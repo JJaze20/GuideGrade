@@ -1,17 +1,15 @@
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
 import '../../../core/routes/app_routes.dart';
+import '../../../core/services/auth_service.dart';
 import '../../../core/state/app_state.dart';
 import '../../../shared/widgets/primary_button.dart';
 
-/// Login / Splash screen — mirrors SCREENS.SPLASH in the prototype.
-///
-/// Simple rule matching the mockup's "Interactive Helper":
-///  - username "admin" -> Admin Console
-///  - anything else    -> Staff Home
+/// Login screen with Firebase email/password and Google sign-in.
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
@@ -22,7 +20,10 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
+  final _authService = AuthService();
+
   bool _obscurePassword = true;
+  bool _isLoading = false;
 
   @override
   void dispose() {
@@ -31,17 +32,68 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
-  void _handleLogin() {
-    final email = _emailController.text.trim();
-    final appState = AppStateScope.of(context);
+  Future<void> _runAuth(Future<UserCredential> Function() signIn) async {
+    if (_isLoading) return;
 
-    if (email == 'admin') {
-      appState.userRole = 'admin';
-      Navigator.of(context).pushNamedAndRemoveUntil(AppRoutes.adminDashboard, (r) => false);
-    } else {
-      appState.userRole = 'staff';
-      Navigator.of(context).pushNamedAndRemoveUntil(AppRoutes.staffHome, (r) => false);
+    setState(() => _isLoading = true);
+    try {
+      final credential = await signIn();
+      if (!mounted) return;
+      _navigateAfterLogin(credential.user);
+    } on FirebaseAuthException catch (error) {
+      if (!mounted) return;
+      _showError(AuthService.messageFor(error));
+    } catch (_) {
+      if (!mounted) return;
+      _showError('Something went wrong. Please try again.');
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  void _handleEmailLogin() {
+    final email = _emailController.text.trim();
+    final password = _passwordController.text;
+
+    if (email.isEmpty || password.isEmpty) {
+      _showError('Enter your email and password.');
+      return;
+    }
+
+    _runAuth(
+      () => _authService.signInWithEmail(email: email, password: password),
+    );
+  }
+
+  void _handleGoogleLogin() {
+    _runAuth(_authService.signInWithGoogle);
+  }
+
+  void _navigateAfterLogin(User? user) {
+    if (user == null) {
+      _showError('Sign-in succeeded but no user profile was returned.');
+      return;
+    }
+
+    final appState = AppStateScope.of(context);
+    final email = user.email ?? '';
+    final localPart = email.split('@').first.toLowerCase();
+    final isAdmin = localPart == 'admin';
+
+    appState.userRole = isAdmin ? 'admin' : 'staff';
+    final route = isAdmin ? AppRoutes.adminDashboard : AppRoutes.staffHome;
+    Navigator.of(context).pushNamedAndRemoveUntil(route, (route) => false);
+  }
+
+  void _showError(String message) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
   }
 
   @override
@@ -51,7 +103,6 @@ class _LoginScreenState extends State<LoginScreen> {
       body: SafeArea(
         child: Column(
           children: [
-            // Hero banner
             SizedBox(
               height: 170,
               width: double.infinity,
@@ -81,8 +132,6 @@ class _LoginScreenState extends State<LoginScreen> {
                 ],
               ),
             ),
-
-            // Wordmark + tagline
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 10),
               child: Column(
@@ -114,8 +163,6 @@ class _LoginScreenState extends State<LoginScreen> {
                 ],
               ),
             ),
-
-            // Form card
             Expanded(
               child: Container(
                 width: double.infinity,
@@ -132,10 +179,35 @@ class _LoginScreenState extends State<LoginScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text('Email / Username', style: AppTextStyles.body(size: 12, weight: FontWeight.w600)),
+                            SecondaryButton(
+                              label: _isLoading ? 'SIGNING IN...' : 'CONTINUE WITH GOOGLE',
+                              onPressed: _isLoading ? null : _handleGoogleLogin,
+                              icon: FontAwesomeIcons.google,
+                              foregroundColor: AppColors.textDark,
+                            ),
+                            const SizedBox(height: 20),
+                            Row(
+                              children: [
+                                Expanded(child: Divider(color: Colors.grey.shade300)),
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                                  child: Text(
+                                    'or sign in with email',
+                                    style: AppTextStyles.body(size: 11, color: AppColors.textGray),
+                                  ),
+                                ),
+                                Expanded(child: Divider(color: Colors.grey.shade300)),
+                              ],
+                            ),
+                            const SizedBox(height: 20),
+                            Text('Email', style: AppTextStyles.body(size: 12, weight: FontWeight.w600)),
                             const SizedBox(height: 6),
                             TextField(
                               controller: _emailController,
+                              keyboardType: TextInputType.emailAddress,
+                              textInputAction: TextInputAction.next,
+                              autofillHints: const [AutofillHints.email],
+                              enabled: !_isLoading,
                               decoration: const InputDecoration(hintText: 'staff@ndmu.edu.ph'),
                             ),
                             const SizedBox(height: 16),
@@ -144,6 +216,10 @@ class _LoginScreenState extends State<LoginScreen> {
                             TextField(
                               controller: _passwordController,
                               obscureText: _obscurePassword,
+                              textInputAction: TextInputAction.done,
+                              autofillHints: const [AutofillHints.password],
+                              enabled: !_isLoading,
+                              onSubmitted: (_) => _handleEmailLogin(),
                               decoration: InputDecoration(
                                 hintText: '••••••••',
                                 suffixIcon: IconButton(
@@ -152,7 +228,9 @@ class _LoginScreenState extends State<LoginScreen> {
                                     size: 18,
                                     color: Colors.grey,
                                   ),
-                                  onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                                  onPressed: _isLoading
+                                      ? null
+                                      : () => setState(() => _obscurePassword = !_obscurePassword),
                                 ),
                               ),
                             ),
@@ -162,17 +240,10 @@ class _LoginScreenState extends State<LoginScreen> {
                     ),
                     const SizedBox(height: 12),
                     PrimaryButton(
-                      label: 'LOGIN',
+                      label: _isLoading ? 'SIGNING IN...' : 'LOGIN',
                       icon: FontAwesomeIcons.arrowRight,
                       color: AppColors.textDark,
-                      onPressed: _handleLogin,
-                    ),
-                    const SizedBox(height: 8),
-                    Center(
-                      child: Text(
-                        'Tip: username "admin" opens the Admin Console',
-                        style: AppTextStyles.body(size: 10, color: AppColors.textGray),
-                      ),
+                      onPressed: _isLoading ? null : _handleEmailLogin,
                     ),
                   ],
                 ),

@@ -55,8 +55,16 @@ class PrimaryButton extends StatelessWidget {
 class SecondaryButton extends StatelessWidget {
   final String label;
   final VoidCallback? onPressed;
+  final FaIconData? icon;
+  final Color foregroundColor;
 
-  const SecondaryButton({super.key, required this.label, required this.onPressed});
+  const SecondaryButton({
+    super.key,
+    required this.label,
+    required this.onPressed,
+    this.icon,
+    this.foregroundColor = AppColors.textGray,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -65,12 +73,24 @@ class SecondaryButton extends StatelessWidget {
       child: OutlinedButton(
         onPressed: onPressed,
         style: OutlinedButton.styleFrom(
-          foregroundColor: AppColors.textGray,
+          foregroundColor: foregroundColor,
           side: const BorderSide(color: Color(0xFFCBD5E1)),
-          padding: const EdgeInsets.symmetric(vertical: 12),
+          padding: const EdgeInsets.symmetric(vertical: 14),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
         ),
-        child: Text(label, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12)),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            if (icon != null) ...[
+              FaIcon(icon!, size: 15),
+              const SizedBox(width: 8),
+            ],
+            Text(
+              label,
+              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12.5, letterSpacing: 0.4),
+            ),
+          ],
+        ),
       ),
     );
   }
