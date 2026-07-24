@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "204847946991",
+    "project_id": "guidegrade-470ea",
+    "storage_bucket": "guidegrade-470ea.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:204847946991:android:57a303a556f540da68cf1a",
+        "android_client_info": {
+          "package_name": "com.team.guidegrade"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCeytoCvHubnin3AMCQX-5L0tin9QwbFMQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
