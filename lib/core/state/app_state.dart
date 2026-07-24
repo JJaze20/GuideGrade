@@ -1,3 +1,4 @@
+import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import '../../models/activity_model.dart';
 import '../../models/cloud_file_model.dart';
@@ -30,6 +31,10 @@ class AppState extends ChangeNotifier {
 
   int currentScannedPage = 0;
   int totalToScan = 50;
+
+  /// Raw captured sheet photos for the in-progress scan session, one per
+  /// page, in capture order. Cleared by [resetScanProgress].
+  final List<XFile> capturedPages = [];
 
   List<ActivityModel> get pendingBatches =>
       recentActivities.where((a) => a.status == 'Pending').toList();
@@ -76,11 +81,14 @@ class AppState extends ChangeNotifier {
 
   void resetScanProgress() {
     currentScannedPage = 0;
+    capturedPages.clear();
     notifyListeners();
   }
 
-  void nextScanPage() {
-    currentScannedPage += 1;
+  /// Records a freshly captured sheet photo and advances the page counter.
+  void addCapturedPage(XFile file) {
+    capturedPages.add(file);
+    currentScannedPage = capturedPages.length;
     notifyListeners();
   }
 
