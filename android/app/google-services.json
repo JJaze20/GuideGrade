@@ -12,7 +12,28 @@
           "package_name": "com.team.guidegrade"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "204847946991-itunqskqiq5l6p3oimgkkihkn97b32o6.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.team.guidegrade",
+            "certificate_hash": "b70da7a9e1dfc9f06e7075da907a812f8b316203"
+          }
+        },
+        {
+          "client_id": "204847946991-li1iqmipcdnpugrnphjl17ud67lreaik.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.team.guidegrade",
+            "certificate_hash": "eb37b3d9e003baeba9541721132161cfb279bd85"
+          }
+        },
+        {
+          "client_id": "204847946991-sp3idegsm1gfc2eki8gb0olv3e0e0uqi.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyCeytoCvHubnin3AMCQX-5L0tin9QwbFMQ"
@@ -20,7 +41,19 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "204847946991-sp3idegsm1gfc2eki8gb0olv3e0e0uqi.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "204847946991-akhevlhev2sqcnpe69151bnbq3qun4nk.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.guidegrade.app"
+              }
+            }
+          ]
         }
       }
     }

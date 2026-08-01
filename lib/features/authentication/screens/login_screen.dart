@@ -24,6 +24,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
   bool _obscurePassword = true;
   bool _isLoading = false;
+  static const String _adminEmail = 'admin@ndmu.edu.ph';
 
   @override
   void dispose() {
@@ -77,8 +78,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
     final appState = AppStateScope.of(context);
     final email = user.email ?? '';
-    final localPart = email.split('@').first.toLowerCase();
-    final isAdmin = localPart == 'admin';
+    final isAdmin = email.toLowerCase() == _adminEmail.toLowerCase();
 
     appState.userRole = isAdmin ? 'admin' : 'staff';
     final route = isAdmin ? AppRoutes.adminDashboard : AppRoutes.staffHome;
@@ -89,10 +89,7 @@ class _LoginScreenState extends State<LoginScreen> {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
-        SnackBar(
-          content: Text(message),
-          behavior: SnackBarBehavior.floating,
-        ),
+        SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
       );
   }
 
@@ -114,7 +111,8 @@ class _LoginScreenState extends State<LoginScreen> {
                     fit: BoxFit.cover,
                     color: Colors.black.withOpacity(0.4),
                     colorBlendMode: BlendMode.darken,
-                    errorBuilder: (_, __, ___) => Container(color: AppColors.slate800),
+                    errorBuilder: (_, __, ___) =>
+                        Container(color: AppColors.slate800),
                   ),
                   Align(
                     alignment: Alignment.bottomCenter,
@@ -124,7 +122,10 @@ class _LoginScreenState extends State<LoginScreen> {
                         gradient: LinearGradient(
                           begin: Alignment.bottomCenter,
                           end: Alignment.topCenter,
-                          colors: [AppColors.lightBg, AppColors.lightBg.withOpacity(0)],
+                          colors: [
+                            AppColors.lightBg,
+                            AppColors.lightBg.withOpacity(0),
+                          ],
                         ),
                       ),
                     ),
@@ -144,21 +145,44 @@ class _LoginScreenState extends State<LoginScreen> {
                         height: 40,
                         decoration: BoxDecoration(
                           gradient: const LinearGradient(
-                            colors: [AppColors.warmRedOrange, AppColors.accentYellowGreen, Color(0xFF1565C0)],
+                            colors: [
+                              AppColors.warmRedOrange,
+                              AppColors.accentYellowGreen,
+                              Color(0xFF1565C0),
+                            ],
                           ),
                           borderRadius: BorderRadius.circular(12),
                         ),
-                        child: const FaIcon(FontAwesomeIcons.shieldHalved, color: Colors.white, size: 18),
+                        child: const FaIcon(
+                          FontAwesomeIcons.shieldHalved,
+                          color: Colors.white,
+                          size: 18,
+                        ),
                       ),
                       const SizedBox(width: 8),
-                      Text('Guide', style: AppTextStyles.logo(size: 28, color: AppColors.warmRedOrange)),
-                      Text('Grade', style: AppTextStyles.logo(size: 28, color: AppColors.primaryGreen)),
+                      Text(
+                        'Guide',
+                        style: AppTextStyles.logo(
+                          size: 28,
+                          color: AppColors.warmRedOrange,
+                        ),
+                      ),
+                      Text(
+                        'Grade',
+                        style: AppTextStyles.logo(
+                          size: 28,
+                          color: AppColors.primaryGreen,
+                        ),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 4),
                   Text(
                     'Guidance automated test diagnostic checking',
-                    style: AppTextStyles.body(size: 10, color: Colors.grey.shade400),
+                    style: AppTextStyles.body(
+                      size: 10,
+                      color: Colors.grey.shade400,
+                    ),
                   ),
                 ],
               ),
@@ -180,7 +204,9 @@ class _LoginScreenState extends State<LoginScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             SecondaryButton(
-                              label: _isLoading ? 'SIGNING IN...' : 'CONTINUE WITH GOOGLE',
+                              label: _isLoading
+                                  ? 'SIGNING IN...'
+                                  : 'CONTINUE WITH GOOGLE',
                               onPressed: _isLoading ? null : _handleGoogleLogin,
                               icon: FontAwesomeIcons.google,
                               foregroundColor: AppColors.textDark,
@@ -188,19 +214,34 @@ class _LoginScreenState extends State<LoginScreen> {
                             const SizedBox(height: 20),
                             Row(
                               children: [
-                                Expanded(child: Divider(color: Colors.grey.shade300)),
+                                Expanded(
+                                  child: Divider(color: Colors.grey.shade300),
+                                ),
                                 Padding(
-                                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                  ),
                                   child: Text(
                                     'or sign in with email',
-                                    style: AppTextStyles.body(size: 11, color: AppColors.textGray),
+                                    style: AppTextStyles.body(
+                                      size: 11,
+                                      color: AppColors.textGray,
+                                    ),
                                   ),
                                 ),
-                                Expanded(child: Divider(color: Colors.grey.shade300)),
+                                Expanded(
+                                  child: Divider(color: Colors.grey.shade300),
+                                ),
                               ],
                             ),
                             const SizedBox(height: 20),
-                            Text('Email', style: AppTextStyles.body(size: 12, weight: FontWeight.w600)),
+                            Text(
+                              'Email',
+                              style: AppTextStyles.body(
+                                size: 12,
+                                weight: FontWeight.w600,
+                              ),
+                            ),
                             const SizedBox(height: 6),
                             TextField(
                               controller: _emailController,
@@ -208,10 +249,18 @@ class _LoginScreenState extends State<LoginScreen> {
                               textInputAction: TextInputAction.next,
                               autofillHints: const [AutofillHints.email],
                               enabled: !_isLoading,
-                              decoration: const InputDecoration(hintText: 'staff@ndmu.edu.ph'),
+                              decoration: const InputDecoration(
+                                hintText: 'staff@ndmu.edu.ph',
+                              ),
                             ),
                             const SizedBox(height: 16),
-                            Text('Password', style: AppTextStyles.body(size: 12, weight: FontWeight.w600)),
+                            Text(
+                              'Password',
+                              style: AppTextStyles.body(
+                                size: 12,
+                                weight: FontWeight.w600,
+                              ),
+                            ),
                             const SizedBox(height: 6),
                             TextField(
                               controller: _passwordController,
@@ -224,16 +273,22 @@ class _LoginScreenState extends State<LoginScreen> {
                                 hintText: '••••••••',
                                 suffixIcon: IconButton(
                                   icon: Icon(
-                                    _obscurePassword ? Icons.visibility_off : Icons.visibility,
+                                    _obscurePassword
+                                        ? Icons.visibility_off
+                                        : Icons.visibility,
                                     size: 18,
                                     color: Colors.grey,
                                   ),
                                   onPressed: _isLoading
                                       ? null
-                                      : () => setState(() => _obscurePassword = !_obscurePassword),
+                                      : () => setState(
+                                          () => _obscurePassword =
+                                              !_obscurePassword,
+                                        ),
                                 ),
                               ),
                             ),
+                            const SizedBox(height: 12),
                           ],
                         ),
                       ),
