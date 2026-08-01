@@ -1,4 +1,5 @@
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:google_sign_in/google_sign_in.dart';
 
 /// Wraps Firebase Auth and Google Sign-In for the login screen.
@@ -7,10 +8,10 @@ class AuthService {
     FirebaseAuth? firebaseAuth,
     GoogleSignIn? googleSignIn,
   })  : _auth = firebaseAuth ?? FirebaseAuth.instance,
-        _googleSignIn = googleSignIn ?? GoogleSignIn();
+        _googleSignIn = googleSignIn ?? (kIsWeb ? null : GoogleSignIn());
 
   final FirebaseAuth _auth;
-  final GoogleSignIn _googleSignIn;
+  final GoogleSignIn? _googleSignIn;
 
   User? get currentUser => _auth.currentUser;
 
@@ -22,7 +23,15 @@ class AuthService {
   }
 
   Future<UserCredential> signInWithGoogle() async {
-    final googleUser = await _googleSignIn.signIn();
+    final googleSignIn = _googleSignIn;
+    if (googleSignIn == null) {
+      throw FirebaseAuthException(
+        code: 'google-sign-in-not-available',
+        message: 'Google Sign-in is not available on this platform.',
+      );
+    }
+
+    final googleUser = await googleSignIn.signIn();
     if (googleUser == null) {
       throw FirebaseAuthException(
         code: 'sign-in-cancelled',
@@ -40,10 +49,11 @@ class AuthService {
   }
 
   Future<void> signOut() async {
-    await Future.wait([
-      _auth.signOut(),
-      _googleSignIn.signOut(),
-    ]);
+    await _auth.signOut();
+    final googleSignIn = _googleSignIn;
+    if (googleSignIn != null) {
+      await googleSignIn.signOut();
+    }
   }
 
   static String messageFor(FirebaseAuthException error) {
@@ -62,6 +72,8 @@ class AuthService {
         return 'Sign-in was cancelled.';
       case 'network-request-failed':
         return 'Network error. Check your connection and try again.';
+      case 'google-sign-in-not-available':
+        return 'Google Sign-in is not available on this platform.';
       default:
         return error.message ?? 'Sign-in failed. Please try again.';
     }

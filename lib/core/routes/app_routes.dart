@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
-import '../../features/authentication/screens/login_screen.dart';
+import '../../core/utils/platform_utils.dart';
+import '../../features/authentication/screens/mobile_login_screen.dart';
+import '../../features/admin/screens/admin_login_screen.dart';
 import '../../features/home/screens/staff_home_screen.dart';
 import '../../features/exam/screens/exam_hub_screen.dart';
 import '../../features/exam/screens/exam_setup_screen.dart';
@@ -15,6 +17,8 @@ class AppRoutes {
   AppRoutes._();
 
   static const String login = '/login';
+  static const String mobileLogin = '/mobile-login';
+  static const String adminLogin = '/admin-login';
   static const String staffHome = '/staff-home';
   static const String examHub = '/exam-hub';
   static const String examSetup = '/exam-setup';
@@ -29,7 +33,12 @@ class AppRoutes {
   static Route<dynamic> onGenerateRoute(RouteSettings settings) {
     switch (settings.name) {
       case login:
-        return _fade(const LoginScreen());
+        // Platform-specific login screen
+        return _fade(PlatformUtils.isWeb ? const AdminLoginScreen() : const MobileLoginScreen());
+      case mobileLogin:
+        return _fade(const MobileLoginScreen());
+      case adminLogin:
+        return _fade(const AdminLoginScreen());
       case staffHome:
         return _fade(const StaffHomeScreen());
       case examHub:
@@ -45,7 +54,7 @@ class AppRoutes {
       case adminDashboard:
         return _fade(const AdminDashboardScreen());
       default:
-        return _fade(const LoginScreen());
+        return _fade(PlatformUtils.isWeb ? const AdminLoginScreen() : const MobileLoginScreen());
     }
   }
 

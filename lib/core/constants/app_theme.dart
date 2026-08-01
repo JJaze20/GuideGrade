@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'app_colors.dart';
 
 class AppTheme {
@@ -16,7 +15,8 @@ class AppTheme {
         secondary: AppColors.darkNavy,
         error: AppColors.warmRedOrange,
       ),
-      textTheme: GoogleFonts.poppinsTextTheme(),
+      // Use default fonts for web to avoid loading issues
+      textTheme: ThemeData.light().textTheme,
       appBarTheme: const AppBarTheme(
         backgroundColor: AppColors.primaryGreen,
         foregroundColor: Colors.white,
@@ -46,7 +46,7 @@ class AppTheme {
           foregroundColor: Colors.white,
           padding: const EdgeInsets.symmetric(vertical: 14),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-          textStyle: GoogleFonts.poppins(fontSize: 13, fontWeight: FontWeight.w700),
+          textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
         ),
       ),
       cardTheme: CardThemeData(

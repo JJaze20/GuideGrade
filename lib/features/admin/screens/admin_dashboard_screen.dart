@@ -29,7 +29,7 @@ class AdminDashboardScreen extends StatelessWidget {
                         .copyWith(letterSpacing: 1.0),
                   ),
                   TextButton(
-                    onPressed: () => Navigator.of(context).pushNamedAndRemoveUntil(AppRoutes.login, (r) => false),
+                    onPressed: () => Navigator.of(context).pushNamedAndRemoveUntil(AppRoutes.adminLogin, (r) => false),
                     style: TextButton.styleFrom(
                       backgroundColor: Colors.white.withOpacity(0.1),
                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),

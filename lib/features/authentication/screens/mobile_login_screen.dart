@@ -9,22 +9,23 @@ import '../../../core/services/auth_service.dart';
 import '../../../core/state/app_state.dart';
 import '../../../shared/widgets/primary_button.dart';
 
-/// Login screen with Firebase email/password and Google sign-in.
-class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
+/// Mobile Login screen for Android/iOS platforms.
+/// This is specifically designed for Guidance Council staff with mobile-optimized
+/// UI and Google Sign-in integration. Mobile users always route to staff home.
+class MobileLoginScreen extends StatefulWidget {
+  const MobileLoginScreen({super.key});
 
   @override
-  State<LoginScreen> createState() => _LoginScreenState();
+  State<MobileLoginScreen> createState() => _MobileLoginScreenState();
 }
 
-class _LoginScreenState extends State<LoginScreen> {
+class _MobileLoginScreenState extends State<MobileLoginScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
-  final _authService = AuthService();
+  final _authService = AuthService(); // Enable Google Sign-in for mobile
 
   bool _obscurePassword = true;
   bool _isLoading = false;
-  static const String _adminEmail = 'admin@ndmu.edu.ph';
 
   @override
   void dispose() {
@@ -77,12 +78,12 @@ class _LoginScreenState extends State<LoginScreen> {
     }
 
     final appState = AppStateScope.of(context);
-    final email = user.email ?? '';
-    final isAdmin = email.toLowerCase() == _adminEmail.toLowerCase();
-
-    appState.userRole = isAdmin ? 'admin' : 'staff';
-    final route = isAdmin ? AppRoutes.adminDashboard : AppRoutes.staffHome;
-    Navigator.of(context).pushNamedAndRemoveUntil(route, (route) => false);
+    
+    // Mobile users always route to staff home (Guidance Council)
+    appState.userRole = 'staff';
+    
+    if (!mounted) return;
+    Navigator.of(context).pushNamedAndRemoveUntil(AppRoutes.staffHome, (route) => false);
   }
 
   void _showError(String message) {

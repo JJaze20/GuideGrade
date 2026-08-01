@@ -6,8 +6,8 @@ import '../../../core/constants/app_text_styles.dart';
 import '../../../core/routes/app_routes.dart';
 import '../../../core/services/auth_service.dart';
 import '../../../core/state/app_state.dart';
+import '../../../core/utils/platform_utils.dart';
 import '../../../shared/widgets/app_bottom_nav.dart';
-import '../../../shared/widgets/primary_button.dart';
 import '../widgets/activity_card.dart';
 import '../widgets/create_batch_sheet.dart';
 
@@ -47,7 +47,8 @@ class StaffHomeScreen extends StatelessWidget {
     }
 
     if (!context.mounted) return;
-    Navigator.of(context).pushNamedAndRemoveUntil(AppRoutes.login, (route) => false);
+    final loginRoute = PlatformUtils.isWeb ? AppRoutes.adminLogin : AppRoutes.mobileLogin;
+    Navigator.of(context).pushNamedAndRemoveUntil(loginRoute, (route) => false);
   }
 
   @override
