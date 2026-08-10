@@ -4,10 +4,12 @@ import '../../core/utils/platform_utils.dart';
 import '../../features/authentication/screens/mobile_login_screen.dart';
 import '../../features/admin/screens/admin_login_screen.dart';
 import '../../features/home/screens/staff_home_screen.dart';
+import '../../features/home/screens/profile_screen.dart';
 import '../../features/exam/screens/exam_hub_screen.dart';
 import '../../features/exam/screens/exam_setup_screen.dart';
 import '../../features/exam/screens/exam_scanning_screen.dart';
 import '../../features/exam/screens/exam_results_screen.dart';
+import '../../features/exam/screens/answer_key_entry_screen.dart';
 import '../../features/archive/screens/cloud_archive_screen.dart';
 import '../../features/admin/screens/admin_dashboard_screen.dart';
 
@@ -20,10 +22,12 @@ class AppRoutes {
   static const String mobileLogin = '/mobile-login';
   static const String adminLogin = '/admin-login';
   static const String staffHome = '/staff-home';
+  static const String profile = '/profile';
   static const String examHub = '/exam-hub';
   static const String examSetup = '/exam-setup';
   static const String examScanning = '/exam-scanning';
   static const String examResults = '/exam-results';
+  static const String answerKeyEntry = '/answer-key-entry';
   static const String cloudArchive = '/cloud-archive';
   static const String adminDashboard = '/admin-dashboard';
 
@@ -41,6 +45,8 @@ class AppRoutes {
         return _fade(const AdminLoginScreen());
       case staffHome:
         return _fade(const StaffHomeScreen());
+      case profile:
+        return _slide(const ProfileScreen());
       case examHub:
         return _fade(const ExamHubScreen());
       case examSetup:
@@ -49,6 +55,8 @@ class AppRoutes {
         return _slide(const ExamScanningScreen());
       case examResults:
         return _slide(const ExamResultsScreen());
+      case answerKeyEntry:
+        return _slide(const AnswerKeyEntryScreen());
       case cloudArchive:
         return _fade(const CloudArchiveScreen());
       case adminDashboard:

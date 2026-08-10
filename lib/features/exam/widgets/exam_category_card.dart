@@ -39,6 +39,7 @@ class ExamCategoryCard extends StatelessWidget {
             Container(
               width: 42,
               height: 42,
+              alignment: Alignment.center,
               decoration: BoxDecoration(color: iconBg, shape: BoxShape.circle),
               child: FaIcon(icon, color: iconColor, size: 18),
             ),

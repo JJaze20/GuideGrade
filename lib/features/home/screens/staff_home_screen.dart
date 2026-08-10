@@ -4,9 +4,7 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
 import '../../../core/routes/app_routes.dart';
-import '../../../core/services/auth_service.dart';
 import '../../../core/state/app_state.dart';
-import '../../../core/utils/platform_utils.dart';
 import '../../../shared/widgets/app_bottom_nav.dart';
 import '../widgets/activity_card.dart';
 import '../widgets/create_batch_sheet.dart';
@@ -16,40 +14,6 @@ import '../widgets/create_batch_sheet.dart';
 /// of diagnostic batches (Pending -> Exam Setup, Done -> Exam Results).
 class StaffHomeScreen extends StatelessWidget {
   const StaffHomeScreen({super.key});
-
-  Future<void> _handleLogout(BuildContext context) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Log out?'),
-        content: const Text('You will need to sign in again to access exam records.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('Log out'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed != true) return;
-    if (!context.mounted) return;
-
-    try {
-      await AuthService().signOut();
-    } catch (_) {
-      // Even if sign-out fails locally (e.g. no network), still route the
-      // user back to login rather than leaving them stuck on a dead session.
-    }
-
-    if (!context.mounted) return;
-    final loginRoute = PlatformUtils.isWeb ? AppRoutes.adminLogin : AppRoutes.mobileLogin;
-    Navigator.of(context).pushNamedAndRemoveUntil(loginRoute, (route) => false);
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -79,10 +43,11 @@ class StaffHomeScreen extends StatelessWidget {
                     ],
                   ),
                   InkWell(
-                    onTap: () => _handleLogout(context),
+                    onTap: () => Navigator.of(context).pushNamed(AppRoutes.profile),
                     child: Container(
                       width: 30,
                       height: 30,
+                      alignment: Alignment.center,
                       decoration: const BoxDecoration(color: Color(0xFF1B5E20), shape: BoxShape.circle),
                       child: const FaIcon(FontAwesomeIcons.userTie, size: 12, color: Colors.white),
                     ),

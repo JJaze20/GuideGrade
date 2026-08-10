@@ -32,4 +32,20 @@ class ActivityModel {
       examCode: examCode ?? this.examCode,
     );
   }
+
+  Map<String, dynamic> toJson() => {
+    'type': type,
+    'date': date,
+    'batch': batch,
+    'status': status,
+    'examCode': examCode,
+  };
+
+  factory ActivityModel.fromJson(Map<String, dynamic> json) => ActivityModel(
+    type: json['type'] as String,
+    date: json['date'] as String,
+    batch: json['batch'] as String,
+    status: json['status'] as String,
+    examCode: json['examCode'] as String,
+  );
 }
