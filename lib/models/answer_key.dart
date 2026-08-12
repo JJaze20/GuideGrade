@@ -28,8 +28,11 @@ class AnswerKeyModel {
     required this.updatedAt,
   });
 
-  /// Creates an AnswerKeyModel from Firestore document data
-  factory AnswerKeyModel.fromFirestore(Map<String, dynamic> data, String documentId) {
+  /// Creates an AnswerKeyModel from Firestore document data.
+  factory AnswerKeyModel.fromFirestore(
+      Map<String, dynamic> data,
+      String documentId,
+      ) {
     return AnswerKeyModel(
       answerKeyId: documentId,
       examId: data['examId'] as String,
@@ -46,7 +49,7 @@ class AnswerKeyModel {
     );
   }
 
-  /// Converts AnswerKeyModel to Firestore document data
+  /// Converts AnswerKeyModel to Firestore document data.
   Map<String, dynamic> toFirestore() {
     return {
       'answerKeyId': answerKeyId,
@@ -64,8 +67,8 @@ class AnswerKeyModel {
     };
   }
 
-  /// Creates a copy of this AnswerKeyModel with some fields replaced
-  /// Note: Audit fields (createdByUid, createdByName, createdAt) are never overwritten
+  /// Creates a copy of this AnswerKeyModel with some fields replaced.
+  /// Audit fields are never overwritten.
   AnswerKeyModel copyWith({
     String? answerKeyId,
     String? examId,
@@ -86,22 +89,46 @@ class AnswerKeyModel {
       allowedChoices: allowedChoices ?? this.allowedChoices,
       answers: answers ?? this.answers,
       totalItems: totalItems ?? this.totalItems,
-      createdByUid: createdByUid, // Never overwritten
-      createdByName: createdByName, // Never overwritten
-      createdAt: createdAt, // Never overwritten
+      createdByUid: createdByUid,
+      createdByName: createdByName,
+      createdAt: createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
     );
   }
 
-  /// Helper to check if answer key is in Draft status
+  /// Helper to check if answer key is in Draft status.
   bool get isDraft => status == 'Draft';
 
-  /// Helper to check if answer key is Final
+  /// Helper to check if answer key is Final.
   bool get isFinal => status == 'Final';
 
-  /// Helper to check if answer key can be edited
+  /// Helper to check if answer key can be edited.
   bool get canEdit => status == 'Draft';
 
-  /// Helper to check if answer key can be marked as Final
+  /// Helper to check if answer key can be marked as Final.
   bool get canMarkFinal => status == 'Draft';
+}
+
+/// The correct choice per question for one exam code, entered manually by
+/// staff (see AnswerKeyEntryScreen) rather than uploaded from a file.
+///
+/// Keyed by section name + item number, not item number alone. Exam types
+/// like TAT restart numbering at 1 in every section, so a flat item-number
+/// key would collide across sections.
+class AnswerKey {
+  final String examCode;
+  final Map<String, String> correctChoices;
+
+  const AnswerKey({
+    required this.examCode,
+    required this.correctChoices,
+  });
+
+  static String keyFor(String sectionName, int itemNumber) {
+    return '$sectionName|$itemNumber';
+  }
+
+  String? choiceFor(String sectionName, int itemNumber) {
+    return correctChoices[keyFor(sectionName, itemNumber)];
+  }
 }

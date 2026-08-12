@@ -9,11 +9,11 @@ import 'firebase_options.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
+
   print('=== GuideGrade Startup ===');
   print('Platform: ${PlatformUtils.platformType}');
   print('Is Web: ${PlatformUtils.isWeb}');
-  
+
   // Initialize Firebase for all platforms
   try {
     await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
@@ -22,8 +22,10 @@ Future<void> main() async {
     print('Firebase initialization error: $e');
     // Continue even if Firebase fails - allows UI to render
   }
-  
-  runApp(const GuideGradeApp());
+
+  final appState = AppState();
+  await appState.loadPersistedData();
+  runApp(GuideGradeApp(appState: appState));
 }
 
 /// Root widget for the Guide Grade app.
@@ -33,22 +35,24 @@ Future<void> main() async {
 /// - Web: Uses AdminLoginScreen → Admin Dashboard
 ///
 /// Wraps the whole app in [AppStateScope] so any screen (login,
-/// staff home, exam flow, archive, admin) can read/update shared
-/// mock data without prop-drilling.
+/// staff home, exam flow, archive, admin) can read/update shared state
+/// without prop-drilling. [appState] is constructed and its persisted
+/// data loaded in [main] before this widget is built, so the registry
+/// never flashes empty before populating.
 class GuideGradeApp extends StatefulWidget {
-  const GuideGradeApp({super.key});
+  const GuideGradeApp({super.key, required this.appState});
+
+  final AppState appState;
 
   @override
   State<GuideGradeApp> createState() => _GuideGradeAppState();
 }
 
 class _GuideGradeAppState extends State<GuideGradeApp> {
-  final AppState _appState = AppState();
-
   @override
   Widget build(BuildContext context) {
     return AppStateScope(
-      notifier: _appState,
+      notifier: widget.appState,
       child: MaterialApp(
         title: PlatformUtils.isWeb ? 'GuideGrade Admin Console' : 'GuideGrade',
         debugShowCheckedModeBanner: false,

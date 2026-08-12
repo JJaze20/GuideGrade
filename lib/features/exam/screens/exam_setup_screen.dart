@@ -150,13 +150,8 @@ class _ExamSetupScreenState extends State<ExamSetupScreen> {
                                   ),
                                   const SizedBox(height: 8),
                                   OutlinedButton.icon(
-                                    onPressed: () {
-                                      appState.uploadAnswerKey();
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        const SnackBar(content: Text('Answer key uploaded successfully!')),
-                                      );
-                                    },
-                                    icon: const FaIcon(FontAwesomeIcons.fileImport, size: 13, color: AppColors.primaryGreen),
+                                    onPressed: () => Navigator.of(context).pushNamed(AppRoutes.answerKeyEntry),
+                                    icon: const FaIcon(FontAwesomeIcons.penToSquare, size: 13, color: AppColors.primaryGreen),
                                     label: const Text('ADD EXAM ANSWER KEY'),
                                     style: OutlinedButton.styleFrom(
                                       foregroundColor: AppColors.textDark,

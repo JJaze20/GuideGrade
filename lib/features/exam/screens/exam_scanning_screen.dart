@@ -1,9 +1,41 @@
 import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../../core/constants/app_colors.dart';
+import '../../../core/omr/omr_decoder.dart';
+import '../../../core/omr/omr_templates.dart';
 import '../../../core/routes/app_routes.dart';
 import '../../../core/state/app_state.dart';
+
+class _AlignmentCheckRequest {
+  final String imagePath;
+  final OmrExamTemplate template;
+  const _AlignmentCheckRequest(this.imagePath, this.template);
+}
+
+AlignmentCheck _checkAlignment(_AlignmentCheckRequest request) {
+  return const OmrDecoder().locateCorners(request.imagePath, request.template);
+}
+
+class _LiveAlignmentRequest {
+  final Uint8List lumaBytes;
+  final int width;
+  final int height;
+  final int bytesPerRow;
+  final OmrExamTemplate template;
+  const _LiveAlignmentRequest(this.lumaBytes, this.width, this.height, this.bytesPerRow, this.template);
+}
+
+AlignmentCheck _checkLiveAlignment(_LiveAlignmentRequest request) {
+  return const OmrDecoder().checkAlignmentFromLuma(
+    request.lumaBytes,
+    request.width,
+    request.height,
+    request.bytesPerRow,
+    request.template,
+  );
+}
 
 /// OMR Scanner Loop — mirrors SCREENS.EXAM_SCANNING.
 /// Shows a live camera feed inside a capture viewfinder with an alignment
@@ -25,6 +57,16 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
   Future<void>? _initializeFuture;
   String? _cameraError;
   bool _isCapturing = false;
+
+  /// Live, advisory-only alignment feedback for the on-screen guide: null
+  /// until the first frame check completes, then whether the most recent
+  /// checked frame found all 4 corner marks. The post-capture check in
+  /// [_capture] remains the real gate (Retake/Use Anyway) — this only
+  /// colors the guide while framing, and runs against lower-effort preview
+  /// frames rather than the full-resolution captured photo.
+  bool? _liveAligned;
+  DateTime? _lastFrameCheckAt;
+  bool _frameCheckInFlight = false;
 
   @override
   void initState() {
@@ -54,23 +96,38 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
       await controller.initialize();
       if (!mounted) return;
       setState(() => _cameraController = controller);
+      try {
+        await controller.startImageStream(_onCameraFrame);
+      } catch (_) {
+        // Live guide feedback is advisory only; if streaming isn't
+        // supported on this device, capture + the post-capture check
+        // still work fine without it.
+      }
     } on CameraException catch (e) {
+      if (!mounted) return;
       setState(() {
         _cameraError = e.code == 'CameraAccessDenied' || e.code == 'CameraAccessDeniedWithoutPrompt'
             ? 'Camera permission was denied. Enable it in your device settings to scan sheets.'
             : 'Could not start the camera (${e.description ?? e.code}).';
       });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _cameraError = 'Could not start the camera ($e).');
     }
   }
 
   @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
+  void didChangeAppLifecycleState(AppLifecycleState state) async {
     final controller = _cameraController;
     if (controller == null || !controller.value.isInitialized) return;
 
     if (state == AppLifecycleState.inactive || state == AppLifecycleState.paused) {
-      controller.dispose();
+      if (controller.value.isStreamingImages) {
+        await controller.stopImageStream();
+      }
+      await controller.dispose();
       _cameraController = null;
+      _liveAligned = null;
     } else if (state == AppLifecycleState.resumed) {
       _initializeFuture = _setUpCamera();
       setState(() {});
@@ -81,8 +138,39 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _scanController.dispose();
-    _cameraController?.dispose();
+    final controller = _cameraController;
+    if (controller != null && controller.value.isStreamingImages) {
+      controller.stopImageStream();
+    }
+    controller?.dispose();
     super.dispose();
+  }
+
+  /// Throttled, advisory-only live check: at most once every 600ms, and
+  /// never overlapping a check already in flight, so this stays cheap
+  /// enough to run continuously while framing.
+  void _onCameraFrame(CameraImage image) {
+    if (!mounted || _frameCheckInFlight) return;
+    final now = DateTime.now();
+    if (_lastFrameCheckAt != null && now.difference(_lastFrameCheckAt!) < const Duration(milliseconds: 600)) {
+      return;
+    }
+    final template = omrTemplates[AppStateScope.of(context).activeExamCode];
+    if (template == null) return;
+
+    _lastFrameCheckAt = now;
+    _frameCheckInFlight = true;
+    final plane = image.planes.first;
+    compute(
+      _checkLiveAlignment,
+      _LiveAlignmentRequest(plane.bytes, image.width, image.height, plane.bytesPerRow, template),
+    ).then((check) {
+      _frameCheckInFlight = false;
+      if (!mounted) return;
+      setState(() => _liveAligned = check.aligned);
+    }).catchError((_) {
+      _frameCheckInFlight = false;
+    });
   }
 
   Future<void> _capture(AppState appState) async {
@@ -92,15 +180,59 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
     setState(() => _isCapturing = true);
     try {
       final file = await controller.takePicture();
+      final template = omrTemplates[appState.activeExamCode];
+      if (template != null) {
+        final check = await compute(_checkAlignment, _AlignmentCheckRequest(file.path, template));
+        if (!check.aligned) {
+          if (!mounted) return;
+          final useAnyway = await _showMisalignedDialog(check.message);
+          if (useAnyway != true) return; // Retake: discard this photo.
+        }
+      }
+      if (!mounted) return;
       appState.addCapturedPage(file);
     } on CameraException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Capture failed: ${e.description ?? e.code}')),
       );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Capture failed: $e')),
+      );
     } finally {
       if (mounted) setState(() => _isCapturing = false);
     }
+  }
+
+  /// Returns true if the user chose to keep the photo despite the alignment
+  /// check failing, false (or null, if dismissed) to retake it.
+  Future<bool?> _showMisalignedDialog(String? message) {
+    return showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('Photo may not be aligned'),
+        content: Text(message ?? "This sheet's corner markers weren't found clearly in this photo."),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Retake')),
+          TextButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Use Anyway')),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _compileData(AppState appState) async {
+    await appState.processCapturedPages();
+    if (!mounted) return;
+    if (appState.scanProcessingError != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not process the scan: ${appState.scanProcessingError}')),
+      );
+      return;
+    }
+    Navigator.of(context).pushReplacementNamed(AppRoutes.examResults);
   }
 
   @override
@@ -162,6 +294,7 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
                             ),
                           ),
                           if (_cameraController?.value.isInitialized == true) ...[
+                            Positioned.fill(child: IgnorePointer(child: CustomPaint(painter: _PageGuidePainter(_liveAligned)))),
                             AnimatedBuilder(
                               animation: _scanController,
                               builder: (context, child) {
@@ -262,8 +395,8 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
                             const SizedBox(width: 10),
                             Expanded(
                               child: ElevatedButton(
-                                onPressed: appState.capturedPages.isNotEmpty
-                                    ? () => Navigator.of(context).pushReplacementNamed(AppRoutes.examResults)
+                                onPressed: appState.capturedPages.isNotEmpty && !appState.isProcessingScans
+                                    ? () => _compileData(appState)
                                     : null,
                                 style: ElevatedButton.styleFrom(
                                   backgroundColor: AppColors.primaryGreen,
@@ -272,7 +405,13 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
                                   padding: const EdgeInsets.symmetric(vertical: 12),
                                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                                 ),
-                                child: const Text('Compile Data', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+                                child: appState.isProcessingScans
+                                    ? const SizedBox(
+                                        width: 14,
+                                        height: 14,
+                                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                                      )
+                                    : const Text('Compile Data', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
                               ),
                             ),
                           ],
@@ -320,6 +459,33 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
       future: _initializeFuture,
       builder: (context, snapshot) {
         final controller = _cameraController;
+        if (snapshot.connectionState == ConnectionState.done &&
+            controller == null &&
+            _cameraError == null) {
+          return Container(
+            color: Colors.black,
+            alignment: Alignment.center,
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.videocam_off_outlined, color: Colors.white54, size: 32),
+                const SizedBox(height: 12),
+                const Text(
+                  'Could not start the camera.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.white70, fontSize: 12),
+                ),
+                const SizedBox(height: 16),
+                OutlinedButton(
+                  onPressed: () => setState(() => _initializeFuture = _setUpCamera()),
+                  style: OutlinedButton.styleFrom(foregroundColor: Colors.white, side: const BorderSide(color: Colors.white54)),
+                  child: const Text('Retry'),
+                ),
+              ],
+            ),
+          );
+        }
         if (controller == null || !controller.value.isInitialized) {
           return const ColoredBox(
             color: Colors.black,
@@ -339,4 +505,74 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
       },
     );
   }
+}
+
+/// Draws a dimmed spotlight with corner brackets sized to the OMR sheet's
+/// aspect ratio (US Letter portrait, matching every [OmrExamTemplate]'s
+/// pageWidthPt/pageHeightPt), so the user can line the physical sheet up to
+/// a known frame position instead of guessing. Consistent framing keeps the
+/// full sheet - and all 4 corner fiducials - reliably in shot, which is
+/// what the decoder's corner search depends on.
+class _PageGuidePainter extends CustomPainter {
+  const _PageGuidePainter(this.aligned);
+
+  /// Live, advisory alignment state: null before the first check completes,
+  /// then whether the most recently checked preview frame found all 4
+  /// corner marks. Purely visual feedback while framing — capture is never
+  /// blocked on this.
+  final bool? aligned;
+
+  static const double _pageAspectRatio = 595.28 / 841.89; // A4 portrait, matches every OmrExamTemplate's page size
+  static const double _insetFraction = 0.06;
+  static const double _cornerArmFraction = 0.08;
+
+  Color get _guideColor => switch (aligned) {
+    true => AppColors.primaryGreen,
+    false => AppColors.warmRedOrange,
+    null => AppColors.accentYellowGreen,
+  };
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final maxWidth = size.width * (1 - _insetFraction * 2);
+    final maxHeight = size.height * (1 - _insetFraction * 2);
+    double guideWidth = maxWidth;
+    double guideHeight = guideWidth / _pageAspectRatio;
+    if (guideHeight > maxHeight) {
+      guideHeight = maxHeight;
+      guideWidth = guideHeight * _pageAspectRatio;
+    }
+    final guideRect = Rect.fromCenter(
+      center: size.center(Offset.zero),
+      width: guideWidth,
+      height: guideHeight,
+    );
+
+    final dimPath = Path.combine(
+      PathOperation.difference,
+      Path()..addRect(Offset.zero & size),
+      Path()..addRect(guideRect),
+    );
+    canvas.drawPath(dimPath, Paint()..color = Colors.black.withOpacity(0.45));
+
+    final bracketPaint = Paint()
+      ..color = _guideColor
+      ..strokeWidth = 3
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+    final armLength = guideWidth * _cornerArmFraction;
+
+    void drawCorner(Offset corner, Offset horizontal, Offset vertical) {
+      canvas.drawLine(corner, corner + horizontal * armLength, bracketPaint);
+      canvas.drawLine(corner, corner + vertical * armLength, bracketPaint);
+    }
+
+    drawCorner(guideRect.topLeft, const Offset(1, 0), const Offset(0, 1));
+    drawCorner(guideRect.topRight, const Offset(-1, 0), const Offset(0, 1));
+    drawCorner(guideRect.bottomLeft, const Offset(1, 0), const Offset(0, -1));
+    drawCorner(guideRect.bottomRight, const Offset(-1, 0), const Offset(0, -1));
+  }
+
+  @override
+  bool shouldRepaint(covariant _PageGuidePainter oldDelegate) => aligned != oldDelegate.aligned;
 }
