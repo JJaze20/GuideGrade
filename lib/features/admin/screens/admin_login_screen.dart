@@ -47,13 +47,9 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
       final credential = await signIn();
       if (!mounted) return;
       _navigateAfterLogin(credential.user);
-    } on FirebaseAuthException catch (error) {
-      if (!mounted) return;
-      _showError(AuthService.messageFor(error));
     } catch (error) {
       if (!mounted) return;
-      print('Authentication error: $error');
-      _showError('Authentication failed. Please try again.');
+      _showError(AuthService.messageFor(error));
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -73,7 +69,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
     );
   }
 
-  void _navigateAfterLogin(User? user) {
+  void _navigateAfterLogin(User? user) async {
     if (user == null) {
       _showError('Sign-in succeeded but no user profile was returned.');
       return;
@@ -81,9 +77,20 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
 
     final appState = AppStateScope.of(context);
     
-    // For admin login, we'll route directly to admin dashboard
-    // In production, you might want to verify admin status in Firebase
-    appState.userRole = 'admin';
+    // Get user role from Firestore
+    try {
+      final firestoreUser = await _authService.getCurrentFirestoreUser();
+      
+      if (firestoreUser != null) {
+        appState.userRole = firestoreUser.role == 'system_admin' ? 'admin' : 'staff';
+      } else {
+        // Shouldn't happen with new validation, but fallback
+        appState.userRole = 'admin';
+      }
+    } catch (e) {
+      print('Error getting user role from Firestore: $e');
+      appState.userRole = 'admin'; // Fallback for admin context
+    }
     
     if (!mounted) return;
     Navigator.of(context).pushNamedAndRemoveUntil(AppRoutes.adminDashboard, (route) => false);

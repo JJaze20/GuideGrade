@@ -42,12 +42,9 @@ class _MobileLoginScreenState extends State<MobileLoginScreen> {
       final credential = await signIn();
       if (!mounted) return;
       _navigateAfterLogin(credential.user);
-    } on FirebaseAuthException catch (error) {
+    } catch (error) {
       if (!mounted) return;
       _showError(AuthService.messageFor(error));
-    } catch (_) {
-      if (!mounted) return;
-      _showError('Something went wrong. Please try again.');
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -71,7 +68,7 @@ class _MobileLoginScreenState extends State<MobileLoginScreen> {
     _runAuth(_authService.signInWithGoogle);
   }
 
-  void _navigateAfterLogin(User? user) {
+  void _navigateAfterLogin(User? user) async {
     if (user == null) {
       _showError('Sign-in succeeded but no user profile was returned.');
       return;
@@ -79,8 +76,20 @@ class _MobileLoginScreenState extends State<MobileLoginScreen> {
 
     final appState = AppStateScope.of(context);
     
-    // Mobile users always route to staff home (Guidance Council)
-    appState.userRole = 'staff';
+    // Get user role from Firestore instead of hardcoding
+    try {
+      final firestoreUser = await _authService.getCurrentFirestoreUser();
+      
+      if (firestoreUser != null) {
+        appState.userRole = firestoreUser.role == 'system_admin' ? 'admin' : 'staff';
+      } else {
+        // Fallback to staff if Firestore user not found (shouldn't happen with new validation)
+        appState.userRole = 'staff';
+      }
+    } catch (e) {
+      print('Error getting user role from Firestore: $e');
+      appState.userRole = 'staff'; // Fallback
+    }
     
     if (!mounted) return;
     Navigator.of(context).pushNamedAndRemoveUntil(AppRoutes.staffHome, (route) => false);
