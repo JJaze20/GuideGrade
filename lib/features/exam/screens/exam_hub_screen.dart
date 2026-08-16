@@ -55,13 +55,6 @@ class ExamHubScreen extends StatelessWidget {
                       onTap: () => selectAndGo('AT'),
                     ),
                     ExamCategoryCard(
-                      icon: FontAwesomeIcons.brain,
-                      label: 'Personality Profile',
-                      iconColor: const Color(0xFF2563EB),
-                      iconBg: const Color(0xFFEFF6FF),
-                      onTap: () => selectAndGo('PT'),
-                    ),
-                    ExamCategoryCard(
                       icon: FontAwesomeIcons.chalkboardUser,
                       label: 'TAT Test',
                       iconColor: const Color(0xFFD97706),

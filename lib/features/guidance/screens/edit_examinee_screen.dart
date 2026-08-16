@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
 import '../../../core/services/firestore_service.dart';
+import '../../../models/batch.dart';
 import '../../../models/examinee.dart';
 import '../../../shared/widgets/primary_button.dart';
 
@@ -31,8 +32,14 @@ class _EditExamineeScreenState extends State<EditExamineeScreen> {
   
   bool _isLoading = true;
   bool _isSaving = false;
-  
+
   ExamineeModel? _examinee;
+
+  /// The examinee's actual batch, fetched by [ExamineeModel.batchId] so the
+  /// "Batch Code" field below can show the real, human-readable
+  /// [BatchModel.batchCode] instead of the raw Firestore document ID that
+  /// [ExamineeModel.batchId] actually is.
+  BatchModel? _batch;
 
   @override
   void initState() {
@@ -52,8 +59,12 @@ class _EditExamineeScreenState extends State<EditExamineeScreen> {
       return;
     }
 
+    final batch = await _firestoreService.getBatchById(args.batchId);
+
+    if (!mounted) return;
     setState(() {
       _examinee = args;
+      _batch = batch;
       _studentNumberController = TextEditingController(text: args.studentNumber);
       _fullNameController = TextEditingController(text: args.fullName);
       _courseController = TextEditingController(text: args.course);
@@ -252,7 +263,7 @@ class _EditExamineeScreenState extends State<EditExamineeScreen> {
               const SizedBox(height: 16),
               _buildSection('Batch Information'),
               const SizedBox(height: 16),
-              _buildInfoField('Batch Code', _examinee!.batchId),
+              _buildInfoField('Batch Code', _batch?.batchCode ?? 'Unavailable'),
               const SizedBox(height: 8),
               _buildInfoField('Exam', _examinee!.examTitle),
               const SizedBox(height: 24),

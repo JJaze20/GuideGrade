@@ -49,6 +49,22 @@ class _CreateExamScreenState extends State<CreateExamScreen> {
     super.dispose();
   }
 
+  /// The only exam codes recognized by the OMR sheet layouts (omrTemplates)
+  /// -- any other value would let an exam be saved that Answer Key
+  /// Management / Exam Setup can never actually use for scanning.
+  static const Set<String> _validExamCodes = {'QTM', 'TAT', 'AT'};
+
+  String? _validateExamCode(String? value) {
+    final trimmed = (value ?? '').trim();
+    if (trimmed.isEmpty) {
+      return 'Required';
+    }
+    if (!_validExamCodes.contains(trimmed.toUpperCase())) {
+      return 'Must be exactly QTM, TAT, or AT';
+    }
+    return null;
+  }
+
   Future<bool> _checkExamCodeUniqueness(String examCode) async {
     if (examCode.isEmpty) return false;
     
@@ -73,9 +89,13 @@ class _CreateExamScreenState extends State<CreateExamScreen> {
     setState(() => _isLoading = true);
 
     try {
+      // Canonical form: trimmed, uppercase -- matches omrTemplates' keys
+      // exactly regardless of what case the user typed.
+      final examCode = _examCodeController.text.trim().toUpperCase();
+
       // Check exam code uniqueness
-      final isUnique = await _checkExamCodeUniqueness(_examCodeController.text.trim());
-      
+      final isUnique = await _checkExamCodeUniqueness(examCode);
+
       if (!isUnique) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -101,7 +121,7 @@ class _CreateExamScreenState extends State<CreateExamScreen> {
       // Create exam
       final exam = ExamModel(
         examId: '', // Will be set by Firestore
-        examCode: _examCodeController.text.trim(),
+        examCode: examCode,
         title: _titleController.text.trim(),
         category: _selectedCategory,
         totalItems: int.parse(_totalItemsController.text),
@@ -158,8 +178,9 @@ class _CreateExamScreenState extends State<CreateExamScreen> {
               _buildTextField(
                 label: 'Exam Code',
                 controller: _examCodeController,
-                hint: 'e.g., AT-2026-001',
+                hint: 'QTM, TAT, or AT',
                 required: true,
+                validator: _validateExamCode,
                 suffix: _isCheckingCode
                     ? const SizedBox(
                         width: 16,
@@ -167,6 +188,11 @@ class _CreateExamScreenState extends State<CreateExamScreen> {
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     : null,
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Must be exactly QTM, TAT, or AT -- this selects which OMR sheet layout the exam uses.',
+                style: AppTextStyles.body(size: 9, color: AppColors.textGray),
               ),
               const SizedBox(height: 12),
               _buildTextField(
@@ -181,7 +207,6 @@ class _CreateExamScreenState extends State<CreateExamScreen> {
                 value: _selectedCategory,
                 items: const [
                   'admission',
-                  'personality',
                   'aptitude',
                   'quantitative',
                 ],
@@ -219,7 +244,6 @@ class _CreateExamScreenState extends State<CreateExamScreen> {
                   'Default-50',
                   'Default-100',
                   'Admission-200',
-                  'Personality-300',
                 ],
                 onChanged: (value) {
                   if (value != null) setState(() => _selectedTemplate = value);
@@ -282,6 +306,7 @@ class _CreateExamScreenState extends State<CreateExamScreen> {
     String? hint,
     bool required = false,
     Widget? suffix,
+    String? Function(String?)? validator,
   }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -294,8 +319,9 @@ class _CreateExamScreenState extends State<CreateExamScreen> {
           ],
         ),
         const SizedBox(height: 6),
-        TextField(
+        TextFormField(
           controller: controller,
+          validator: validator,
           decoration: InputDecoration(
             hintText: hint,
             suffixIcon: suffix,

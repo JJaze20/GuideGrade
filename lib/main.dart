@@ -58,7 +58,7 @@ class _GuideGradeAppState extends State<GuideGradeApp> {
         debugShowCheckedModeBanner: false,
         theme: AppTheme.light,
         initialRoute: AppRoutes.login,
-        onGenerateRoute: AppRoutes.onGenerateRoute,
+        onGenerateRoute: (settings) => AppRoutes.onGenerateRoute(settings, widget.appState),
       ),
     );
   }

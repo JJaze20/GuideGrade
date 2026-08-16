@@ -6,6 +6,8 @@ import '../../models/exam.dart';
 import '../../models/answer_key.dart';
 import '../../models/batch.dart';
 import '../../models/examinee.dart';
+import '../../models/result.dart';
+import '../omr/answer_key_adapter.dart';
 
 /// Firestore service for all database operations.
 /// This service handles Firestore interactions for the GuideGrade application.
@@ -25,6 +27,7 @@ class FirestoreService {
   CollectionReference get _answerKeysCollection => _firestore.collection('answer_keys');
   CollectionReference get _batchesCollection => _firestore.collection('batches');
   CollectionReference get _examineesCollection => _firestore.collection('examinees');
+  CollectionReference get _resultsCollection => _firestore.collection('results');
 
   // ============================================
   // USER OPERATIONS
@@ -375,6 +378,65 @@ class FirestoreService {
     }
   }
 
+  /// Get the single current-schema Final answer key for an exam, or null if
+  /// none exists. This is the only entry point the official scan/scoring
+  /// path should use -- a legacy (pre-section-support) Final document is
+  /// still returned (so the caller can build a clear "needs re-entry"
+  /// message via answer_key_adapter.dart) but is never treated as usable.
+  ///
+  /// Throws [MultipleFinalAnswerKeysException] if more than one
+  /// current-schema Final key exists for the same exam, rather than
+  /// silently picking one -- this should be prevented by the finalize-time
+  /// guard in the answer key editor (see [hasOtherFinalAnswerKey]), so
+  /// seeing it here means that guard was bypassed (e.g. a race between two
+  /// concurrent sessions) and needs Guidance Council attention.
+  Future<AnswerKeyModel?> getFinalAnswerKeyByExamId(String examId) async {
+    try {
+      final query = await _answerKeysCollection
+          .where('examId', isEqualTo: examId)
+          .where('status', isEqualTo: 'Final')
+          .get();
+      if (query.docs.isEmpty) return null;
+
+      final keys = query.docs
+          .map((doc) => AnswerKeyModel.fromFirestore(doc.data() as Map<String, dynamic>, doc.id))
+          .toList();
+      final currentSchemaKeys = keys.where((k) => !k.isLegacy).toList();
+
+      if (currentSchemaKeys.length > 1) {
+        throw MultipleFinalAnswerKeysException(examId);
+      }
+      if (currentSchemaKeys.isNotEmpty) return currentSchemaKeys.first;
+      // No current-schema Final key, but a legacy Final one exists -- return
+      // it so the caller can explain why it can't be used, rather than
+      // reporting "no key at all".
+      return keys.first;
+    } catch (e) {
+      if (e is MultipleFinalAnswerKeysException) rethrow;
+      print('Error getting Final answer key by exam ID: $e');
+      return null;
+    }
+  }
+
+  /// True if a Final answer key other than [excludingAnswerKeyId] already
+  /// exists for [examId]. Used by the answer key editor immediately before
+  /// finalizing, so two concurrent Guidance Council sessions can't both end
+  /// up with a Final key active for the same exam.
+  Future<bool> hasOtherFinalAnswerKey(String examId, String excludingAnswerKeyId) async {
+    try {
+      final query = await _answerKeysCollection
+          .where('examId', isEqualTo: examId)
+          .where('status', isEqualTo: 'Final')
+          .get();
+      return query.docs.any((doc) => doc.id != excludingAnswerKeyId);
+    } catch (e) {
+      print('Error checking for other Final answer keys: $e');
+      // Fail closed: if this check can't be performed, don't let
+      // finalization proceed as if it were safe.
+      return true;
+    }
+  }
+
   // ============================================
   // BATCH OPERATIONS
   // ============================================
@@ -599,9 +661,86 @@ class FirestoreService {
 
   /// Stream of examinees by batch ID for real-time updates
   Stream<List<ExamineeModel>> examineesByBatchStream(String batchId) {
-    return _examineesCollection.where('batchId', isEqualTo: batchId).snapshots().map((snapshot) => 
-      snapshot.docs.map((doc) => 
+    return _examineesCollection.where('batchId', isEqualTo: batchId).snapshots().map((snapshot) =>
+      snapshot.docs.map((doc) =>
         ExamineeModel.fromFirestore(doc.data() as Map<String, dynamic>, doc.id)
+      ).toList()
+    );
+  }
+
+  // ============================================
+  // RESULT OPERATIONS
+  // ============================================
+
+  /// Get a result by its (deterministic) ID.
+  Future<ResultModel?> getResultById(String resultId) async {
+    try {
+      final doc = await _resultsCollection.doc(resultId).get();
+      if (!doc.exists) return null;
+      return ResultModel.fromFirestore(doc.data() as Map<String, dynamic>, doc.id);
+    } catch (e) {
+      print('Error getting result by ID: $e');
+      return null;
+    }
+  }
+
+  /// Get all results for a batch.
+  Future<List<ResultModel>> getResultsByBatchId(String batchId) async {
+    try {
+      final query = await _resultsCollection.where('batchId', isEqualTo: batchId).get();
+      return query.docs.map((doc) =>
+        ResultModel.fromFirestore(doc.data() as Map<String, dynamic>, doc.id)
+      ).toList();
+    } catch (e) {
+      print('Error getting results by batch ID: $e');
+      return [];
+    }
+  }
+
+  /// Creates or updates [result] at its deterministic ID
+  /// (ResultModel.buildId), and increments the owning batch's actualCount
+  /// exactly once -- only the first time a result is created for a given
+  /// exam+batch+examinee, never on a correction/re-scan of an existing one.
+  ///
+  /// Both the result write and the count increment happen inside one
+  /// Firestore transaction: either both land or neither does, so
+  /// actualCount can never drift out of sync with the number of result
+  /// documents that actually exist. Throws (without writing anything) if
+  /// the batch referenced by [result.batchId] doesn't exist.
+  Future<ResultPersistOutcome> persistResult(ResultModel result) async {
+    final docRef = _resultsCollection.doc(result.resultId);
+    final batchRef = _batchesCollection.doc(result.batchId);
+
+    return _firestore.runTransaction<ResultPersistOutcome>((transaction) async {
+      // All reads must happen before any writes in a Firestore transaction.
+      final existingSnap = await transaction.get(docRef);
+      final batchSnap = await transaction.get(batchRef);
+
+      if (!batchSnap.exists) {
+        throw StateError('Batch ${result.batchId} does not exist.');
+      }
+
+      final isNew = !existingSnap.exists;
+      transaction.set(docRef, result.toFirestore());
+
+      if (isNew) {
+        final batchData = batchSnap.data() as Map<String, dynamic>;
+        final currentCount = batchData['actualCount'] as int? ?? 0;
+        transaction.update(batchRef, {
+          'actualCount': currentCount + 1,
+          'updatedAt': DateTime.now().toIso8601String(),
+        });
+      }
+
+      return isNew ? ResultPersistOutcome.created : ResultPersistOutcome.updated;
+    });
+  }
+
+  /// Stream of results for a batch, for real-time updates.
+  Stream<List<ResultModel>> resultsByBatchStream(String batchId) {
+    return _resultsCollection.where('batchId', isEqualTo: batchId).snapshots().map((snapshot) =>
+      snapshot.docs.map((doc) =>
+        ResultModel.fromFirestore(doc.data() as Map<String, dynamic>, doc.id)
       ).toList()
     );
   }

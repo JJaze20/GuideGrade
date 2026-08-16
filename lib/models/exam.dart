@@ -3,11 +3,11 @@ class ExamModel {
   final String examId;
   final String examCode;
   final String title;
-  final String category; // 'admission' | 'personality' | 'aptitude' | 'quantitative'
+  final String category; // 'admission' | 'aptitude' | 'quantitative'
   final int totalItems;
   final int duration; // minutes
   final String instructions;
-  final String answerSheetTemplate; // e.g., 'Default-50', 'Default-100', 'Admission-200', 'Personality-300'
+  final String answerSheetTemplate; // e.g., 'Default-50', 'Default-100', 'Admission-200'
   final String status; // 'Draft' | 'Ready' | 'Archived'
   final String createdByUid;
   final String createdByName;

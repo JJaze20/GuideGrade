@@ -3,11 +3,15 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:google_sign_in/google_sign_in.dart';
 
 import 'firestore_service.dart';
+import 'logging_service.dart';
 import '../../models/user.dart';
 
 export 'firestore_service.dart' show FirestoreService;
 
-/// Custom exceptions for user access validation
+/// Thrown when the signed-in Firebase identity has no approved Firestore
+/// user record, or that record's role isn't one this app recognizes.
+/// Both cases mean the same thing to the app: this identity is not
+/// authorized to use it.
 class UserNotConfiguredException implements Exception {
   final String message;
   UserNotConfiguredException(this.message);
@@ -18,8 +22,39 @@ class UserDeactivatedException implements Exception {
   UserDeactivatedException(this.message);
 }
 
-/// Wraps Firebase Auth and Google Sign-In for the login screen.
-/// Integrates with Firestore for user document validation.
+/// Thrown when the Firestore lookup needed to authorize the user couldn't
+/// be completed at all (network error, rules denial, etc.) — kept distinct
+/// from [UserNotConfiguredException] so "we don't know" is never confused
+/// with "we know you're not allowed," and both fail closed identically.
+class UserVerificationException implements Exception {
+  final String message;
+  UserVerificationException(this.message);
+}
+
+/// Thrown when an otherwise-valid, active, known-role account signs in
+/// through the wrong platform's login screen — e.g. a `guidance_council`
+/// account using the Web Admin login, or a `system_admin` account using the
+/// mobile login. The account itself isn't invalid (unlike
+/// [UserNotConfiguredException]/[UserDeactivatedException]); it just isn't
+/// authorized to enter *this* portal.
+class WrongPortalException implements Exception {
+  final String message;
+  WrongPortalException(this.message);
+}
+
+/// Wraps Firebase Auth and Google Sign-In for the login screens.
+///
+/// Authentication (Firebase) proves *who* signed in; this class is where
+/// authorization (Firestore) decides *whether* that identity may actually
+/// use the app, and with which role. [_authorize] is the single place that
+/// makes that decision — both login screens call [signInWithEmail] /
+/// [signInWithGoogle] and get back an approved, active [UserModel] or an
+/// exception; neither screen resolves role on its own anymore.
+///
+/// Every denial path signs the Firebase (and Google, where applicable)
+/// session back out before throwing, so a rejected sign-in never leaves an
+/// authenticated-but-unauthorized session behind — this matters because
+/// route guards elsewhere key off `FirebaseAuth.instance.currentUser`.
 class AuthService {
   AuthService({
     FirebaseAuth? firebaseAuth,
@@ -33,26 +68,40 @@ class AuthService {
   final GoogleSignIn? _googleSignIn;
   final FirestoreService _firestoreService;
 
+  /// The only roles this app knows how to act on. A Firestore user document
+  /// with any other value in `role` is treated as unauthorized, not as a
+  /// silently-broader or silently-narrower access level.
+  static const Set<String> _knownRoles = {'system_admin', 'guidance_council'};
+
   User? get currentUser => _auth.currentUser;
 
-  /// Get current user from Firestore
+  /// Get current user from Firestore (the caller is assumed to already be
+  /// signed in and authorized; this does not itself authorize anything).
   Future<UserModel?> getCurrentFirestoreUser() async {
     return await _firestoreService.getCurrentUser();
   }
 
-  Future<UserCredential> signInWithEmail({
+  /// Signs in with email/password, then authorizes the result against
+  /// Firestore. Returns the approved, active [UserModel] on success.
+  /// Throws on any failure (see [_authorize]) — the caller never receives
+  /// a "success" it has to double-check.
+  ///
+  /// [requiredRole] is the role this login *portal* is for (e.g. the Web
+  /// Admin screen passes `'system_admin'`, the mobile screen passes
+  /// `'guidance_council'`) — an otherwise-valid account whose role doesn't
+  /// match is denied with [WrongPortalException], not silently let through
+  /// and routed elsewhere. This is a platform/portal check, separate from
+  /// (and in addition to) the account-validity checks in [_authorize].
+  Future<UserModel> signInWithEmail({
     required String email,
     required String password,
+    required String requiredRole,
   }) async {
     final credential = await _auth.signInWithEmailAndPassword(email: email, password: password);
-    
-    // Validate user access with Firestore after successful authentication
-    await _validateUserAccess(credential.user);
-    
-    return credential;
+    return _authorize(credential.user, requiredRole: requiredRole);
   }
 
-  Future<UserCredential> signInWithGoogle() async {
+  Future<UserModel> signInWithGoogle({required String requiredRole}) async {
     final googleSignIn = _googleSignIn;
     if (googleSignIn == null) {
       throw FirebaseAuthException(
@@ -76,11 +125,7 @@ class AuthService {
     );
 
     final authCredential = await _auth.signInWithCredential(credential);
-    
-    // Validate user access with Firestore after successful authentication
-    await _validateUserAccess(authCredential.user);
-    
-    return authCredential;
+    return _authorize(authCredential.user, requiredRole: requiredRole);
   }
 
   Future<void> signOut() async {
@@ -91,64 +136,110 @@ class AuthService {
     }
   }
 
-  /// Validate user access from Firestore
-  /// Users must exist in Firestore and be active to access the application
-  Future<void> _validateUserAccess(User? user) async {
-    if (user == null) return;
+  /// Authorizes an already-Firebase-authenticated [user] against Firestore,
+  /// for the login portal that requires [requiredRole].
+  /// Fails closed on every path:
+  ///
+  /// - No Firestore user record -> deny. Accounts are provisioned by an
+  ///   administrator beforehand (there is no in-app user-management screen
+  ///   yet); signing in with Firebase never creates one anymore.
+  /// - Record exists but `isActive == false` -> deny.
+  /// - Record exists, active, but `role` isn't one this app recognizes ->
+  ///   deny (never falls back to a default role).
+  /// - Record exists, active, known role, but that role isn't
+  ///   [requiredRole] -> deny with [WrongPortalException] (the account is
+  ///   valid, it's just using the wrong portal — e.g. a `guidance_council`
+  ///   account on the Web Admin login).
+  /// - The Firestore lookup itself fails (network, rules, etc.) -> deny;
+  ///   never treated as "not found" and never silently let through.
+  ///
+  /// Every deny path signs the user back out before throwing.
+  Future<UserModel> _authorize(User? user, {required String requiredRole}) async {
+    if (user == null) {
+      throw UserVerificationException('Sign-in succeeded but no user profile was returned.');
+    }
+
+    UserModel? firestoreUser;
+    try {
+      firestoreUser = await _firestoreService.getUserById(user.uid);
+    } catch (e) {
+      await signOut();
+      print('Auth: Firestore lookup failed while authorizing ${user.uid}: $e');
+      throw UserVerificationException('Unable to verify your account. Please try again.');
+    }
+
+    if (firestoreUser == null) {
+      await signOut();
+      throw UserNotConfiguredException(
+        'Your account is not authorized to access this system. Please contact the System Administrator.',
+      );
+    }
+
+    if (!firestoreUser.isActive) {
+      await signOut();
+      throw UserDeactivatedException(
+        'Your account has been deactivated. Please contact the System Administrator.',
+      );
+    }
+
+    if (!_knownRoles.contains(firestoreUser.role)) {
+      await signOut();
+      print('Auth: user ${user.uid} has an unrecognized role "${firestoreUser.role}"');
+      throw UserNotConfiguredException(
+        'Your account is not authorized to access this system. Please contact the System Administrator.',
+      );
+    }
+
+    if (firestoreUser.role != requiredRole) {
+      await signOut();
+      throw WrongPortalException(
+        requiredRole == 'system_admin'
+            ? 'This login is for System Administrators only. Guidance Council staff should use the GuideGrade mobile app.'
+            : 'This app is for Guidance Council staff only. System Administrators should use the Web admin console.',
+      );
+    }
 
     try {
-      final firestoreUser = await _firestoreService.getUserById(user.uid);
-      
-      if (firestoreUser == null) {
-        // TODO: Remove this automatic user creation after User Management module is implemented
-        // Development mode: Automatically create user document if it doesn't exist
-        await _firestoreService.createUserWithId(UserModel(
-          userId: user.uid,
-          email: user.email ?? '',
-          displayName: user.displayName ?? '',
-          role: 'guidance_council',
-          guidancePosition: 'guidance_staff',
-          isActive: true,
-          createdAt: DateTime.now(),
-          lastLoginAt: DateTime.now(),
-          institution: 'NDMU',
-        ));
-        print('Development mode: Auto-created user document for ${user.email}');
-      } else {
-        // User exists, check if active
-        if (!firestoreUser.isActive) {
-          // User exists but is deactivated
-          throw UserDeactivatedException(
-            'Your account has been deactivated. Please contact the System Administrator.'
-          );
-        }
-        
-        // Update last login timestamp for active users
-        await _firestoreService.updateLastLogin(user.uid);
-      }
-      
+      await _firestoreService.updateLastLogin(user.uid);
     } catch (e) {
-      if (e is UserDeactivatedException) {
-        rethrow; // Re-throw our custom exception
-      }
-      print('Error validating user access: $e');
-      // Don't block authentication for other Firestore errors
+      // Last-login is a courtesy timestamp, not an authorization signal —
+      // don't block an already-approved sign-in over it.
+      print('Auth: failed to update lastLoginAt for ${user.uid}: $e');
     }
+
+    // Only System Administrator logins are logged in v1 (Guidance Council
+    // login logging is explicitly out of scope for now — see the System
+    // Logs design). This runs only after authentication AND authorization
+    // have both fully succeeded, per the requirement that LOGIN_SUCCESS
+    // never fires for a denied or partially-completed sign-in.
+    if (firestoreUser.role == 'system_admin') {
+      await LoggingService().logLoginSuccess(firestoreUser);
+    }
+
+    return firestoreUser;
   }
 
   static String messageFor(dynamic error) {
     if (error is UserNotConfiguredException) {
       return error.message;
     }
-    
+
     if (error is UserDeactivatedException) {
       return error.message;
     }
-    
+
+    if (error is UserVerificationException) {
+      return error.message;
+    }
+
+    if (error is WrongPortalException) {
+      return error.message;
+    }
+
     if (error is FirebaseAuthException) {
       return _messageForFirebaseAuth(error);
     }
-    
+
     return 'An error occurred. Please try again.';
   }
 
@@ -171,7 +262,8 @@ class AuthService {
       case 'google-sign-in-not-available':
         return 'Google Sign-in is not available on this platform.';
       default:
-        return error.message ?? 'Sign-in failed. Please try again.';
+        // Deliberately generic: avoid surfacing raw Firebase SDK error text.
+        return 'Sign-in failed. Please try again.';
     }
   }
 }

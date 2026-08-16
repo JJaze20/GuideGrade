@@ -120,8 +120,7 @@ final kBlack = PdfColors.black;
 
 // ---------------------------------------------------------------------------
 // Exam content — item counts and choice letters preserved from the current
-// lib/core/omr/omr_templates.dart, except PT's "?" middle choice (almost
-// certainly a lost-tooling artifact) is fixed to "b".
+// lib/core/omr/omr_templates.dart.
 // ---------------------------------------------------------------------------
 
 class SectionSpec {
@@ -140,16 +139,12 @@ class ExamSpec {
 
 final List<String> _atOdd = const ['A', 'B', 'C', 'D', 'E'];
 final List<String> _atEven = const ['F', 'G', 'H', 'J', 'K'];
-final List<String> _ptChoices = const ['a', 'b', 'c'];
 final List<String> _abcd = const ['A', 'B', 'C', 'D'];
 final List<String> _tf = const ['T', 'F'];
 
 final List<ExamSpec> kExams = [
   ExamSpec('AT', 'Admission Test (AT)', [
     SectionSpec('Section 1', 72, (n) => n.isOdd ? _atOdd : _atEven),
-  ]),
-  ExamSpec('PT', 'Personality Profile (PT)', [
-    SectionSpec('Personality Profile', 185, (n) => _ptChoices),
   ]),
   ExamSpec('TAT', 'Teaching Aptitude Test (TAT)', [
     SectionSpec('Test I', 30, (n) => _abcd),

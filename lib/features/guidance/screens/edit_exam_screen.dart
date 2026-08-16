@@ -347,11 +347,15 @@ class _EditExamScreenState extends State<EditExamScreen> {
               _buildDropdown(
                 label: 'Category',
                 value: _selectedCategory,
-                items: const [
+                // 'personality' is discontinued and no longer selectable, but a
+                // legacy exam already saved with that category must still be
+                // shown without crashing the dropdown (its value must be one
+                // of `items`), so it's appended only when it's the loaded value.
+                items: [
                   'admission',
-                  'personality',
                   'aptitude',
                   'quantitative',
+                  if (_selectedCategory == 'personality') 'personality',
                 ],
                 onChanged: _isFieldEditable('category')
                     ? (value) {
@@ -388,11 +392,14 @@ class _EditExamScreenState extends State<EditExamScreen> {
               _buildDropdown(
                 label: 'Answer Sheet Template',
                 value: _selectedTemplate,
-                items: const [
+                // Same reasoning as the Category dropdown above: 'Personality-300'
+                // is discontinued but must not crash the dropdown for a legacy
+                // exam that already has it saved.
+                items: [
                   'Default-50',
                   'Default-100',
                   'Admission-200',
-                  'Personality-300',
+                  if (_selectedTemplate == 'Personality-300') 'Personality-300',
                 ],
                 onChanged: _isFieldEditable('answerSheetTemplate')
                     ? (value) {

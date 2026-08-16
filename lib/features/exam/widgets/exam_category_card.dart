@@ -5,7 +5,7 @@ import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
 
 /// Grid tile used on the Exam Hub screen to pick an assessment type
-/// (Admission Exam, Personality Profile, TAT, QTM).
+/// (Admission Exam, TAT, QTM).
 class ExamCategoryCard extends StatelessWidget {
   final FaIconData icon;
   final String label;

@@ -1,11 +1,11 @@
 /// Represents a diagnostic test batch/session shown in the
 /// Staff Home "Diagnostic Batches & Results Registry" list.
 class ActivityModel {
-  final String type; // e.g. Admission Exam, Personality Profile
+  final String type; // e.g. Admission Exam, Teaching Aptitude
   final String date;
   final String batch;
   final String status; // 'Done' | 'Pending'
-  final String examCode; // AT | PT | TAT | QTM
+  final String examCode; // AT | TAT | QTM
 
   const ActivityModel({
     required this.type,

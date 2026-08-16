@@ -4,16 +4,24 @@ import 'package:firebase_auth/firebase_auth.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
+import '../../../core/omr/answer_key_adapter.dart';
+import '../../../core/omr/omr_templates.dart';
 import '../../../core/services/firestore_service.dart';
 import '../../../models/answer_key.dart';
 import '../../../models/exam.dart';
 import '../widgets/answer_key_question.dart';
 
 /// Answer Key Management screen for Guidance Council users.
-/// Allows creation, viewing, and editing of answer keys for exams.
+///
+/// Section-aware: structure (which sections exist, how many items each
+/// has, which choices are valid per item) is always derived from
+/// omrTemplates[exam.examCode] -- never a flat 1..totalItems loop and
+/// never a locally-hardcoded choice list, so this works correctly for
+/// single-section exams (QTM, Admission) and multi-section exams (TAT's
+/// Test I / Test II / Test III, which each restart numbering at 1) alike.
 class AnswerKeyManagementScreen extends StatefulWidget {
   final ExamModel? exam;
-  
+
   const AnswerKeyManagementScreen({super.key, this.exam});
 
   @override
@@ -23,17 +31,27 @@ class AnswerKeyManagementScreen extends StatefulWidget {
 class _AnswerKeyManagementScreenState extends State<AnswerKeyManagementScreen> {
   final FirestoreService _firestoreService = FirestoreService();
   final FirebaseAuth _auth = FirebaseAuth.instance;
-  
+
   final _formKey = GlobalKey<FormState>();
-  
+
   ExamModel? _exam;
+  OmrExamTemplate? _template;
   AnswerKeyModel? _answerKey;
-  
-  Map<String, String> _answers = {};
+
+  Map<String, Map<String, String>> _answers = {};
   String _version = '1.0';
   bool _isLoading = true;
   bool _isSaving = false;
   String _validationError = '';
+
+  /// Non-empty when the loaded key predates section support -- explains
+  /// what was (or wasn't) carried over into [_answers].
+  String _compatibilityNote = '';
+
+  /// True only for a legacy TAT key: its structure can't be safely
+  /// reinterpreted at all, so every field starts blank and must be
+  /// re-entered before this key can be saved/finalized again.
+  bool _isLegacyBlocked = false;
 
   @override
   void initState() {
@@ -53,25 +71,56 @@ class _AnswerKeyManagementScreenState extends State<AnswerKeyManagementScreen> {
       return;
     }
 
+    final template = omrTemplates[args.examCode];
+
     setState(() {
       _exam = args;
+      _template = template;
+      _answers = template != null ? emptySectionAnswers(template) : {};
       _isLoading = false;
     });
 
-    // Load existing answer key
     await _loadAnswerKey();
   }
 
   Future<void> _loadAnswerKey() async {
-    if (_exam == null) return;
+    if (_exam == null || _template == null) return;
 
     try {
       final existingKey = await _firestoreService.getAnswerKeyByExamId(_exam!.examId);
-      if (existingKey != null) {
+      if (existingKey == null) {
+        setState(() {
+          _answerKey = null;
+          _answers = emptySectionAnswers(_template!);
+          _compatibilityNote = '';
+          _isLegacyBlocked = false;
+        });
+        return;
+      }
+
+      if (existingKey.isLegacy) {
+        final migration = migrateLegacyAnswerKeyForEditing(existingKey, _template!, _exam!.examCode);
         setState(() {
           _answerKey = existingKey;
-          _answers = Map.from(existingKey.answers);
           _version = existingKey.version;
+          _answers = migration.blocked ? emptySectionAnswers(_template!) : migration.prefill;
+          _compatibilityNote = migration.note;
+          _isLegacyBlocked = migration.blocked;
+        });
+      } else {
+        // Merge onto an empty template shape so a key saved under an older
+        // (but still current-schema) template revision doesn't leave any
+        // section/item missing from the editable state.
+        final merged = emptySectionAnswers(_template!);
+        existingKey.answers.forEach((sectionName, items) {
+          if (merged.containsKey(sectionName)) merged[sectionName] = Map.of(items);
+        });
+        setState(() {
+          _answerKey = existingKey;
+          _version = existingKey.version;
+          _answers = merged;
+          _compatibilityNote = '';
+          _isLegacyBlocked = false;
         });
       }
     } catch (e) {
@@ -80,7 +129,7 @@ class _AnswerKeyManagementScreenState extends State<AnswerKeyManagementScreen> {
   }
 
   Future<void> _saveDraft() async {
-    if (_exam == null) return;
+    if (_exam == null || _template == null) return;
     if (!_formKey.currentState!.validate()) return;
 
     setState(() => _isSaving = true);
@@ -97,7 +146,6 @@ class _AnswerKeyManagementScreenState extends State<AnswerKeyManagementScreen> {
         return;
       }
 
-      // Validate
       final validationError = _validateAnswers();
       if (validationError != null) {
         setState(() {
@@ -110,16 +158,15 @@ class _AnswerKeyManagementScreenState extends State<AnswerKeyManagementScreen> {
       setState(() => _validationError = '');
 
       if (_answerKey == null) {
-        // Create new answer key
         final newAnswerKey = AnswerKeyModel(
           answerKeyId: '',
           examId: _exam!.examId,
           version: '1.0',
           status: 'Draft',
-          answerFormat: 'multiple_choice',
-          allowedChoices: ['A', 'B', 'C', 'D'],
+          schemaVersion: AnswerKeyModel.currentSchemaVersion,
           answers: _answers,
-          totalItems: _exam!.totalItems,
+          legacyFlatAnswers: const {},
+          totalItems: _totalItems,
           createdByUid: currentUser.uid,
           createdByName: currentUser.displayName ?? 'Unknown',
           createdAt: DateTime.now(),
@@ -127,13 +174,14 @@ class _AnswerKeyManagementScreenState extends State<AnswerKeyManagementScreen> {
         );
 
         final answerKeyId = await _firestoreService.createAnswerKey(newAnswerKey);
-        
+
         setState(() {
           _answerKey = newAnswerKey.copyWith(answerKeyId: answerKeyId);
           _version = '1.0';
+          _compatibilityNote = '';
+          _isLegacyBlocked = false;
         });
       } else {
-        // Update existing answer key
         final updatedKey = _answerKey!.copyWith(
           answers: _answers,
           version: _incrementVersion(_answerKey!.version),
@@ -141,10 +189,12 @@ class _AnswerKeyManagementScreenState extends State<AnswerKeyManagementScreen> {
         );
 
         await _firestoreService.updateAnswerKey(updatedKey);
-        
+
         setState(() {
           _answerKey = updatedKey;
           _version = updatedKey.version;
+          _compatibilityNote = '';
+          _isLegacyBlocked = false;
         });
       }
 
@@ -166,7 +216,6 @@ class _AnswerKeyManagementScreenState extends State<AnswerKeyManagementScreen> {
   }
 
   Future<void> _finalizeAnswerKey() async {
-    // Show confirmation dialog
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
@@ -187,7 +236,6 @@ class _AnswerKeyManagementScreenState extends State<AnswerKeyManagementScreen> {
 
     if (confirmed != true) return;
 
-    // Validate before finalizing
     final validationError = _validateAnswers();
     if (validationError != null) {
       if (mounted) {
@@ -201,28 +249,48 @@ class _AnswerKeyManagementScreenState extends State<AnswerKeyManagementScreen> {
     setState(() => _isSaving = true);
 
     try {
-      if (_answerKey == null) {
-        // First finalize - save as Final directly
-        final currentUser = _auth.currentUser;
-        if (currentUser == null) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Unable to get user information')),
-            );
-          }
-          setState(() => _isSaving = false);
-          return;
+      final currentUser = _auth.currentUser;
+      if (currentUser == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Unable to get user information')),
+          );
         }
+        setState(() => _isSaving = false);
+        return;
+      }
 
+      // Safe finalization: refuse if another Final key already exists for
+      // this exam (e.g. a concurrent Guidance Council session finalized one
+      // in the meantime), rather than silently ending up with two.
+      final hasOther = await _firestoreService.hasOtherFinalAnswerKey(
+        _exam!.examId,
+        _answerKey?.answerKeyId ?? '',
+      );
+      if (hasOther) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Another Final answer key already exists for this exam. Refresh and review it before finalizing this one.',
+              ),
+            ),
+          );
+        }
+        setState(() => _isSaving = false);
+        return;
+      }
+
+      if (_answerKey == null) {
         final newAnswerKey = AnswerKeyModel(
           answerKeyId: '',
           examId: _exam!.examId,
           version: '1.0',
           status: 'Final',
-          answerFormat: 'multiple_choice',
-          allowedChoices: ['A', 'B', 'C', 'D'],
+          schemaVersion: AnswerKeyModel.currentSchemaVersion,
           answers: _answers,
-          totalItems: _exam!.totalItems,
+          legacyFlatAnswers: const {},
+          totalItems: _totalItems,
           createdByUid: currentUser.uid,
           createdByName: currentUser.displayName ?? 'Unknown',
           createdAt: DateTime.now(),
@@ -230,13 +298,14 @@ class _AnswerKeyManagementScreenState extends State<AnswerKeyManagementScreen> {
         );
 
         final answerKeyId = await _firestoreService.createAnswerKey(newAnswerKey);
-        
+
         setState(() {
           _answerKey = newAnswerKey.copyWith(answerKeyId: answerKeyId);
           _version = '1.0';
+          _compatibilityNote = '';
+          _isLegacyBlocked = false;
         });
       } else {
-        // Update to Final
         final updatedKey = _answerKey!.copyWith(
           answers: _answers,
           status: 'Final',
@@ -245,10 +314,12 @@ class _AnswerKeyManagementScreenState extends State<AnswerKeyManagementScreen> {
         );
 
         await _firestoreService.updateAnswerKey(updatedKey);
-        
+
         setState(() {
           _answerKey = updatedKey;
           _version = updatedKey.version;
+          _compatibilityNote = '';
+          _isLegacyBlocked = false;
         });
       }
 
@@ -269,31 +340,42 @@ class _AnswerKeyManagementScreenState extends State<AnswerKeyManagementScreen> {
     }
   }
 
-  String? _validateAnswers() {
-    if (_exam == null) return 'Exam data not loaded';
+  int get _totalItems =>
+      _template?.sections.fold<int>(0, (sum, s) => sum + s.itemCount) ?? _exam?.totalItems ?? 0;
 
-    // Check for blank answers
-    final blankQuestions = <int>[];
-    for (int i = 1; i <= _exam!.totalItems; i++) {
-      if (!_answers.containsKey(i.toString()) || _answers[i.toString()]!.isEmpty) {
-        blankQuestions.add(i);
+  /// Section-aware validation: every item in every section of the template
+  /// must have a non-empty, template-valid answer. Never a flat
+  /// 1..totalItems loop -- that's exactly what let TAT's Test I/II/III
+  /// collide under one continuous count before this rewrite.
+  String? _validateAnswers() {
+    if (_exam == null || _template == null) return 'Exam data not loaded';
+    if (_isLegacyBlocked) {
+      return 'This answer key predates section support and must be fully re-entered before saving.';
+    }
+
+    final missing = <String>[];
+    for (final section in _template!.sections) {
+      final sectionAnswers = _answers[section.name] ?? {};
+      for (final itemNumber in section.items.keys) {
+        final value = sectionAnswers[itemNumber.toString()];
+        if (value == null || value.isEmpty) {
+          missing.add('${section.name} Q$itemNumber');
+        }
       }
     }
-
-    if (blankQuestions.isNotEmpty) {
-      return 'Please provide answers for questions: ${blankQuestions.join(', ')}';
+    if (missing.isNotEmpty) {
+      final shown = missing.take(8).join(', ');
+      final suffix = missing.length > 8 ? ' (+${missing.length - 8} more)' : '';
+      return 'Please provide answers for: $shown$suffix';
     }
 
-    // Check answer count matches totalItems
-    if (_answers.length != _exam!.totalItems) {
-      return 'Number of answers (${_answers.length}) must match total items (${_exam!.totalItems})';
-    }
-
-    // Check answers are in allowed choices
-    if (_answerKey != null) {
-      for (final entry in _answers.entries) {
-        if (!_answerKey!.allowedChoices.contains(entry.value)) {
-          return 'Invalid answer for question ${entry.key}: ${entry.value}';
+    for (final section in _template!.sections) {
+      final sectionAnswers = _answers[section.name]!;
+      for (final itemNumber in section.items.keys) {
+        final valid = section.items[itemNumber]!.map((b) => b.choice).toSet();
+        final value = sectionAnswers[itemNumber.toString()];
+        if (!valid.contains(value)) {
+          return 'Invalid answer for ${section.name} Q$itemNumber: $value';
         }
       }
     }
@@ -302,7 +384,6 @@ class _AnswerKeyManagementScreenState extends State<AnswerKeyManagementScreen> {
   }
 
   String _incrementVersion(String currentVersion) {
-    // Simple version increment: 1.0 -> 1.1 -> 1.2 -> 1.3
     final parts = currentVersion.split('.');
     if (parts.length == 2) {
       final major = int.tryParse(parts[0]) ?? 1;
@@ -313,7 +394,6 @@ class _AnswerKeyManagementScreenState extends State<AnswerKeyManagementScreen> {
   }
 
   String _incrementMajorVersion(String currentVersion) {
-    // Major version increment: 1.3 -> 2.0
     final parts = currentVersion.split('.');
     if (parts.length == 2) {
       final major = int.tryParse(parts[0]) ?? 1;
@@ -334,6 +414,13 @@ class _AnswerKeyManagementScreenState extends State<AnswerKeyManagementScreen> {
     return _answerKey!.isDraft;
   }
 
+  void _setAnswer(String sectionName, int itemNumber, String value) {
+    setState(() {
+      _answers.putIfAbsent(sectionName, () => {});
+      _answers[sectionName]![itemNumber.toString()] = value;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
@@ -345,6 +432,15 @@ class _AnswerKeyManagementScreenState extends State<AnswerKeyManagementScreen> {
     if (_exam == null) {
       return const Scaffold(
         body: Center(child: Text('Error loading exam')),
+      );
+    }
+
+    if (_template == null) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Answer Key Management')),
+        body: Center(
+          child: Text('No sheet layout is defined for exam code "${_exam!.examCode}".'),
+        ),
       );
     }
 
@@ -371,7 +467,6 @@ class _AnswerKeyManagementScreenState extends State<AnswerKeyManagementScreen> {
           child: ListView(
             padding: const EdgeInsets.all(16),
             children: [
-              // Exam information
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
@@ -382,10 +477,7 @@ class _AnswerKeyManagementScreenState extends State<AnswerKeyManagementScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      _exam!.title,
-                      style: AppTextStyles.heading(size: 13),
-                    ),
+                    Text(_exam!.title, style: AppTextStyles.heading(size: 13)),
                     const SizedBox(height: 4),
                     Text(
                       'Code: ${_exam!.examCode}',
@@ -394,7 +486,9 @@ class _AnswerKeyManagementScreenState extends State<AnswerKeyManagementScreen> {
                     const SizedBox(height: 8),
                     Row(
                       children: [
-                        _buildInfoChip('Total Items', '${_exam!.totalItems}'),
+                        _buildInfoChip('Total Items', '$_totalItems'),
+                        const SizedBox(width: 8),
+                        _buildInfoChip('Sections', '${_template!.sections.length}'),
                         const SizedBox(width: 8),
                         _buildInfoChip('Status', _exam!.status),
                       ],
@@ -404,7 +498,6 @@ class _AnswerKeyManagementScreenState extends State<AnswerKeyManagementScreen> {
               ),
               const SizedBox(height: 16),
 
-              // Answer key information
               if (_answerKey != null)
                 Container(
                   padding: const EdgeInsets.all(16),
@@ -419,10 +512,7 @@ class _AnswerKeyManagementScreenState extends State<AnswerKeyManagementScreen> {
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            'Answer Key',
-                            style: AppTextStyles.body(size: 11, weight: FontWeight.w700),
-                          ),
+                          Text('Answer Key', style: AppTextStyles.body(size: 11, weight: FontWeight.w700)),
                           const SizedBox(height: 4),
                           Text(
                             'Version: $_version',
@@ -436,7 +526,28 @@ class _AnswerKeyManagementScreenState extends State<AnswerKeyManagementScreen> {
                 ),
               const SizedBox(height: 16),
 
-              // Validation error
+              if (_compatibilityNote.isNotEmpty)
+                Container(
+                  margin: const EdgeInsets.only(bottom: 16),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.amber.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.info_outline, size: 16, color: Colors.amber.shade900),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _compatibilityNote,
+                          style: AppTextStyles.body(size: 10, color: Colors.amber.shade900),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
               if (_validationError.isNotEmpty)
                 Container(
                   padding: const EdgeInsets.all(12),
@@ -459,36 +570,21 @@ class _AnswerKeyManagementScreenState extends State<AnswerKeyManagementScreen> {
                 ),
               const SizedBox(height: 16),
 
-              // Questions
               Text(
                 'Answers',
                 style: AppTextStyles.body(size: 11, weight: FontWeight.w700, color: AppColors.primaryGreen),
               ),
               const SizedBox(height: 12),
 
-              ...List.generate(_exam!.totalItems, (index) {
-                final questionNum = index + 1;
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: AnswerKeyQuestion(
-                    questionNumber: questionNum,
-                    selectedAnswer: _answers[questionNum.toString()],
-                    allowedChoices: _answerKey?.allowedChoices ?? ['A', 'B', 'C', 'D'],
-                    enabled: !isReadOnly,
-                    onChanged: (value) {
-                      if (value != null) {
-                        setState(() {
-                          _answers[questionNum.toString()] = value;
-                        });
-                      }
-                    },
-                  ),
-                );
-              }),
+              // One card per OmrSection (Test I / Test II / Test III for
+              // TAT, a single section for QTM/Admission), each with its own
+              // independently-numbered items and its own valid choice set
+              // per item -- sourced entirely from the template, not a
+              // second stored copy.
+              ..._template!.sections.map((section) => _buildSectionCard(section, isReadOnly)),
 
               const SizedBox(height: 24),
 
-              // Actions
               if (!isReadOnly)
                 Column(
                   children: [
@@ -558,6 +654,45 @@ class _AnswerKeyManagementScreenState extends State<AnswerKeyManagementScreen> {
     );
   }
 
+  Widget _buildSectionCard(OmrSection section, bool isReadOnly) {
+    final itemNumbers = section.items.keys.toList()..sort();
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.cardBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '${section.name}  ·  ${section.itemCount} items',
+            style: AppTextStyles.body(size: 11.5, weight: FontWeight.w800, color: AppColors.primaryGreen),
+          ),
+          const SizedBox(height: 10),
+          ...itemNumbers.map((itemNumber) {
+            final choices = section.items[itemNumber]!.map((b) => b.choice).toList();
+            final selected = _answers[section.name]?[itemNumber.toString()];
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: AnswerKeyQuestion(
+                questionNumber: itemNumber,
+                selectedAnswer: selected,
+                allowedChoices: choices,
+                enabled: !isReadOnly && !_isLegacyBlocked,
+                onChanged: (value) {
+                  if (value != null) _setAnswer(section.name, itemNumber, value);
+                },
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+
   Widget _buildInfoChip(String label, String value) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -598,11 +733,7 @@ class _AnswerKeyManagementScreenState extends State<AnswerKeyManagementScreen> {
       ),
       child: Text(
         status,
-        style: AppTextStyles.body(
-          size: 10,
-          weight: FontWeight.w600,
-          color: textColor,
-        ),
+        style: AppTextStyles.body(size: 10, weight: FontWeight.w600, color: textColor),
       ),
     );
   }

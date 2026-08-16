@@ -58,6 +58,17 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
   String? _cameraError;
   bool _isCapturing = false;
 
+  /// Bumped every time camera setup is (re)started or torn down. An
+  /// in-flight [_setUpCamera] call captures the generation it was started
+  /// under and checks it again after every await — if it no longer
+  /// matches, a newer setup or a teardown has superseded this one, so its
+  /// (possibly just-initialized) controller is disposed immediately
+  /// instead of being handed to the widget tree. This is what prevents a
+  /// stale controller from a rapid pause/resume (or a resume racing a
+  /// still-in-flight initial setup) from ever landing in
+  /// [_cameraController].
+  int _cameraGeneration = 0;
+
   /// Live, advisory-only alignment feedback for the on-screen guide: null
   /// until the first frame check completes, then whether the most recent
   /// checked frame found all 4 corner marks. The post-capture check in
@@ -77,9 +88,11 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
   }
 
   Future<void> _setUpCamera() async {
+    final myGeneration = ++_cameraGeneration;
     setState(() => _cameraError = null);
     try {
       final cameras = await availableCameras();
+      if (!mounted || myGeneration != _cameraGeneration) return;
       if (cameras.isEmpty) {
         setState(() => _cameraError = 'No camera was found on this device.');
         return;
@@ -94,7 +107,14 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
         enableAudio: false,
       );
       await controller.initialize();
-      if (!mounted) return;
+      if (!mounted || myGeneration != _cameraGeneration) {
+        // The widget is gone, or a newer setup/teardown has already
+        // superseded this call (e.g. a quick pause->resume) while this one
+        // was still initializing. Never hand a controller from an outdated
+        // attempt to the widget tree -- dispose it immediately instead.
+        await controller.dispose();
+        return;
+      }
       setState(() => _cameraController = controller);
       try {
         await controller.startImageStream(_onCameraFrame);
@@ -104,30 +124,48 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
         // still work fine without it.
       }
     } on CameraException catch (e) {
-      if (!mounted) return;
+      if (!mounted || myGeneration != _cameraGeneration) return;
       setState(() {
         _cameraError = e.code == 'CameraAccessDenied' || e.code == 'CameraAccessDeniedWithoutPrompt'
             ? 'Camera permission was denied. Enable it in your device settings to scan sheets.'
             : 'Could not start the camera (${e.description ?? e.code}).';
       });
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || myGeneration != _cameraGeneration) return;
       setState(() => _cameraError = 'Could not start the camera ($e).');
     }
   }
 
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) async {
+  /// Detaches [_cameraController] from the widget tree synchronously --
+  /// before any async stop/dispose work starts -- so that no later rebuild
+  /// (even one racing in from an unrelated notifyListeners firing while
+  /// stopImageStream/dispose are still in flight) can ever construct a
+  /// CameraPreview against a controller that's mid-teardown or already
+  /// disposed. This is what [didChangeAppLifecycleState] and [dispose] both
+  /// use, so there's exactly one teardown path.
+  void _teardownCamera({required bool notify}) {
+    _cameraGeneration++; // invalidate any in-flight _setUpCamera call
     final controller = _cameraController;
-    if (controller == null || !controller.value.isInitialized) return;
-
-    if (state == AppLifecycleState.inactive || state == AppLifecycleState.paused) {
-      if (controller.value.isStreamingImages) {
-        await controller.stopImageStream();
-      }
-      await controller.dispose();
+    if (controller == null) return;
+    if (notify) {
+      setState(() {
+        _cameraController = null;
+        _liveAligned = null;
+      });
+    } else {
       _cameraController = null;
       _liveAligned = null;
+    }
+    if (controller.value.isStreamingImages) {
+      controller.stopImageStream();
+    }
+    controller.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive || state == AppLifecycleState.paused) {
+      _teardownCamera(notify: true);
     } else if (state == AppLifecycleState.resumed) {
       _initializeFuture = _setUpCamera();
       setState(() {});
@@ -137,12 +175,11 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    // notify: false -- setState is not safe to call once dispose() has
+    // started; the field reset alone is enough since the widget is being
+    // torn down and won't rebuild again.
+    _teardownCamera(notify: false);
     _scanController.dispose();
-    final controller = _cameraController;
-    if (controller != null && controller.value.isStreamingImages) {
-      controller.stopImageStream();
-    }
-    controller?.dispose();
     super.dispose();
   }
 
