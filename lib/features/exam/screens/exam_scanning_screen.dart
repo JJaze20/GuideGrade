@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -18,30 +20,28 @@ AlignmentCheck _checkAlignment(_AlignmentCheckRequest request) {
   return const OmrDecoder().locateCorners(request.imagePath, request.template);
 }
 
-class _LiveAlignmentRequest {
+class _LiveCornersRequest {
   final Uint8List lumaBytes;
   final int width;
   final int height;
   final int bytesPerRow;
-  final OmrExamTemplate template;
-  const _LiveAlignmentRequest(this.lumaBytes, this.width, this.height, this.bytesPerRow, this.template);
+  const _LiveCornersRequest(this.lumaBytes, this.width, this.height, this.bytesPerRow);
 }
 
-AlignmentCheck _checkLiveAlignment(_LiveAlignmentRequest request) {
-  return const OmrDecoder().checkAlignmentFromLuma(
+List<bool> _checkLiveCorners(_LiveCornersRequest request) {
+  return const OmrDecoder().checkCornersFromLuma(
     request.lumaBytes,
     request.width,
     request.height,
     request.bytesPerRow,
-    request.template,
   );
 }
 
 /// OMR Scanner Loop — mirrors SCREENS.EXAM_SCANNING.
-/// Shows a live camera feed inside a capture viewfinder with an alignment
-/// overlay and scan-line animation, and lets the user photograph each
-/// answer sheet ("Scan Next" captures + advances) before compiling the
-/// batch ("Compile Data").
+/// Shows a live camera feed inside a capture viewfinder with a live
+/// per-corner alignment overlay, and lets the user photograph each answer
+/// sheet ("Scan Next" captures + advances) before compiling the batch
+/// ("Compile Data").
 class ExamScanningScreen extends StatefulWidget {
   const ExamScanningScreen({super.key});
 
@@ -49,30 +49,63 @@ class ExamScanningScreen extends StatefulWidget {
   State<ExamScanningScreen> createState() => _ExamScanningScreenState();
 }
 
-class _ExamScanningScreenState extends State<ExamScanningScreen>
-    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
-  late final AnimationController _scanController;
-
+class _ExamScanningScreenState extends State<ExamScanningScreen> with WidgetsBindingObserver {
   CameraController? _cameraController;
   Future<void>? _initializeFuture;
   String? _cameraError;
   bool _isCapturing = false;
 
-  /// Live, advisory-only alignment feedback for the on-screen guide: null
-  /// until the first frame check completes, then whether the most recent
-  /// checked frame found all 4 corner marks. The post-capture check in
-  /// [_capture] remains the real gate (Retake/Use Anyway) — this only
-  /// colors the guide while framing, and runs against lower-effort preview
-  /// frames rather than the full-resolution captured photo.
-  bool? _liveAligned;
+  /// Live, per-corner feedback: null until the first frame check completes,
+  /// then whether each of the 4 corner marks (in
+  /// [OmrExamTemplate.cornerMarkers] order) was found in the most recently
+  /// checked frame. This now also gates capture (see [_readyToCapture]) —
+  /// it isn't purely advisory any more — but the post-capture check in
+  /// [_capture] remains the authoritative gate, since it runs against the
+  /// actual full-resolution captured photo rather than these lower-effort
+  /// preview frames, and a page can still fail it even after this live
+  /// signal read all 4 as found.
+  List<bool>? _liveCornersFound;
   DateTime? _lastFrameCheckAt;
   bool _frameCheckInFlight = false;
+
+  /// When all 4 corners most recently read as found, continuously — set the
+  /// moment they first do, cleared the instant any check comes back with
+  /// fewer than 4. [_readyToCapture] requires this to have held for
+  /// [_requiredStableDuration] before allowing a capture, so a single
+  /// flickery "4/4" frame (a brief glare, a shaky hand) can't by itself
+  /// trigger a scan.
+  DateTime? _all4FoundSince;
+
+  /// How long all 4 corners must read as continuously found before capture
+  /// is allowed. Live checks land roughly every 600ms
+  /// ([_onCameraFrame]'s throttle), so this requires at least one
+  /// corroborating re-check beyond the frame that first read 4/4, not just
+  /// that single frame.
+  static const Duration _requiredStableDuration = Duration(milliseconds: 500);
+
+  /// Hard gate on capture: every corner must currently read as found *and*
+  /// have done so continuously for [_requiredStableDuration]. The "Scan
+  /// Next" button is disabled whenever this is false (see [build]), and
+  /// [_capture] re-checks it defensively before ever calling
+  /// `takePicture()` — there should be no path to a capture attempt while
+  /// this is false, let alone to a scan result.
+  bool get _readyToCapture {
+    final since = _all4FoundSince;
+    return since != null && DateTime.now().difference(since) >= _requiredStableDuration;
+  }
+
+  /// Neutral until the first live check completes, green once all 4
+  /// anchors are currently found, red otherwise (some or none found).
+  Color get _scanWindowBorderColor {
+    final found = _liveCornersFound;
+    if (found == null) return AppColors.accentYellowGreen;
+    return found.every((f) => f) ? AppColors.primaryGreen : AppColors.warmRedOrange;
+  }
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _scanController = AnimationController(vsync: this, duration: const Duration(seconds: 2))..repeat();
     _initializeFuture = _setUpCamera();
   }
 
@@ -90,12 +123,27 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
       );
       final controller = CameraController(
         backCamera,
-        ResolutionPreset.high,
+        // veryHigh (1080p, ~2MP) over the previous `high` (720p, ~0.92MP) —
+        // a page with 72 small bubble rows needs real resolution to read
+        // reliably; 720p was giving the decoder noticeably fewer pixels
+        // per bubble than the phone's actual camera is capable of.
+        ResolutionPreset.veryHigh,
         enableAudio: false,
       );
       await controller.initialize();
       if (!mounted) return;
       setState(() => _cameraController = controller);
+      try {
+        // Not guaranteed by default — explicitly keep the camera actively
+        // refocusing/re-exposing on whatever's in frame (the sheet, once
+        // the user positions it), rather than whatever the platform
+        // happened to lock onto during initialization.
+        await controller.setFocusMode(FocusMode.auto);
+        await controller.setExposureMode(ExposureMode.auto);
+      } catch (_) {
+        // Not all devices/lenses support explicit focus/exposure mode
+        // control; capture still works with whatever the platform default is.
+      }
       try {
         await controller.startImageStream(_onCameraFrame);
       } catch (_) {
@@ -127,7 +175,8 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
       }
       await controller.dispose();
       _cameraController = null;
-      _liveAligned = null;
+      _liveCornersFound = null;
+      _all4FoundSince = null;
     } else if (state == AppLifecycleState.resumed) {
       _initializeFuture = _setUpCamera();
       setState(() {});
@@ -137,7 +186,6 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _scanController.dispose();
     final controller = _cameraController;
     if (controller != null && controller.value.isStreamingImages) {
       controller.stopImageStream();
@@ -146,9 +194,10 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
     super.dispose();
   }
 
-  /// Throttled, advisory-only live check: at most once every 600ms, and
-  /// never overlapping a check already in flight, so this stays cheap
-  /// enough to run continuously while framing.
+  /// Throttled live check: at most once every 600ms, and never overlapping
+  /// a check already in flight, so this stays cheap enough to run
+  /// continuously while framing. Feeds both the on-screen indicator and
+  /// [_readyToCapture]'s stabilization tracking.
   void _onCameraFrame(CameraImage image) {
     if (!mounted || _frameCheckInFlight) return;
     final now = DateTime.now();
@@ -162,12 +211,19 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
     _frameCheckInFlight = true;
     final plane = image.planes.first;
     compute(
-      _checkLiveAlignment,
-      _LiveAlignmentRequest(plane.bytes, image.width, image.height, plane.bytesPerRow, template),
-    ).then((check) {
+      _checkLiveCorners,
+      _LiveCornersRequest(plane.bytes, image.width, image.height, plane.bytesPerRow),
+    ).then((found) {
       _frameCheckInFlight = false;
       if (!mounted) return;
-      setState(() => _liveAligned = check.aligned);
+      setState(() {
+        _liveCornersFound = found;
+        if (found.every((f) => f)) {
+          _all4FoundSince ??= now;
+        } else {
+          _all4FoundSince = null;
+        }
+      });
     }).catchError((_) {
       _frameCheckInFlight = false;
     });
@@ -176,6 +232,11 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
   Future<void> _capture(AppState appState) async {
     final controller = _cameraController;
     if (controller == null || !controller.value.isInitialized || _isCapturing) return;
+    // Defensive re-check: the "Scan Next" button is already disabled unless
+    // this holds (see build()), but re-checking here means there's no path
+    // to takePicture() while corners aren't confidently, stably found —
+    // not just a button-state assumption.
+    if (!_readyToCapture) return;
 
     setState(() => _isCapturing = true);
     try {
@@ -184,9 +245,15 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
       if (template != null) {
         final check = await compute(_checkAlignment, _AlignmentCheckRequest(file.path, template));
         if (!check.aligned) {
+          // The live check above is advisory-strength (a lower-effort
+          // preview frame); this one runs the real decoder's corner search
+          // against the actual captured photo and is authoritative. No
+          // bypass — a photo that fails this is always discarded, never
+          // added to the batch, so an unconfirmed page geometry can never
+          // reach perspective correction, bubble sampling, or scoring.
           if (!mounted) return;
-          final useAnyway = await _showMisalignedDialog(check.message);
-          if (useAnyway != true) return; // Retake: discard this photo.
+          await _showMisalignedDialog(check.message);
+          return;
         }
       }
       if (!mounted) return;
@@ -206,18 +273,19 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
     }
   }
 
-  /// Returns true if the user chose to keep the photo despite the alignment
-  /// check failing, false (or null, if dismissed) to retake it.
-  Future<bool?> _showMisalignedDialog(String? message) {
-    return showDialog<bool>(
+  /// Informational only — always ends with the photo discarded. There is
+  /// no "use anyway" option: a page whose 4 corners weren't confirmed on
+  /// the actual captured photo is always rejected, per the hard
+  /// all-4-corners requirement.
+  Future<void> _showMisalignedDialog(String? message) {
+    return showDialog<void>(
       context: context,
       barrierDismissible: false,
       builder: (context) => AlertDialog(
-        title: const Text('Photo may not be aligned'),
-        content: Text(message ?? "This sheet's corner markers weren't found clearly in this photo."),
+        title: const Text('Page not fully detected'),
+        content: Text(message ?? 'Page not fully detected. Please align the sheet and try again.'),
         actions: [
-          TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Retake')),
-          TextButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Use Anyway')),
+          TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Try Again')),
         ],
       ),
     );
@@ -235,9 +303,29 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
     Navigator.of(context).pushReplacementNamed(AppRoutes.examResults);
   }
 
+  static const _defaultCornerFractions = [(0.05, 0.05), (0.95, 0.05), (0.05, 0.95), (0.95, 0.95)];
+
   @override
   Widget build(BuildContext context) {
     final appState = AppStateScope.of(context);
+    final activeTemplate = omrTemplates[appState.activeExamCode];
+    final cornerFractions = activeTemplate == null
+        ? _defaultCornerFractions
+        : activeTemplate.cornerMarkers.map((c) => (c.xFrac, c.yFrac)).toList();
+
+    // The 4 corner marks aren't necessarily near the page's literal
+    // (0,0)-(1,1) edges (a narrow bubble grid leaves them well inside the
+    // page — see the comment on OmrDecoder.decode's dstCorners), so the
+    // guide box's real-world aspect ratio has to come from the marks'
+    // actual bounding box, not the full page's aspect ratio, or the guide
+    // rectangle drawn on screen won't match the marks' true proportions.
+    final pageWidthPt = activeTemplate?.pageWidthPt ?? 595.28;
+    final pageHeightPt = activeTemplate?.pageHeightPt ?? 841.89;
+    final markerXs = [for (final c in cornerFractions) c.$1];
+    final markerYs = [for (final c in cornerFractions) c.$2];
+    final markerAspectRatio =
+        ((markerXs.reduce(math.max) - markerXs.reduce(math.min)) * pageWidthPt) /
+        ((markerYs.reduce(math.max) - markerYs.reduce(math.min)) * pageHeightPt);
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -289,48 +377,42 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
                             child: Container(
                               decoration: BoxDecoration(
                                 borderRadius: BorderRadius.circular(24),
-                                border: Border.all(color: AppColors.accentYellowGreen.withOpacity(0.6), width: 2),
+                                border: Border.all(color: _scanWindowBorderColor.withOpacity(0.85), width: 3),
                               ),
                             ),
                           ),
                           if (_cameraController?.value.isInitialized == true) ...[
-                            Positioned.fill(child: IgnorePointer(child: CustomPaint(painter: _PageGuidePainter(_liveAligned)))),
-                            AnimatedBuilder(
-                              animation: _scanController,
-                              builder: (context, child) {
-                                return Positioned(
-                                  top: _scanController.value * 320,
-                                  left: 0,
-                                  right: 0,
-                                  child: Container(
-                                    height: 2,
-                                    decoration: BoxDecoration(
-                                      gradient: LinearGradient(
-                                        colors: [
-                                          Colors.transparent,
-                                          AppColors.accentYellowGreen,
-                                          Colors.transparent,
-                                        ],
-                                      ),
-                                      boxShadow: [
-                                        BoxShadow(color: AppColors.accentYellowGreen.withOpacity(0.6), blurRadius: 8),
-                                      ],
-                                    ),
-                                  ),
-                                );
-                              },
-                            ),
-                            Center(
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                                decoration: BoxDecoration(
-                                  color: Colors.black.withOpacity(0.6),
-                                  borderRadius: BorderRadius.circular(6),
-                                  border: Border.all(color: AppColors.accentYellowGreen.withOpacity(0.2)),
+                            Positioned.fill(
+                              child: IgnorePointer(
+                                child: CustomPaint(
+                                  painter: _PageGuidePainter(cornerFractions, markerAspectRatio, _liveCornersFound),
                                 ),
-                                child: const Text(
-                                  'Target Lock Alignment Target Matrix',
-                                  style: TextStyle(color: Color(0xFF6EE7B7), fontSize: 10, fontFamily: 'monospace'),
+                              ),
+                            ),
+                            Positioned(
+                              top: 14,
+                              left: 0,
+                              right: 0,
+                              child: Center(
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                  decoration: BoxDecoration(
+                                    color: Colors.black.withOpacity(0.6),
+                                    borderRadius: BorderRadius.circular(6),
+                                    border: Border.all(color: AppColors.accentYellowGreen.withOpacity(0.2)),
+                                  ),
+                                  child: Text(
+                                    _liveCornersFound == null
+                                        ? 'Position sheet within the frame'
+                                        : _readyToCapture
+                                            ? 'Ready to scan'
+                                            : _liveCornersFound!.every((f) => f)
+                                                ? 'Hold steady…'
+                                                : _liveCornersFound!.any((f) => f)
+                                                    ? '${_liveCornersFound!.where((f) => f).length}/4 corner marks locked'
+                                                    : 'Align all 4 corners inside the frame',
+                                    style: const TextStyle(color: Color(0xFF6EE7B7), fontSize: 10, fontFamily: 'monospace'),
+                                  ),
                                 ),
                               ),
                             ),
@@ -372,7 +454,7 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
                           children: [
                             Expanded(
                               child: OutlinedButton(
-                                onPressed: _cameraController?.value.isInitialized == true && !_isCapturing
+                                onPressed: _cameraController?.value.isInitialized == true && !_isCapturing && _readyToCapture
                                     ? () => _capture(appState)
                                     : null,
                                 style: OutlinedButton.styleFrom(
@@ -507,40 +589,45 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
   }
 }
 
-/// Draws a dimmed spotlight with corner brackets sized to the OMR sheet's
-/// aspect ratio (US Letter portrait, matching every [OmrExamTemplate]'s
-/// pageWidthPt/pageHeightPt), so the user can line the physical sheet up to
-/// a known frame position instead of guessing. Consistent framing keeps the
-/// full sheet - and all 4 corner fiducials - reliably in shot, which is
-/// what the decoder's corner search depends on.
+/// Draws a dimmed spotlight sized to match the real proportions of the
+/// rectangle spanned by the sheet's 4 fiducial marks (not the full page —
+/// see [markerAspectRatio]), a visible outline on that rectangle so it
+/// reads as a target even against a busy background, and one L-shaped
+/// bracket per corner — colored individually from [cornersFound] — so the
+/// user can see exactly *which* corner still needs adjusting instead of
+/// only an aggregate "X/4" count. The scan window's own overall border
+/// color (see [_ExamScanningScreenState._scanWindowBorderColor]) still
+/// gives an at-a-glance all-4 cue; this adds the specific, per-corner one.
 class _PageGuidePainter extends CustomPainter {
-  const _PageGuidePainter(this.aligned);
+  const _PageGuidePainter(this.cornerFractions, this.markerAspectRatio, this.cornersFound);
 
-  /// Live, advisory alignment state: null before the first check completes,
-  /// then whether the most recently checked preview frame found all 4
-  /// corner marks. Purely visual feedback while framing — capture is never
-  /// blocked on this.
-  final bool? aligned;
+  /// The active exam template's corner-marker fractional (xFrac, yFrac)
+  /// positions, in [top-left, top-right, bottom-left, bottom-right] order.
+  final List<(double, double)> cornerFractions;
 
-  static const double _pageAspectRatio = 595.28 / 841.89; // A4 portrait, matches every OmrExamTemplate's page size
+  /// Real-world width/height of the rectangle spanned by the 4 marks
+  /// (computed by the caller from the marks' own bounding box in page
+  /// points, not the full page's aspect ratio).
+  final double markerAspectRatio;
+
+  /// Live per-corner detection state, same order as [cornerFractions].
+  /// Null until the first live check completes, in which case every
+  /// bracket draws neutral.
+  final List<bool>? cornersFound;
+
   static const double _insetFraction = 0.06;
-  static const double _cornerArmFraction = 0.08;
-
-  Color get _guideColor => switch (aligned) {
-    true => AppColors.primaryGreen,
-    false => AppColors.warmRedOrange,
-    null => AppColors.accentYellowGreen,
-  };
+  static const double _bracketArmLength = 26;
+  static const double _bracketStrokeWidth = 4;
 
   @override
   void paint(Canvas canvas, Size size) {
     final maxWidth = size.width * (1 - _insetFraction * 2);
     final maxHeight = size.height * (1 - _insetFraction * 2);
     double guideWidth = maxWidth;
-    double guideHeight = guideWidth / _pageAspectRatio;
+    double guideHeight = guideWidth / markerAspectRatio;
     if (guideHeight > maxHeight) {
       guideHeight = maxHeight;
-      guideWidth = guideHeight * _pageAspectRatio;
+      guideWidth = guideHeight * markerAspectRatio;
     }
     final guideRect = Rect.fromCenter(
       center: size.center(Offset.zero),
@@ -553,26 +640,65 @@ class _PageGuidePainter extends CustomPainter {
       Path()..addRect(Offset.zero & size),
       Path()..addRect(guideRect),
     );
-    canvas.drawPath(dimPath, Paint()..color = Colors.black.withOpacity(0.45));
+    canvas.drawPath(dimPath, Paint()..color = Colors.black.withOpacity(0.55));
 
-    final bracketPaint = Paint()
-      ..color = _guideColor
-      ..strokeWidth = 3
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
-    final armLength = guideWidth * _cornerArmFraction;
+    // A visible outline on the target rectangle itself — dimming alone
+    // reads as ambiguous against a busy background, this is what makes
+    // "the sheet goes exactly here" legible on its own, before any frame
+    // has even been checked.
+    canvas.drawRect(
+      guideRect,
+      Paint()
+        ..color = Colors.white.withOpacity(0.9)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5,
+    );
 
-    void drawCorner(Offset corner, Offset horizontal, Offset vertical) {
-      canvas.drawLine(corner, corner + horizontal * armLength, bracketPaint);
-      canvas.drawLine(corner, corner + vertical * armLength, bracketPaint);
+    // One bracket per corner, positioned by normalizing each marker's page
+    // fraction against the 4 markers' own bounding box — the same
+    // normalization that gives markerAspectRatio its value (see the
+    // caller in build()) — so a bracket lands exactly on that marker's
+    // real position within guideRect for any exam's layout, not just a
+    // generic corner of the box.
+    final minX = cornerFractions.map((c) => c.$1).reduce(math.min);
+    final maxX = cornerFractions.map((c) => c.$1).reduce(math.max);
+    final minY = cornerFractions.map((c) => c.$2).reduce(math.min);
+    final maxY = cornerFractions.map((c) => c.$2).reduce(math.max);
+
+    for (var i = 0; i < cornerFractions.length; i++) {
+      final (xFrac, yFrac) = cornerFractions[i];
+      final localX = maxX > minX ? (xFrac - minX) / (maxX - minX) : 0.5;
+      final localY = maxY > minY ? (yFrac - minY) / (maxY - minY) : 0.5;
+      final point = guideRect.topLeft + Offset(localX * guideRect.width, localY * guideRect.height);
+      final found = cornersFound != null && i < cornersFound!.length ? cornersFound![i] : null;
+      final color = found == null
+          ? Colors.white.withOpacity(0.85)
+          : found
+              ? AppColors.primaryGreen
+              : AppColors.warmRedOrange;
+      _drawBracket(canvas, point, towardRight: localX < 0.5, towardBottom: localY < 0.5, color: color);
     }
+  }
 
-    drawCorner(guideRect.topLeft, const Offset(1, 0), const Offset(0, 1));
-    drawCorner(guideRect.topRight, const Offset(-1, 0), const Offset(0, 1));
-    drawCorner(guideRect.bottomLeft, const Offset(1, 0), const Offset(0, -1));
-    drawCorner(guideRect.bottomRight, const Offset(-1, 0), const Offset(0, -1));
+  /// Draws one L-shaped bracket at [point], arms extending toward the
+  /// guide rectangle's interior — [towardRight]/[towardBottom] say which
+  /// direction that is for this particular corner (e.g. the top-left
+  /// corner's arms extend right and down).
+  void _drawBracket(Canvas canvas, Offset point, {required bool towardRight, required bool towardBottom, required Color color}) {
+    final dx = towardRight ? _bracketArmLength : -_bracketArmLength;
+    final dy = towardBottom ? _bracketArmLength : -_bracketArmLength;
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = _bracketStrokeWidth
+      ..strokeCap = StrokeCap.round
+      ..style = PaintingStyle.stroke;
+    canvas.drawLine(point, point + Offset(dx, 0), paint);
+    canvas.drawLine(point, point + Offset(0, dy), paint);
   }
 
   @override
-  bool shouldRepaint(covariant _PageGuidePainter oldDelegate) => aligned != oldDelegate.aligned;
+  bool shouldRepaint(covariant _PageGuidePainter oldDelegate) =>
+      !listEquals(cornerFractions, oldDelegate.cornerFractions) ||
+      markerAspectRatio != oldDelegate.markerAspectRatio ||
+      !listEquals(cornersFound, oldDelegate.cornersFound);
 }

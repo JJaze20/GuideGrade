@@ -23,9 +23,13 @@ class AlignmentCheck {
 class OmrDecoder {
   const OmrDecoder();
 
-  /// How far (as a fraction of the shorter image dimension) to search around
-  /// each corner marker's expected position for the actual fiducial mark.
-  static const double _cornerSearchWindowFrac = 0.08;
+  /// How far each corner's search region extends past the photo's exact
+  /// midpoint into the opposite half, as a fraction of that dimension —
+  /// gives a corner mark sitting close to the frame's center (a small or
+  /// off-center sheet) room to still fall inside its own quadrant, without
+  /// searching so much of the photo that unrelated marks or clutter
+  /// routinely cross into the wrong quadrant. See [_quadrantsFor].
+  static const double _quadrantOverlapFrac = 0.12;
 
   /// Canonical pixels per PDF point when warping the sheet flat. Bubble
   /// sampling geometry below is tuned against this scale.
@@ -43,13 +47,57 @@ class OmrDecoder {
   static const double _adaptiveThresholdC = 12;
 
   /// A bubble's ink fill fraction (0 = empty, 1 = fully black) must clear
-  /// this floor to be considered marked at all.
-  static const double _blankFillFloor = 0.15;
+  /// this floor to be considered marked at all. Raised from 0.15 (first
+  /// correction) to 0.22 (halved the flagged rate on a blank OLSAT sheet,
+  /// ~50-58% -> ~19-32%), now to 0.28: geometry was confirmed pixel-perfect
+  /// (see decode()/saveDebugVisualization commit history), so the remaining
+  /// flags on a blank sheet are purely fill-noise, not misaligned sampling
+  /// — the right lever is still this floor. Re-check against a blank-sheet
+  /// scan after this change; if the flagged rate keeps dropping
+  /// proportionally, keep raising it, but this has never been tested
+  /// against a sheet with genuine pencil marks — at some point a real,
+  /// light mark could start reading as blank, so this can't go up forever
+  /// without that check too.
+  static const double _blankFillFloor = 0.28;
 
   /// The most-filled bubble in an item must beat the runner-up fill
   /// fraction by at least this much to be treated as an unambiguous single
   /// mark.
   static const double _ambiguousMargin = 0.15;
+
+  /// A fiducial blob must be at least this many gray levels darker than the
+  /// local background to count as a real mark (not a shadow edge).
+  static const double _markerMinContrast = 20;
+
+  /// A candidate blob's contour area must fill at least this fraction of
+  /// its own bounding box to count as a mark. The printed marks (solid
+  /// square or thin tick — see [_findMarkerInRegion]) are both clean filled
+  /// shapes; background clutter that happens to be dark and roughly the
+  /// right size (fabric texture, shadows, a keyboard key) rarely fills its
+  /// bounding box this tightly, so this rejects that clutter instead of
+  /// confidently reporting a mark "found" on whatever's actually in frame.
+  static const double _markerMinFillRatio = 0.55;
+
+  /// A candidate blob's bounding box must not be more elongated than this
+  /// (longer side / shorter side). The thinnest legitimate mark is the
+  /// tick (~2.5pt stroke over a 12pt span, aspect ~4.8), so this allows
+  /// real photo blur/perspective slack above that while still rejecting
+  /// long edges — a table line, a run of header text — that happen to
+  /// cross the search window.
+  static const double _markerMaxAspect = 7.0;
+
+  /// Inner sample radius as a fraction of the outer bubble sample radius.
+  /// The printed choice letter sits in this center zone; subtracting its
+  /// ink contribution from the outer reading isolates pencil marks in the
+  /// bubble ring. Sized against the sheet generator's current geometry
+  /// (`kBubbleRadius: 6, kLetterFontSize: 6` in tool/generate_sheets.dart,
+  /// bold): a wide glyph like "W" or "M" has an advance width close to
+  /// 0.85x its font size, so half-width ≈ 0.42x the bubble radius — 0.4
+  /// left letters like that poking just outside the exclusion zone,
+  /// reading as ink on an otherwise-blank bubble. 0.6 covers every glyph
+  /// with margin while still leaving most of the ring (64% of the sample
+  /// area) free to detect an actual pencil mark.
+  static const double _bubbleInnerSampleFrac = 0.6;
 
   /// Cheap alignment check for right after a photo is captured: does the
   /// same image load + corner search as [decode], but skips the perspective
@@ -75,22 +123,38 @@ class OmrDecoder {
   /// Same alignment check as [locateCorners], but against a live camera
   /// preview frame instead of a captured file — cheap enough to run
   /// periodically while framing, for the on-screen guide's live
-  /// green/red feedback. [lumaBytes] is the Y (luma) plane of a YUV
+  /// per-corner feedback. [lumaBytes] is the Y (luma) plane of a YUV
   /// camera frame, already 8-bit grayscale with no color conversion
   /// needed. [bytesPerRow] may exceed [width] (row padding, common on
   /// Android camera buffers) — the extra columns are cropped off.
-  AlignmentCheck checkAlignmentFromLuma(
+  ///
+  /// Returns whether each of the 4 fiducial marks is currently found,
+  /// independently, in [top-left, top-right, bottom-left, bottom-right]
+  /// order — unlike [locateCorners], this doesn't require all 4 to form a
+  /// plausible rectangle together, since each corner's little viewfinder
+  /// square needs to react on its own as the user moves the sheet, not
+  /// just an aggregate pass/fail.
+  ///
+  /// Searches the same way [_refineCorners] does (see [_quadrantsFor],
+  /// [_findMarkerInRegion]) — each of the photo's own 4 quadrants,
+  /// directly, not a small window around a predicted position — so the
+  /// live guide and the post-capture gate can never disagree about
+  /// whether a mark is findable in a given frame.
+  List<bool> checkCornersFromLuma(
     Uint8List lumaBytes,
     int width,
     int height,
     int bytesPerRow,
-    OmrExamTemplate template,
   ) {
     final full = cv.Mat.fromList(height, bytesPerRow, cv.MatType.CV_8UC1, lumaBytes);
     try {
       final gray = bytesPerRow == width ? full : full.region(cv.Rect(0, 0, width, height));
       try {
-        return _checkAlignment(gray, template);
+        final pageQuad = _detectPageQuad(gray);
+        return [
+          for (final (region, anchorX, anchorY) in _quadrantsFor(gray.width, gray.height, pageQuad))
+            _findMarkerInRegion(gray, region, anchorX, anchorY) != null,
+        ];
       } finally {
         if (!identical(gray, full)) gray.dispose();
       }
@@ -99,7 +163,7 @@ class OmrDecoder {
     }
   }
 
-  /// Shared by [locateCorners] and [checkAlignmentFromLuma] so a captured
+  /// Shared by [locateCorners] and [checkCornersFromLuma] so a captured
   /// photo and a live preview frame are judged by identical logic.
   AlignmentCheck _checkAlignment(cv.Mat gray, OmrExamTemplate template) {
     try {
@@ -125,11 +189,20 @@ class OmrDecoder {
         final canonicalWidth = (template.pageWidthPt * _canonicalPxPerPt).round();
         final canonicalHeight = (template.pageHeightPt * _canonicalPxPerPt).round();
 
+        // The 4 fiducial marks are printed at their own template-recorded
+        // fractional page positions (template.cornerMarkers), not
+        // necessarily near the page's literal (0,0)-(1,1) edges — a narrow
+        // bubble grid (e.g. QTM's 2-column layout) leaves the marks well
+        // inside the page. Mapping them to the canonical rect's literal
+        // corners instead of their own fractional positions would stretch
+        // that marker sub-rectangle to fill the whole canonical page,
+        // throwing every BubblePos.xFrac/yFrac sample (computed as a
+        // fraction of the *true* page, in _readBubbles) off by however far
+        // the marks sit from the true edges — proportionally worse the
+        // narrower the printed content is.
         final dstCorners = cv.VecPoint2f.fromList([
-          cv.Point2f(0, 0),
-          cv.Point2f(canonicalWidth.toDouble(), 0),
-          cv.Point2f(0, canonicalHeight.toDouble()),
-          cv.Point2f(canonicalWidth.toDouble(), canonicalHeight.toDouble()),
+          for (final corner in template.cornerMarkers)
+            cv.Point2f(corner.xFrac * canonicalWidth, corner.yFrac * canonicalHeight),
         ]);
         final srcCorners = cv.VecPoint2f.fromList(corners);
         final transform = cv.getPerspectiveTransform2f(srcCorners, dstCorners);
@@ -197,6 +270,26 @@ class OmrDecoder {
 
         final cornersDebug = src.clone();
         try {
+          // The page-boundary estimate (yellow) is drawn separately from
+          // the final selected marks (red) so a bad final pick can be
+          // told apart from a bad *anchor* feeding into it: if the yellow
+          // quad already isn't on the sheet, _detectPageQuad is the stage
+          // to fix; if it's fine but the red circles still aren't on the
+          // marks, the problem is in _findMarkerInRegion's own filtering.
+          final pageQuad = _detectPageQuad(gray);
+          if (pageQuad != null) {
+            // pageQuad is [topLeft, topRight, bottomLeft, bottomRight] —
+            // not already a perimeter walk — so draw it in actual
+            // clockwise order (TL, TR, BR, BL) or the "quad" comes out as
+            // a bowtie instead of an outline.
+            final perimeter = [pageQuad[0], pageQuad[1], pageQuad[3], pageQuad[2]];
+            for (var i = 0; i < perimeter.length; i++) {
+              final (x, y) = perimeter[i];
+              cv.circle(cornersDebug, cv.Point(x.round(), y.round()), 10, cv.Scalar(0, 255, 255), thickness: 3);
+              final (nx, ny) = perimeter[(i + 1) % perimeter.length];
+              cv.line(cornersDebug, cv.Point(x.round(), y.round()), cv.Point(nx.round(), ny.round()), cv.Scalar(0, 255, 255), thickness: 2);
+            }
+          }
           for (final c in corners) {
             cv.circle(cornersDebug, cv.Point(c.x.round(), c.y.round()), 16, cv.Scalar(0, 0, 255), thickness: 5);
           }
@@ -208,10 +301,8 @@ class OmrDecoder {
         final canonicalWidth = (template.pageWidthPt * _canonicalPxPerPt).round();
         final canonicalHeight = (template.pageHeightPt * _canonicalPxPerPt).round();
         final dstCorners = cv.VecPoint2f.fromList([
-          cv.Point2f(0, 0),
-          cv.Point2f(canonicalWidth.toDouble(), 0),
-          cv.Point2f(0, canonicalHeight.toDouble()),
-          cv.Point2f(canonicalWidth.toDouble(), canonicalHeight.toDouble()),
+          for (final corner in template.cornerMarkers)
+            cv.Point2f(corner.xFrac * canonicalWidth, corner.yFrac * canonicalHeight),
         ]);
         final srcCorners = cv.VecPoint2f.fromList(corners);
         final transform = cv.getPerspectiveTransform2f(srcCorners, dstCorners);
@@ -244,45 +335,57 @@ class OmrDecoder {
     }
   }
 
-  /// The template's 4 [OmrCorner]s are ordered top-left, top-right,
-  /// bottom-left, bottom-right. For each, seed an expected pixel position
-  /// and search a local window around it for the actual fiducial mark (a
-  /// small dark blob — solid square or thin tick, shape-agnostic), returning
-  /// its refined centroid.
+  /// Finds each of the sheet's 4 fiducial corner marks by searching the
+  /// photo's own 4 quadrants directly (see [_quadrantsFor] and
+  /// [_findMarkerInRegion]) — every quadrant is searched in full, so a
+  /// wrong page-boundary estimate can no longer hide the true mark outside
+  /// a too-small window the way the old seed-and-search design could.
   ///
-  /// The seed comes from [_detectPageQuad] when the photo shows background
-  /// around the sheet (the common case — the viewfinder doesn't crop tight
-  /// to the page), bilinearly interpolating within the detected page
-  /// boundary. Assuming the fractional page position maps directly onto the
-  /// full image (`xFrac * image.width`) is only correct when the page fills
-  /// the frame edge-to-edge, which produced systematically wrong seeds -
-  /// and therefore a skewed homography and misread bubbles - whenever any
-  /// background was visible around the sheet.
+  /// [_detectPageQuad]'s estimate is still used, but only to pick which
+  /// candidate blob *within* that full quadrant search is scored as the
+  /// real mark: measuring distance to the literal photo corner instead
+  /// (when no boundary is visible, or as the whole-frame fallback) is
+  /// only correct when the sheet fills the frame edge-to-edge. Whenever
+  /// there's visible background around the sheet — the common case — a
+  /// fold, shadow, or texture sitting right at the photo's actual corner
+  /// will always be closer to that anchor than the true mark is, and wins
+  /// on distance alone. A rough page-boundary estimate, even an imperfect
+  /// one, sits far closer to the true mark than random background clutter
+  /// at the frame's edge does, which is enough to correctly break that
+  /// tie. Returns the 4 refined centroids in [top-left, top-right,
+  /// bottom-left, bottom-right] order.
   List<cv.Point2f> _refineCorners(cv.Mat gray, OmrExamTemplate template) {
     const labels = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
-    final corners = template.cornerMarkers;
     final pageQuad = _detectPageQuad(gray);
-    final found = List.generate(corners.length, (i) {
-      final double expectedX;
-      final double expectedY;
-      if (pageQuad != null) {
-        final seed = _bilinearInterpolate(pageQuad, corners[i].xFrac, corners[i].yFrac);
-        expectedX = seed.$1;
-        expectedY = seed.$2;
-      } else {
-        expectedX = corners[i].xFrac * gray.width;
-        expectedY = corners[i].yFrac * gray.height;
-      }
-      final marker = _findMarkerNear(gray, expectedX, expectedY);
-      if (marker == null) {
-        throw StateError(
-          'Could not find the ${labels[i]} alignment mark. Retake the photo with the full sheet, including all four corners, in frame.',
-        );
-      }
-      return marker;
+    final quadrants = _quadrantsFor(gray.width, gray.height, pageQuad);
+    final found = List<cv.Point2f?>.generate(quadrants.length, (i) {
+      final (region, anchorX, anchorY) = quadrants[i];
+      return _findMarkerInRegion(gray, region, anchorX, anchorY);
     });
-    _validateQuad(found, template, gray);
-    return found;
+
+    // All 4 fiducial marks must be found directly — no reconstructing a
+    // missing one from the other 3. An earlier version tolerated exactly 1
+    // missing corner, estimating it via parallelogram-diagonal math from
+    // the other 3 (a photographed rectangle's diagonals share a midpoint
+    // under mild perspective distortion). That let a scan proceed on an
+    // estimate rather than a confirmed detection — precisely for the
+    // occluded/uncertain cases (a thumb, a crease, a glare spot) most
+    // likely to also be skewed, which is the opposite of where an estimate
+    // should be trusted. Requiring a clean 4/4 makes "not enough was
+    // detected" a hard rejection instead of a silent guess feeding into
+    // perspective correction and bubble sampling.
+    final missing = [for (var i = 0; i < found.length; i++) if (found[i] == null) i];
+    if (missing.isNotEmpty) {
+      final names = missing.map((i) => labels[i]).join(', ');
+      throw StateError(
+        'Could not find the $names alignment mark${missing.length > 1 ? 's' : ''}. '
+        'Page not fully detected. Please align the sheet and try again.',
+      );
+    }
+
+    final resolved = found.cast<cv.Point2f>();
+    _validateQuad(resolved, template, gray);
+    return resolved;
   }
 
   /// Finding *a* plausible small dark blob near each of the 4 expected
@@ -307,9 +410,11 @@ class OmrDecoder {
     final actualAspect = width / height;
     // A real sheet's aspect ratio should match reasonably closely (paper
     // dimensions are exact), but this is a coarse secondary check — the
-    // centrality filter in _detectPageQuad is the primary defense against
-    // picking up background clutter (a second sheet, wall, furniture)
-    // instead of the actual sheet. 0.15 (tightened from an original 0.35
+    // anchor-distance scoring in _findMarkerInRegion (prefer whichever
+    // candidate sits closest to this quadrant's own estimated corner) is
+    // the primary defense against picking up background clutter (a second
+    // sheet, wall, furniture) instead of the actual sheet. 0.15 (tightened
+    // from an original 0.35
     // that let a clutter-quad through) turned out to reject too many
     // genuine handheld photos too, whose measured aspect ratio shifts more
     // than that from normal perspective/keystone distortion at a
@@ -332,8 +437,11 @@ class OmrDecoder {
   /// surrounds it), returning its corners ordered [topLeft, topRight,
   /// bottomLeft, bottomRight], or null if no such quad is found (e.g. the
   /// page already fills the whole frame, so there's no visible boundary
-  /// edge to detect - callers should fall back to treating the image
-  /// itself as the page).
+  /// edge to detect). Used only to seed a *scoring anchor* for the
+  /// full-quadrant marker search (see [_quadrantsFor]), not to restrict
+  /// where that search looks — an imprecise estimate here still lets the
+  /// true mark win over background clutter, it just needs to be closer to
+  /// the mark than the clutter is, not pixel-accurate.
   ///
   /// Requiring the candidate's centroid to be reasonably central rules out
   /// unrelated background objects - a second sheet lower in frame, a wall
@@ -344,7 +452,30 @@ class OmrDecoder {
   List<(double, double)>? _detectPageQuad(cv.Mat gray) {
     final blurred = cv.gaussianBlur(gray, (5, 5), 0);
     try {
-      final edges = cv.canny(blurred, 50, 150);
+      // Canny thresholds derived from this photo's own mean brightness
+      // (the well-known "auto Canny" approach, substituting mean for the
+      // more common median here since a mean is already computed elsewhere
+      // in this file with the same `.mean()` call and a photographed sheet's
+      // grayscale histogram is roughly unimodal, so the two track closely)
+      // rather than a fixed 50/150 tuned against whatever lighting one past
+      // test photo happened to have. Classroom photos vary a lot in
+      // exposure — a fixed pair of absolute thresholds is either too
+      // sensitive (picks up desk texture/shadow as edges) on a bright photo
+      // or misses the actual page boundary on a dim one; scaling both
+      // thresholds off the photo's own brightness keeps the same relative
+      // sensitivity across that range instead of guessing one setting for
+      // an unknown "typical" photo.
+      final meanScalar = blurred.mean();
+      double meanIntensity;
+      try {
+        meanIntensity = meanScalar.val1;
+      } finally {
+        meanScalar.dispose();
+      }
+      const cannySigma = 0.33;
+      final lower = (meanIntensity * (1 - cannySigma)).clamp(0, 255);
+      final upper = (meanIntensity * (1 + cannySigma)).clamp(0, 255);
+      final edges = cv.canny(blurred, lower.toDouble(), upper.toDouble());
       try {
         final kernel = cv.getStructuringElement(cv.MORPH_RECT, (5, 5));
         try {
@@ -361,20 +492,56 @@ class OmrDecoder {
               for (final contour in contours) {
                 final area = cv.contourArea(contour);
                 if (area < imageArea * 0.2 || area <= bestArea) continue;
+
+                List<(double, double)>? points;
                 final peri = cv.arcLength(contour, true);
                 final approx = cv.approxPolyDP(contour, 0.02 * peri, true);
                 try {
-                  if (approx.length != 4 || !cv.isContourConvex(approx)) continue;
-                  final points = [for (final p in approx) (p.x.toDouble(), p.y.toDouble())];
-                  final centroidX = points.map((p) => p.$1).reduce((a, b) => a + b) / 4;
-                  final centroidY = points.map((p) => p.$2).reduce((a, b) => a + b) / 4;
-                  final centerDistance = math.sqrt(math.pow(centroidX - centerX, 2) + math.pow(centroidY - centerY, 2));
-                  if (centerDistance > maxCenterDistance) continue;
-                  bestArea = area;
-                  bestQuad = points;
+                  if (approx.length == 4 && cv.isContourConvex(approx)) {
+                    points = [for (final p in approx) (p.x.toDouble(), p.y.toDouble())];
+                  }
                 } finally {
                   approx.dispose();
                 }
+
+                // approxPolyDP didn't resolve a clean convex quad — a
+                // shadow, a crease, or clutter touching the page's edge
+                // commonly breaks the boundary into >4 vertices even though
+                // it's still roughly rectangular. Falling back to the
+                // contour's minimum-area bounding rectangle instead of
+                // discarding it outright means a page whose edge is
+                // well-formed apart from one broken segment still seeds a
+                // usable anchor, rather than falling all the way back to
+                // the coarser "page fills the frame" fallback every time
+                // polygon approximation isn't perfectly clean.
+                if (points == null) {
+                  final rect = cv.minAreaRect(contour);
+                  try {
+                    // Guard against accepting a non-rectangular blob (an L
+                    // shape, a diagonal object) just because it's large and
+                    // central: a genuine page edge should fill most of its
+                    // own minimum-area rectangle, so require the contour to
+                    // cover a healthy majority of that box's area before
+                    // trusting the box as a page-quad substitute.
+                    final boxArea = rect.size.width * rect.size.height;
+                    if (boxArea <= 0 || area < boxArea * 0.6) continue;
+                    final boxPts = rect.points;
+                    try {
+                      points = [for (final p in boxPts) (p.x, p.y)];
+                    } finally {
+                      boxPts.dispose();
+                    }
+                  } finally {
+                    rect.dispose();
+                  }
+                }
+
+                final centroidX = points.map((p) => p.$1).reduce((a, b) => a + b) / 4;
+                final centroidY = points.map((p) => p.$2).reduce((a, b) => a + b) / 4;
+                final centerDistance = math.sqrt(math.pow(centroidX - centerX, 2) + math.pow(centroidY - centerY, 2));
+                if (centerDistance > maxCenterDistance) continue;
+                bestArea = area;
+                bestQuad = points;
               }
               return bestQuad == null ? null : _orderQuadCorners(bestQuad);
             } finally {
@@ -415,57 +582,234 @@ class OmrDecoder {
     return (topX + (bottomX - topX) * yFrac, topY + (bottomY - topY) * yFrac);
   }
 
-  /// Searches the window around ([expectedX], [expectedY]) for the fiducial
-  /// mark. Rather than taking the largest dark blob in the window (which
-  /// reliably locked onto nearby header text/table lines instead of the
-  /// actual mark whenever those happened to out-area it - a real bug, not
-  /// just noise, since it picked the *same* wrong feature just as
-  /// confidently at higher photo resolution), this rejects implausibly
-  /// tiny (speckle) or large (a line/text run spanning much of the window)
-  /// blobs, then takes whichever remaining blob's centroid is closest to
-  /// the expected position.
-  cv.Point2f? _findMarkerNear(cv.Mat gray, double expectedX, double expectedY) {
-    final windowRadius = _cornerSearchWindowFrac * math.min(gray.width, gray.height);
-    final left = (expectedX - windowRadius).clamp(0, gray.width - 1).round();
-    final top = (expectedY - windowRadius).clamp(0, gray.height - 1).round();
-    final right = (expectedX + windowRadius).clamp(left + 1, gray.width).round();
-    final bottom = (expectedY + windowRadius).clamp(top + 1, gray.height).round();
+  /// Clamps a candidate rectangle (given as raw left/top/right/bottom,
+  /// which may extend past the image bounds) to a valid region within an
+  /// image of [width]x[height].
+  cv.Rect _clampedRect(double left, double top, double right, double bottom, int width, int height) {
+    final l = left.clamp(0, width - 1).round();
+    final t = top.clamp(0, height - 1).round();
+    final r = right.clamp(l + 1, width).round();
+    final b = bottom.clamp(t + 1, height).round();
+    return cv.Rect(l, t, r - l, b - t);
+  }
 
-    final roiRect = cv.Rect(left, top, right - left, bottom - top);
-    final roi = gray.region(roiRect);
+  /// The 4 regions to search for each corner mark — one full quadrant of
+  /// the photo per mark, in [top-left, top-right, bottom-left,
+  /// bottom-right] order — paired with the point each quadrant's best
+  /// candidate is scored against for distance (see [_findMarkerInRegion]):
+  /// bilinearly interpolated from [pageQuad] when [_detectPageQuad] found
+  /// a page boundary, or that quadrant's literal photo corner otherwise
+  /// (correct when the sheet fills the frame edge-to-edge, so there's no
+  /// boundary edge to have detected in the first place).
+  ///
+  /// The *search region* itself is always the full quadrant regardless —
+  /// only the scoring anchor depends on [pageQuad]. A wrong or imprecise
+  /// page-boundary estimate used to mean the true mark could fall outside
+  /// a small search window built from it and never even be examined; now
+  /// it only means the anchor is slightly off, and the true mark — closer
+  /// to a decent estimate than any unrelated background clutter sitting
+  /// at the photo's literal corner — still wins on distance.
+  ///
+  /// Identifying *which* corner a mark is doesn't need the template at
+  /// all: every exam's 4 corner marks sit one to a quadrant of the printed
+  /// page by construction (see tool/generate_sheets.dart's
+  /// `_cornerMarkers`), so quadrant identity alone is enough. Quadrants
+  /// overlap slightly past the exact midpoint ([_quadrantOverlapFrac]) so
+  /// a mark sitting close to the frame's center — a small or off-center
+  /// sheet — still falls inside its own quadrant.
+  List<(cv.Rect, double, double)> _quadrantsFor(int width, int height, List<(double, double)>? pageQuad) {
+    final midX = width / 2;
+    final midY = height / 2;
+    final overlapX = width * _quadrantOverlapFrac;
+    final overlapY = height * _quadrantOverlapFrac;
+    final w = width.toDouble();
+    final h = height.toDouble();
+    final regions = [
+      _clampedRect(0, 0, midX + overlapX, midY + overlapY, width, height),
+      _clampedRect(midX - overlapX, 0, w, midY + overlapY, width, height),
+      _clampedRect(0, midY - overlapY, midX + overlapX, h, width, height),
+      _clampedRect(midX - overlapX, midY - overlapY, w, h, width, height),
+    ];
+    // pageQuad, when present, is already ordered [topLeft, topRight,
+    // bottomLeft, bottomRight] by _detectPageQuad — matching quadrant
+    // order exactly, so each region pairs with its own corner's estimate.
+    // Falls back to that quadrant's literal photo corner when no boundary
+    // was detected (correct precisely when the sheet fills the frame
+    // edge-to-edge, so there was no boundary edge to detect in the first
+    // place).
+    const fracs = [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)];
+    final anchors = [
+      for (final (xFrac, yFrac) in fracs)
+        pageQuad == null ? (xFrac * w, yFrac * h) : _bilinearInterpolate(pageQuad, xFrac, yFrac),
+    ];
+    return [for (var i = 0; i < 4; i++) (regions[i], anchors[i].$1, anchors[i].$2)];
+  }
+
+  /// Searches all of [region] for the fiducial mark, scoring every
+  /// candidate blob by its distance to ([anchorX], [anchorY]) — the
+  /// sheet's own estimated corner, or the photo's literal corner as a
+  /// fallback (see [_quadrantsFor]) — combined with contrast.
+  ///
+  /// This replaces an earlier design that only *searched* a small window
+  /// around that same predicted position: when the estimate was off — a
+  /// textured background confusing it, a broken contour from a shadow —
+  /// the true mark could sit outside the search window entirely and would
+  /// never even be examined, reporting "not found" for a mark that was in
+  /// fact clearly visible in the photo, with no way to tell "the marker
+  /// isn't there" apart from "we looked in the wrong place".
+  /// Searching the whole quadrant removes that failure mode: the mark is
+  /// found by what it actually looks like (a small, solid, high-contrast
+  /// square) and where it genuinely is, not by whether an earlier,
+  /// separate guess happened to be close enough.
+  ///
+  /// Rejects implausibly tiny (speckle) or large (a shadow, a block of
+  /// clutter) blobs, filters by fill-ratio/aspect/contrast to keep only
+  /// blobs that actually look like the printed mark, then takes whichever
+  /// survivor's centroid is closest to the anchor corner.
+  cv.Point2f? _findMarkerInRegion(cv.Mat gray, cv.Rect region, double anchorX, double anchorY) {
+    final roi = gray.region(region);
     try {
-      final (_, binary) = cv.threshold(roi, 0, 255, cv.THRESH_BINARY_INV | cv.THRESH_OTSU);
+      final clahe = cv.createCLAHE(clipLimit: 3, tileGridSize: (4, 4));
       try {
-        final (contours, hierarchy) = cv.findContours(binary, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+        final enhanced = clahe.apply(roi);
         try {
-          final roiArea = (right - left) * (bottom - top);
-          final windowCenterX = (right - left) / 2;
-          final windowCenterY = (bottom - top) / 2;
+          final blurred = cv.gaussianBlur(enhanced, (3, 3), 0);
+          try {
+            final roiMinDim = math.min(roi.width, roi.height);
+            final blockSize = ((roiMinDim ~/ 4) | 1).clamp(11, 51);
+            final binary = cv.adaptiveThreshold(
+              blurred,
+              255,
+              cv.ADAPTIVE_THRESH_GAUSSIAN_C,
+              cv.THRESH_BINARY_INV,
+              blockSize,
+              8,
+            );
+            try {
+              // Ordinary photo blur/JPEG softening can still break a
+              // printed mark's edges into fragments too small to
+              // individually clear the area filter below. A small dilation
+              // bridges those fragments back into one solid blob before
+              // contour extraction, with little effect on marks that were
+              // already solid.
+              final dilateKernel = cv.getStructuringElement(cv.MORPH_RECT, (3, 3));
+              try {
+                final dilated = cv.dilate(binary, dilateKernel, iterations: 1);
+                try {
+                  final (contours, hierarchy) = cv.findContours(dilated, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+                  try {
+                    // The area cap is relative to the *whole photo*, not
+                    // this region — a quadrant can be a large fraction of
+                    // the image, but the printed mark itself is always a
+                    // small, roughly fixed fraction of the page regardless
+                    // of how much of the photo is being searched for it.
+                    final imageArea = gray.width * gray.height;
 
-          double bestDistance = double.infinity;
-          cv.Rect? bestRect;
-          for (final contour in contours) {
-            final area = cv.contourArea(contour);
-            if (area < 8 || area > roiArea * 0.35) continue;
-            final rect = cv.boundingRect(contour);
-            final cx = rect.x + rect.width / 2;
-            final cy = rect.y + rect.height / 2;
-            final distance = math.sqrt(math.pow(cx - windowCenterX, 2) + math.pow(cy - windowCenterY, 2));
-            if (distance < bestDistance) {
-              bestDistance = distance;
-              bestRect = rect;
+                    double bestScore = double.infinity;
+                    cv.Rect? bestRect;
+                    for (final contour in contours) {
+                      final area = cv.contourArea(contour);
+                      if (area < 8 || area > imageArea * 0.02) continue;
+                      final rect = cv.boundingRect(contour);
+
+                      // Reject blobs that don't actually look like a printed
+                      // mark (a clean filled square or thin tick) — this is
+                      // the main defense against reporting "found" on
+                      // whatever dark clutter happens to sit in this
+                      // quadrant when the camera isn't even pointed at a
+                      // sheet.
+                      final boxArea = (rect.width * rect.height).toDouble();
+                      if (boxArea <= 0 || area / boxArea < _markerMinFillRatio) continue;
+                      final longSide = math.max(rect.width, rect.height);
+                      final shortSide = math.max(1, math.min(rect.width, rect.height));
+                      if (longSide / shortSide > _markerMaxAspect) continue;
+
+                      final globalCx = region.x + rect.x + rect.width / 2;
+                      final globalCy = region.y + rect.y + rect.height / 2;
+                      final distance = math.sqrt(math.pow(globalCx - anchorX, 2) + math.pow(globalCy - anchorY, 2));
+
+                      // Contrast is measured against this blob's own local
+                      // neighborhood, not one mean for the whole quadrant.
+                      // A quadrant search region can be a large fraction of
+                      // the photo — including a lot of background well
+                      // outside the page — so a single region-wide mean
+                      // gets dragged toward whatever dominates that area.
+                      // On a photo with substantial dark background around
+                      // the sheet, that pulls the "background" reading
+                      // dark enough that the real mark's genuine contrast
+                      // against the white page next to it reads as too low
+                      // to pass _markerMinContrast, while background
+                      // clutter sitting in that same dark area can read as
+                      // adequate contrast against the same skewed number.
+                      // A small local box around each candidate — sized to
+                      // its own blob, not the search region — restores the
+                      // "contrast against what's actually next to it"
+                      // measurement that made this filter meaningful in
+                      // the first place.
+                      final localPad = math.max(rect.width, rect.height) * 2;
+                      final localRegion = _clampedRect(
+                        (rect.x - localPad).toDouble(),
+                        (rect.y - localPad).toDouble(),
+                        (rect.x + rect.width + localPad).toDouble(),
+                        (rect.y + rect.height + localPad).toDouble(),
+                        roi.width,
+                        roi.height,
+                      );
+                      final blobRoi = roi.region(rect);
+                      final localRoi = roi.region(localRegion);
+                      double contrast;
+                      try {
+                        final blobMean = blobRoi.mean();
+                        try {
+                          final localMean = localRoi.mean();
+                          try {
+                            contrast = localMean.val1 - blobMean.val1;
+                          } finally {
+                            localMean.dispose();
+                          }
+                        } finally {
+                          blobMean.dispose();
+                        }
+                      } finally {
+                        blobRoi.dispose();
+                        localRoi.dispose();
+                      }
+                      if (contrast < _markerMinContrast) continue;
+
+                      // Prefer blobs close to this quadrant's own photo
+                      // corner that are also dark enough to be real
+                      // fiducials, not shadow edges.
+                      final score = distance / math.max(contrast, _markerMinContrast);
+                      if (score < bestScore) {
+                        bestScore = score;
+                        bestRect = rect;
+                      }
+                    }
+                    if (bestRect == null) return null;
+                    final cx = region.x + bestRect.x + bestRect.width / 2;
+                    final cy = region.y + bestRect.y + bestRect.height / 2;
+                    return cv.Point2f(cx.toDouble(), cy.toDouble());
+                  } finally {
+                    contours.dispose();
+                    hierarchy.dispose();
+                  }
+                } finally {
+                  dilated.dispose();
+                }
+              } finally {
+                dilateKernel.dispose();
+              }
+            } finally {
+              binary.dispose();
             }
+          } finally {
+            blurred.dispose();
           }
-          if (bestRect == null) return null;
-          final cx = left + bestRect.x + bestRect.width / 2;
-          final cy = top + bestRect.y + bestRect.height / 2;
-          return cv.Point2f(cx.toDouble(), cy.toDouble());
         } finally {
-          contours.dispose();
-          hierarchy.dispose();
+          enhanced.dispose();
         }
       } finally {
-        binary.dispose();
+        clahe.dispose();
       }
     } finally {
       roi.dispose();
@@ -518,12 +862,26 @@ class OmrDecoder {
     return OmrScanResult(examCode: template.examCode, items: items);
   }
 
-  /// Fraction (0-1) of the bubble's sample ROI that is "ink" on the
-  /// binarized [inkMap] (255 = ink, after THRESH_BINARY_INV), independent
-  /// of the original photo's overall brightness.
+  /// Fraction (0-1) of the bubble's ring-shaped sample ROI that is "ink" on
+  /// the binarized [inkMap] (255 = ink, after THRESH_BINARY_INV). Samples
+  /// the outer bubble area minus a central zone where the printed choice
+  /// letter lives, so blank sheets aren't misread as ambiguous marks.
   double _bubbleFillFraction(cv.Mat inkMap, BubblePos bubble, double sampleHalfPx, int canonicalWidth, int canonicalHeight) {
     final cx = bubble.xFrac * canonicalWidth;
     final cy = bubble.yFrac * canonicalHeight;
+    final outerFill = _squareFillFraction(inkMap, cx, cy, sampleHalfPx, canonicalWidth, canonicalHeight);
+    final innerHalfPx = sampleHalfPx * _bubbleInnerSampleFrac;
+    final innerFill = _squareFillFraction(inkMap, cx, cy, innerHalfPx, canonicalWidth, canonicalHeight);
+
+    final outerArea = sampleHalfPx * sampleHalfPx * 4;
+    final innerArea = innerHalfPx * innerHalfPx * 4;
+    final ringArea = outerArea - innerArea;
+    if (ringArea <= 0) return outerFill;
+
+    return ((outerFill * outerArea) - (innerFill * innerArea)) / ringArea;
+  }
+
+  double _squareFillFraction(cv.Mat inkMap, double cx, double cy, double sampleHalfPx, int canonicalWidth, int canonicalHeight) {
     final left = (cx - sampleHalfPx).clamp(0, canonicalWidth - 1).round();
     final top = (cy - sampleHalfPx).clamp(0, canonicalHeight - 1).round();
     final right = (cx + sampleHalfPx).clamp(left + 1, canonicalWidth).round();

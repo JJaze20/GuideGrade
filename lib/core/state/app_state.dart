@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:camera/camera.dart';
@@ -69,6 +70,10 @@ class AppState extends ChangeNotifier {
     recentActivities
       ..clear()
       ..addAll(activities);
+    final keys = await _localStorage.loadAnswerKeys();
+    answerKeys
+      ..clear()
+      ..addAll(keys);
     notifyListeners();
   }
 
@@ -139,6 +144,7 @@ class AppState extends ChangeNotifier {
 
   void setAnswerKey(AnswerKey key) {
     answerKeys[key.examCode] = key;
+    unawaited(_localStorage.saveAnswerKeys(answerKeys));
     notifyListeners();
   }
 

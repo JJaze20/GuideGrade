@@ -13,4 +13,11 @@ class AnswerKey {
   static String keyFor(String sectionName, int itemNumber) => '$sectionName|$itemNumber';
 
   String? choiceFor(String sectionName, int itemNumber) => correctChoices[keyFor(sectionName, itemNumber)];
+
+  Map<String, dynamic> toJson() => {'examCode': examCode, 'correctChoices': correctChoices};
+
+  factory AnswerKey.fromJson(Map<String, dynamic> json) => AnswerKey(
+        examCode: json['examCode'] as String,
+        correctChoices: Map<String, String>.from(json['correctChoices'] as Map),
+      );
 }

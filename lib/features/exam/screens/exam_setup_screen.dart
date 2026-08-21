@@ -172,16 +172,55 @@ class _ExamSetupScreenState extends State<ExamSetupScreen> {
                   PrimaryButton(
                     label: 'LAUNCH OMR SCANNER LOOP',
                     icon: FontAwesomeIcons.camera,
-                    onPressed: () {
-                      appState.resetScanProgress();
-                      Navigator.of(context).pushNamed(AppRoutes.examScanning);
-                    },
+                    onPressed: () => _launchScanner(appState),
                   ),
                 ],
               ),
             );
           },
         ),
+      ),
+    );
+  }
+
+  /// Warns before launching the scanner if this exam has no answer key
+  /// yet — without one, scored results silently render every confidently
+  /// decoded item in the same green used for a verified-correct answer
+  /// (see ScoredItem.isCorrect: null when ungraded, and `null == false`
+  /// is false, so it falls into the "correct" branch), which reads as "all
+  /// correct" when nothing was actually checked. Not a hard block — a key
+  /// can legitimately be added after scanning — just makes sure that's a
+  /// deliberate choice, not something staff find out from an
+  /// unexpectedly-all-green results screen.
+  Future<void> _launchScanner(AppState appState) async {
+    if (appState.answerKeyStatus != 'Loaded Success') {
+      final addKeyFirst = await _showNoAnswerKeyDialog();
+      if (addKeyFirst == null) return; // dismissed — don't launch either way
+      if (addKeyFirst) {
+        if (!mounted) return;
+        Navigator.of(context).pushNamed(AppRoutes.answerKeyEntry);
+        return;
+      }
+    }
+    appState.resetScanProgress();
+    if (!mounted) return;
+    Navigator.of(context).pushNamed(AppRoutes.examScanning);
+  }
+
+  /// Returns true to go add the key first, false to scan without one now,
+  /// or null if dismissed (treated the same as "don't launch").
+  Future<bool?> _showNoAnswerKeyDialog() {
+    return showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('No Answer Key Set'),
+        content: const Text(
+          'This exam has no answer key yet. Sheets can still be scanned, but nothing will be graded until a key is added.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Scan Without Key')),
+          TextButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Add Key First')),
+        ],
       ),
     );
   }
