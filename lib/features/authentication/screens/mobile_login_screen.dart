@@ -1,4 +1,3 @@
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
@@ -7,6 +6,7 @@ import '../../../core/constants/app_text_styles.dart';
 import '../../../core/routes/app_routes.dart';
 import '../../../core/services/auth_service.dart';
 import '../../../core/state/app_state.dart';
+import '../../../models/user.dart';
 import '../../../shared/widgets/primary_button.dart';
 
 /// Mobile Login screen for Android/iOS platforms.
@@ -34,20 +34,17 @@ class _MobileLoginScreenState extends State<MobileLoginScreen> {
     super.dispose();
   }
 
-  Future<void> _runAuth(Future<UserCredential> Function() signIn) async {
+  Future<void> _runAuth(Future<UserModel> Function() signIn) async {
     if (_isLoading) return;
 
     setState(() => _isLoading = true);
     try {
-      final credential = await signIn();
+      final user = await signIn();
       if (!mounted) return;
-      _navigateAfterLogin(credential.user);
-    } on FirebaseAuthException catch (error) {
+      _navigateAfterLogin(user);
+    } catch (error) {
       if (!mounted) return;
       _showError(AuthService.messageFor(error));
-    } catch (_) {
-      if (!mounted) return;
-      _showError('Something went wrong. Please try again.');
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -63,26 +60,21 @@ class _MobileLoginScreenState extends State<MobileLoginScreen> {
     }
 
     _runAuth(
-      () => _authService.signInWithEmail(email: email, password: password),
+      () => _authService.signInWithEmail(email: email, password: password, requiredRole: 'guidance_council'),
     );
   }
 
   void _handleGoogleLogin() {
-    _runAuth(_authService.signInWithGoogle);
+    _runAuth(() => _authService.signInWithGoogle(requiredRole: 'guidance_council'));
   }
 
-  void _navigateAfterLogin(User? user) {
-    if (user == null) {
-      _showError('Sign-in succeeded but no user profile was returned.');
-      return;
-    }
-
-    final appState = AppStateScope.of(context);
-    
-    // Mobile users always route to staff home (Guidance Council)
-    appState.userRole = 'staff';
-    
-    if (!mounted) return;
+  // AuthService has already confirmed [user] is approved, active, AND
+  // specifically 'guidance_council' by the time this runs — a system_admin
+  // account is denied with a WrongPortalException before ever reaching
+  // here (see AuthService._authorize), so there's no admin case left to
+  // branch on: every successful call always lands on Staff Home.
+  void _navigateAfterLogin(UserModel user) {
+    AppStateScope.of(context).setCurrentUser(user);
     Navigator.of(context).pushNamedAndRemoveUntil(AppRoutes.staffHome, (route) => false);
   }
 

@@ -7,7 +7,6 @@ import '../../../core/routes/app_routes.dart';
 import '../../../core/state/app_state.dart';
 import '../../../shared/widgets/app_bottom_nav.dart';
 import '../widgets/activity_card.dart';
-import '../widgets/create_batch_sheet.dart';
 
 /// Staff Home / Dashboard — mirrors SCREENS.STAFF_HOME in the prototype.
 /// Shows a welcome card, "Create New Batch" CTA, and the registry list
@@ -91,15 +90,51 @@ class StaffHomeScreen extends StatelessWidget {
                       ),
                       const SizedBox(height: 14),
 
-                      // Create new batch CTA
+                      // Exam Management CTA
                       SizedBox(
                         width: double.infinity,
                         child: ElevatedButton.icon(
-                          onPressed: () => CreateBatchSheet.show(context),
+                          onPressed: () => Navigator.of(context).pushNamed(AppRoutes.examManagement),
+                          icon: const FaIcon(FontAwesomeIcons.fileLines, size: 14, color: Colors.amber),
+                          label: const Text('EXAM MANAGEMENT'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.primaryGreen,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 13),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                            textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, letterSpacing: 0.4),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      
+                      // Batch Management CTA
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          onPressed: () => Navigator.of(context).pushNamed(AppRoutes.batchManagement),
                           icon: const FaIcon(FontAwesomeIcons.folderPlus, size: 14, color: Colors.amber),
-                          label: const Text('CREATE NEW BATCH'),
+                          label: const Text('BATCH MANAGEMENT'),
                           style: ElevatedButton.styleFrom(
                             backgroundColor: AppColors.darkNavy,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 13),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                            textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, letterSpacing: 0.4),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      
+                      // Examinee Management CTA
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          onPressed: () => Navigator.of(context).pushNamed(AppRoutes.examineeManagement),
+                          icon: const FaIcon(FontAwesomeIcons.users, size: 14, color: Colors.amber),
+                          label: const Text('EXAMINEE MANAGEMENT'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.primaryGreen,
                             foregroundColor: Colors.white,
                             padding: const EdgeInsets.symmetric(vertical: 13),
                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),

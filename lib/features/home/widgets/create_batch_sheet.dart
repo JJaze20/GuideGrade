@@ -34,7 +34,6 @@ class _CreateBatchSheetState extends State<CreateBatchSheet> {
 
   final Map<String, String> _typeOptions = const {
     'AT': 'Admission Exam (AT)',
-    'PT': 'Personality Profile (PT)',
     'TAT': 'Teaching Aptitude Test (TAT)',
     'QTM': 'Quantitative Math Test (QTM)',
   };

@@ -9,6 +9,7 @@ import '../../models/activity_model.dart';
 import '../../models/answer_key.dart';
 import '../../models/cloud_file_model.dart';
 import '../../models/omr_scan_result.dart';
+import '../../models/user.dart';
 import '../omr/omr_decoder.dart';
 import '../omr/omr_templates.dart';
 import '../services/local_storage_service.dart';
@@ -42,12 +43,82 @@ void _saveDebugVisualization(_DebugVizRequest request) {
 /// This mirrors the mock `state` object used in the HTML prototype
 /// (recentActivities, activeExamCode, sync timestamps, etc.).
 class AppState extends ChangeNotifier {
-  String userRole = 'staff'; // 'staff' | 'admin'
-  String activeExamCode = 'AT'; // AT | PT | TAT | QTM
+  /// The signed-in, Firestore-approved user for this session — null until a
+  /// login screen successfully authorizes a sign-in (see
+  /// AuthService._authorize) and cleared again on logout. [AppRoutes]'s
+  /// route guard keys off this (not just Firebase's own auth state) so a
+  /// protected screen can never be reached without having actually passed
+  /// Firestore authorization, not merely Firebase authentication.
+  UserModel? currentUser;
+
+  void setCurrentUser(UserModel? user) {
+    currentUser = user;
+    notifyListeners();
+  }
+
+  String activeExamCode = 'AT'; // AT | TAT | QTM
 
   /// Manually-entered answer keys (see AnswerKeyEntryScreen), one per exam
-  /// code that's had a key saved.
+  /// code that's had a key saved. Also where the Firestore Final answer key
+  /// ends up after Exam Setup loads and converts it (see
+  /// core/omr/answer_key_adapter.dart) -- the scorer only ever reads this
+  /// map, regardless of which path populated it.
   final Map<String, AnswerKey> answerKeys = {};
+
+  // --------------------------------------------------------------------
+  // Real scan-session identity. Populated by Exam Setup once a real
+  // Firestore ExamModel, BatchModel, and ExamineeModel have all been
+  // selected -- [activeExamCode] alone is never sufficient to identify a
+  // scan session against Firestore, since it's just the sheet-layout
+  // lookup key and carries no exam/batch/examinee identity. Cleared only
+  // by [clearScanSession] -- NOT by [resetScanProgress], since Exam
+  // Results still needs this identity after scanning finishes in order to
+  // persist a ResultModel.
+  // --------------------------------------------------------------------
+  String? scanExamId;
+  String? scanExamTitle;
+  int? scanTotalItems;
+  String? scanBatchId;
+  String? scanBatchCode;
+  String? scanExamineeId;
+  String? scanExamineeName;
+
+  /// True once a real exam+batch+examinee have all been selected for this
+  /// session -- i.e. it's safe to persist a ResultModel against them.
+  bool get hasRealScanSession =>
+      scanExamId != null && scanBatchId != null && scanExamineeId != null;
+
+  void setScanSession({
+    required String examId,
+    required String examCode,
+    required String examTitle,
+    required int totalItems,
+    required String batchId,
+    required String batchCode,
+    required String examineeId,
+    required String examineeName,
+  }) {
+    scanExamId = examId;
+    activeExamCode = examCode;
+    scanExamTitle = examTitle;
+    scanTotalItems = totalItems;
+    scanBatchId = batchId;
+    scanBatchCode = batchCode;
+    scanExamineeId = examineeId;
+    scanExamineeName = examineeName;
+    notifyListeners();
+  }
+
+  void clearScanSession() {
+    scanExamId = null;
+    scanExamTitle = null;
+    scanTotalItems = null;
+    scanBatchId = null;
+    scanBatchCode = null;
+    scanExamineeId = null;
+    scanExamineeName = null;
+    notifyListeners();
+  }
 
   String get answerKeyStatus => answerKeys.containsKey(activeExamCode) ? 'Loaded Success' : 'Not Uploaded';
 
@@ -79,7 +150,6 @@ class AppState extends ChangeNotifier {
 
   final List<CloudFileModel> databaseCloudFiles = const [
     CloudFileModel(name: 'Admission Exam - Batch 01-A (Synced)', code: 'AT', total: 50, timestamp: '06/04/2026'),
-    CloudFileModel(name: 'Personality Test - Batch 04 (Synced)', code: 'PT', total: 32, timestamp: '06/05/2026'),
   ];
 
   int currentScannedPage = 0;
@@ -107,7 +177,6 @@ class AppState extends ChangeNotifier {
 
   void addBatch({required String title, required String typeCode}) {
     String typeLabel = 'Admission Exam';
-    if (typeCode == 'PT') typeLabel = 'Personality Profile';
     if (typeCode == 'TAT') typeLabel = 'Teaching Aptitude';
     if (typeCode == 'QTM') typeLabel = 'Quantitative Math';
 
