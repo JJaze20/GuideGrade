@@ -8,8 +8,8 @@ import '../../../core/state/app_state.dart';
 import '../../../shared/widgets/primary_button.dart';
 
 /// Configure Exam Session — mirrors SCREENS.EXAM_SETUP.
-/// Lets staff pick a pending batch, set expected scale range, and
-/// upload/confirm the answer key before launching the OMR scanner.
+/// Lets staff pick a pending batch and upload/confirm the answer key
+/// before launching the OMR scanner.
 class ExamSetupScreen extends StatefulWidget {
   const ExamSetupScreen({super.key});
 
@@ -19,7 +19,6 @@ class ExamSetupScreen extends StatefulWidget {
 
 class _ExamSetupScreenState extends State<ExamSetupScreen> {
   late final TextEditingController _sessionIdController;
-  final TextEditingController _totalController = TextEditingController(text: '40');
   String? _selectedBatch;
 
   @override
@@ -32,7 +31,6 @@ class _ExamSetupScreenState extends State<ExamSetupScreen> {
   @override
   void dispose() {
     _sessionIdController.dispose();
-    _totalController.dispose();
     super.dispose();
   }
 
@@ -100,14 +98,6 @@ class _ExamSetupScreenState extends State<ExamSetupScreen> {
                             Text(
                               'Only cohorts lacking complete test records can be scheduled for OMR camera tracking.',
                               style: AppTextStyles.body(size: 9, color: AppColors.textGray),
-                            ),
-                            const SizedBox(height: 16),
-
-                            Text('Expected Scale Range Bounds', style: AppTextStyles.body(size: 11, weight: FontWeight.w700)),
-                            const SizedBox(height: 6),
-                            TextField(
-                              controller: _totalController,
-                              keyboardType: TextInputType.number,
                             ),
                             const SizedBox(height: 16),
 

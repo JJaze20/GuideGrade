@@ -46,24 +46,45 @@ class OmrDecoder {
   /// values require darker pixels to count as "ink".
   static const double _adaptiveThresholdC = 12;
 
-  /// A bubble's ink fill fraction (0 = empty, 1 = fully black) must clear
-  /// this floor to be considered marked at all. Raised from 0.15 (first
-  /// correction) to 0.22 (halved the flagged rate on a blank OLSAT sheet,
-  /// ~50-58% -> ~19-32%), now to 0.28: geometry was confirmed pixel-perfect
-  /// (see decode()/saveDebugVisualization commit history), so the remaining
-  /// flags on a blank sheet are purely fill-noise, not misaligned sampling
-  /// — the right lever is still this floor. Re-check against a blank-sheet
-  /// scan after this change; if the flagged rate keeps dropping
-  /// proportionally, keep raising it, but this has never been tested
-  /// against a sheet with genuine pencil marks — at some point a real,
-  /// light mark could start reading as blank, so this can't go up forever
-  /// without that check too.
-  static const double _blankFillFloor = 0.28;
+  /// Absolute floor an item's best-filled bubble must clear before it's
+  /// even considered for marking, used only as a last-resort sanity check
+  /// (see [_readBubbles]) — everything with 3+ choices decides "is
+  /// anything marked here" by comparing the best bubble against the
+  /// *other bubbles in that same item*, not this constant. That change
+  /// (see [_readBubbles]'s doc comment) is what replaced this floor as the
+  /// primary decision after real scans confirmed it: with a single global
+  /// constant, a photo with any whole-sheet contrast compression (uneven
+  /// or dim lighting — confirmed against real photos, not assumed) pushed
+  /// every bubble's fill up together, so blank items crossed this floor
+  /// and genuinely marked items failed to clear it by enough over their
+  /// row-mates. A same-row, same-lighting comparison isn't affected by
+  /// that whole-photo shift at all. Kept low (below the old 0.28) since it
+  /// only needs to catch "no real ink signal anywhere," not do the actual
+  /// discrimination.
+  static const double _blankFillFloor = 0.15;
 
-  /// The most-filled bubble in an item must beat the runner-up fill
-  /// fraction by at least this much to be treated as an unambiguous single
-  /// mark.
+  /// The gap an item's best bubble must open over the single runner-up to
+  /// be trusted as "only one choice looks marked" rather than ambiguous —
+  /// checked for every item regardless of choice count, after
+  /// [_markPresenceGap] has already decided something is there at all.
   static const double _ambiguousMargin = 0.15;
+
+  /// The gap an item's best bubble must open over the lowest of its own
+  /// row's *other* bubbles ([_readBubbles]'s 3+-choice path) to count as
+  /// "something is marked here at all" — deliberately smaller than
+  /// [_ambiguousMargin]. A real scan showed why the two needs are
+  /// different: one genuinely shaded bubble read as a solid, dense mark in
+  /// the ink map (comfortably clearing 0.15), while a second, equally real
+  /// but more lightly shaded bubble on the same sheet produced visibly
+  /// less ink density in the same ink map — real, not noise, just fainter
+  /// pencil pressure — and fell just short of that same 0.15 gap, so it
+  /// read as confidently blank instead of even being flagged. Detecting
+  /// "is anything here" should be more sensitive than deciding "is it
+  /// unambiguous" — a light-but-real mark should fall through to the
+  /// ambiguous check below (get flagged for review) rather than being
+  /// missed outright, which [_ambiguousMargin] alone couldn't do since it
+  /// was being asked to do both jobs at once.
+  static const double _markPresenceGap = 0.08;
 
   /// A fiducial blob must be at least this many gray levels darker than the
   /// local background to count as a real mark (not a shadow edge).
@@ -209,23 +230,52 @@ class OmrDecoder {
         try {
           final warped = cv.warpPerspective(gray, transform, (canonicalWidth, canonicalHeight));
           try {
-            final blurred = cv.gaussianBlur(warped, (3, 3), 0);
+            // A cast shadow (a hand, phone, or object between the light
+            // source and the sheet) doesn't just darken the pixels under
+            // it — a camera's auto-exposure reacts to a large dark region
+            // in frame by adjusting overall exposure, which compresses
+            // paper-vs-ink contrast across the *whole* photo, not just the
+            // shadowed part (confirmed against a real scan: every item
+            // read ambiguous, including ones nowhere near the shadow).
+            // _adaptiveThresholdC's fixed margin assumes normal contrast;
+            // it has no way to compensate for a photo-wide compression
+            // like that. CLAHE re-normalizes local contrast per tile
+            // before thresholding — the same technique already used for
+            // corner-mark detection (_findMarkerInRegion) — so a
+            // shadow-compressed region gets its contrast restored instead
+            // of staying flattened into the ambiguous zone. clipLimit is
+            // lower and the tile grid coarser than the corner search uses,
+            // since this runs across the whole dense page (bubble grid +
+            // header text) rather than one small ROI, and the goal here is
+            // countering a slow, page-scale exposure/shadow gradient, not
+            // maximizing fine local contrast.
+            final clahe = cv.createCLAHE(clipLimit: 2, tileGridSize: (8, 8));
             try {
-              final inkMap = cv.adaptiveThreshold(
-                blurred,
-                255,
-                cv.ADAPTIVE_THRESH_GAUSSIAN_C,
-                cv.THRESH_BINARY_INV,
-                _adaptiveThresholdBlockSize,
-                _adaptiveThresholdC,
-              );
+              final normalized = clahe.apply(warped);
               try {
-                return _readBubbles(inkMap, template, canonicalWidth, canonicalHeight);
+                final blurred = cv.gaussianBlur(normalized, (3, 3), 0);
+                try {
+                  final inkMap = cv.adaptiveThreshold(
+                    blurred,
+                    255,
+                    cv.ADAPTIVE_THRESH_GAUSSIAN_C,
+                    cv.THRESH_BINARY_INV,
+                    _adaptiveThresholdBlockSize,
+                    _adaptiveThresholdC,
+                  );
+                  try {
+                    return _readBubbles(inkMap, template, canonicalWidth, canonicalHeight);
+                  } finally {
+                    inkMap.dispose();
+                  }
+                } finally {
+                  blurred.dispose();
+                }
               } finally {
-                inkMap.dispose();
+                normalized.dispose();
               }
             } finally {
-              blurred.dispose();
+              clahe.dispose();
             }
           } finally {
             warped.dispose();
@@ -321,6 +371,52 @@ class OmrDecoder {
             cv.imwrite('$outputDir/sheet${pageIndex}_grid.jpg', warped);
           } finally {
             warped.dispose();
+          }
+
+          // The actual grayscale pipeline decode() reads bubbles from —
+          // same warp, same CLAHE, same threshold, on the grayscale image
+          // rather than color — saved at each stage so a misread can be
+          // diagnosed against what the decoder actually saw, not a
+          // reconstruction of it. sheetN_warped_gray.jpg is the flattened
+          // page before any contrast correction; sheetN_clahe.jpg is after
+          // (compare the two to see how much correction was needed);
+          // sheetN_inkmap.jpg is the final black/white result
+          // _readBubbles actually samples — white is "ink" everywhere it
+          // matters for scoring.
+          final warpedGray = cv.warpPerspective(gray, transform, (canonicalWidth, canonicalHeight));
+          try {
+            cv.imwrite('$outputDir/sheet${pageIndex}_warped_gray.jpg', warpedGray);
+            final clahe = cv.createCLAHE(clipLimit: 2, tileGridSize: (8, 8));
+            try {
+              final normalized = clahe.apply(warpedGray);
+              try {
+                cv.imwrite('$outputDir/sheet${pageIndex}_clahe.jpg', normalized);
+                final blurred = cv.gaussianBlur(normalized, (3, 3), 0);
+                try {
+                  final inkMap = cv.adaptiveThreshold(
+                    blurred,
+                    255,
+                    cv.ADAPTIVE_THRESH_GAUSSIAN_C,
+                    cv.THRESH_BINARY_INV,
+                    _adaptiveThresholdBlockSize,
+                    _adaptiveThresholdC,
+                  );
+                  try {
+                    cv.imwrite('$outputDir/sheet${pageIndex}_inkmap.jpg', inkMap);
+                  } finally {
+                    inkMap.dispose();
+                  }
+                } finally {
+                  blurred.dispose();
+                }
+              } finally {
+                normalized.dispose();
+              }
+            } finally {
+              clahe.dispose();
+            }
+          } finally {
+            warpedGray.dispose();
           }
         } finally {
           transform.dispose();
@@ -816,6 +912,30 @@ class OmrDecoder {
     }
   }
 
+  /// Reads every item's fill fractions and decides blank/marked/ambiguous
+  /// primarily by comparing bubbles *within the same item* against each
+  /// other, not against a single fixed constant.
+  ///
+  /// The earlier design compared every bubble on the sheet against one
+  /// global floor and margin. That's fragile to exactly the kind of thing
+  /// a real photo actually has: uneven or dim lighting across the page
+  /// (confirmed against real scans, not assumed) shifts every bubble's
+  /// fill reading together, so a global floor either lets a whole
+  /// lighting-dim sheet's blank bubbles cross it, or a global margin
+  /// shrinks below its threshold for a genuinely marked bubble sitting
+  /// next to a blank one whose reading got pushed up by the same shift.
+  /// Two bubbles printed on the same row of the same photo were captured
+  /// under essentially identical local lighting, so comparing a bubble
+  /// against its own row's other bubbles cancels that shift out instead
+  /// of being fooled by it — a real mark still has to look darker than
+  /// its neighbors, but "darker than its neighbors" no longer depends on
+  /// matching one fixed brightness assumed to hold for every photo.
+  ///
+  /// Requires at least 3 choices to build that row-local reference safely
+  /// (see below) — items with only 2 choices (e.g. True/False) fall back
+  /// to the original fixed floor, since with just 2 bubbles there's no
+  /// third choice available to reference that couldn't itself be a
+  /// second real mark.
   OmrScanResult _readBubbles(cv.Mat inkMap, OmrExamTemplate template, int canonicalWidth, int canonicalHeight) {
     // Sample the full printed bubble (its radius, converted to canonical
     // pixels), not a size guessed independently of what's actually on the
@@ -827,23 +947,34 @@ class OmrDecoder {
     for (final section in template.sections) {
       for (final itemNumber in section.items.keys.toList()..sort()) {
         final choices = section.items[itemNumber]!;
-        String? bestChoice;
-        double bestFill = -1;
-        double runnerUpFill = -1;
-        for (final bubble in choices) {
-          final fill = _bubbleFillFraction(inkMap, bubble, bubbleSampleHalfPx, canonicalWidth, canonicalHeight);
-          if (fill > bestFill) {
-            runnerUpFill = bestFill;
-            bestFill = fill;
-            bestChoice = bubble.choice;
-          } else if (fill > runnerUpFill) {
-            runnerUpFill = fill;
-          }
+        final fills = [
+          for (final bubble in choices) (bubble.choice, _bubbleFillFraction(inkMap, bubble, bubbleSampleHalfPx, canonicalWidth, canonicalHeight)),
+        ]..sort((a, b) => b.$2.compareTo(a.$2)); // descending by fill
+
+        final bestChoice = fills[0].$1;
+        final bestFill = fills[0].$2;
+        final runnerUpFill = fills[1].$2; // every item has >=2 choices
+
+        final bool hasSomething;
+        if (fills.length >= 3) {
+          // The lowest-filled *other* bubble in this item — a robust,
+          // same-row "what does blank ink look like right here" reference
+          // that stays reliable even if the single runner-up happens to
+          // be a noisy outlier (still safely blank, just not the
+          // clearest example of it).
+          final floorReference = fills.sublist(1).map((e) => e.$2).reduce(math.min);
+          hasSomething = bestFill >= _blankFillFloor && (bestFill - floorReference) >= _markPresenceGap;
+        } else {
+          hasSomething = bestFill >= _blankFillFloor;
         }
 
-        if (bestFill < _blankFillFloor) {
+        if (!hasSomething) {
           items.add(OmrItemResult(sectionName: section.name, itemNumber: itemNumber, markedChoice: null));
         } else if (bestFill - runnerUpFill < _ambiguousMargin) {
+          // Unchanged regardless of choice count: best and runner-up are
+          // too close to call, whether that's a genuine double-mark or a
+          // single mark with an unusually dark neighbor — either way it
+          // shouldn't be silently guessed.
           items.add(
             OmrItemResult(
               sectionName: section.name,
