@@ -540,6 +540,17 @@ class FirestoreService {
     }
   }
 
+  /// Permanently delete a batch.
+  Future<void> deleteBatch(String batchId) async {
+    try {
+      await _batchesCollection.doc(batchId).delete();
+      print('Batch deleted: $batchId');
+    } catch (e) {
+      print('Error deleting batch: $e');
+      rethrow;
+    }
+  }
+
   /// Complete a batch (change status to Completed)
   Future<void> completeBatch(String batchId) async {
     try {

@@ -99,6 +99,47 @@ class _BatchManagementScreenState extends State<BatchManagementScreen> {
     }
   }
 
+  Future<void> _confirmDeleteBatch(BatchModel batch) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Delete Batch?'),
+        content: Text(
+          'This will permanently delete "${batch.batchCode}"'
+          '${batch.description.isNotEmpty ? ' (${batch.description})' : ''}. '
+          'This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            style: TextButton.styleFrom(foregroundColor: const Color(0xFF991B1B)),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    try {
+      await _firestoreService.deleteBatch(batch.batchId);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Batch "${batch.batchCode}" deleted.')),
+      );
+      _loadBatches();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error deleting batch: $e')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -218,15 +259,25 @@ class _BatchManagementScreenState extends State<BatchManagementScreen> {
 
   Widget _buildBatchList() {
     return ListView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: _filteredBatches.length,
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+      itemCount: _filteredBatches.length + 1,
       itemBuilder: (context, index) {
-        final batch = _filteredBatches[index];
+        if (index == 0) {
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 10, left: 2),
+            child: Text(
+              '${_filteredBatches.length} batch${_filteredBatches.length == 1 ? '' : 'es'}',
+              style: AppTextStyles.body(size: 10, weight: FontWeight.w700, color: AppColors.textGray),
+            ),
+          );
+        }
+        final batch = _filteredBatches[index - 1];
         return Padding(
           padding: const EdgeInsets.only(bottom: 12),
           child: BatchListItem(
             batch: batch,
             onTap: () => _navigateToEditBatch(batch),
+            onDelete: () => _confirmDeleteBatch(batch),
           ),
         );
       },

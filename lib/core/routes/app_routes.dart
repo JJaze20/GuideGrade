@@ -16,22 +16,16 @@ import '../../features/exam/screens/answer_key_entry_screen.dart';
 import '../../features/archive/screens/cloud_archive_screen.dart';
 import '../../features/admin/screens/admin_dashboard_screen.dart';
 import '../../features/guidance/screens/exam_management_screen.dart';
-import '../../features/guidance/screens/create_exam_screen.dart';
-import '../../features/guidance/screens/edit_exam_screen.dart';
-import '../../features/guidance/screens/answer_key_management_screen.dart';
+import '../../features/guidance/screens/exam_sheet_preview_screen.dart';
 import '../../features/guidance/screens/batch_management_screen.dart';
 import '../../features/guidance/screens/create_batch_screen.dart';
 import '../../features/guidance/screens/edit_batch_screen.dart';
-import '../../features/guidance/screens/examinee_management_screen.dart';
-import '../../features/guidance/screens/create_examinee_screen.dart';
-import '../../features/guidance/screens/edit_examinee_screen.dart';
 import '../../features/admin/screens/user_management_screen.dart';
 import '../../features/admin/screens/create_user_screen.dart';
 import '../../features/admin/screens/edit_user_screen.dart';
 import '../../features/admin/screens/system_logs_screen.dart';
-import '../../models/exam.dart';
+import '../constants/exam_catalog.dart';
 import '../../models/batch.dart';
-import '../../models/examinee.dart';
 import '../../models/user.dart';
 
 /// Centralized route names. Keeping these as constants avoids typos
@@ -52,15 +46,10 @@ class AppRoutes {
   static const String cloudArchive = '/cloud-archive';
   static const String adminDashboard = '/admin-dashboard';
   static const String examManagement = '/exam-management';
-  static const String createExam = '/create-exam';
-  static const String editExam = '/edit-exam';
-  static const String answerKeyManagement = '/answer-key-management';
+  static const String examSheetPreview = '/exam-sheet-preview';
   static const String batchManagement = '/batch-management';
   static const String createBatch = '/create-batch';
   static const String editBatch = '/edit-batch';
-  static const String examineeManagement = '/examinee-management';
-  static const String createExaminee = '/create-examinee';
-  static const String editExaminee = '/edit-examinee';
   static const String userManagement = '/user-management';
   static const String createUser = '/create-user';
   static const String editUser = '/edit-user';
@@ -94,16 +83,11 @@ class AppRoutes {
     examScanning,
     examResults,
     answerKeyEntry,
-    answerKeyManagement,
     examManagement,
-    createExam,
-    editExam,
+    examSheetPreview,
     batchManagement,
     createBatch,
     editBatch,
-    examineeManagement,
-    createExaminee,
-    editExaminee,
     cloudArchive,
   };
 
@@ -193,24 +177,14 @@ class AppRoutes {
         return _fade(const AdminDashboardScreen());
       case examManagement:
         return _fade(const ExamManagementScreen());
-      case createExam:
-        return _fade(const CreateExamScreen());
-      case editExam:
-        return _fade(EditExamScreen(exam: settings.arguments as ExamModel?));
-      case answerKeyManagement:
-        return _fade(AnswerKeyManagementScreen(exam: settings.arguments as ExamModel?));
+      case examSheetPreview:
+        return _fade(ExamSheetPreviewScreen(entry: settings.arguments as ExamCatalogEntry));
       case batchManagement:
         return _fade(const BatchManagementScreen());
       case createBatch:
         return _fade(const CreateBatchScreen());
       case editBatch:
         return _fade(EditBatchScreen(batch: settings.arguments as BatchModel?));
-      case examineeManagement:
-        return _fade(const ExamineeManagementScreen());
-      case createExaminee:
-        return _fade(CreateExamineeScreen(batch: settings.arguments as BatchModel?));
-      case editExaminee:
-        return _fade(EditExamineeScreen(examinee: settings.arguments as ExamineeModel?));
       case userManagement:
         return _fade(const UserManagementScreen());
       case createUser:

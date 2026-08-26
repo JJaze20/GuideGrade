@@ -135,9 +135,36 @@ const double kNdmuHeaderHeight =
     kNdmuInstructionHeight +
     kGapBeforeNdmuGrid;
 
-double headerHeightFor(HeaderKind kind) => switch (kind) {
+// Compact variant of the NDMU header — same fields, same reading order,
+// just tighter row heights/gaps and smaller type. Used only where
+// [ExamSpec.compactNdmuHeader] is set (currently TAT's single-page
+// landscape layout, whose page has far less vertical room to spare than
+// QTM's portrait one), so QTM keeps its current, already-shipped sizing
+// untouched.
+const double kCompactLetterheadHeight = 36;
+const double kCompactGapAfterLetterhead = 3;
+const double kCompactIdRowHeight = 15;
+const double kCompactGapAfterIdTable = 3;
+const double kCompactDateScoresHeight = 42;
+const double kCompactGapAfterDateScores = 4;
+const double kCompactNdmuTitleHeight = 20;
+const double kCompactNdmuInstructionHeight = 9;
+const double kCompactGapBeforeNdmuGrid = 4;
+
+const double kCompactNdmuHeaderHeight =
+    kCompactLetterheadHeight +
+    kCompactGapAfterLetterhead +
+    kCompactIdRowHeight * kIdRowCount +
+    kCompactGapAfterIdTable +
+    kCompactDateScoresHeight +
+    kCompactGapAfterDateScores +
+    kCompactNdmuTitleHeight +
+    kCompactNdmuInstructionHeight +
+    kCompactGapBeforeNdmuGrid;
+
+double headerHeightFor(ExamSpec exam) => switch (exam.headerKind) {
   HeaderKind.simple => kSimpleHeaderHeight,
-  HeaderKind.ndmu => kNdmuHeaderHeight,
+  HeaderKind.ndmu => exam.compactNdmuHeader ? kCompactNdmuHeaderHeight : kNdmuHeaderHeight,
 };
 
 /// Row 30's bubble center sits `(kRowsPerColumn - 1) * kRowPitch` below row
@@ -145,8 +172,21 @@ double headerHeightFor(HeaderKind kind) => switch (kind) {
 /// the header above it varies.
 
 double contentHeightFor(ExamSpec exam) =>
-    headerHeightFor(exam.headerKind) + (exam.rowsPerColumn - 1) *
+    headerHeightFor(exam) + (exam.rowsPerColumn - 1) *
 exam.rowPitch + 2 * exam.bubbleRadius;
+
+/// The actual vertical radius bubbles are drawn with — QTM/TAT (NDMU
+/// forms) draw slightly flattened ovals rather than true circles (see
+/// _paintItems), matching those sheets' real bubble style. Single source
+/// of truth for both the PDF drawing and the emitted template's
+/// bubbleRadiusYPt, so the decoder's sample region can never disagree
+/// with what's actually printed — an earlier version assumed this
+/// distinction was purely cosmetic (the decoder always sampled a square
+/// sized to the horizontal radius), which diluted a genuinely filled
+/// oval bubble's measured fill by roughly half, confirmed against a real
+/// scan where it was enough to make every marked item read ambiguous.
+double bubbleRadiusYFor(ExamSpec exam) =>
+    exam.headerKind == HeaderKind.ndmu ? exam.bubbleRadius * 0.8 : exam.bubbleRadius;
 
 // ---------------------------------------------------------------------------
 // Brand colors, matching lib/core/constants/app_colors.dart.
@@ -224,6 +264,32 @@ class ExamSpec {
   /// [HeaderKind.ndmu]) — e.g. the center's name, university, and location.
   final List<String> letterheadLines;
 
+  /// Extra visual gap, in points, between an item number's own right edge
+  /// and its first bubble's actual left edge (accounting for
+  /// [bubbleRadius], so the gap looks the same regardless of bubble size).
+  /// Null (the default) keeps the original behavior: the label is drawn
+  /// flush against the left edge of the [rowLabelWidth] space reserved for
+  /// it, so how much visual gap that leaves depends on the label text's
+  /// own width (a 1-digit item number ends up with more breathing room
+  /// than a 2-digit one). Setting this instead right-aligns every label to
+  /// a consistent gap regardless of digit count — purely a draw-position
+  /// change, doesn't touch [rowLabelWidth] or bubble positions at all.
+  final double? labelGapPt;
+
+  /// When true, the printed header title is just [title] on its own —
+  /// the section name that's otherwise always appended (see
+  /// [_paintSimpleHeader]) is left off. Doesn't touch [SectionSpec.name]
+  /// itself, which the app still uses at runtime for scoring/answer-key
+  /// grouping — this only changes what's drawn on the printed page.
+  final bool suppressSectionInTitle;
+
+  /// Uses the compact NDMU header sizing (see kCompactNdmuHeaderHeight)
+  /// instead of the normal one. Only meaningful when [headerKind] is
+  /// [HeaderKind.ndmu] — for a page with much less vertical room to spare
+  /// (TAT's single-page landscape layout), so the grid below it can be
+  /// bigger instead of most of the page going to the header.
+  final bool compactNdmuHeader;
+
   const ExamSpec(
       this.code,
       this.title,
@@ -244,6 +310,9 @@ class ExamSpec {
         this.contentTopOverride,
         this.cornerMarkersOverride,
         this.letterheadLines = const [],
+        this.labelGapPt,
+        this.suppressSectionInTitle = false,
+        this.compactNdmuHeader = false,
       });
 }
 
@@ -266,13 +335,38 @@ final List<ExamSpec> kExams = [
       SectionSpec('Test III', 20, (n) => _tf),
     ],
     headerKind: HeaderKind.ndmu,
-    pageWidthPt: kLongWidth,
-    pageHeightPt: kLongHeight,
+    // Landscape long-bond, swapped from the paper's usual portrait
+    // orientation (kLongWidth x kLongHeight) -- see _layoutTatLandscape
+    // below for why: this is the one exam whose 3 sections all sit on a
+    // single physical page side by side rather than one page per section,
+    // and doing that needs the wider dimension as the page's width.
+    pageWidthPt: kLongHeight,
+    pageHeightPt: kLongWidth,
     letterheadLines: const [
       'Guidance, Honors, and Scholarship Center',
       'Notre Dame of Marbel University',
       'City of Koronadal, South Cotabato',
     ],
+    // compactNdmuHeader trims the header from 238pt down to ~164pt (see
+    // kCompactNdmuHeaderHeight) -- landscape long-bond is only 612pt tall
+    // total, so the normal QTM-sized header alone was eating nearly 40% of
+    // the page before a single bubble got drawn. The freed-up ~74pt goes
+    // straight to the grid below, which is what let bubbleRadius/
+    // choicePitch come back up to exactly match AT/QTM's own (8/26) --
+    // an earlier version of this layout had to shrink those below AT's
+    // numbers just to fit; with the compact header there's enough room
+    // (see _layoutTatLandscape's fit math) not to need that trade-off.
+    // rowPitch 25 (vs AT's 27) is the one number still slightly tighter,
+    // needed to fit 15 rows/column in the remaining space -- still a 9pt
+    // real edge gap, well above the ~2pt gap that caused AT's cross-bubble
+    // bleed bug (see AT's own comment below).
+    compactNdmuHeader: true,
+    bubbleRadius: 8,
+    choicePitch: 26,
+    rowPitch: 25,
+    rowsPerColumn: 15,
+    columnGap: 24,
+    labelGapPt: 6,
   ),
   ExamSpec(
     'QTM',
@@ -286,6 +380,23 @@ final List<ExamSpec> kExams = [
       'NOTRE DAME OF MARBEL UNIVERSITY',
       'City of Koronadal, South Cotabato',
     ],
+    // Bubble grid restyled to match AT's proportions (bigger bubbles,
+    // wider gaps, consistent item-number distance) so the two sheets read
+    // as the same system below their different headers -- the NDMU
+    // letterhead above is untouched. choicePitch/bubbleRadius match AT
+    // exactly (same bubble look); rowPitch is deliberately *larger* than
+    // AT's, not copied -- "long" bond paper (936pt tall) is noticeably
+    // taller than AT's A4 (842pt), and reusing AT's rowPitch as-is left
+    // roughly a third of this page blank below the grid. 15 rows across
+    // the 4 columns this width fits (60/4, divides evenly, no
+    // partially-empty column) at rowPitch: 40 fills the page down near
+    // the bottom margin instead -- verified against the regenerated PDF's
+    // actual fill, not computed on paper alone.
+    bubbleRadius: 8,
+    choicePitch: 26,
+    rowPitch: 40,
+    rowsPerColumn: 15,
+    labelGapPt: 6,
   ),
   // The Admission Test (AT) — a self-designed sheet, printed and laid out
   // entirely by this tool on standard A4 (matches the paper it's actually
@@ -314,18 +425,45 @@ final List<ExamSpec> kExams = [
   // needed 12 rows and the 4th went unused entirely — over half the page
   // printed blank on the right and along the bottom. rowsPerColumn: 18
   // uses exactly the 4 columns that fit this page width (72 / 4 = 18,
-  // divides evenly, no partially-empty column), and the larger
-  // bubbleRadius/choicePitch/rowPitch below scale the grid up to use most
-  // of the remaining page instead of leaving it blank — verified by
-  // rendering the regenerated PDF, not just computed on paper.
+  // divides evenly, no partially-empty column). That first fix used
+  // choicePitch: 18 with bubbleRadius: 8, leaving only a 2pt (~0.7mm) gap
+  // between adjacent printed bubble *edges* — the decoder's ink-sampling
+  // square for each bubble is sized to exactly match its radius, with no
+  // built-in margin, so at a 0.7mm real-world gap ordinary photo/warp
+  // imprecision was enough for one bubble's printed circle outline to
+  // bleed into its neighbor's sample square. That inflates every bubble's
+  // ink reading a little, including unmarked ones next to a marked one,
+  // which shrinks the marked-vs-runner-up margin sheet-wide — confirmed
+  // against real scanned photos of a fully answered sheet: corner
+  // detection and the perspective warp were both pixel-accurate (every
+  // sample dot landed dead-center on its bubble), yet every single item
+  // still came back "ambiguous," which is exactly what universal
+  // cross-bubble bleed produces and a geometry problem would not.
+  //
+  // 3 columns of 24 (still divides 72 evenly, still fits on one page)
+  // frees up enough width for choicePitch: 26 instead of 18 — a ~10pt
+  // (~3.5mm) edge gap, comparable to a real printed OMR sheet's spacing
+  // rather than the print run's minimum legible size.
   ExamSpec(
     'AT',
-    'Admission Test (AT) - OLSAT',
+    'Admission Test (AT)',
     [SectionSpec('Answer Document', 72, (n) => n.isOdd ? _atOdd : _atEven)],
     bubbleRadius: 8,
-    choicePitch: 18,
-    rowPitch: 30,
-    rowsPerColumn: 18,
+    choicePitch: 26,
+    rowPitch: 27,
+    rowsPerColumn: 24,
+    // Printed header reads just "Admission Test (AT)" -- no "- OLSAT",
+    // no "- Answer Document" section suffix. SectionSpec.name above is
+    // untouched (still "Answer Document"), so scoring/answer-key grouping
+    // at runtime is unaffected -- this only changes what's drawn.
+    suppressSectionInTitle: true,
+    // A consistent, deliberate gap between each item number and its own
+    // bubble -- the original layout (label flush against the reserved
+    // rowLabelWidth zone) put 1- and 2-digit numbers at different
+    // distances from the bubble and left barely any gap at all for the
+    // widest ones ("72."). Purely a label draw-position change: bubble
+    // positions and rowLabelWidth are untouched.
+    labelGapPt: 6,
   ),
 ];
 
@@ -431,7 +569,7 @@ ExamLayout _layoutExam(ExamSpec exam) {
         final columnX = exam.contentLeft +
             col * (_columnWidth(choiceCount, exam.rowLabelWidth, exam.choicePitch) + exam.columnGap) +
             exam.rowLabelWidth;
-        final rowY = exam.contentTop + headerHeightFor(exam.headerKind) + row * exam.rowPitch;
+        final rowY = exam.contentTop + headerHeightFor(exam) + row * exam.rowPitch;
         final choices = section.choicesForItem(itemNumber);
         final bubbles = [
           for (var i = 0; i < choices.length; i++) BubblePoint(choices[i], columnX + i * exam.choicePitch, rowY),
@@ -443,6 +581,101 @@ ExamLayout _layoutExam(ExamSpec exam) {
   }
 
   return ExamLayout(exam, pages, widestContent);
+}
+
+/// Extra horizontal gap between one section's zone and the next, on TAT's
+/// combined landscape page -- separate from [ExamSpec.columnGap], which
+/// only spaces columns *within* one section's own grid.
+const double kTatZoneGap = 32;
+
+/// Extra vertical room, below the NDMU header's natural bottom edge,
+/// reserved for each zone's own "TEST I/II/III" label on TAT's combined
+/// landscape page -- see [_layoutTatLandscape].
+const double kTatZoneLabelHeight = 14;
+
+/// TAT-only: lays out all 3 sections (Test I/II/III) side by side on ONE
+/// physical landscape page, instead of the generic engine's one-page-per-
+/// section behavior every other exam (including TAT's own former portrait
+/// layout) uses. [_layoutExam] always starts a section's columns at
+/// [ExamSpec.contentLeft] and gives it a fresh page — there's no way to
+/// tell it "keep going, just further right on the same page" without
+/// reworking it for every exam. Since TAT is the only exam that currently
+/// needs a multi-section shared page, this builds it directly instead:
+/// one independent mini-[ExamSpec] per section, each pinned to its own
+/// horizontal slice of the page via [ExamSpec.contentLeftOverride], laid
+/// out with the proven [_layoutExam] column/row math, then stitched back
+/// into one combined [ExamLayout] whose 3 [PagePlacement]s keep their
+/// original [SectionSpec] identity (so [_emitTemplate]'s per-section
+/// grouping still works) but render onto a single PDF page.
+ExamLayout _layoutTatLandscape(ExamSpec exam) {
+  double sectionWidth(SectionSpec section, ExamSpec mini) {
+    final choiceCount = section.choicesForItem(1).length;
+    final cols = (section.itemCount / mini.rowsPerColumn).ceil();
+    return cols * _columnWidth(choiceCount, mini.rowLabelWidth, mini.choicePitch) + (cols - 1) * mini.columnGap;
+  }
+
+  final pages = <PagePlacement>[];
+  var nextLeft = exam.contentLeft;
+  for (final section in exam.sections) {
+    final mini = ExamSpec(
+      '${exam.code}_${section.name}',
+      section.name,
+      [section],
+      headerKind: exam.headerKind, // keeps rowY's header-height offset correct
+      compactNdmuHeader: exam.compactNdmuHeader,
+      pageWidthPt: exam.pageWidthPt,
+      pageHeightPt: exam.pageHeightPt,
+      choicePitch: exam.choicePitch,
+      rowPitch: exam.rowPitch,
+      columnGap: exam.columnGap,
+      rowLabelWidth: exam.rowLabelWidth,
+      bubbleRadius: exam.bubbleRadius,
+      rowsPerColumn: exam.rowsPerColumn,
+      contentLeftOverride: nextLeft,
+      // Shifted down from the header's natural bottom edge to leave room
+      // for this zone's own section-name label (see _paintTatLandscapePage).
+      contentTopOverride: exam.contentTop + kTatZoneLabelHeight,
+    );
+    final miniLayout = _layoutExam(mini);
+    pages.addAll(miniLayout.pages);
+    nextLeft += sectionWidth(section, mini) + kTatZoneGap;
+  }
+  // Combined content width, for _cornerMarkers to size the shared page's
+  // markers to every zone at once -- not any individual mini-layout's own
+  // (ndmu-header-floored) contentWidth.
+  final combinedWidth = nextLeft - kTatZoneGap - exam.contentLeft;
+  return ExamLayout(exam, pages, combinedWidth);
+}
+
+/// Paints TAT's combined landscape page: corner markers + the NDMU header
+/// once (spanning the full combined width), then each section's own
+/// zone label + bubble grid, side by side. Companion to
+/// [_layoutTatLandscape] — see its comment for why this exam needs a
+/// dedicated paint path instead of the generic [_paintPage].
+void _paintTatLandscapePage(PdfGraphics canvas, ExamSpec exam, ExamLayout layout, PdfFont regular, PdfFont bold) {
+  double flip(double topLeftY) => exam.pageHeightPt - topLeftY;
+
+  canvas.setColor(kBlack);
+  for (final corner in _cornerMarkers(layout)) {
+    canvas.drawRect(corner.$1 - kMarkerHalf, flip(corner.$2) - kMarkerHalf, kMarkerHalf * 2, kMarkerHalf * 2);
+    canvas.fillPath();
+  }
+
+  // Synthetic page just to drive _paintNdmuHeader's title text — section
+  // name set to match the exam title (minus its "(XX)" suffix) so the
+  // header's own "section differs from title" logic cleanly omits a
+  // redundant suffix, same as QTM's single self-named section does today.
+  final title1 = exam.title.replaceAll(RegExp(r'\s*\([A-Z]+\)$'), '').toUpperCase();
+  final headerPage = PagePlacement(SectionSpec(title1, 0, (n) => const []), 1, 1, const []);
+  _paintNdmuHeader(canvas, exam, headerPage, layout, regular, bold, flip);
+
+  final labelY = exam.contentTop + headerHeightFor(exam) + 2;
+  for (final page in layout.pages) {
+    canvas.setColor(kNavy);
+    final zoneLeft = page.items.first.bubbles.first.x - exam.rowLabelWidth;
+    canvas.drawString(bold, 8, page.section.name.toUpperCase(), zoneLeft, flip(labelY + 8));
+    _paintItems(canvas, page.items, exam, regular, bold, flip);
+  }
 }
 
 /// The 4 corner marker points (top-left-origin, points), sized to the
@@ -485,16 +718,44 @@ void _paintPage(PdfGraphics canvas, ExamSpec exam, PagePlacement page, ExamLayou
       _paintNdmuHeader(canvas, exam, page, layout, regular, bold, flip);
   }
 
-  // Bubble grid. QTM/TAT (NDMU forms) draw slightly elongated ovals rather
-  // than perfect circles, matching those sheets' actual bubble style; the
-  // decoder samples square regions regardless of the drawn shape, so this
-  // is purely cosmetic.
+  _paintItems(canvas, page.items, exam, regular, bold, flip);
+}
+
+/// Draws item-number labels + bubble ovals for one list of placed items.
+/// Shared by every per-section page ([_paintPage]) and by TAT's combined
+/// single-page landscape layout ([_paintTatLandscapePage]), which draws
+/// this once per section-zone on the same page.
+void _paintItems(
+  PdfGraphics canvas,
+  List<ItemPlacement> items,
+  ExamSpec exam,
+  PdfFont regular,
+  PdfFont bold,
+  double Function(double) flip,
+) {
+  // QTM/TAT (NDMU forms) draw slightly elongated ovals rather than perfect
+  // circles, matching those sheets' actual bubble style. Not just cosmetic
+  // — the decoder samples a region sized to bubbleRadiusYFor(exam), so
+  // this and _emitTemplate's bubbleRadiusYPt must always agree with what's
+  // actually drawn here.
   final bubbleRx = exam.bubbleRadius;
-  final bubbleRy = exam.headerKind == HeaderKind.ndmu ? exam.bubbleRadius * 0.8 : exam.bubbleRadius;
-  for (final item in page.items) {
+  final bubbleRy = bubbleRadiusYFor(exam);
+  for (final item in items) {
     canvas.setColor(kBlack);
-    final labelX = item.bubbles.first.x - kRowLabelWidth;
-    canvas.drawString(regular, 9, '${item.itemNumber}.', labelX, flip(item.bubbles.first.y) - 3);
+    final labelStr = '${item.itemNumber}.';
+    final double labelX;
+    if (exam.labelGapPt != null) {
+      // Right-align: every label ends the same fixed distance from the
+      // bubble's actual left edge, regardless of how many digits the
+      // item number has (a left-aligned label of varying width, the
+      // original behavior below, left a different -- and for the widest
+      // numbers, barely-there -- gap per item).
+      final labelWidth = (regular.stringMetrics(labelStr) * 9).advanceWidth;
+      labelX = item.bubbles.first.x - exam.bubbleRadius - exam.labelGapPt! - labelWidth;
+    } else {
+      labelX = item.bubbles.first.x - kRowLabelWidth;
+    }
+    canvas.drawString(regular, 9, labelStr, labelX, flip(item.bubbles.first.y) - 3);
     for (final bubble in item.bubbles) {
       canvas.setLineWidth(1);
       canvas.drawEllipse(bubble.x, flip(bubble.y), bubbleRx, bubbleRy);
@@ -557,7 +818,8 @@ void _paintSimpleHeader(
 
   // Title (+ page indicator for multi-page sections).
   canvas.setColor(kNavy);
-  final title = page.pageCount > 1 ? '${exam.title} - ${page.section.name} (Page ${page.pageNumber} of ${page.pageCount})' : '${exam.title} - ${page.section.name}';
+  final sectionSuffix = exam.suppressSectionInTitle ? '' : ' - ${page.section.name}';
+  final title = page.pageCount > 1 ? '${exam.title}$sectionSuffix (Page ${page.pageNumber} of ${page.pageCount})' : '${exam.title}$sectionSuffix';
   canvas.drawString(bold, 13, title, kContentLeft, flip(y + 15));
   y += kTitleRowHeight;
 
@@ -579,52 +841,60 @@ void _paintNdmuHeader(
 ) {
   var y = kContentTop;
   final width = layout.contentWidth;
+  final compact = exam.compactNdmuHeader;
+
+  final letterheadHeight = compact ? kCompactLetterheadHeight : kLetterheadHeight;
+  final idRowHeight = compact ? kCompactIdRowHeight : kIdRowHeight;
+  final dateScoresHeight = compact ? kCompactDateScoresHeight : kDateScoresHeight;
+  final titleHeight = compact ? kCompactNdmuTitleHeight : kNdmuTitleHeight;
 
   // Letterhead box.
   canvas.setColor(kBlack);
   canvas.setLineWidth(1);
-  canvas.drawRect(kContentLeft, flip(y + kLetterheadHeight), width, kLetterheadHeight);
+  canvas.drawRect(kContentLeft, flip(y + letterheadHeight), width, letterheadHeight);
   canvas.strokePath();
-  var ly = y + 13;
+  var ly = y + (compact ? 10 : 13);
   for (var i = 0; i < exam.letterheadLines.length; i++) {
     final line = exam.letterheadLines[i];
-    final size = i == 1 ? 12.0 : 8.0; // the university name (line 2) stands out
+    // the university name (line 2) stands out
+    final size = compact ? (i == 1 ? 10.0 : 7.0) : (i == 1 ? 12.0 : 8.0);
     final font = i == 1 ? bold : regular;
     final metrics = font.stringMetrics(line) * size;
     final textX = kContentLeft + (width - metrics.advanceWidth) / 2;
     canvas.setColor(i == 1 ? kNavy : kGray);
     canvas.drawString(font, size, line, textX, flip(ly));
-    ly += size + 4;
+    ly += size + (compact ? 3 : 4);
   }
-  y += kLetterheadHeight + kGapAfterLetterhead;
+  y += letterheadHeight + (compact ? kCompactGapAfterLetterhead : kGapAfterLetterhead);
 
   // ID table: row 1 splits into Last Name / First Name / MI; rows 2-3 are
   // full-width (School Last Attended, Address of School Last Attended).
   canvas.setColor(kBlack);
   canvas.setLineWidth(1);
-  final idTableHeight = kIdRowHeight * kIdRowCount;
+  final idTableHeight = idRowHeight * kIdRowCount;
   canvas.drawRect(kContentLeft, flip(y + idTableHeight), width, idTableHeight);
   canvas.strokePath();
   for (var i = 1; i < kIdRowCount; i++) {
-    final lineY = y + kIdRowHeight * i;
+    final lineY = y + idRowHeight * i;
     canvas.drawLine(kContentLeft, flip(lineY), kContentLeft + width, flip(lineY));
     canvas.strokePath();
   }
+  final labelOffset = compact ? 8.0 : 9.0;
   final nameCols = [('Last Name', width * 0.45), ('First Name', width * 0.4), ('MI', width * 0.15)];
   var colX = kContentLeft;
   for (final (label, w) in nameCols) {
     if (colX > kContentLeft) {
-      canvas.drawLine(colX, flip(y), colX, flip(y + kIdRowHeight));
+      canvas.drawLine(colX, flip(y), colX, flip(y + idRowHeight));
       canvas.strokePath();
     }
     canvas.setColor(kGray);
-    canvas.drawString(regular, 7, label, colX + 3, flip(y + 9));
+    canvas.drawString(regular, 7, label, colX + 3, flip(y + labelOffset));
     colX += w;
   }
   canvas.setColor(kGray);
-  canvas.drawString(regular, 7, 'School Last Attended', kContentLeft + 3, flip(y + kIdRowHeight + 9));
-  canvas.drawString(regular, 7, 'Address of School Last Attended', kContentLeft + 3, flip(y + kIdRowHeight * 2 + 9));
-  y += idTableHeight + kGapAfterIdTable;
+  canvas.drawString(regular, 7, 'School Last Attended', kContentLeft + 3, flip(y + idRowHeight + labelOffset));
+  canvas.drawString(regular, 7, 'Address of School Last Attended', kContentLeft + 3, flip(y + idRowHeight * 2 + labelOffset));
+  y += idTableHeight + (compact ? kCompactGapAfterIdTable : kGapAfterIdTable);
 
   // Date/Birth/Age/Sex block (left) + exam-specific scores block (right).
   final leftWidth = width * 0.55;
@@ -632,24 +902,44 @@ void _paintNdmuHeader(
   final rightWidth = width - leftWidth - 10;
 
   canvas.setColor(kGray);
-  canvas.drawString(regular, 7, 'Date Today:  Year _____  Month _____  Day _____', kContentLeft, flip(y + 10));
-  canvas.drawString(regular, 7, 'Birth Date:  Year _____  Month _____  Day _____', kContentLeft, flip(y + 26));
-  canvas.drawString(regular, 7, 'Age: _____   Sex:  M ( )   F ( )', kContentLeft, flip(y + 42));
+  if (compact) {
+    canvas.drawString(regular, 7, 'Date Today:  Year _____  Month _____  Day _____', kContentLeft, flip(y + 8));
+    canvas.drawString(regular, 7, 'Birth Date:  Year _____  Month _____  Day _____', kContentLeft, flip(y + 20));
+    canvas.drawString(regular, 7, 'Age: _____   Sex:  M ( )   F ( )', kContentLeft, flip(y + 32));
+  } else {
+    canvas.drawString(regular, 7, 'Date Today:  Year _____  Month _____  Day _____', kContentLeft, flip(y + 10));
+    canvas.drawString(regular, 7, 'Birth Date:  Year _____  Month _____  Day _____', kContentLeft, flip(y + 26));
+    canvas.drawString(regular, 7, 'Age: _____   Sex:  M ( )   F ( )', kContentLeft, flip(y + 42));
+  }
 
   canvas.setLineWidth(0.75);
   if (exam.code == 'TAT') {
     canvas.setColor(kBlack);
-    canvas.drawString(bold, 7, 'Raw', rightX + rightWidth * 0.45, flip(y + 8));
-    canvas.drawString(bold, 7, 'Scaled', rightX + rightWidth * 0.75, flip(y + 8));
     const rows = ['Test I', 'Test II', 'Test III', 'Total'];
-    for (var i = 0; i < rows.length; i++) {
-      final rowY = y + 12 + i * 11.0;
-      canvas.setColor(kGray);
-      canvas.drawString(regular, 7, rows[i], rightX, flip(rowY + 8));
-      canvas.drawRect(rightX + rightWidth * 0.42, flip(rowY + 10), rightWidth * 0.22, 10);
-      canvas.strokePath();
-      canvas.drawRect(rightX + rightWidth * 0.72, flip(rowY + 10), rightWidth * 0.22, 10);
-      canvas.strokePath();
+    if (compact) {
+      canvas.drawString(bold, 6, 'Raw', rightX + rightWidth * 0.45, flip(y + 6));
+      canvas.drawString(bold, 6, 'Scaled', rightX + rightWidth * 0.75, flip(y + 6));
+      for (var i = 0; i < rows.length; i++) {
+        final rowY = y + 9 + i * 8.0;
+        canvas.setColor(kGray);
+        canvas.drawString(regular, 6, rows[i], rightX, flip(rowY + 5));
+        canvas.drawRect(rightX + rightWidth * 0.42, flip(rowY + 7), rightWidth * 0.22, 7);
+        canvas.strokePath();
+        canvas.drawRect(rightX + rightWidth * 0.72, flip(rowY + 7), rightWidth * 0.22, 7);
+        canvas.strokePath();
+      }
+    } else {
+      canvas.drawString(bold, 7, 'Raw', rightX + rightWidth * 0.45, flip(y + 8));
+      canvas.drawString(bold, 7, 'Scaled', rightX + rightWidth * 0.75, flip(y + 8));
+      for (var i = 0; i < rows.length; i++) {
+        final rowY = y + 12 + i * 11.0;
+        canvas.setColor(kGray);
+        canvas.drawString(regular, 7, rows[i], rightX, flip(rowY + 8));
+        canvas.drawRect(rightX + rightWidth * 0.42, flip(rowY + 10), rightWidth * 0.22, 10);
+        canvas.strokePath();
+        canvas.drawRect(rightX + rightWidth * 0.72, flip(rowY + 10), rightWidth * 0.22, 10);
+        canvas.strokePath();
+      }
     }
   } else {
     canvas.setColor(kNavy);
@@ -662,10 +952,10 @@ void _paintNdmuHeader(
     canvas.drawRect(rightX + rightWidth * 0.5, flip(y + 38), rightWidth * 0.42, 12);
     canvas.strokePath();
     canvas.drawString(regular, 7, 'Test Booklet No.', rightX, flip(y + 54));
-    canvas.drawRect(rightX, flip(y + kDateScoresHeight), rightWidth * 0.42, 12);
+    canvas.drawRect(rightX, flip(y + dateScoresHeight), rightWidth * 0.42, 12);
     canvas.strokePath();
   }
-  y += kDateScoresHeight + kGapAfterDateScores;
+  y += dateScoresHeight + (compact ? kCompactGapAfterDateScores : kGapAfterDateScores);
 
   // Title: exam name, then "<section> — ANSWER SHEET" (section omitted
   // when it's just a restatement of the exam name, as for QTM's single
@@ -677,12 +967,17 @@ void _paintNdmuHeader(
     if (page.pageCount > 1) 'ANSWER SHEET (Page ${page.pageNumber} of ${page.pageCount})' else 'ANSWER SHEET',
   ];
   canvas.setColor(kNavy);
-  canvas.drawString(bold, 12, title1, kContentLeft, flip(y + 13));
-  canvas.drawString(bold, 9, title2Parts.join(' - ').toUpperCase(), kContentLeft, flip(y + 26));
-  y += kNdmuTitleHeight;
+  if (compact) {
+    canvas.drawString(bold, 10, title1, kContentLeft, flip(y + 9));
+    canvas.drawString(bold, 7, title2Parts.join(' - ').toUpperCase(), kContentLeft, flip(y + 18));
+  } else {
+    canvas.drawString(bold, 12, title1, kContentLeft, flip(y + 13));
+    canvas.drawString(bold, 9, title2Parts.join(' - ').toUpperCase(), kContentLeft, flip(y + 26));
+  }
+  y += titleHeight;
 
   canvas.setColor(kGray);
-  canvas.drawString(regular, 7, 'Use a No. 2 pencil. Fill the circle completely.', kContentLeft, flip(y + 9));
+  canvas.drawString(regular, compact ? 6 : 7, 'Use a No. 2 pencil. Fill the circle completely.', kContentLeft, flip(y + (compact ? 7 : 9)));
 }
 
 // ---------------------------------------------------------------------------
@@ -714,10 +1009,18 @@ class OmrExamTemplate {
   final String examCode;
   final double pageWidthPt;
   final double pageHeightPt;
-  /// Radius, in page points, of the printed bubble circles — the decoder
-  /// samples a region this size around each BubblePos, so it must match
-  /// the actual printed geometry rather than being guessed independently.
+  /// Horizontal radius, in page points, of the printed bubbles — the
+  /// decoder samples a region this size around each BubblePos, so it must
+  /// match the actual printed geometry rather than being guessed
+  /// independently.
   final double bubbleRadiusPt;
+  /// Vertical radius — equal to [bubbleRadiusPt] for a true circle (AT/PT),
+  /// smaller for QTM/TAT's flattened NDMU-style ovals. Sampling a region
+  /// sized to [bubbleRadiusPt] in both directions on an oval bubble
+  /// dilutes a genuinely filled bubble's measured fill with blank paper
+  /// above/below the actual printed shape — significant enough on its own
+  /// to make real marks misread as ambiguous.
+  final double bubbleRadiusYPt;
   final List<OmrCorner> cornerMarkers;
   final List<OmrSection> sections;
   const OmrExamTemplate({
@@ -725,6 +1028,7 @@ class OmrExamTemplate {
     required this.pageWidthPt,
     required this.pageHeightPt,
     required this.bubbleRadiusPt,
+    required this.bubbleRadiusYPt,
     required this.cornerMarkers,
     required this.sections,
   });
@@ -747,6 +1051,7 @@ String _emitTemplate(ExamLayout layout) {
   buffer.writeln('  pageWidthPt: ${exam.pageWidthPt},');
   buffer.writeln('  pageHeightPt: ${exam.pageHeightPt},');
   buffer.writeln('  bubbleRadiusPt: ${exam.bubbleRadius},');
+  buffer.writeln('  bubbleRadiusYPt: ${bubbleRadiusYFor(exam)},');
   buffer.writeln('  cornerMarkers: const [$cornersDart],');
   buffer.writeln('  sections: const [');
   for (final section in exam.sections) {
@@ -793,28 +1098,45 @@ Future<void> main() async {
   final mapEntries = <String>[];
 
   for (final exam in kExams) {
-    final layout = _layoutExam(exam);
+    // TAT: all 3 sections share one physical landscape page instead of
+    // each getting its own — see _layoutTatLandscape's comment.
+    final isTatLandscape = exam.code == 'TAT';
+    final layout = isTatLandscape ? _layoutTatLandscape(exam) : _layoutExam(exam);
 
     final pdf = pw.Document();
     final regular = PdfFont.helvetica(pdf.document);
     final bold = PdfFont.helveticaBold(pdf.document);
 
-    for (final page in layout.pages) {
+    if (isTatLandscape) {
       pdf.addPage(
         pw.Page(
           pageFormat: PdfPageFormat(exam.pageWidthPt, exam.pageHeightPt),
           margin: pw.EdgeInsets.zero,
           build: (context) => pw.CustomPaint(
             size: PdfPoint(exam.pageWidthPt, exam.pageHeightPt),
-            painter: (canvas, size) => _paintPage(canvas, exam, page, layout, regular, bold),
+            painter: (canvas, size) => _paintTatLandscapePage(canvas, exam, layout, regular, bold),
           ),
         ),
       );
+    } else {
+      for (final page in layout.pages) {
+        pdf.addPage(
+          pw.Page(
+            pageFormat: PdfPageFormat(exam.pageWidthPt, exam.pageHeightPt),
+            margin: pw.EdgeInsets.zero,
+            build: (context) => pw.CustomPaint(
+              size: PdfPoint(exam.pageWidthPt, exam.pageHeightPt),
+              painter: (canvas, size) => _paintPage(canvas, exam, page, layout, regular, bold),
+            ),
+          ),
+        );
+      }
     }
 
     final bytes = await pdf.save();
     File('${answerSheetsDir.path}/${exam.code}.pdf').writeAsBytesSync(bytes);
-    stdout.writeln('Wrote answer_sheets/${exam.code}.pdf (${layout.pages.length} page(s), content width ${layout.contentWidth.toStringAsFixed(1)}pt)');
+    final physicalPageCount = isTatLandscape ? 1 : layout.pages.length;
+    stdout.writeln('Wrote answer_sheets/${exam.code}.pdf ($physicalPageCount page(s), content width ${layout.contentWidth.toStringAsFixed(1)}pt)');
 
     dartFile.writeln(_emitTemplate(layout));
     mapEntries.add('"${exam.code}": _omr${exam.code}');

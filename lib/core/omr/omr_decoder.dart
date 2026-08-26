@@ -35,6 +35,25 @@ class OmrDecoder {
   /// sampling geometry below is tuned against this scale.
   static const double _canonicalPxPerPt = 2.0;
 
+  /// CLAHE clip limit, per exam code — how aggressively contrast gets
+  /// re-normalized before thresholding (see the CLAHE comment in
+  /// [decode]). Not a single global value: confirmed against real scans
+  /// that different exams' real captures needed different amounts of
+  /// correction. QTM's scan was evenly lit, so a low clip limit (1.2) was
+  /// enough and kept ordinary sensor/JPEG noise in blank paper from being
+  /// amplified into a speckled ink map. AT's scan had a genuine page-wide
+  /// lighting gradient (visibly darker on one side in the raw photo), and
+  /// that same low clip limit left it uncorrected — the flagged items
+  /// tracked the gradient almost exactly (42% flagged in the darkest
+  /// column vs 21% in the brightest). AT needs the stronger correction the
+  /// original clipLimit 2 provided; defaulting everything else to that
+  /// same 2 until each is individually confirmed against a real scan,
+  /// rather than assuming QTM's tuning generalizes.
+  static double _claheClipLimitFor(String examCode) => switch (examCode) {
+    'QTM' => 1.2,
+    _ => 2.0,
+  };
+
   /// Block size (must be odd) for the adaptive threshold that binarizes the
   /// warped sheet before bubble sampling. Large enough to span several
   /// bubbles so it tracks slow lighting gradients across the page rather
@@ -67,7 +86,22 @@ class OmrDecoder {
   /// be trusted as "only one choice looks marked" rather than ambiguous —
   /// checked for every item regardless of choice count, after
   /// [_markPresenceGap] has already decided something is there at all.
-  static const double _ambiguousMargin = 0.15;
+  ///
+  /// Per exam code rather than one fixed value, same reasoning as
+  /// [_claheClipLimitFor]: confirmed against a real AT scan that even its
+  /// correctly-read items typically show as a moderately-shaded ring
+  /// rather than a solid filled disc (a real difference in how that sheet
+  /// gets marked, not a decoder issue — see the CLAHE/inkmap comparison
+  /// this was diagnosed from). AT also compares 5 choices per item
+  /// (QTM/TAT compare 2-4), so its runner-up is drawn from a bigger pool
+  /// and has more chances to land close to the real mark by chance alone.
+  /// Both push a fixed 0.15 margin into flagging genuine single marks on
+  /// AT more often than it should. Left at 0.15 for everything else until
+  /// individually confirmed against a real scan, same as clipLimit.
+  static double _ambiguousMarginFor(String examCode) => switch (examCode) {
+    'AT' => 0.10,
+    _ => 0.15,
+  };
 
   /// The gap an item's best bubble must open over the lowest of its own
   /// row's *other* bubbles ([_readBubbles]'s 3+-choice path) to count as
@@ -249,11 +283,25 @@ class OmrDecoder {
             // header text) rather than one small ROI, and the goal here is
             // countering a slow, page-scale exposure/shadow gradient, not
             // maximizing fine local contrast.
-            final clahe = cv.createCLAHE(clipLimit: 2, tileGridSize: (8, 8));
+            //
+            // clipLimit is per exam code (see _claheClipLimitFor) rather
+            // than one fixed value — confirmed against real scans that
+            // different exams' captures need different amounts of
+            // correction, and a value tuned for one can regress another.
+            // The post-CLAHE blur is widened from 3x3 to 5x5 for everyone:
+            // confirmed against a real scan that CLAHE, applied to an
+            // almost-flat tile of blank paper (most of this page), can
+            // stretch ordinary sensor/JPEG noise in that tile into a
+            // visibly speckled black/white pattern after thresholding —
+            // blurring more afterward reduces how much of that amplified
+            // per-pixel noise survives into the ink map, where it inflates
+            // a blank neighbor bubble's fill reading enough to erode a
+            // genuine mark's margin over it.
+            final clahe = cv.createCLAHE(clipLimit: _claheClipLimitFor(template.examCode), tileGridSize: (8, 8));
             try {
               final normalized = clahe.apply(warped);
               try {
-                final blurred = cv.gaussianBlur(normalized, (3, 3), 0);
+                final blurred = cv.gaussianBlur(normalized, (5, 5), 0);
                 try {
                   final inkMap = cv.adaptiveThreshold(
                     blurred,
@@ -386,12 +434,15 @@ class OmrDecoder {
           final warpedGray = cv.warpPerspective(gray, transform, (canonicalWidth, canonicalHeight));
           try {
             cv.imwrite('$outputDir/sheet${pageIndex}_warped_gray.jpg', warpedGray);
-            final clahe = cv.createCLAHE(clipLimit: 2, tileGridSize: (8, 8));
+            // Kept identical to the real decode path above (clipLimit,
+            // blur kernel) so this debug output actually reflects what
+            // _readBubbles saw, not a different pipeline.
+            final clahe = cv.createCLAHE(clipLimit: _claheClipLimitFor(template.examCode), tileGridSize: (8, 8));
             try {
               final normalized = clahe.apply(warpedGray);
               try {
                 cv.imwrite('$outputDir/sheet${pageIndex}_clahe.jpg', normalized);
-                final blurred = cv.gaussianBlur(normalized, (3, 3), 0);
+                final blurred = cv.gaussianBlur(normalized, (5, 5), 0);
                 try {
                   final inkMap = cv.adaptiveThreshold(
                     blurred,
@@ -937,18 +988,25 @@ class OmrDecoder {
   /// third choice available to reference that couldn't itself be a
   /// second real mark.
   OmrScanResult _readBubbles(cv.Mat inkMap, OmrExamTemplate template, int canonicalWidth, int canonicalHeight) {
-    // Sample the full printed bubble (its radius, converted to canonical
+    // Sample the full printed bubble (its radii, converted to canonical
     // pixels), not a size guessed independently of what's actually on the
     // page — otherwise enlarging bubbles in the sheet generator without a
     // matching decoder change just keeps sampling the same small patch in
-    // the middle, which is where the printed choice letter lives.
-    final bubbleSampleHalfPx = template.bubbleRadiusPt * _canonicalPxPerPt;
+    // the middle, which is where the printed choice letter lives. X and Y
+    // are sampled independently since QTM/TAT's bubbles print flattened
+    // (see _bubbleFillFraction's doc comment) — using the same radius for
+    // both, as an earlier version did, systematically diluted a genuinely
+    // marked oval bubble's measured fill.
+    final bubbleSampleHalfPxX = template.bubbleRadiusPt * _canonicalPxPerPt;
+    final bubbleSampleHalfPxY = template.bubbleRadiusYPt * _canonicalPxPerPt;
+    final ambiguousMargin = _ambiguousMarginFor(template.examCode);
     final items = <OmrItemResult>[];
     for (final section in template.sections) {
       for (final itemNumber in section.items.keys.toList()..sort()) {
         final choices = section.items[itemNumber]!;
         final fills = [
-          for (final bubble in choices) (bubble.choice, _bubbleFillFraction(inkMap, bubble, bubbleSampleHalfPx, canonicalWidth, canonicalHeight)),
+          for (final bubble in choices)
+            (bubble.choice, _bubbleFillFraction(inkMap, bubble, bubbleSampleHalfPxX, bubbleSampleHalfPxY, canonicalWidth, canonicalHeight)),
         ]..sort((a, b) => b.$2.compareTo(a.$2)); // descending by fill
 
         final bestChoice = fills[0].$1;
@@ -970,7 +1028,7 @@ class OmrDecoder {
 
         if (!hasSomething) {
           items.add(OmrItemResult(sectionName: section.name, itemNumber: itemNumber, markedChoice: null));
-        } else if (bestFill - runnerUpFill < _ambiguousMargin) {
+        } else if (bestFill - runnerUpFill < ambiguousMargin) {
           // Unchanged regardless of choice count: best and runner-up are
           // too close to call, whether that's a genuine double-mark or a
           // single mark with an unusually dark neighbor — either way it
@@ -997,26 +1055,38 @@ class OmrDecoder {
   /// the binarized [inkMap] (255 = ink, after THRESH_BINARY_INV). Samples
   /// the outer bubble area minus a central zone where the printed choice
   /// letter lives, so blank sheets aren't misread as ambiguous marks.
-  double _bubbleFillFraction(cv.Mat inkMap, BubblePos bubble, double sampleHalfPx, int canonicalWidth, int canonicalHeight) {
+  ///
+  /// The sample rectangle's half-width/half-height are taken from
+  /// [template]'s bubbleRadiusPt/bubbleRadiusYPt independently rather than
+  /// assuming a single radius for both — QTM/TAT's bubbles print as
+  /// flattened ovals (see generate_sheets.dart's bubbleRadiusYFor), and
+  /// sampling a square sized to the horizontal radius in both directions
+  /// pulls in a band of blank paper above/below the actual printed oval.
+  /// Confirmed against a real scan: that diluted a fully, densely marked
+  /// oval bubble's measured fill from ~0.9 down to ~0.4 — on its own
+  /// enough for ordinary threshold noise on a neighboring blank bubble to
+  /// push a genuine mark into reading as ambiguous.
+  double _bubbleFillFraction(cv.Mat inkMap, BubblePos bubble, double halfPxX, double halfPxY, int canonicalWidth, int canonicalHeight) {
     final cx = bubble.xFrac * canonicalWidth;
     final cy = bubble.yFrac * canonicalHeight;
-    final outerFill = _squareFillFraction(inkMap, cx, cy, sampleHalfPx, canonicalWidth, canonicalHeight);
-    final innerHalfPx = sampleHalfPx * _bubbleInnerSampleFrac;
-    final innerFill = _squareFillFraction(inkMap, cx, cy, innerHalfPx, canonicalWidth, canonicalHeight);
+    final outerFill = _squareFillFraction(inkMap, cx, cy, halfPxX, halfPxY, canonicalWidth, canonicalHeight);
+    final innerHalfPxX = halfPxX * _bubbleInnerSampleFrac;
+    final innerHalfPxY = halfPxY * _bubbleInnerSampleFrac;
+    final innerFill = _squareFillFraction(inkMap, cx, cy, innerHalfPxX, innerHalfPxY, canonicalWidth, canonicalHeight);
 
-    final outerArea = sampleHalfPx * sampleHalfPx * 4;
-    final innerArea = innerHalfPx * innerHalfPx * 4;
+    final outerArea = halfPxX * halfPxY * 4;
+    final innerArea = innerHalfPxX * innerHalfPxY * 4;
     final ringArea = outerArea - innerArea;
     if (ringArea <= 0) return outerFill;
 
     return ((outerFill * outerArea) - (innerFill * innerArea)) / ringArea;
   }
 
-  double _squareFillFraction(cv.Mat inkMap, double cx, double cy, double sampleHalfPx, int canonicalWidth, int canonicalHeight) {
-    final left = (cx - sampleHalfPx).clamp(0, canonicalWidth - 1).round();
-    final top = (cy - sampleHalfPx).clamp(0, canonicalHeight - 1).round();
-    final right = (cx + sampleHalfPx).clamp(left + 1, canonicalWidth).round();
-    final bottom = (cy + sampleHalfPx).clamp(top + 1, canonicalHeight).round();
+  double _squareFillFraction(cv.Mat inkMap, double cx, double cy, double halfPxX, double halfPxY, int canonicalWidth, int canonicalHeight) {
+    final left = (cx - halfPxX).clamp(0, canonicalWidth - 1).round();
+    final top = (cy - halfPxY).clamp(0, canonicalHeight - 1).round();
+    final right = (cx + halfPxX).clamp(left + 1, canonicalWidth).round();
+    final bottom = (cy + halfPxY).clamp(top + 1, canonicalHeight).round();
 
     final roi = inkMap.region(cv.Rect(left, top, right - left, bottom - top));
     try {

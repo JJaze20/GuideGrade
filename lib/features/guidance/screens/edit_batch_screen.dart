@@ -3,7 +3,6 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
-import '../../../core/routes/app_routes.dart';
 import '../../../core/services/firestore_service.dart';
 import '../../../models/batch.dart';
 import '../../../shared/widgets/primary_button.dart';
@@ -126,20 +125,6 @@ class _EditBatchScreenState extends State<EditBatchScreen> {
         return false;
       default:
         return false;
-    }
-  }
-
-  void _navigateToExamineeManagement() async {
-    if (_batch == null) return;
-    
-    final result = await Navigator.of(context).pushNamed(
-      AppRoutes.examineeManagement,
-      arguments: _batch,
-    );
-    
-    if (result == true) {
-      // Reload batch to update actualCount
-      await _loadBatch();
     }
   }
 
@@ -269,23 +254,6 @@ class _EditBatchScreenState extends State<EditBatchScreen> {
                   label: _isSaving ? 'Saving...' : 'Save Changes',
                   onPressed: _isSaving ? null : _saveBatch,
                 ),
-              const SizedBox(height: 12),
-              
-              // Examinee Management Button
-              ElevatedButton.icon(
-                onPressed: () => _navigateToExamineeManagement(),
-                icon: const FaIcon(FontAwesomeIcons.users, size: 14),
-                label: Text(
-                  'Manage Examinees (${_batch!.actualCount})',
-                  style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12.5),
-                ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primaryGreen,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                ),
-              ),
               const SizedBox(height: 16),
             ],
           ),

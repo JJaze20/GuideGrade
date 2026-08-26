@@ -11,6 +11,7 @@ import '../../../core/state/app_state.dart';
 import '../../../models/omr_scan_result.dart';
 import '../../../models/result.dart';
 import '../../../shared/widgets/primary_button.dart';
+import 'scanned_image_viewer_screen.dart';
 
 /// Exam Results — mirrors SCREENS.AT_RESULTS.
 ///
@@ -289,12 +290,19 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
       itemBuilder: (context, sheetIndex) {
         final result = results[sheetIndex];
         final scored = scoreOmrResult(result, appState.answerKeys[result.examCode]);
-        return _buildSheetCard(sheetIndex, scored);
+        // Captured photos only live in memory for the current scan session
+        // (AppState.capturedPages) -- guard against index mismatch (e.g. a
+        // persisted-only view with nothing captured this run) rather than
+        // assuming a 1:1 match with results.
+        final imagePath = sheetIndex < appState.capturedPages.length
+            ? appState.capturedPages[sheetIndex].path
+            : null;
+        return _buildSheetCard(context, sheetIndex, scored, imagePath);
       },
     );
   }
 
-  Widget _buildSheetCard(int sheetIndex, ScoredResult scored) {
+  Widget _buildSheetCard(BuildContext context, int sheetIndex, ScoredResult scored, String? imagePath) {
     final blankCount = scored.items.where((i) => i.isBlank).length;
     final ambiguousCount = scored.items.where((i) => i.isAmbiguous).length;
     final isGraded = scored.totalGraded > 0;
@@ -338,6 +346,31 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
             '${scored.items.length} items · $blankCount blank · $ambiguousCount flagged',
             style: AppTextStyles.body(size: 9, color: AppColors.textGray),
           ),
+          if (imagePath != null) ...[
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => ScannedImageViewerScreen(
+                      imagePath: imagePath,
+                      title: 'Sheet ${sheetIndex + 1}',
+                      scoredItems: scored.items,
+                    ),
+                  ),
+                ),
+                icon: const FaIcon(FontAwesomeIcons.image, size: 12, color: AppColors.primaryGreen),
+                label: const Text('View Scan', style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700)),
+                style: TextButton.styleFrom(
+                  foregroundColor: AppColors.primaryGreen,
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+              ),
+            ),
+          ],
           const SizedBox(height: 12),
           ...bySection.entries.map(
             (entry) => Padding(

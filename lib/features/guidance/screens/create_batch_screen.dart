@@ -3,9 +3,9 @@ import 'package:firebase_auth/firebase_auth.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
+import '../../../core/constants/exam_catalog.dart';
 import '../../../core/services/firestore_service.dart';
 import '../../../models/batch.dart';
-import '../../../models/exam.dart';
 import '../../../shared/widgets/primary_button.dart';
 
 /// Create Batch screen for Guidance Council users.
@@ -25,18 +25,15 @@ class _CreateBatchScreenState extends State<CreateBatchScreen> {
   
   final _descriptionController = TextEditingController();
   final _expectedCountController = TextEditingController(text: '30');
-  
-  ExamModel? _selectedExam;
-  List<ExamModel> _availableExams = [];
+
+  ExamCatalogEntry? _selectedExam;
   String _generatedBatchCode = '';
-  
-  bool _isLoading = true;
+
   bool _isSaving = false;
 
   @override
   void initState() {
     super.initState();
-    _loadExams();
     _generateBatchCode();
   }
 
@@ -45,24 +42,6 @@ class _CreateBatchScreenState extends State<CreateBatchScreen> {
     _descriptionController.dispose();
     _expectedCountController.dispose();
     super.dispose();
-  }
-
-  Future<void> _loadExams() async {
-    setState(() => _isLoading = true);
-    
-    try {
-      // Only load exams that are Ready (have Final answer keys)
-      final exams = await _firestoreService.getExams();
-      final readyExams = exams.where((exam) => exam.status == 'Ready').toList();
-      
-      setState(() {
-        _availableExams = readyExams;
-        _isLoading = false;
-      });
-    } catch (e) {
-      print('Error loading exams: $e');
-      setState(() => _isLoading = false);
-    }
   }
 
   void _generateBatchCode() {
@@ -134,7 +113,7 @@ class _CreateBatchScreenState extends State<CreateBatchScreen> {
       final batch = BatchModel(
         batchId: '',
         batchCode: _generatedBatchCode,
-        examId: _selectedExam!.examId,
+        examId: _selectedExam!.examCode,
         examCode: _selectedExam!.examCode,
         examTitle: _selectedExam!.title,
         status: 'Draft',
@@ -341,62 +320,34 @@ class _CreateBatchScreenState extends State<CreateBatchScreen> {
           ],
         ),
         const SizedBox(height: 6),
-        if (_isLoading)
-          const Center(child: CircularProgressIndicator())
-        else if (_availableExams.isEmpty)
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.white,
+        DropdownButtonFormField<ExamCatalogEntry>(
+          value: _selectedExam,
+          decoration: InputDecoration(
+            border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: AppColors.cardBorder),
+              borderSide: BorderSide(color: AppColors.cardBorder),
             ),
-            child: Text(
-              'No Ready exams available. Please mark an exam as Ready first.',
-              style: AppTextStyles.body(size: 10, color: AppColors.textGray),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: BorderSide(color: AppColors.cardBorder),
             ),
-          )
-        else
-          DropdownButtonFormField<ExamModel>(
-            value: _selectedExam,
-            decoration: InputDecoration(
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(10),
-                borderSide: BorderSide(color: AppColors.cardBorder),
-              ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(10),
-                borderSide: BorderSide(color: AppColors.cardBorder),
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(10),
-                borderSide: BorderSide(color: AppColors.primaryGreen),
-              ),
-              contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: BorderSide(color: AppColors.primaryGreen),
             ),
-            hint: Text('Select an exam', style: AppTextStyles.body(size: 11)),
-            items: _availableExams.map((exam) {
-              return DropdownMenuItem(
-                value: exam,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      exam.title,
-                      style: AppTextStyles.body(size: 11),
-                    ),
-                    Text(
-                      '${exam.examCode} • ${exam.totalItems} items',
-                      style: AppTextStyles.body(size: 9, color: AppColors.textGray),
-                    ),
-                  ],
-                ),
-              );
-            }).toList(),
-            onChanged: (value) {
-              setState(() => _selectedExam = value);
-            },
+            contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
           ),
+          hint: Text('Select an exam', style: AppTextStyles.body(size: 11)),
+          items: examCatalog.map((exam) {
+            return DropdownMenuItem(
+              value: exam,
+              child: Text('${exam.title} (${exam.examCode})', style: AppTextStyles.body(size: 11)),
+            );
+          }).toList(),
+          onChanged: (value) {
+            setState(() => _selectedExam = value);
+          },
+        ),
       ],
     );
   }

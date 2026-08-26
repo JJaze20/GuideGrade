@@ -124,24 +124,6 @@ class StaffHomeScreen extends StatelessWidget {
                           ),
                         ),
                       ),
-                      const SizedBox(height: 10),
-                      
-                      // Examinee Management CTA
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton.icon(
-                          onPressed: () => Navigator.of(context).pushNamed(AppRoutes.examineeManagement),
-                          icon: const FaIcon(FontAwesomeIcons.users, size: 14, color: Colors.amber),
-                          label: const Text('EXAMINEE MANAGEMENT'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: AppColors.primaryGreen,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 13),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                            textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, letterSpacing: 0.4),
-                          ),
-                        ),
-                      ),
                       const SizedBox(height: 18),
 
                       Row(

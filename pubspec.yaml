@@ -44,6 +44,7 @@ dependencies:
   opencv_dart: ^2.2.1
   path_provider: ^2.1.5
   shared_preferences: ^2.3.3
+  printing: ^5.13.0
 
 dev_dependencies:
   flutter_test:
@@ -58,6 +59,9 @@ dev_dependencies:
   flutter_lints: ^6.0.0
 flutter:
   uses-material-design: true
+
+  assets:
+    - answer_sheets/
 
   # To add assets to your application, add an assets section, like this:
   # assets:

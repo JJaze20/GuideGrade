@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'package:firebase_core/firebase_core.dart';
 import 'core/constants/app_theme.dart';
@@ -9,6 +10,14 @@ import 'firebase_options.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Every screen (camera viewfinder, forms, bottom nav) is built for a tall,
+  // portrait frame -- lock to it rather than leaving layouts to cope with a
+  // rotation they were never designed for.
+  await SystemChrome.setPreferredOrientations([
+    DeviceOrientation.portraitUp,
+    DeviceOrientation.portraitDown,
+  ]);
 
   print('=== GuideGrade Startup ===');
   print('Platform: ${PlatformUtils.platformType}');
