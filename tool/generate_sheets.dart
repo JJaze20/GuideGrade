@@ -141,13 +141,18 @@ const double kNdmuHeaderHeight =
 // landscape layout, whose page has far less vertical room to spare than
 // QTM's portrait one), so QTM keeps its current, already-shipped sizing
 // untouched.
-const double kCompactLetterheadHeight = 36;
+const double kCompactLetterheadHeight = 38;
 const double kCompactGapAfterLetterhead = 3;
 const double kCompactIdRowHeight = 15;
 const double kCompactGapAfterIdTable = 3;
-const double kCompactDateScoresHeight = 42;
-const double kCompactGapAfterDateScores = 4;
-const double kCompactNdmuTitleHeight = 20;
+// Zero -- TAT-compact draws Date/Birth/Age inline in the ID table's
+// School/Address rows instead (see _paintNdmuHeader), so there's no
+// separate block here to reserve height for. Named zero rather than
+// removed from kCompactNdmuHeaderHeight's sum so that sum still reads as
+// "every section, in order."
+const double kCompactDateScoresHeight = 0;
+const double kCompactGapAfterDateScores = 6;
+const double kCompactNdmuTitleHeight = 14;
 const double kCompactNdmuInstructionHeight = 9;
 const double kCompactGapBeforeNdmuGrid = 4;
 
@@ -591,7 +596,7 @@ const double kTatZoneGap = 32;
 /// Extra vertical room, below the NDMU header's natural bottom edge,
 /// reserved for each zone's own "TEST I/II/III" label on TAT's combined
 /// landscape page -- see [_layoutTatLandscape].
-const double kTatZoneLabelHeight = 14;
+const double kTatZoneLabelHeight = 20;
 
 /// TAT-only: lays out all 3 sections (Test I/II/III) side by side on ONE
 /// physical landscape page, instead of the generic engine's one-page-per-
@@ -669,11 +674,15 @@ void _paintTatLandscapePage(PdfGraphics canvas, ExamSpec exam, ExamLayout layout
   final headerPage = PagePlacement(SectionSpec(title1, 0, (n) => const []), 1, 1, const []);
   _paintNdmuHeader(canvas, exam, headerPage, layout, regular, bold, flip);
 
-  final labelY = exam.contentTop + headerHeightFor(exam) + 2;
+  // Sits near the top of the kTatZoneLabelHeight gap reserved below the
+  // header, not the bottom -- a bigger gap alone isn't enough once you
+  // account for real glyph height (an 8pt label baseline placed too close
+  // to the grid still visually clips the first row's bubbles).
+  final headerBottom = exam.contentTop + headerHeightFor(exam);
   for (final page in layout.pages) {
     canvas.setColor(kNavy);
     final zoneLeft = page.items.first.bubbles.first.x - exam.rowLabelWidth;
-    canvas.drawString(bold, 8, page.section.name.toUpperCase(), zoneLeft, flip(labelY + 8));
+    canvas.drawString(bold, 7, page.section.name.toUpperCase(), zoneLeft, flip(headerBottom + 9));
     _paintItems(canvas, page.items, exam, regular, bold, flip);
   }
 }
@@ -839,9 +848,19 @@ void _paintNdmuHeader(
   PdfFont bold,
   double Function(double) flip,
 ) {
+  final headerTop = kContentTop;
   var y = kContentTop;
   final width = layout.contentWidth;
   final compact = exam.compactNdmuHeader;
+  // Compact mode (TAT's landscape page) never stretches the header box to
+  // the full grid width -- the grid spans wide because it has 130 items'
+  // worth of real content to fill that space with; the header's actual
+  // content (a few short ID-field lines) doesn't, and stretching it out
+  // just leaves those lines sitting in a lot of dead space instead of
+  // reading as a compact, well-proportioned block the way AT/QTM's own
+  // headers do (TAT only leaves a narrow strip free on the right for a
+  // separate, compact scores panel -- see the scores block below).
+  final headerWidth = compact ? math.min(width, 620.0) : width;
 
   final letterheadHeight = compact ? kCompactLetterheadHeight : kLetterheadHeight;
   final idRowHeight = compact ? kCompactIdRowHeight : kIdRowHeight;
@@ -851,19 +870,19 @@ void _paintNdmuHeader(
   // Letterhead box.
   canvas.setColor(kBlack);
   canvas.setLineWidth(1);
-  canvas.drawRect(kContentLeft, flip(y + letterheadHeight), width, letterheadHeight);
+  canvas.drawRect(kContentLeft, flip(y + letterheadHeight), headerWidth, letterheadHeight);
   canvas.strokePath();
-  var ly = y + (compact ? 10 : 13);
+  var ly = y + (compact ? 11 : 13);
   for (var i = 0; i < exam.letterheadLines.length; i++) {
     final line = exam.letterheadLines[i];
     // the university name (line 2) stands out
-    final size = compact ? (i == 1 ? 10.0 : 7.0) : (i == 1 ? 12.0 : 8.0);
+    final size = compact ? (i == 1 ? 11.0 : 8.0) : (i == 1 ? 12.0 : 8.0);
     final font = i == 1 ? bold : regular;
     final metrics = font.stringMetrics(line) * size;
-    final textX = kContentLeft + (width - metrics.advanceWidth) / 2;
+    final textX = kContentLeft + (headerWidth - metrics.advanceWidth) / 2;
     canvas.setColor(i == 1 ? kNavy : kGray);
     canvas.drawString(font, size, line, textX, flip(ly));
-    ly += size + (compact ? 3 : 4);
+    ly += size + (compact ? 2 : 4);
   }
   y += letterheadHeight + (compact ? kCompactGapAfterLetterhead : kGapAfterLetterhead);
 
@@ -872,15 +891,15 @@ void _paintNdmuHeader(
   canvas.setColor(kBlack);
   canvas.setLineWidth(1);
   final idTableHeight = idRowHeight * kIdRowCount;
-  canvas.drawRect(kContentLeft, flip(y + idTableHeight), width, idTableHeight);
+  canvas.drawRect(kContentLeft, flip(y + idTableHeight), headerWidth, idTableHeight);
   canvas.strokePath();
   for (var i = 1; i < kIdRowCount; i++) {
     final lineY = y + idRowHeight * i;
-    canvas.drawLine(kContentLeft, flip(lineY), kContentLeft + width, flip(lineY));
+    canvas.drawLine(kContentLeft, flip(lineY), kContentLeft + headerWidth, flip(lineY));
     canvas.strokePath();
   }
   final labelOffset = compact ? 8.0 : 9.0;
-  final nameCols = [('Last Name', width * 0.45), ('First Name', width * 0.4), ('MI', width * 0.15)];
+  final nameCols = [('Last Name', headerWidth * 0.45), ('First Name', headerWidth * 0.4), ('MI', headerWidth * 0.15)];
   var colX = kContentLeft;
   for (final (label, w) in nameCols) {
     if (colX > kContentLeft) {
@@ -894,19 +913,95 @@ void _paintNdmuHeader(
   canvas.setColor(kGray);
   canvas.drawString(regular, 7, 'School Last Attended', kContentLeft + 3, flip(y + idRowHeight + labelOffset));
   canvas.drawString(regular, 7, 'Address of School Last Attended', kContentLeft + 3, flip(y + idRowHeight * 2 + labelOffset));
-  y += idTableHeight + (compact ? kCompactGapAfterIdTable : kGapAfterIdTable);
-
-  // Date/Birth/Age/Sex block (left) + exam-specific scores block (right).
-  final leftWidth = width * 0.55;
-  final rightX = kContentLeft + leftWidth + 10;
-  final rightWidth = width - leftWidth - 10;
-
-  canvas.setColor(kGray);
   if (compact) {
-    canvas.drawString(regular, 7, 'Date Today:  Year _____  Month _____  Day _____', kContentLeft, flip(y + 8));
-    canvas.drawString(regular, 7, 'Birth Date:  Year _____  Month _____  Day _____', kContentLeft, flip(y + 20));
-    canvas.drawString(regular, 7, 'Age: _____   Sex:  M ( )   F ( )', kContentLeft, flip(y + 32));
-  } else {
+    // TAT-compact only: Date/Birth/Age fields fit in the School/Address
+    // rows' own leftover width, positioned well clear of each row's own
+    // label -- fieldStartX leaves a real writing zone (not just the label
+    // itself) for the examinee to actually fill in the school name and
+    // address in, not just enough room for the label text to not clip.
+    const fieldStartXRel = 300.0;
+    final fieldStartX = kContentLeft + fieldStartXRel;
+
+    // Vertical border marking where the writing zone ends and the
+    // Date/Birth/Age fields begin -- anchored to the same row boundaries
+    // as the table's own horizontal lines so it reads as a real table
+    // cell, not a line floating independently of the grid it's part of.
+    canvas.setColor(kBlack);
+    canvas.setLineWidth(1);
+    canvas.drawLine(fieldStartX - 10, flip(y + idRowHeight), fieldStartX - 10, flip(y + idRowHeight * kIdRowCount));
+    canvas.strokePath();
+
+    const labelColW = 50.0, yearColW = 52.0, monthColW = 58.0, dayColW = 45.0;
+    void drawDateFields(String label, double rowY) {
+      canvas.setColor(kGray);
+      var fx = fieldStartX;
+      canvas.drawString(regular, 7, label, fx, flip(rowY));
+      fx += labelColW;
+      canvas.drawString(regular, 7, 'Year ___', fx, flip(rowY));
+      fx += yearColW;
+      canvas.drawString(regular, 7, 'Month ___', fx, flip(rowY));
+      fx += monthColW;
+      canvas.drawString(regular, 7, 'Day ___', fx, flip(rowY));
+    }
+
+    drawDateFields('Date Today:', y + idRowHeight + labelOffset);
+    drawDateFields('Birth Date:', y + idRowHeight * 2 + labelOffset);
+    canvas.drawString(
+      regular,
+      7,
+      'Age: ___  Sex: M ( ) F ( )',
+      fieldStartX + labelColW + yearColW + monthColW + dayColW + 12,
+      flip(y + idRowHeight * 2 + labelOffset),
+    );
+  }
+  y += idTableHeight;
+  final idTableBottomY = y;
+  y += compact ? kCompactGapAfterIdTable : kGapAfterIdTable;
+
+  // TAT-compact only: a separate scores panel in the top-right, using the
+  // width freed up by capping the letterhead/ID box (see headerWidth) --
+  // spans the same vertical range as the letterhead+ID box to its left,
+  // rather than being squeezed into the date/birth row's height like
+  // QTM's does, since there's a full column of height available for it
+  // here.
+  if (compact && exam.code == 'TAT') {
+    final scoresX = kContentLeft + headerWidth + 24;
+    // A compact side panel, not a second wide block -- the letterhead/ID
+    // box (headerWidth) is the one that stretches to use the width; this
+    // is just Raw/Scaled numbers, capped modestly regardless of how much
+    // width happens to be left over.
+    final scoresWidth = math.min(math.max(width - headerWidth - 24, 0.0), 150.0);
+    final scoresHeight = idTableBottomY - headerTop;
+    canvas.setColor(kBlack);
+    canvas.setLineWidth(1);
+    canvas.drawRect(scoresX, flip(headerTop + scoresHeight), scoresWidth, scoresHeight);
+    canvas.strokePath();
+    const rows = ['Test I', 'Test II', 'Test III', 'Total'];
+    final rowPitch = (scoresHeight - 14) / rows.length;
+    canvas.drawString(bold, 7, 'Raw', scoresX + scoresWidth * 0.32, flip(headerTop + 10));
+    canvas.drawString(bold, 7, 'Scaled', scoresX + scoresWidth * 0.68, flip(headerTop + 10));
+    for (var i = 0; i < rows.length; i++) {
+      final rowY = headerTop + 15 + i * rowPitch;
+      canvas.setColor(kGray);
+      canvas.drawString(regular, 7, rows[i], scoresX + 4, flip(rowY + rowPitch * 0.65));
+      canvas.setLineWidth(0.75);
+      canvas.drawRect(scoresX + scoresWidth * 0.22, flip(rowY + rowPitch * 0.88), scoresWidth * 0.22, rowPitch * 0.65);
+      canvas.strokePath();
+      canvas.drawRect(scoresX + scoresWidth * 0.6, flip(rowY + rowPitch * 0.88), scoresWidth * 0.22, rowPitch * 0.65);
+      canvas.strokePath();
+    }
+  }
+
+  // Date/Birth/Age/Sex block -- QTM-only: TAT-compact already drew these
+  // fields inline in the ID table's School/Address rows above, positioned
+  // with a real writing zone before them (see there), so there's nothing
+  // left to draw in this row for TAT.
+  final leftWidth = headerWidth * 0.55;
+  final rightX = kContentLeft + leftWidth + 10;
+  final rightWidth = headerWidth - leftWidth - 10;
+
+  if (!compact) {
+    canvas.setColor(kGray);
     canvas.drawString(regular, 7, 'Date Today:  Year _____  Month _____  Day _____', kContentLeft, flip(y + 10));
     canvas.drawString(regular, 7, 'Birth Date:  Year _____  Month _____  Day _____', kContentLeft, flip(y + 26));
     canvas.drawString(regular, 7, 'Age: _____   Sex:  M ( )   F ( )', kContentLeft, flip(y + 42));
@@ -914,33 +1009,8 @@ void _paintNdmuHeader(
 
   canvas.setLineWidth(0.75);
   if (exam.code == 'TAT') {
-    canvas.setColor(kBlack);
-    const rows = ['Test I', 'Test II', 'Test III', 'Total'];
-    if (compact) {
-      canvas.drawString(bold, 6, 'Raw', rightX + rightWidth * 0.45, flip(y + 6));
-      canvas.drawString(bold, 6, 'Scaled', rightX + rightWidth * 0.75, flip(y + 6));
-      for (var i = 0; i < rows.length; i++) {
-        final rowY = y + 9 + i * 8.0;
-        canvas.setColor(kGray);
-        canvas.drawString(regular, 6, rows[i], rightX, flip(rowY + 5));
-        canvas.drawRect(rightX + rightWidth * 0.42, flip(rowY + 7), rightWidth * 0.22, 7);
-        canvas.strokePath();
-        canvas.drawRect(rightX + rightWidth * 0.72, flip(rowY + 7), rightWidth * 0.22, 7);
-        canvas.strokePath();
-      }
-    } else {
-      canvas.drawString(bold, 7, 'Raw', rightX + rightWidth * 0.45, flip(y + 8));
-      canvas.drawString(bold, 7, 'Scaled', rightX + rightWidth * 0.75, flip(y + 8));
-      for (var i = 0; i < rows.length; i++) {
-        final rowY = y + 12 + i * 11.0;
-        canvas.setColor(kGray);
-        canvas.drawString(regular, 7, rows[i], rightX, flip(rowY + 8));
-        canvas.drawRect(rightX + rightWidth * 0.42, flip(rowY + 10), rightWidth * 0.22, 10);
-        canvas.strokePath();
-        canvas.drawRect(rightX + rightWidth * 0.72, flip(rowY + 10), rightWidth * 0.22, 10);
-        canvas.strokePath();
-      }
-    }
+    // Compact TAT already drew its scores panel above; nothing left to
+    // draw here.
   } else {
     canvas.setColor(kNavy);
     canvas.drawString(bold, 9, 'Scores', rightX, flip(y + 10));
@@ -968,8 +1038,11 @@ void _paintNdmuHeader(
   ];
   canvas.setColor(kNavy);
   if (compact) {
-    canvas.drawString(bold, 10, title1, kContentLeft, flip(y + 9));
-    canvas.drawString(bold, 7, title2Parts.join(' - ').toUpperCase(), kContentLeft, flip(y + 18));
+    // No second "ANSWER SHEET" line here -- TAT's title is already
+    // unambiguous on its own (there's no other section name it could be
+    // confused with), so that line was purely decorative weight the
+    // compact header doesn't have room to spend.
+    canvas.drawString(bold, 12, title1, kContentLeft, flip(y + 10));
   } else {
     canvas.drawString(bold, 12, title1, kContentLeft, flip(y + 13));
     canvas.drawString(bold, 9, title2Parts.join(' - ').toUpperCase(), kContentLeft, flip(y + 26));

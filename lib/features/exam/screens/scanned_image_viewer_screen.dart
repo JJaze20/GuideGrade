@@ -9,11 +9,11 @@ import '../../../core/omr/omr_scorer.dart';
 /// against what the decoder actually read. View-only -- never writes back
 /// to the image file.
 ///
-/// The answer key for this sheet's exam is shown alongside the image (see
-/// [_AnswerKeyPanel]) so staff can compare the printed key against the
-/// visible marks without leaving this screen -- blank and flagged
-/// (ambiguous) items are highlighted since those are exactly the ones most
-/// likely to need a manual look.
+/// The image gets the full screen for zoom/pan; the answer key (see
+/// [_AnswerKeyPanel]) lives in an end drawer opened via the app bar so it
+/// never eats into the viewing area -- blank and flagged (ambiguous) items
+/// are highlighted since those are exactly the ones most likely to need a
+/// manual look.
 class ScannedImageViewerScreen extends StatelessWidget {
   final String imagePath;
   final String title;
@@ -35,26 +35,31 @@ class ScannedImageViewerScreen extends StatelessWidget {
         foregroundColor: Colors.white,
         elevation: 0,
         title: Text(title),
-      ),
-      body: SafeArea(
-        child: Row(
-          children: [
-            Expanded(
-              flex: 3,
-              child: InteractiveViewer(
-                minScale: 1,
-                maxScale: 6,
-                child: Center(
-                  child: Image.file(File(imagePath)),
-                ),
+        actions: [
+          if (scoredItems.isNotEmpty)
+            Builder(
+              builder: (context) => IconButton(
+                icon: const Icon(Icons.fact_check_outlined),
+                tooltip: 'Answer key',
+                onPressed: () => Scaffold.of(context).openEndDrawer(),
               ),
             ),
-            if (scoredItems.isNotEmpty)
-              SizedBox(
-                width: 148,
-                child: _AnswerKeyPanel(items: scoredItems),
-              ),
-          ],
+        ],
+      ),
+      endDrawer: scoredItems.isNotEmpty
+          ? Drawer(
+              backgroundColor: const Color(0xFF111827),
+              width: 220,
+              child: SafeArea(child: _AnswerKeyPanel(items: scoredItems)),
+            )
+          : null,
+      body: SafeArea(
+        child: InteractiveViewer(
+          minScale: 1,
+          maxScale: 6,
+          child: Center(
+            child: Image.file(File(imagePath)),
+          ),
         ),
       ),
     );
@@ -74,37 +79,31 @@ class _AnswerKeyPanel extends StatelessWidget {
       bySection.putIfAbsent(item.sectionName, () => []).add(item);
     }
 
-    return Container(
-      decoration: const BoxDecoration(
-        color: Color(0xFF111827),
-        border: Border(left: BorderSide(color: Color(0xFF1F2937))),
-      ),
-      child: ListView(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
-        children: [
-          const Text(
-            'ANSWER KEY',
-            style: TextStyle(color: Colors.white70, fontSize: 9.5, fontWeight: FontWeight.w800, letterSpacing: 0.6),
-          ),
-          const SizedBox(height: 10),
-          ...bySection.entries.map(
-            (entry) => Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    entry.key,
-                    style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w700),
-                  ),
-                  const SizedBox(height: 6),
-                  ...entry.value.map(_buildRow),
-                ],
-              ),
+    return ListView(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 16),
+      children: [
+        const Text(
+          'ANSWER KEY',
+          style: TextStyle(color: Colors.white70, fontSize: 10.5, fontWeight: FontWeight.w800, letterSpacing: 0.6),
+        ),
+        const SizedBox(height: 12),
+        ...bySection.entries.map(
+          (entry) => Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  entry.key,
+                  style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 6),
+                ...entry.value.map(_buildRow),
+              ],
             ),
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
