@@ -10,7 +10,7 @@ import '../../../shared/utils/logout_helper.dart';
 ///
 /// System Administrator entry point: administrative/system-management
 /// functions only. Deliberately contains no links to Exams, Answer Keys,
-/// Batches, Examinees, OMR, or Results — that's the Guidance Council's
+/// Batches, OMR, or Results — that's the Guidance Council's
 /// workspace (see AppRoutes._guidanceOnlyRoutes), and the System
 /// Administrator role must not reach it, consistent with the deployed
 /// Firestore rules (system_admin has no rule granting access to those

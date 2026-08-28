@@ -71,11 +71,11 @@ class AppRoutes {
   };
 
   /// Routes that require the `guidance_council` role — Staff Home and the
-  /// confidential examination workflow (exams, answer keys, batches,
-  /// examinees, OMR scanning, results). `system_admin` must never reach
-  /// these, per the System Administrator = system management / Guidance
-  /// Council = examination management separation. `profile` is
-  /// deliberately excluded from this set — it stays open to both roles.
+  /// confidential examination workflow (exams, answer keys, batches, OMR
+  /// scanning, results). `system_admin` must never reach these, per the
+  /// System Administrator = system management / Guidance Council =
+  /// examination management separation. `profile` is deliberately
+  /// excluded from this set — it stays open to both roles.
   static const Set<String> _guidanceOnlyRoutes = {
     staffHome,
     examHub,

@@ -6,7 +6,6 @@ import '../../models/exam.dart';
 import '../../models/answer_key.dart';
 import '../../models/answer_key_model.dart';
 import '../../models/batch.dart';
-import '../../models/examinee.dart';
 import '../../models/result.dart';
 import '../omr/answer_key_adapter.dart';
 
@@ -27,7 +26,6 @@ class FirestoreService {
   CollectionReference get _examsCollection => _firestore.collection('exams');
   CollectionReference get _answerKeysCollection => _firestore.collection('answer_keys');
   CollectionReference get _batchesCollection => _firestore.collection('batches');
-  CollectionReference get _examineesCollection => _firestore.collection('examinees');
   CollectionReference get _resultsCollection => _firestore.collection('results');
 
   // ============================================
@@ -572,119 +570,20 @@ class FirestoreService {
   }
 
   // ============================================
-  // EXAMINEE OPERATIONS
-  // ============================================
-
-  /// Get all examinees
-  Future<List<ExamineeModel>> getExaminees() async {
-    try {
-      final query = await _examineesCollection.get();
-      return query.docs.map((doc) => 
-        ExamineeModel.fromFirestore(doc.data() as Map<String, dynamic>, doc.id)
-      ).toList();
-    } catch (e) {
-      print('Error getting all examinees: $e');
-      return [];
-    }
-  }
-
-  /// Get examinee by ID
-  Future<ExamineeModel?> getExamineeById(String examineeId) async {
-    try {
-      final doc = await _examineesCollection.doc(examineeId).get();
-      if (!doc.exists) return null;
-      
-      return ExamineeModel.fromFirestore(doc.data() as Map<String, dynamic>, doc.id);
-    } catch (e) {
-      print('Error getting examinee by ID: $e');
-      return null;
-    }
-  }
-
-  /// Get examinees by batch ID
-  Future<List<ExamineeModel>> getExamineesByBatchId(String batchId) async {
-    try {
-      final query = await _examineesCollection.where('batchId', isEqualTo: batchId).get();
-      return query.docs.map((doc) => 
-        ExamineeModel.fromFirestore(doc.data() as Map<String, dynamic>, doc.id)
-      ).toList();
-    } catch (e) {
-      print('Error getting examinees by batch ID: $e');
-      return [];
-    }
-  }
-
-  /// Get examinee by student number
-  Future<ExamineeModel?> getExamineeByStudentNumber(String studentNumber) async {
-    try {
-      final query = await _examineesCollection.where('studentNumber', isEqualTo: studentNumber).limit(1).get();
-      if (query.docs.isEmpty) return null;
-      
-      final doc = query.docs.first;
-      return ExamineeModel.fromFirestore(doc.data() as Map<String, dynamic>, doc.id);
-    } catch (e) {
-      print('Error getting examinee by student number: $e');
-      return null;
-    }
-  }
-
-  /// Create a new examinee
-  Future<String> createExaminee(ExamineeModel examinee) async {
-    try {
-      final docRef = await _examineesCollection.add(examinee.toFirestore());
-      print('Examinee created with ID: ${docRef.id}');
-      return docRef.id;
-    } catch (e) {
-      print('Error creating examinee: $e');
-      rethrow;
-    }
-  }
-
-  /// Update an existing examinee (preserves audit fields)
-  Future<void> updateExaminee(ExamineeModel examinee) async {
-    try {
-      await _examineesCollection.doc(examinee.examineeId).update(examinee.toFirestore());
-      print('Examinee updated: ${examinee.examineeId}');
-    } catch (e) {
-      print('Error updating examinee: $e');
-      rethrow;
-    }
-  }
-
-  /// Delete an examinee
-  Future<void> deleteExaminee(String examineeId) async {
-    try {
-      await _examineesCollection.doc(examineeId).delete();
-      print('Examinee deleted: $examineeId');
-    } catch (e) {
-      print('Error deleting examinee: $e');
-      rethrow;
-    }
-  }
-
-  /// Stream of examinees for real-time updates
-  Stream<List<ExamineeModel>> examineesStream() {
-    return _examineesCollection.snapshots().map((snapshot) => 
-      snapshot.docs.map((doc) => 
-        ExamineeModel.fromFirestore(doc.data() as Map<String, dynamic>, doc.id)
-      ).toList()
-    );
-  }
-
-  /// Stream of examinees by batch ID for real-time updates
-  Stream<List<ExamineeModel>> examineesByBatchStream(String batchId) {
-    return _examineesCollection.where('batchId', isEqualTo: batchId).snapshots().map((snapshot) =>
-      snapshot.docs.map((doc) =>
-        ExamineeModel.fromFirestore(doc.data() as Map<String, dynamic>, doc.id)
-      ).toList()
-    );
-  }
-
-  // ============================================
   // RESULT OPERATIONS
   // ============================================
 
-  /// Get a result by its (deterministic) ID.
+  /// A fresh, client-generated Firestore document ID for a new result --
+  /// same mechanism `exams`/`batches` already get via `.add()` (a
+  /// `.add()` call is sugar for exactly this: generate an ID, then
+  /// `.set()` at it). Generated synchronously, no network round-trip.
+  /// Guarantees every call returns a distinct ID, so two sheets scanned
+  /// in the same batch can never collide on the same result document --
+  /// there is deliberately no shared key (exam/batch/anything) baked into
+  /// a result's identity anymore; each completed scan gets its own.
+  String newResultDocumentId() => _resultsCollection.doc().id;
+
+  /// Get a result by its ID.
   Future<ResultModel?> getResultById(String resultId) async {
     try {
       final doc = await _resultsCollection.doc(resultId).get();
@@ -709,10 +608,13 @@ class FirestoreService {
     }
   }
 
-  /// Creates or updates [result] at its deterministic ID
-  /// (ResultModel.buildId), and increments the owning batch's actualCount
-  /// exactly once -- only the first time a result is created for a given
-  /// exam+batch+examinee, never on a correction/re-scan of an existing one.
+  /// Creates or updates [result] at its ID (see [newResultDocumentId]),
+  /// and increments the owning batch's actualCount exactly once -- only
+  /// the first time a result is created at that ID, never on a
+  /// correction/re-scan of an existing one. In practice every ID passed
+  /// in today is freshly generated per completed scan, so this always
+  /// takes the "created" path -- the "updated" path exists for a future
+  /// caller that deliberately re-persists at a known existing ID.
   ///
   /// Both the result write and the count increment happen inside one
   /// Firestore transaction: either both land or neither does, so
