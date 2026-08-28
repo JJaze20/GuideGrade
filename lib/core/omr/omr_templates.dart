@@ -261,7 +261,7 @@ final OmrExamTemplate _omrTAT = OmrExamTemplate(
   pageHeightPt: 612.0,
   bubbleRadiusPt: 8.0,
   bubbleRadiusYPt: 6.4,
-  cornerMarkers: const [OmrCorner(0.02564, 0.03922), OmrCorner(0.91880, 0.03922), OmrCorner(0.02564, 0.97386), OmrCorner(0.91880, 0.97386)],
+  cornerMarkers: const [OmrCorner(0.02564, 0.03922), OmrCorner(0.91880, 0.03922), OmrCorner(0.02564, 0.90196), OmrCorner(0.91880, 0.90196)],
   sections: const [
     OmrSection(
       name: "Test I",
