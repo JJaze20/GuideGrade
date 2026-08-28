@@ -31,12 +31,11 @@ class OmrDecoder {
 
   AlignmentCheck locateCorners(String imagePath, OmrExamTemplate template) => _unsupported();
 
-  AlignmentCheck checkAlignmentFromLuma(
+  List<bool> checkCornersFromLuma(
     Uint8List lumaBytes,
     int width,
     int height,
     int bytesPerRow,
-    OmrExamTemplate template,
   ) =>
       _unsupported();
 
