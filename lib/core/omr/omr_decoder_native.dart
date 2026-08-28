@@ -93,10 +93,27 @@ class OmrDecoder {
   /// (QTM/TAT compare 2-4), so its runner-up is drawn from a bigger pool
   /// and has more chances to land close to the real mark by chance alone.
   /// Both push a fixed 0.15 margin into flagging genuine single marks on
-  /// AT more often than it should. Left at 0.15 for everything else until
-  /// individually confirmed against a real scan, same as clipLimit.
+  /// AT more often than it should.
+  ///
+  /// QTM confirmed against a real scan to need the same kind of loosening,
+  /// just less of it: a real sheet showed roughly a fifth to a third of
+  /// its items marked as a thin, hollow-centered ring rather than a solid
+  /// disc (compared directly against clearly-solid marks elsewhere on the
+  /// same sheet, at the same ink density) — a consistent feature of how
+  /// that exam-taker marks, not isolated light spots.
+  ///
+  /// Pushed further to match AT's 0.10 exactly after 0.12 still left a
+  /// consistent handful flagged (items 6/7/9/22/53/56 on every one of 4
+  /// re-scans) — checked those against clearly-unflagged items on the same
+  /// sheet at this point and the difference isn't an obvious light-vs-
+  /// solid split any more, just a small margin either side of whatever
+  /// threshold is set. That's a sign real gains here are running out —
+  /// if 0.10 doesn't clear these either, that's evidence they're
+  /// genuinely marginal rather than a fixable tuning gap, not a reason to
+  /// keep lowering further.
   static double _ambiguousMarginFor(String examCode) => switch (examCode) {
     'AT' => 0.10,
+    'QTM' => 0.10,
     _ => 0.15,
   };
 
