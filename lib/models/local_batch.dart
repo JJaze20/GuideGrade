@@ -1,5 +1,62 @@
 import 'omr_scan_result.dart';
 
+/// The student a scanned sheet belongs to. Attached per [LocalScan],
+/// normally entered by staff on the results/review screen while holding the
+/// physical sheet (there is no OCR — see the archive/review UI).
+///
+/// [examineeNumber] is the identifying field results are keyed to for a
+/// person; [firstName]/[lastName] are for human-readable lists and exports.
+class ExamineeInfo {
+  final String firstName;
+  final String lastName;
+  final String examineeNumber;
+
+  const ExamineeInfo({
+    required this.firstName,
+    required this.lastName,
+    required this.examineeNumber,
+  });
+
+  /// "Last, First" — falls back to whichever half is present.
+  String get displayName {
+    final last = lastName.trim();
+    final first = firstName.trim();
+    if (last.isNotEmpty && first.isNotEmpty) return '$last, $first';
+    if (last.isNotEmpty) return last;
+    if (first.isNotEmpty) return first;
+    return 'Unnamed';
+  }
+
+  bool get isComplete =>
+      firstName.trim().isNotEmpty &&
+      lastName.trim().isNotEmpty &&
+      examineeNumber.trim().isNotEmpty;
+
+  bool get isEmpty =>
+      firstName.trim().isEmpty &&
+      lastName.trim().isEmpty &&
+      examineeNumber.trim().isEmpty;
+
+  ExamineeInfo copyWith({String? firstName, String? lastName, String? examineeNumber}) =>
+      ExamineeInfo(
+        firstName: firstName ?? this.firstName,
+        lastName: lastName ?? this.lastName,
+        examineeNumber: examineeNumber ?? this.examineeNumber,
+      );
+
+  Map<String, dynamic> toJson() => {
+        'firstName': firstName,
+        'lastName': lastName,
+        'examineeNumber': examineeNumber,
+      };
+
+  factory ExamineeInfo.fromJson(Map<String, dynamic> json) => ExamineeInfo(
+        firstName: json['firstName'] as String? ?? '',
+        lastName: json['lastName'] as String? ?? '',
+        examineeNumber: json['examineeNumber'] as String? ?? '',
+      );
+}
+
 /// Local, on-device representation of a batch and everything it contains.
 ///
 /// A [LocalBatch] is the central container connecting an exam type, its
@@ -56,6 +113,23 @@ class LocalBatch {
     if (graded.isEmpty) return null;
     final sum = graded.fold<double>(0, (acc, s) => acc + s.result!.percentage);
     return sum / graded.length;
+  }
+
+  /// Scans that don't yet carry a complete examinee identity.
+  int get untaggedScanCount =>
+      scans.where((s) => s.examinee?.isComplete != true).length;
+
+  /// Examinee numbers used by more than one scan in this batch (data-entry
+  /// mistakes to flag). Blank numbers are ignored.
+  Set<String> get duplicateExamineeNumbers {
+    final seen = <String>{};
+    final dupes = <String>{};
+    for (final s in scans) {
+      final n = s.examinee?.examineeNumber.trim() ?? '';
+      if (n.isEmpty) continue;
+      if (!seen.add(n)) dupes.add(n);
+    }
+    return dupes;
   }
 
   bool get isDraft => status == 'Draft';
@@ -145,20 +219,31 @@ class LocalScan {
   /// (e.g. scanned without a Final answer key loaded).
   final LocalScanResult? result;
 
+  /// Which student this sheet belongs to. Null until staff tag it (on the
+  /// results or archive-detail screen).
+  final ExamineeInfo? examinee;
+
   const LocalScan({
     required this.id,
     required this.imageFileName,
     required this.capturedAt,
     required this.decoded,
     this.result,
+    this.examinee,
   });
 
-  LocalScan copyWith({LocalScanResult? result}) => LocalScan(
+  LocalScan copyWith({
+    LocalScanResult? result,
+    ExamineeInfo? examinee,
+    bool clearExaminee = false,
+  }) =>
+      LocalScan(
         id: id,
         imageFileName: imageFileName,
         capturedAt: capturedAt,
         decoded: decoded,
         result: result ?? this.result,
+        examinee: clearExaminee ? null : (examinee ?? this.examinee),
       );
 
   Map<String, dynamic> toJson() => {
@@ -167,6 +252,7 @@ class LocalScan {
         'capturedAt': capturedAt.toIso8601String(),
         'decoded': decoded.toJson(),
         'result': result?.toJson(),
+        'examinee': examinee?.toJson(),
       };
 
   factory LocalScan.fromJson(Map<String, dynamic> json) => LocalScan(
@@ -177,6 +263,9 @@ class LocalScan {
         result: json['result'] == null
             ? null
             : LocalScanResult.fromJson(json['result'] as Map<String, dynamic>),
+        examinee: json['examinee'] == null
+            ? null
+            : ExamineeInfo.fromJson(json['examinee'] as Map<String, dynamic>),
       );
 }
 

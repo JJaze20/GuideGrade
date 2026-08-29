@@ -38,13 +38,14 @@ abstract class BatchRepository {
   Future<void> deleteBatch(String id);
 
   /// Copies [sourceImage] into [batchId]'s container and appends a scan
-  /// carrying [decoded] (and [result], when the session was graded).
-  /// Returns the updated batch.
+  /// carrying [decoded] (and [result]/[examinee] when known at capture
+  /// time). Returns the updated batch.
   Future<LocalBatch> addScan({
     required String batchId,
     required OmrScanResult decoded,
     required File sourceImage,
     LocalScanResult? result,
+    ExamineeInfo? examinee,
   });
 
   /// Attaches/overwrites the grading outcome for one already-stored scan.
@@ -52,6 +53,14 @@ abstract class BatchRepository {
     required String batchId,
     required String scanId,
     required LocalScanResult result,
+  });
+
+  /// Sets (or clears, when [examinee] is null) which student one stored
+  /// scan belongs to. Returns the updated batch.
+  Future<LocalBatch> setScanExaminee({
+    required String batchId,
+    required String scanId,
+    ExamineeInfo? examinee,
   });
 
   /// Absolute file for a stored scan image, for display.

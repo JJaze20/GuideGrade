@@ -8,6 +8,7 @@ import '../../../core/constants/app_text_styles.dart';
 import '../../../core/omr/omr_scorer.dart';
 import '../../../core/state/app_state.dart';
 import '../../../models/local_batch.dart';
+import '../../../shared/widgets/examinee_dialog.dart';
 import '../../exam/screens/scanned_image_viewer_screen.dart';
 
 /// Opens one archived batch: its info, exam type, every scanned image it
@@ -78,6 +79,34 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
                       _buildHeader(batch),
                       const SizedBox(height: 14),
                       _buildSummary(batch),
+                      if (batch.scans.isNotEmpty && batch.untaggedScanCount > 0) ...[
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            const FaIcon(FontAwesomeIcons.userClock, size: 10, color: Color(0xFF92400E)),
+                            const SizedBox(width: 6),
+                            Text(
+                              '${batch.untaggedScanCount} of ${batch.scanCount} sheets have no student assigned',
+                              style: AppTextStyles.body(size: 9.5, color: const Color(0xFF92400E), weight: FontWeight.w600),
+                            ),
+                          ],
+                        ),
+                      ],
+                      if (batch.duplicateExamineeNumbers.isNotEmpty) ...[
+                        const SizedBox(height: 6),
+                        Row(
+                          children: [
+                            const FaIcon(FontAwesomeIcons.triangleExclamation, size: 10, color: Color(0xFF991B1B)),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(
+                                'Examinee number reused: ${batch.duplicateExamineeNumbers.join(', ')}',
+                                style: AppTextStyles.body(size: 9.5, color: const Color(0xFF991B1B), weight: FontWeight.w600),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
                       const SizedBox(height: 12),
                       _buildCloudBackupButton(),
                       const SizedBox(height: 16),
@@ -210,11 +239,35 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
     );
   }
 
+  Future<void> _tagExaminee(LocalBatch batch, LocalScan scan, int index) async {
+    final others = <String>{
+      for (final s in batch.scans)
+        if (s.id != scan.id) (s.examinee?.examineeNumber.trim() ?? ''),
+    }..removeWhere((e) => e.isEmpty);
+
+    final res = await showExamineeDialog(
+      context,
+      initial: scan.examinee,
+      sheetLabel: 'Sheet ${index + 1}',
+      otherNumbers: others,
+    );
+    if (res == null || !mounted) return;
+    await AppStateScope.of(context).batchRepository.setScanExaminee(
+          batchId: batch.id,
+          scanId: scan.id,
+          examinee: res.cleared ? null : res.info,
+        );
+    if (!mounted) return;
+    await _load();
+  }
+
   Widget _buildScanCard(LocalBatch batch, int index, AppState appState) {
     final scan = batch.scans[index];
     final scored = scoreOmrResult(scan.decoded, appState.answerKeys[batch.examCode]);
     final file = _images[scan.id];
     final result = scan.result;
+    final examinee = scan.examinee;
+    final tagged = examinee != null && !examinee.isEmpty;
 
     final blankCount = scored.items.where((i) => i.isBlank).length;
     final ambiguousCount = scored.items.where((i) => i.isAmbiguous).length;
@@ -239,7 +292,14 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
               children: [
                 Row(
                   children: [
-                    Expanded(child: Text('Sheet ${index + 1}', style: AppTextStyles.heading(size: 12))),
+                    Expanded(
+                      child: Text(
+                        tagged ? examinee.displayName : 'Sheet ${index + 1}',
+                        style: AppTextStyles.heading(size: 12),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
                     if (graded)
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -260,30 +320,53 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  '${scored.items.length} items · $blankCount blank · $ambiguousCount flagged',
+                  tagged
+                      ? 'Sheet ${index + 1} · Examinee ${examinee.examineeNumber}'
+                      : '${scored.items.length} items · $blankCount blank · $ambiguousCount flagged',
                   style: AppTextStyles.body(size: 9, color: AppColors.textGray),
                 ),
                 const SizedBox(height: 6),
-                if (file != null)
-                  TextButton.icon(
-                    onPressed: () => Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => ScannedImageViewerScreen(
-                          imagePath: file.path,
-                          title: 'Sheet ${index + 1}',
-                          scoredItems: scored.items,
-                        ),
+                Row(
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: () => _tagExaminee(batch, scan, index),
+                      icon: FaIcon(tagged ? FontAwesomeIcons.userPen : FontAwesomeIcons.userPlus,
+                          size: 10, color: AppColors.darkNavy),
+                      label: Text(tagged ? 'Edit student' : 'Tag student',
+                          style: const TextStyle(fontSize: 9.5, fontWeight: FontWeight.w700)),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColors.darkNavy,
+                        side: const BorderSide(color: Color(0xFFCBD5E1)),
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       ),
                     ),
-                    icon: const FaIcon(FontAwesomeIcons.magnifyingGlassPlus, size: 11, color: AppColors.primaryGreen),
-                    label: const Text('View Scan', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700)),
-                    style: TextButton.styleFrom(
-                      foregroundColor: AppColors.primaryGreen,
-                      padding: const EdgeInsets.symmetric(horizontal: 4),
-                      minimumSize: Size.zero,
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
-                  ),
+                    const SizedBox(width: 8),
+                    if (file != null)
+                      TextButton.icon(
+                        onPressed: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => ScannedImageViewerScreen(
+                              imagePath: file.path,
+                              title: tagged
+                                  ? 'Sheet ${index + 1} — ${examinee.displayName}'
+                                  : 'Sheet ${index + 1}',
+                              scoredItems: scored.items,
+                            ),
+                          ),
+                        ),
+                        icon: const FaIcon(FontAwesomeIcons.magnifyingGlassPlus, size: 11, color: AppColors.primaryGreen),
+                        label: const Text('View Scan', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700)),
+                        style: TextButton.styleFrom(
+                          foregroundColor: AppColors.primaryGreen,
+                          padding: const EdgeInsets.symmetric(horizontal: 4),
+                          minimumSize: Size.zero,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                      ),
+                  ],
+                ),
               ],
             ),
           ),

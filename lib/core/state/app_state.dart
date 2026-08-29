@@ -273,6 +273,23 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  /// Tags (or clears, when [examinee] is null/empty) the student for the
+  /// scan at [sheetIndex] of the just-persisted session. Safe no-op until
+  /// [persistCapturedSessionToBatch] has run and the batch holds that many
+  /// scans. Keeps [scanBatch] refreshed so the results screen reflects it.
+  Future<void> tagSessionScanExaminee(int sheetIndex, ExamineeInfo? examinee) async {
+    final batch = scanBatch;
+    if (batch == null || sheetIndex < 0 || sheetIndex >= batch.scans.length) return;
+    final scanId = batch.scans[sheetIndex].id;
+    final updated = await batchRepository.setScanExaminee(
+      batchId: batch.id,
+      scanId: scanId,
+      examinee: examinee,
+    );
+    scanBatch = updated;
+    notifyListeners();
+  }
+
   /// App-external "omr_debug" folder for [processCapturedPages]'s debug
   /// visualization images. Returns null (silently) if unavailable.
   Future<String?> _prepareDebugImagesDir() async {

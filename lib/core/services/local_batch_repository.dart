@@ -162,6 +162,7 @@ class LocalBatchRepository implements BatchRepository {
     required OmrScanResult decoded,
     required File sourceImage,
     LocalScanResult? result,
+    ExamineeInfo? examinee,
   }) async {
     final root = await _root();
     final batch = await _readManifest(_manifestFile(root, batchId));
@@ -184,6 +185,7 @@ class LocalBatchRepository implements BatchRepository {
       capturedAt: now,
       decoded: decoded,
       result: result,
+      examinee: examinee,
     );
 
     final updated = batch.copyWith(
@@ -209,6 +211,28 @@ class LocalBatchRepository implements BatchRepository {
     }
     final scans = batch.scans
         .map((s) => s.id == scanId ? s.copyWith(result: result) : s)
+        .toList();
+    final updated = batch.copyWith(scans: scans, updatedAt: DateTime.now());
+    await _writeManifest(updated);
+    return updated;
+  }
+
+  @override
+  Future<LocalBatch> setScanExaminee({
+    required String batchId,
+    required String scanId,
+    ExamineeInfo? examinee,
+  }) async {
+    final root = await _root();
+    final batch = await _readManifest(_manifestFile(root, batchId));
+    if (batch == null) {
+      throw StateError('Batch $batchId does not exist.');
+    }
+    final clear = examinee == null || examinee.isEmpty;
+    final scans = batch.scans
+        .map((s) => s.id == scanId
+            ? s.copyWith(examinee: examinee, clearExaminee: clear)
+            : s)
         .toList();
     final updated = batch.copyWith(scans: scans, updatedAt: DateTime.now());
     await _writeManifest(updated);

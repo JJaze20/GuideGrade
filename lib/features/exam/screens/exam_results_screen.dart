@@ -6,7 +6,9 @@ import '../../../core/constants/app_text_styles.dart';
 import '../../../core/omr/omr_scorer.dart';
 import '../../../core/routes/app_routes.dart';
 import '../../../core/state/app_state.dart';
+import '../../../models/local_batch.dart';
 import '../../../models/omr_scan_result.dart';
+import '../../../shared/widgets/examinee_dialog.dart';
 import '../../../shared/widgets/primary_button.dart';
 import 'scanned_image_viewer_screen.dart';
 
@@ -57,13 +59,16 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
       return;
     }
     _completionPrompted = true;
+    final untagged = batch.untaggedScanCount;
     final confirm = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('Batch Complete?'),
         content: Text(
           'All expected sheets (${batch.expectedCount}) have been scanned for '
-          '${batch.batchCode}. Mark this batch as Completed?',
+          '${batch.batchCode}. Mark this batch as Completed?'
+          '${untagged > 0 ? '\n\nNote: $untagged sheet${untagged == 1 ? '' : 's'} '
+              'still ${untagged == 1 ? 'has' : 'have'} no student assigned.' : ''}',
         ),
         actions: [
           TextButton(onPressed: () => Navigator.of(dialogContext).pop(false), child: const Text('Not Yet')),
@@ -198,15 +203,58 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
         final imagePath = sheetIndex < appState.capturedPages.length
             ? appState.capturedPages[sheetIndex].path
             : null;
-        return _buildSheetCard(context, sheetIndex, scored, imagePath);
+        // Available only once the session is persisted — that's when the
+        // batch holds the LocalScan this card can be tagged against.
+        final batch = appState.scanBatch;
+        final scan = (appState.sessionPersistedToBatch &&
+                batch != null &&
+                sheetIndex < batch.scans.length)
+            ? batch.scans[sheetIndex]
+            : null;
+        return _buildSheetCard(context, appState, sheetIndex, scored, imagePath, scan);
       },
     );
   }
 
-  Widget _buildSheetCard(BuildContext context, int sheetIndex, ScoredResult scored, String? imagePath) {
+  Future<void> _tagExaminee(
+    BuildContext context,
+    AppState appState,
+    int sheetIndex,
+    ExamineeInfo? current,
+  ) async {
+    final batch = appState.scanBatch;
+    if (batch == null || sheetIndex >= batch.scans.length) return;
+    final thisId = batch.scans[sheetIndex].id;
+    final others = <String>{
+      for (final s in batch.scans)
+        if (s.id != thisId) (s.examinee?.examineeNumber.trim() ?? ''),
+    }..removeWhere((e) => e.isEmpty);
+
+    final res = await showExamineeDialog(
+      context,
+      initial: current,
+      sheetLabel: 'Sheet ${sheetIndex + 1}',
+      otherNumbers: others,
+    );
+    if (res == null) return;
+    await appState.tagSessionScanExaminee(sheetIndex, res.cleared ? null : res.info);
+  }
+
+  Widget _buildSheetCard(
+    BuildContext context,
+    AppState appState,
+    int sheetIndex,
+    ScoredResult scored,
+    String? imagePath,
+    LocalScan? scan,
+  ) {
     final blankCount = scored.items.where((i) => i.isBlank).length;
     final ambiguousCount = scored.items.where((i) => i.isAmbiguous).length;
     final isGraded = scored.totalGraded > 0;
+    final examinee = scan?.examinee;
+    final tagged = examinee != null && !examinee.isEmpty;
+    final viewerTitle =
+        tagged ? 'Sheet ${sheetIndex + 1} — ${examinee.displayName}' : 'Sheet ${sheetIndex + 1}';
 
     final bySection = <String, List<ScoredItem>>{};
     for (final item in scored.items) {
@@ -229,7 +277,12 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
               const FaIcon(FontAwesomeIcons.fileLines, color: AppColors.primaryGreen, size: 16),
               const SizedBox(width: 8),
               Expanded(
-                child: Text('Sheet ${sheetIndex + 1}', style: AppTextStyles.heading(size: 13)),
+                child: Text(
+                  tagged ? examinee.displayName : 'Sheet ${sheetIndex + 1}',
+                  style: AppTextStyles.heading(size: 13),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
               if (isGraded)
                 Container(
@@ -244,9 +297,13 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
           ),
           const SizedBox(height: 4),
           Text(
-            '${scored.items.length} items · $blankCount blank · $ambiguousCount flagged',
+            tagged
+                ? 'Sheet ${sheetIndex + 1} · Examinee ${examinee.examineeNumber}'
+                : '${scored.items.length} items · $blankCount blank · $ambiguousCount flagged',
             style: AppTextStyles.body(size: 9, color: AppColors.textGray),
           ),
+          const SizedBox(height: 8),
+          _buildExamineeRow(context, appState, sheetIndex, scan, tagged, examinee),
           if (imagePath != null) ...[
             const SizedBox(height: 8),
             Align(
@@ -256,7 +313,7 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
                   MaterialPageRoute(
                     builder: (_) => ScannedImageViewerScreen(
                       imagePath: imagePath,
-                      title: 'Sheet ${sheetIndex + 1}',
+                      title: viewerTitle,
                       scoredItems: scored.items,
                     ),
                   ),
@@ -291,6 +348,71 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  /// Per-sheet student tagging. Disabled until the session has been
+  /// persisted (there's no LocalScan to attach to before then).
+  Widget _buildExamineeRow(
+    BuildContext context,
+    AppState appState,
+    int sheetIndex,
+    LocalScan? scan,
+    bool tagged,
+    ExamineeInfo? examinee,
+  ) {
+    if (scan == null) {
+      return Row(
+        children: [
+          const FaIcon(FontAwesomeIcons.userClock, size: 11, color: AppColors.textGray),
+          const SizedBox(width: 6),
+          Text('Saving to batch…', style: AppTextStyles.body(size: 9.5, color: AppColors.textGray)),
+        ],
+      );
+    }
+
+    if (tagged) {
+      return Row(
+        children: [
+          const FaIcon(FontAwesomeIcons.userCheck, size: 11, color: AppColors.primaryGreen),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              '${examinee!.displayName} · #${examinee.examineeNumber}',
+              style: AppTextStyles.body(size: 9.5, weight: FontWeight.w600),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          TextButton(
+            onPressed: () => _tagExaminee(context, appState, sheetIndex, examinee),
+            style: TextButton.styleFrom(
+              foregroundColor: AppColors.primaryGreen,
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            child: const Text('Edit', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700)),
+          ),
+        ],
+      );
+    }
+
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: OutlinedButton.icon(
+        onPressed: () => _tagExaminee(context, appState, sheetIndex, null),
+        icon: const FaIcon(FontAwesomeIcons.userPlus, size: 11, color: AppColors.darkNavy),
+        label: const Text('Tag student'),
+        style: OutlinedButton.styleFrom(
+          foregroundColor: AppColors.darkNavy,
+          side: const BorderSide(color: Color(0xFFCBD5E1)),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          minimumSize: Size.zero,
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          textStyle: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700),
+        ),
       ),
     );
   }
