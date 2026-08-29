@@ -43,4 +43,6 @@ class OmrDecoder {
 
   void saveDebugVisualization(String imagePath, OmrExamTemplate template, String outputDir, int pageIndex) =>
       _unsupported();
+
+  String? rectifyForOverlay(String imagePath, OmrExamTemplate template, String outputPath) => _unsupported();
 }

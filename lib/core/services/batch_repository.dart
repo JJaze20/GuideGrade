@@ -10,6 +10,25 @@ import '../../models/omr_scan_result.dart';
 /// (device storage). A cloud-backed implementation (Firestore + Storage, or
 /// a syncing wrapper around the local one) can be added later as a sibling
 /// class without any change to the screens that depend on this.
+/// Thrown by [BatchRepository.addScan] when [LocalBatch.isFull] is already
+/// true for the target batch — the scan-count cap ([LocalBatch.expectedCount]
+/// once [LocalBatch.hasScanLimit]) is enforced here, at the actual save
+/// path, specifically so it can't be bypassed by skipping some other
+/// screen's own check (see AppState.scanLimitBlockMessage, which exists
+/// only as an earlier, friendlier warning — this exception is the real
+/// gate). [message] is worded for direct display to the user.
+class BatchScanLimitExceededException implements Exception {
+  final int expectedCount;
+  final String message;
+
+  BatchScanLimitExceededException(this.expectedCount)
+      : message = 'This batch has reached its scan limit of $expectedCount examinees. '
+            'Please modify the batch in Batch Management if you need to increase the limit.';
+
+  @override
+  String toString() => message;
+}
+
 abstract class BatchRepository {
   /// All batches, newest activity first.
   Future<List<LocalBatch>> getBatches();
@@ -39,13 +58,37 @@ abstract class BatchRepository {
 
   /// Copies [sourceImage] into [batchId]'s container and appends a scan
   /// carrying [decoded] (and [result]/[examinee] when known at capture
-  /// time). Returns the updated batch.
+  /// time). [rectifiedImage], when given, is also copied in and is purely
+  /// display material for the graded overlay (see
+  /// [resolveScanRectifiedImage]) — never part of [decoded]/scoring. Returns
+  /// the updated batch.
+  ///
+  /// Throws [BatchScanLimitExceededException], with nothing written to
+  /// disk, if the batch is already at its scan-count cap — see
+  /// [LocalBatch.isFull]. This is the authoritative enforcement of that cap
+  /// (any UI-level check is only a friendlier early warning on top of it).
   Future<LocalBatch> addScan({
     required String batchId,
     required OmrScanResult decoded,
     required File sourceImage,
+    File? rectifiedImage,
     LocalScanResult? result,
     ExamineeInfo? examinee,
+  });
+
+  /// Replaces an existing scan's stored image/decode/result in place —
+  /// same scan id, position in the batch, and examinee tag as before; only
+  /// the photo/decode/result/rectified image actually change. Used by
+  /// "Rescan" in the batch archive, when a sheet's original capture needs
+  /// to be redone (e.g. a bad photo) without losing its place or its
+  /// student tag. Throws if [scanId] doesn't exist in [batchId].
+  Future<LocalBatch> replaceScan({
+    required String batchId,
+    required String scanId,
+    required OmrScanResult decoded,
+    required File sourceImage,
+    File? rectifiedImage,
+    LocalScanResult? result,
   });
 
   /// Attaches/overwrites the grading outcome for one already-stored scan.
@@ -65,4 +108,9 @@ abstract class BatchRepository {
 
   /// Absolute file for a stored scan image, for display.
   Future<File> resolveScanImage(String batchId, LocalScan scan);
+
+  /// Absolute file for [scan]'s perspective-corrected image, or null when
+  /// none was stored for it (see [LocalScan.rectifiedImageFileName]) or the
+  /// file is missing on disk.
+  Future<File?> resolveScanRectifiedImage(String batchId, LocalScan scan);
 }

@@ -4,6 +4,7 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
 import '../../../core/omr/omr_scorer.dart';
+import '../../../core/omr/omr_templates.dart';
 import '../../../core/routes/app_routes.dart';
 import '../../../core/state/app_state.dart';
 import '../../../models/local_batch.dart';
@@ -205,11 +206,17 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
             : null;
         // Available only once the session is persisted — that's when the
         // batch holds the LocalScan this card can be tagged against.
+        // sheetIndex is relative to *this session's* sheets; scanning onto
+        // a batch that already has scans from an earlier session means
+        // those land first in batch.scans, so sessionScanOffset must be
+        // added before indexing (see its doc comment) — otherwise this
+        // picks up an earlier session's already-tagged scan instead.
         final batch = appState.scanBatch;
+        final scanIndex = appState.sessionScanOffset + sheetIndex;
         final scan = (appState.sessionPersistedToBatch &&
                 batch != null &&
-                sheetIndex < batch.scans.length)
-            ? batch.scans[sheetIndex]
+                scanIndex < batch.scans.length)
+            ? batch.scans[scanIndex]
             : null;
         return _buildSheetCard(context, appState, sheetIndex, scored, imagePath, scan);
       },
@@ -223,8 +230,9 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
     ExamineeInfo? current,
   ) async {
     final batch = appState.scanBatch;
-    if (batch == null || sheetIndex >= batch.scans.length) return;
-    final thisId = batch.scans[sheetIndex].id;
+    final scanIndex = appState.sessionScanOffset + sheetIndex;
+    if (batch == null || scanIndex >= batch.scans.length) return;
+    final thisId = batch.scans[scanIndex].id;
     final others = <String>{
       for (final s in batch.scans)
         if (s.id != thisId) (s.examinee?.examineeNumber.trim() ?? ''),
@@ -315,6 +323,10 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
                       imagePath: imagePath,
                       title: viewerTitle,
                       scoredItems: scored.items,
+                      rectifiedImagePath: sheetIndex < appState.rectifiedImagePaths.length
+                          ? appState.rectifiedImagePaths[sheetIndex]
+                          : null,
+                      template: omrTemplates[scored.examCode],
                     ),
                   ),
                 ),

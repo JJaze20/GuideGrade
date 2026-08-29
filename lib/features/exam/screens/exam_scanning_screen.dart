@@ -332,6 +332,17 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
     // to takePicture() while corners aren't confidently, stably found —
     // not just a button-state assumption.
     if (!_readyToCapture) return;
+    // Same defensive re-check for the batch's scan-count cap: the button is
+    // already disabled once this is non-null (see build()), but this is
+    // what actually stops a capture from happening — not just its visual
+    // state. The durable, unbypassable enforcement is still
+    // BatchRepository.addScan's own check at save time; this only avoids
+    // wasting a photo the batch could never accept.
+    final limitMessage = appState.scanLimitBlockMessage;
+    if (limitMessage != null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(limitMessage)));
+      return;
+    }
 
     setState(() => _isCapturing = true);
     try {
@@ -408,8 +419,48 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
       );
       return;
     }
+    if (appState.rescanScanId != null) {
+      // Rescanning one existing sheet in an archived batch, not building a
+      // normal multi-sheet session -- overwrite it in place and return to
+      // wherever "Rescan" was tapped from, instead of Exam Results.
+      final ok = await appState.finishRescan();
+      if (!mounted) return;
+      if (!ok) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(appState.rescanSaveError ?? 'Could not save the rescan.')),
+        );
+        return;
+      }
+      Navigator.of(context).pop();
+      return;
+    }
     Navigator.of(context).pushReplacementNamed(AppRoutes.examResults);
   }
+
+  /// Bottom-panel status line, above the Scan Next / Compile Data buttons.
+  String _statusText(AppState appState) {
+    // Checked first (ahead of the capturedPages.isEmpty case below) since
+    // capacity can run out mid-session, with pages already captured —
+    // "batch full" is the more useful thing to say at that point than a
+    // sheet count, and Compile Data (saving what's captured so far) is
+    // still exactly the right next step, just not another capture.
+    if (appState.scanLimitBlockMessage != null) {
+      return 'BATCH FULL — COMPILE DATA TO SAVE WHAT YOU HAVE';
+    }
+    if (appState.capturedPages.isEmpty) return 'ALIGN SHEET AND CAPTURE';
+    if (appState.rescanScanId != null) {
+      // Capturing again while rescanning is a retake, not an additional
+      // sheet -- only the most recent photo gets saved (see
+      // AppState.finishRescan), so the count shown for a normal session
+      // would be misleading here.
+      return 'READY — LATEST PHOTO WILL BE SAVED';
+    }
+    final n = appState.capturedPages.length;
+    return '$n SHEET${n == 1 ? '' : 'S'} CAPTURED';
+  }
+
+  String _compileButtonLabel(AppState appState) =>
+      appState.rescanScanId != null ? 'Save Rescan' : 'Compile Data';
 
   static const _defaultCornerFractions = [
     (0.05, 0.05),
@@ -660,9 +711,7 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
         child: Column(
           children: [
             Text(
-              appState.capturedPages.isEmpty
-                  ? 'ALIGN SHEET AND CAPTURE'
-                  : '${appState.capturedPages.length} SHEET${appState.capturedPages.length == 1 ? '' : 'S'} CAPTURED',
+              _statusText(appState),
               style: const TextStyle(
                 color: Color(0xFF34D399),
                 fontSize: 11,
@@ -678,7 +727,8 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
                     onPressed:
                         _cameraController?.value.isInitialized == true &&
                             !_isCapturing &&
-                            _readyToCapture
+                            _readyToCapture &&
+                            appState.scanLimitBlockMessage == null
                         ? () => _capture(appState)
                         : null,
                     style: OutlinedButton.styleFrom(
@@ -716,7 +766,8 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
                   child: ElevatedButton(
                     onPressed:
                         appState.capturedPages.isNotEmpty &&
-                            !appState.isProcessingScans
+                            !appState.isProcessingScans &&
+                            !appState.isSavingRescan
                         ? () => _compileData(appState)
                         : null,
                     style: ElevatedButton.styleFrom(
@@ -729,7 +780,7 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
                         borderRadius: BorderRadius.circular(12),
                       ),
                     ),
-                    child: appState.isProcessingScans
+                    child: appState.isProcessingScans || appState.isSavingRescan
                         ? const SizedBox(
                             width: 14,
                             height: 14,
@@ -738,9 +789,9 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
                               color: Colors.white,
                             ),
                           )
-                        : const Text(
-                            'Compile Data',
-                            style: TextStyle(
+                        : Text(
+                            _compileButtonLabel(appState),
+                            style: const TextStyle(
                               fontSize: 12,
                               fontWeight: FontWeight.w700,
                             ),
@@ -771,9 +822,7 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(
-            appState.capturedPages.isEmpty
-                ? 'ALIGN SHEET AND CAPTURE'
-                : '${appState.capturedPages.length} SHEET${appState.capturedPages.length == 1 ? '' : 'S'} CAPTURED',
+            _statusText(appState),
             style: const TextStyle(
               color: Color(0xFF34D399),
               fontSize: 9,
@@ -790,7 +839,8 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
                   onPressed:
                       _cameraController?.value.isInitialized == true &&
                           !_isCapturing &&
-                          _readyToCapture
+                          _readyToCapture &&
+                          appState.scanLimitBlockMessage == null
                       ? () => _capture(appState)
                       : null,
                   style: OutlinedButton.styleFrom(
@@ -829,7 +879,8 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
                 child: ElevatedButton(
                   onPressed:
                       appState.capturedPages.isNotEmpty &&
-                          !appState.isProcessingScans
+                          !appState.isProcessingScans &&
+                          !appState.isSavingRescan
                       ? () => _compileData(appState)
                       : null,
                   style: ElevatedButton.styleFrom(
@@ -843,7 +894,7 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
                       borderRadius: BorderRadius.circular(10),
                     ),
                   ),
-                  child: appState.isProcessingScans
+                  child: appState.isProcessingScans || appState.isSavingRescan
                       ? const SizedBox(
                           width: 12,
                           height: 12,
@@ -852,9 +903,9 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
                             color: Colors.white,
                           ),
                         )
-                      : const Text(
-                          'Compile Data',
-                          style: TextStyle(
+                      : Text(
+                          _compileButtonLabel(appState),
+                          style: const TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w700,
                           ),

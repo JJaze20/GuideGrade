@@ -392,6 +392,103 @@ class OmrDecoder {
     }
   }
 
+  /// Produces a perspective-corrected COLOR copy of [imagePath], saved to
+  /// [outputPath], for UI display only (e.g. drawing a per-item graded
+  /// overlay at each [BubblePos]'s exact fractional page position — see
+  /// ScannedImageViewerScreen). Returns [outputPath] on success, or null if
+  /// the sheet's corners couldn't be found in this photo. (Returns a path,
+  /// not a `dart:io` `File`, only so this method's signature can be mirrored
+  /// in omr_decoder_web.dart without needing a dart:io import there — that
+  /// file must stay import-free of dart:io/dart:ffi to keep `flutter build
+  /// web` compiling.)
+  ///
+  /// Deliberately entirely separate from [decode]: this does its own
+  /// `imread`, its own grayscale conversion, and its own
+  /// [_orientAndFindCorners] call rather than sharing any Mat or
+  /// intermediate value with a `decode()` run — so this method cannot, even
+  /// in principle, change what `decode()` reads off a sheet. It exists
+  /// purely so a caller can additionally have a display-quality rectified
+  /// image; it plays no part in scoring. (A prior attempt at this same
+  /// overlay feature instead added a color-warp branch *inside* `decode()`
+  /// itself, sharing its corner search — that was reverted after the user
+  /// reported a possible accuracy regression that was never root-caused.
+  /// Keeping this fully outside `decode()` removes that risk by
+  /// construction, at the cost of finding the corners twice per scan.)
+  String? rectifyForOverlay(
+    String imagePath,
+    OmrExamTemplate template,
+    String outputPath,
+  ) {
+    final src = cv.imread(imagePath);
+    try {
+      if (src.isEmpty) return null;
+      final gray = cv.cvtColor(src, cv.COLOR_BGR2GRAY);
+      try {
+        cv.Mat oriented;
+        List<cv.Point2f> corners;
+        int? rotationCode;
+        try {
+          (oriented, corners, rotationCode) = _orientAndFindCorners(
+            gray,
+            template,
+          );
+        } on StateError {
+          return null;
+        }
+        try {
+          // Color must be rotated the same way [oriented] was, so the
+          // corners found against the (possibly rotated) grayscale image
+          // still line up with what gets warped here.
+          final orientedSrc = rotationCode == null
+              ? src
+              : cv.rotate(src, rotationCode);
+          try {
+            final canonicalWidth = (template.pageWidthPt * _canonicalPxPerPt)
+                .round();
+            final canonicalHeight =
+                (template.pageHeightPt * _canonicalPxPerPt).round();
+            final dstCorners = cv.VecPoint2f.fromList([
+              for (final corner in template.cornerMarkers)
+                cv.Point2f(
+                  corner.xFrac * canonicalWidth,
+                  corner.yFrac * canonicalHeight,
+                ),
+            ]);
+            final srcCorners = cv.VecPoint2f.fromList(corners);
+            final transform = cv.getPerspectiveTransform2f(
+              srcCorners,
+              dstCorners,
+            );
+            try {
+              final warped = cv.warpPerspective(orientedSrc, transform, (
+                canonicalWidth,
+                canonicalHeight,
+              ));
+              try {
+                cv.imwrite(outputPath, warped);
+                return outputPath;
+              } finally {
+                warped.dispose();
+              }
+            } finally {
+              transform.dispose();
+              srcCorners.dispose();
+              dstCorners.dispose();
+            }
+          } finally {
+            if (!identical(orientedSrc, src)) orientedSrc.dispose();
+          }
+        } finally {
+          if (!identical(oriented, gray)) oriented.dispose();
+        }
+      } finally {
+        gray.dispose();
+      }
+    } finally {
+      src.dispose();
+    }
+  }
+
   /// Debug-only: writes two annotated JPEGs to [outputDir] — the detected
   /// corner markers drawn on the original photo, and the full expected
   /// bubble grid drawn on the warped/aligned image — so a misread sheet can

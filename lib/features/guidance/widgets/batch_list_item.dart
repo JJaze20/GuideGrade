@@ -68,15 +68,17 @@ class BatchListItem extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 10),
-            Row(
+            Wrap(
+              spacing: 8,
+              runSpacing: 6,
               children: [
                 _buildInfoChip('${batch.examTitle} (${batch.examCode})'),
-                const SizedBox(width: 8),
-                _buildInfoChip('${batch.scanCount}/${batch.expectedCount} sheets'),
-                if (batch.resultsAvailable) ...[
-                  const SizedBox(width: 8),
-                  _buildInfoChip('Results ✓'),
-                ],
+                _buildInfoChip(
+                  '${batch.scanCount}/${batch.expectedCount} sheets',
+                  emphasized: batch.isFull,
+                ),
+                if (batch.isFull) _buildInfoChip('FULL', emphasized: true),
+                if (batch.resultsAvailable) _buildInfoChip('Results ✓'),
               ],
             ),
           ],
@@ -130,16 +132,20 @@ class BatchListItem extends StatelessWidget {
     );
   }
 
-  Widget _buildInfoChip(String label) {
+  Widget _buildInfoChip(String label, {bool emphasized = false}) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
-        color: AppColors.lightBg,
+        color: emphasized ? const Color(0xFFFEE2E2) : AppColors.lightBg,
         borderRadius: BorderRadius.circular(16),
       ),
       child: Text(
         label,
-        style: AppTextStyles.body(size: 9.5, color: AppColors.textGray),
+        style: AppTextStyles.body(
+          size: 9.5,
+          weight: emphasized ? FontWeight.w700 : FontWeight.w400,
+          color: emphasized ? const Color(0xFF991B1B) : AppColors.textGray,
+        ),
       ),
     );
   }

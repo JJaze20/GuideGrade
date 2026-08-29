@@ -107,17 +107,25 @@ class _EditBatchScreenState extends State<EditBatchScreen> {
 
   bool _isFieldEditable(String fieldName) {
     if (_batch == null) return false;
-    
+
     switch (_batch!.status) {
       case 'Draft':
         // All fields editable except exam linkage
         return fieldName != 'exam';
       case 'Active':
-        // Only description and actualCount editable
-        return fieldName == 'description' || fieldName == 'actualCount';
+        // Description, plus the scan-limit field itself -- this is
+        // deliberately still editable once scanning has started, since
+        // raising it is exactly how a full batch's cap gets increased (see
+        // LocalBatch.hasScanLimit/isFull). Was previously checking for
+        // 'actualCount', which this screen never passes, so this was
+        // silently unreachable and Expected Count went read-only the
+        // moment a batch left Draft.
+        return fieldName == 'description' || fieldName == 'expectedCount';
       case 'Completed':
-        // Only description editable
-        return fieldName == 'description';
+        // Same reasoning as Active -- a batch already marked Completed
+        // (e.g. by the expected-count-reached prompt) still needs its cap
+        // raisable if more sheets show up.
+        return fieldName == 'description' || fieldName == 'expectedCount';
       case 'Archived':
         // Nothing editable
         return false;
@@ -226,6 +234,13 @@ class _EditBatchScreenState extends State<EditBatchScreen> {
                       controller: _expectedCountController,
                       required: true,
                       enabled: _isFieldEditable('expectedCount'),
+                      // This is a hard scan-count cap (LocalBatch.isFull),
+                      // not just an estimate any more -- it must never be
+                      // droppable below scans already saved, or a batch
+                      // that already holds N scans would end up unable to
+                      // even display its own existing sheets as "within
+                      // the limit".
+                      minValue: _batch!.scanCount,
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -322,6 +337,10 @@ class _EditBatchScreenState extends State<EditBatchScreen> {
     required TextEditingController controller,
     bool required = false,
     bool enabled = true,
+    // Rejects any value below this (in addition to the required/positive
+    // checks below) — used for Expected Count so it can never drop below
+    // scans already saved (see the scan-limit cap this field enforces).
+    int? minValue,
   }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -369,6 +388,9 @@ class _EditBatchScreenState extends State<EditBatchScreen> {
                   final number = int.tryParse(value);
                   if (number == null || number <= 0) {
                     return 'Enter a valid number';
+                  }
+                  if (minValue != null && number < minValue) {
+                    return 'Must be at least $minValue (scans already saved)';
                   }
                   return null;
                 }

@@ -161,6 +161,7 @@ class LocalBatchRepository implements BatchRepository {
     required String batchId,
     required OmrScanResult decoded,
     required File sourceImage,
+    File? rectifiedImage,
     LocalScanResult? result,
     ExamineeInfo? examinee,
   }) async {
@@ -168,6 +169,14 @@ class LocalBatchRepository implements BatchRepository {
     final batch = await _readManifest(_manifestFile(root, batchId));
     if (batch == null) {
       throw StateError('Batch $batchId does not exist.');
+    }
+    // Checked before any file I/O below, so a rejected scan leaves nothing
+    // behind (no orphaned image, no partial state) — a failed/blocked scan
+    // must never consume a slot. This is the real cap; any check elsewhere
+    // (AppState.scanLimitBlockMessage, a disabled button) is only a
+    // friendlier warning layered on top of it.
+    if (batch.isFull) {
+      throw BatchScanLimitExceededException(batch.expectedCount);
     }
 
     final now = DateTime.now();
@@ -179,9 +188,17 @@ class LocalBatchRepository implements BatchRepository {
     final relPath = '$_imagesDirName/$scanId$ext';
     await sourceImage.copy('${_batchDir(root, batchId).path}/$relPath');
 
+    String? rectifiedRelPath;
+    if (rectifiedImage != null && rectifiedImage.existsSync()) {
+      final rectifiedExt = _extensionOf(rectifiedImage.path);
+      rectifiedRelPath = '$_imagesDirName/${scanId}_rectified$rectifiedExt';
+      await rectifiedImage.copy('${_batchDir(root, batchId).path}/$rectifiedRelPath');
+    }
+
     final scan = LocalScan(
       id: scanId,
       imageFileName: relPath,
+      rectifiedImageFileName: rectifiedRelPath,
       capturedAt: now,
       decoded: decoded,
       result: result,
@@ -194,6 +211,63 @@ class LocalBatchRepository implements BatchRepository {
       status: batch.status == 'Draft' ? 'Active' : batch.status,
       updatedAt: now,
     );
+    await _writeManifest(updated);
+    return updated;
+  }
+
+  @override
+  Future<LocalBatch> replaceScan({
+    required String batchId,
+    required String scanId,
+    required OmrScanResult decoded,
+    required File sourceImage,
+    File? rectifiedImage,
+    LocalScanResult? result,
+  }) async {
+    final root = await _root();
+    final batch = await _readManifest(_manifestFile(root, batchId));
+    if (batch == null) {
+      throw StateError('Batch $batchId does not exist.');
+    }
+    final existingIndex = batch.scans.indexWhere((s) => s.id == scanId);
+    if (existingIndex == -1) {
+      throw StateError('Scan $scanId does not exist in batch $batchId.');
+    }
+    final existing = batch.scans[existingIndex];
+    final batchDirPath = _batchDir(root, batchId).path;
+
+    // Overwrite the same relative path the original scan used, so nothing
+    // else that already references imageFileName (this LocalScan itself)
+    // needs to change, and no orphaned file is left behind.
+    await sourceImage.copy('$batchDirPath/${existing.imageFileName}');
+
+    String? rectifiedRelPath;
+    if (rectifiedImage != null && rectifiedImage.existsSync()) {
+      // Reuse the previous rectified filename if one already existed, so a
+      // repeated rescan doesn't accumulate a new file every time.
+      rectifiedRelPath = existing.rectifiedImageFileName ??
+          '$_imagesDirName/${scanId}_rectified${_extensionOf(rectifiedImage.path)}';
+      await rectifiedImage.copy('$batchDirPath/$rectifiedRelPath');
+    }
+    // else: no rectified image this time -- deliberately left null rather
+    // than kept, so a stale rectified photo from the *previous* capture is
+    // never paired with this rescan's fresh marks (see
+    // ScannedImageViewerScreen's _hasOverlay, which just falls back to the
+    // plain photo when this is null).
+
+    final updatedScan = LocalScan(
+      id: existing.id,
+      imageFileName: existing.imageFileName,
+      rectifiedImageFileName: rectifiedRelPath,
+      capturedAt: DateTime.now(),
+      decoded: decoded,
+      result: result,
+      examinee: existing.examinee, // same physical sheet -- keep its tag
+    );
+
+    final scans = [...batch.scans];
+    scans[existingIndex] = updatedScan;
+    final updated = batch.copyWith(scans: scans, updatedAt: DateTime.now());
     await _writeManifest(updated);
     return updated;
   }
@@ -243,6 +317,15 @@ class LocalBatchRepository implements BatchRepository {
   Future<File> resolveScanImage(String batchId, LocalScan scan) async {
     final root = await _root();
     return File('${_batchDir(root, batchId).path}/${scan.imageFileName}');
+  }
+
+  @override
+  Future<File?> resolveScanRectifiedImage(String batchId, LocalScan scan) async {
+    final name = scan.rectifiedImageFileName;
+    if (name == null) return null;
+    final root = await _root();
+    final file = File('${_batchDir(root, batchId).path}/$name');
+    return file.existsSync() ? file : null;
   }
 
   String _extensionOf(String path) {

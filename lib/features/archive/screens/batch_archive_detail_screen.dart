@@ -6,6 +6,8 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
 import '../../../core/omr/omr_scorer.dart';
+import '../../../core/omr/omr_templates.dart';
+import '../../../core/routes/app_routes.dart';
 import '../../../core/state/app_state.dart';
 import '../../../models/local_batch.dart';
 import '../../../shared/widgets/examinee_dialog.dart';
@@ -28,6 +30,7 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
   bool _loading = true;
   LocalBatch? _batch;
   final Map<String, File> _images = {};
+  final Map<String, File> _rectifiedImages = {};
 
   @override
   void didChangeDependencies() {
@@ -43,6 +46,8 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
     if (batch != null) {
       for (final scan in batch.scans) {
         _images[scan.id] = await repo.resolveScanImage(batch.id, scan);
+        final rectified = await repo.resolveScanRectifiedImage(batch.id, scan);
+        if (rectified != null) _rectifiedImages[scan.id] = rectified;
       }
     }
     if (!mounted) return;
@@ -151,6 +156,13 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
           _kv('Batch Code', batch.batchCode),
           _kv('Exam Type', '${batch.examTitle} (${batch.examCode})'),
           _kv('Status', batch.status),
+          _kv(
+            'Scanned',
+            batch.hasScanLimit
+                ? '${batch.scanCount} / ${batch.expectedCount}${batch.isFull ? '  ·  FULL' : ''}'
+                : '${batch.scanCount}',
+          ),
+          if (batch.hasScanLimit) _kv('Remaining', '${batch.remainingCapacity}'),
           _kv('Saved', _fmtDateTime(batch.updatedAt)),
           _kv('Created', _fmtDateTime(batch.createdAt)),
         ],
@@ -178,31 +190,53 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
     final avg = batch.averagePercentage;
     return Row(
       children: [
-        Expanded(child: _stat('SCANS', '${batch.scanCount}')),
+        Expanded(
+          child: _stat(
+            'SCANS',
+            batch.hasScanLimit ? '${batch.scanCount}/${batch.expectedCount}' : '${batch.scanCount}',
+            full: batch.isFull,
+          ),
+        ),
         const SizedBox(width: 8),
         Expanded(child: _stat('GRADED', '${batch.gradedCount}')),
         const SizedBox(width: 8),
         Expanded(child: _stat('AVG %', avg == null ? '—' : avg.toStringAsFixed(0))),
         const SizedBox(width: 8),
-        Expanded(child: _stat('EXPECTED', '${batch.expectedCount}')),
+        Expanded(
+          child: _stat(
+            'REMAINING',
+            batch.hasScanLimit ? '${batch.remainingCapacity}' : '—',
+            full: batch.isFull,
+          ),
+        ),
       ],
     );
   }
 
-  Widget _stat(String label, String value) {
+  Widget _stat(String label, String value, {bool full = false}) {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 10),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: full ? const Color(0xFFFEE2E2) : Colors.white,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.cardBorder),
+        border: Border.all(color: full ? const Color(0xFFFCA5A5) : AppColors.cardBorder),
       ),
       child: Column(
         children: [
-          Text(label, style: const TextStyle(fontSize: 8, fontWeight: FontWeight.w800, color: AppColors.textGray)),
+          Text(label,
+              style: TextStyle(
+                fontSize: 8,
+                fontWeight: FontWeight.w800,
+                color: full ? const Color(0xFF991B1B) : AppColors.textGray,
+              )),
           const SizedBox(height: 2),
           Text(value,
-              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800, fontFamily: 'monospace', color: AppColors.darkNavy)),
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w800,
+                fontFamily: 'monospace',
+                color: full ? const Color(0xFF991B1B) : AppColors.darkNavy,
+              )),
         ],
       ),
     );
@@ -258,6 +292,40 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
           examinee: res.cleared ? null : res.info,
         );
     if (!mounted) return;
+    await _load();
+  }
+
+  /// Redoes one sheet's capture in place — its existing photo, decode, and
+  /// result are replaced (its position in the batch and student tag are
+  /// not); for a sheet whose original scan came out bad. Opens the normal
+  /// scanner UI, bound to just this one scan via [AppState.startRescan].
+  Future<void> _rescanSheet(LocalBatch batch, LocalScan scan, int index) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Rescan This Sheet?'),
+        content: Text(
+          'Sheet ${index + 1}\'s current photo and result will be replaced with a new capture. '
+          'This can\'t be undone.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Rescan')),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    final appState = AppStateScope.of(context);
+    appState.startRescan(batch, scan);
+    await Navigator.of(context).pushNamed(AppRoutes.examScanning);
+    // Backed out of the scanner (its close button just pops) without
+    // finishing — AppState.finishRescan already clears this on success, so
+    // a value still set here means the rescan needs to be abandoned.
+    if (appState.rescanScanId != null) appState.cancelRescan();
+    if (!mounted) return;
+    // Whether it was saved or the user backed out mid-capture, refresh from
+    // disk so the card reflects whatever actually happened.
     await _load();
   }
 
@@ -326,7 +394,10 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
                   style: AppTextStyles.body(size: 9, color: AppColors.textGray),
                 ),
                 const SizedBox(height: 6),
-                Row(
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 6,
+                  crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     OutlinedButton.icon(
                       onPressed: () => _tagExaminee(batch, scan, index),
@@ -342,7 +413,18 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
                         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       ),
                     ),
-                    const SizedBox(width: 8),
+                    OutlinedButton.icon(
+                      onPressed: () => _rescanSheet(batch, scan, index),
+                      icon: const FaIcon(FontAwesomeIcons.arrowRotateRight, size: 10, color: AppColors.darkNavy),
+                      label: const Text('Rescan', style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w700)),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColors.darkNavy,
+                        side: const BorderSide(color: Color(0xFFCBD5E1)),
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                    ),
                     if (file != null)
                       TextButton.icon(
                         onPressed: () => Navigator.of(context).push(
@@ -353,6 +435,8 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
                                   ? 'Sheet ${index + 1} — ${examinee.displayName}'
                                   : 'Sheet ${index + 1}',
                               scoredItems: scored.items,
+                              rectifiedImagePath: _rectifiedImages[scan.id]?.path,
+                              template: omrTemplates[scored.examCode],
                             ),
                           ),
                         ),

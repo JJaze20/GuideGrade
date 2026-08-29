@@ -247,7 +247,11 @@ class _ExamSetupScreenState extends State<ExamSetupScreen> {
 
   Widget _buildBatchTile(LocalBatch batch) {
     final selected = _selected?.id == batch.id;
+    final full = batch.isFull;
     return InkWell(
+      // Still selectable when full -- launching then shows exactly why it
+      // can't be scanned into, pointing at Batch Management, rather than
+      // silently hiding the batch or its reason.
       onTap: () => setState(() => _selected = batch),
       borderRadius: BorderRadius.circular(10),
       child: Container(
@@ -287,6 +291,15 @@ class _ExamSetupScreenState extends State<ExamSetupScreen> {
                 ],
               ),
             ),
+            if (full) ...[
+              const SizedBox(width: 6),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(color: const Color(0xFFFEE2E2), borderRadius: BorderRadius.circular(20)),
+                child: const Text('FULL',
+                    style: TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: Color(0xFF991B1B))),
+              ),
+            ],
           ],
         ),
       ),
@@ -346,7 +359,26 @@ class _ExamSetupScreenState extends State<ExamSetupScreen> {
   }
 
   Future<void> _launchScanner(AppState appState) async {
-    if (_selected == null) return;
+    final selected = _selected;
+    if (selected == null) return;
+
+    if (selected.isFull) {
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Batch Full'),
+          content: Text(
+            'This batch has reached its scan limit of ${selected.expectedCount} examinees. '
+            'Please modify the batch in Batch Management if you need to increase the limit.',
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('OK')),
+          ],
+        ),
+      );
+      return;
+    }
+    if (!mounted) return;
 
     if (appState.answerKeyStatus != 'Loaded Success') {
       final addKeyFirst = await _showNoAnswerKeyDialog();
@@ -359,7 +391,7 @@ class _ExamSetupScreenState extends State<ExamSetupScreen> {
     }
 
     appState.resetScanProgress();
-    appState.startScanSession(_selected!);
+    appState.startScanSession(selected);
     if (!mounted) return;
     Navigator.of(context).pushNamed(AppRoutes.examScanning);
   }

@@ -102,6 +102,28 @@ class LocalBatch {
 
   int get scanCount => scans.length;
 
+  /// Whether [expectedCount] is enforced as a hard cap on how many scans
+  /// this batch can hold. A batch with no estimate set (0, or negative from
+  /// bad data) has no cap -- [expectedCount] used to be advisory-only, so
+  /// this keeps that behavior for any batch that predates the scan-limit
+  /// feature or was never given a real estimate.
+  bool get hasScanLimit => expectedCount > 0;
+
+  /// How many more scans this batch can accept right now, or null when
+  /// [hasScanLimit] is false. Always derived from the live [scans] list
+  /// (never a separately-tracked counter), so it's automatically correct
+  /// after a reload, an app restart, a scan being added/replaced, or the
+  /// batch being edited -- there's nothing else that needs to stay in sync.
+  int? get remainingCapacity {
+    if (!hasScanLimit) return null;
+    final remaining = expectedCount - scanCount;
+    return remaining < 0 ? 0 : remaining;
+  }
+
+  /// True once [scanCount] has reached [expectedCount], for a batch with a
+  /// cap. Always false when [hasScanLimit] is false.
+  bool get isFull => hasScanLimit && scanCount >= expectedCount;
+
   /// True once at least one scan in this batch has been graded.
   bool get resultsAvailable => scans.any((s) => s.result != null);
 
@@ -210,6 +232,13 @@ class LocalScan {
   /// (e.g. "images/s_1723552000000_0.jpg").
   final String imageFileName;
 
+  /// Path to a perspective-corrected copy of [imageFileName], relative to
+  /// the batch directory, used only to draw the per-item graded overlay in
+  /// ScannedImageViewerScreen — null when none was produced (rectification
+  /// failed for this sheet, or it predates this field). Purely display —
+  /// [decoded] is never derived from this image.
+  final String? rectifiedImageFileName;
+
   final DateTime capturedAt;
 
   /// What the decoder read off this sheet.
@@ -226,6 +255,7 @@ class LocalScan {
   const LocalScan({
     required this.id,
     required this.imageFileName,
+    this.rectifiedImageFileName,
     required this.capturedAt,
     required this.decoded,
     this.result,
@@ -240,6 +270,7 @@ class LocalScan {
       LocalScan(
         id: id,
         imageFileName: imageFileName,
+        rectifiedImageFileName: rectifiedImageFileName,
         capturedAt: capturedAt,
         decoded: decoded,
         result: result ?? this.result,
@@ -249,6 +280,7 @@ class LocalScan {
   Map<String, dynamic> toJson() => {
         'id': id,
         'imageFileName': imageFileName,
+        'rectifiedImageFileName': rectifiedImageFileName,
         'capturedAt': capturedAt.toIso8601String(),
         'decoded': decoded.toJson(),
         'result': result?.toJson(),
@@ -258,6 +290,7 @@ class LocalScan {
   factory LocalScan.fromJson(Map<String, dynamic> json) => LocalScan(
         id: json['id'] as String,
         imageFileName: json['imageFileName'] as String,
+        rectifiedImageFileName: json['rectifiedImageFileName'] as String?,
         capturedAt: DateTime.parse(json['capturedAt'] as String),
         decoded: OmrScanResult.fromJson(json['decoded'] as Map<String, dynamic>),
         result: json['result'] == null
