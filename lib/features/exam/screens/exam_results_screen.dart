@@ -1,4 +1,3 @@
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
@@ -6,27 +5,20 @@ import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
 import '../../../core/omr/omr_scorer.dart';
 import '../../../core/routes/app_routes.dart';
-import '../../../core/services/firestore_service.dart';
 import '../../../core/state/app_state.dart';
 import '../../../models/omr_scan_result.dart';
-import '../../../models/result.dart';
 import '../../../shared/widgets/primary_button.dart';
 import 'scanned_image_viewer_screen.dart';
 
-/// Exam Results — mirrors SCREENS.AT_RESULTS.
+/// Exam Results — shows what the OMR decoder read off each scanned sheet in
+/// this session (AppState.scannedResults), and persists the whole session
+/// into its bound batch: every captured image is copied into the batch
+/// container and each sheet is graded against the loaded Final answer key
+/// (see [AppState.persistCapturedSessionToBatch]). The batch then becomes
+/// the durable record, visible in the Archive.
 ///
-/// Shows what the OMR decoder read off each scanned sheet in this session
-/// (AppState.scannedResults), and — when this session has a real
-/// exam+batch identity plus a non-personal scan reference (see
-/// AppState.setScanSession, populated by Exam Setup) and a usable Final
-/// answer key was loaded — persists one ResultModel for this scan to
-/// Firestore, which becomes the durable record (survives navigating away
-/// and coming back, unlike AppState.scannedResults, which is only ever
-/// in-memory for this run).
-///
-/// Persistence happens once, from an explicit post-frame method
-/// ([_persistResults]) guarded against repeat calls — never as a side
-/// effect inside build().
+/// Persistence runs once, from a post-frame callback, guarded inside
+/// AppState against repeat calls — never as a side effect of build().
 class ExamResultsScreen extends StatefulWidget {
   const ExamResultsScreen({super.key});
 
@@ -35,139 +27,58 @@ class ExamResultsScreen extends StatefulWidget {
 }
 
 class _ExamResultsScreenState extends State<ExamResultsScreen> {
-  final FirestoreService _firestoreService = FirestoreService();
-
-  bool _persistAttempted = false;
-  bool _isPersisting = false;
-  String? _persistError;
-  ResultModel? _persistedResult;
-  ResultPersistOutcome? _persistOutcome;
+  bool _persistTriggered = false;
+  bool _completionPrompted = false;
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    if (!_persistAttempted) {
-      _persistAttempted = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) => _persistResults());
-    }
+    if (_persistTriggered) return;
+    _persistTriggered = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _persist());
   }
 
-  /// One-time, explicit persistence step. Never called from build() --
-  /// triggered once via the post-frame callback in [didChangeDependencies],
-  /// and guarded by [_isPersisting] against overlapping/duplicate calls.
-  Future<void> _persistResults() async {
-    if (_isPersisting) return;
+  Future<void> _persist() async {
     if (!mounted) return;
     final appState = AppStateScope.of(context);
-
-    // No real exam/batch identity for this session (e.g. a manual/local-only
-    // run) -- nothing durable to save. The in-memory scannedResults still
-    // render below as before.
-    if (!appState.hasRealScanSession) return;
-
-    final examId = appState.scanExamId!;
-    final batchId = appState.scanBatchId!;
-    final scanRef = appState.scanRef!;
-
-    // Already persisted earlier in this same app run (e.g. the user left
-    // this screen and came back) -- just re-display it, don't re-score or
-    // re-increment actualCount.
-    if (appState.scannedResults.isEmpty) {
-      final existing = await _firestoreService.getResultById(
-        ResultModel.buildId(examId: examId, batchId: batchId, scanRef: scanRef),
-      );
-      if (!mounted) return;
-      if (existing != null) setState(() => _persistedResult = existing);
-      return;
-    }
-
-    final answerKey = appState.answerKeys[appState.activeExamCode];
-    if (answerKey == null) {
-      setState(() => _persistError = 'No Final answer key was loaded for this session — results were not saved.');
-      return;
-    }
-
-    setState(() => _isPersisting = true);
-    try {
-      var rawScore = 0;
-      var totalGraded = 0;
-      for (final r in appState.scannedResults) {
-        final scored = scoreOmrResult(r, answerKey);
-        rawScore += scored.rawScore;
-        totalGraded += scored.totalGraded;
-      }
-      final totalItems = appState.scanTotalItems ?? totalGraded;
-      final percentage = totalGraded == 0 ? 0.0 : rawScore / totalGraded * 100;
-      final currentUser = FirebaseAuth.instance.currentUser;
-
-      final result = ResultModel(
-        resultId: ResultModel.buildId(examId: examId, batchId: batchId, scanRef: scanRef),
-        examId: examId,
-        examCode: appState.activeExamCode,
-        batchId: batchId,
-        scanRef: scanRef,
-        rawScore: rawScore,
-        totalGraded: totalGraded,
-        totalItems: totalItems,
-        percentage: percentage,
-        status: 'Graded',
-        scannedAt: DateTime.now(),
-        processedByUid: currentUser?.uid ?? '',
-        processedByName: currentUser?.displayName ?? 'Unknown',
-      );
-
-      final outcome = await _firestoreService.persistResult(result);
-      if (!mounted) return;
-      setState(() {
-        _persistedResult = result;
-        _persistOutcome = outcome;
-        _isPersisting = false;
-      });
-
-      if (outcome == ResultPersistOutcome.created) {
-        await _maybePromptBatchCompletion(batchId);
-      }
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _persistError = 'Could not save the result: $e';
-        _isPersisting = false;
-      });
-    }
+    await appState.persistCapturedSessionToBatch();
+    if (!mounted) return;
+    await _maybePromptBatchCompletion(appState);
   }
 
-  /// After a brand-new result pushes a batch's actualCount up to its
-  /// expectedCount, ask staff to confirm marking it Completed -- never
-  /// flips the status automatically, since expectedCount is only ever a
-  /// staff estimate.
-  Future<void> _maybePromptBatchCompletion(String batchId) async {
-    final batch = await _firestoreService.getBatchById(batchId);
-    if (batch == null || !mounted) return;
-    if (batch.status == 'Active' && batch.expectedCount > 0 && batch.actualCount >= batch.expectedCount) {
-      final confirm = await showDialog<bool>(
-        context: context,
-        builder: (dialogContext) => AlertDialog(
-          title: const Text('Batch Complete?'),
-          content: Text(
-            'All expected sheets (${batch.expectedCount}) have been scanned for batch '
-            '${batch.batchCode}. Mark this batch as Completed?',
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.of(dialogContext).pop(false), child: const Text('Not Yet')),
-            TextButton(onPressed: () => Navigator.of(dialogContext).pop(true), child: const Text('Mark Completed')),
-          ],
+  /// After the session is saved, if the batch has now reached its expected
+  /// sheet count, offer to mark it Completed — never flips it automatically,
+  /// since expectedCount is only a staff estimate.
+  Future<void> _maybePromptBatchCompletion(AppState appState) async {
+    if (_completionPrompted) return;
+    final batch = appState.scanBatch;
+    if (batch == null || !appState.sessionPersistedToBatch) return;
+    if (!(batch.isActive && batch.expectedCount > 0 && batch.scanCount >= batch.expectedCount)) {
+      return;
+    }
+    _completionPrompted = true;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Batch Complete?'),
+        content: Text(
+          'All expected sheets (${batch.expectedCount}) have been scanned for '
+          '${batch.batchCode}. Mark this batch as Completed?',
         ),
-      );
-      if (confirm == true) {
-        await _firestoreService.completeBatch(batchId);
-      }
+        actions: [
+          TextButton(onPressed: () => Navigator.of(dialogContext).pop(false), child: const Text('Not Yet')),
+          TextButton(onPressed: () => Navigator.of(dialogContext).pop(true), child: const Text('Mark Completed')),
+        ],
+      ),
+    );
+    if (confirm == true) {
+      await appState.batchRepository.updateBatch(batch.copyWith(status: 'Completed'));
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final appState = AppStateScope.of(context);
-    final results = appState.scannedResults;
 
     return Scaffold(
       backgroundColor: AppColors.lightBg,
@@ -175,56 +86,68 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
         backgroundColor: Colors.white,
         foregroundColor: AppColors.textDark,
         elevation: 0.5,
-        title: Text('Scan Results — ${appState.activeExamCode}', style: AppTextStyles.heading(size: 13)),
+        title: Text(
+          'Scan Results — ${appState.activeExamCode}',
+          style: AppTextStyles.heading(size: 13),
+        ),
       ),
       body: SafeArea(
-        child: Column(
-          children: [
-            _buildPersistenceBanner(appState),
-            Expanded(
-              child: results.isEmpty
-                  ? (_persistedResult != null ? _buildPersistedSummary(_persistedResult!) : _buildEmptyState())
-                  : _buildResultsList(results, appState),
-            ),
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: PrimaryButton(
-                label: 'RETURN HOME',
-                color: AppColors.darkNavy,
-                onPressed: () => Navigator.of(context).pushNamedAndRemoveUntil(AppRoutes.staffHome, (r) => false),
-              ),
-            ),
-          ],
+        child: ListenableBuilder(
+          listenable: appState,
+          builder: (context, _) {
+            final results = appState.scannedResults;
+            return Column(
+              children: [
+                _buildPersistenceBanner(appState),
+                Expanded(
+                  child: results.isEmpty
+                      ? _buildEmptyState()
+                      : _buildResultsList(results, appState),
+                ),
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: PrimaryButton(
+                    label: 'RETURN HOME',
+                    color: AppColors.darkNavy,
+                    onPressed: () =>
+                        Navigator.of(context).pushNamedAndRemoveUntil(AppRoutes.staffHome, (r) => false),
+                  ),
+                ),
+              ],
+            );
+          },
         ),
       ),
     );
   }
 
   Widget _buildPersistenceBanner(AppState appState) {
-    if (!appState.hasRealScanSession) return const SizedBox.shrink();
+    if (appState.scanBatch == null) return const SizedBox.shrink();
 
     String message;
     Color background;
     Color foreground;
-    FaIconData icon;
+    IconData icon;
 
-    if (_isPersisting) {
-      message = 'Saving result…';
+    if (appState.isSavingToBatch) {
+      message = 'Saving scans and results to ${appState.scanBatchCode}…';
       background = AppColors.lightBg;
       foreground = AppColors.textGray;
-      icon = FontAwesomeIcons.cloudArrowUp;
-    } else if (_persistError != null) {
-      message = _persistError!;
+      icon = Icons.cloud_upload_outlined;
+    } else if (appState.batchSaveError != null) {
+      message = appState.batchSaveError!;
       background = const Color(0xFFFEE2E2);
       foreground = const Color(0xFF991B1B);
-      icon = FontAwesomeIcons.triangleExclamation;
-    } else if (_persistedResult != null) {
-      message = _persistOutcome == ResultPersistOutcome.updated
-          ? 'Existing result updated for this scan.'
-          : 'Result saved for this scan.';
+      icon = Icons.warning_amber_rounded;
+    } else if (appState.sessionPersistedToBatch) {
+      final g = appState.savedGradedCount;
+      final n = appState.savedScanCount;
+      message = g == n
+          ? 'Saved $n scan${n == 1 ? '' : 's'} to ${appState.scanBatchCode} — all graded.'
+          : 'Saved $n scan${n == 1 ? '' : 's'} to ${appState.scanBatchCode} ($g graded).';
       background = AppColors.emerald100;
       foreground = const Color(0xFF065F46);
-      icon = FontAwesomeIcons.circleCheck;
+      icon = Icons.check_circle_outline;
     } else {
       return const SizedBox.shrink();
     }
@@ -236,34 +159,15 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
       decoration: BoxDecoration(color: background, borderRadius: BorderRadius.circular(10)),
       child: Row(
         children: [
-          FaIcon(icon, size: 14, color: foreground),
+          Icon(icon, size: 15, color: foreground),
           const SizedBox(width: 8),
-          Expanded(child: Text(message, style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w600, color: foreground))),
+          Expanded(
+            child: Text(
+              message,
+              style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w600, color: foreground),
+            ),
+          ),
         ],
-      ),
-    );
-  }
-
-  Widget _buildPersistedSummary(ResultModel result) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const FaIcon(FontAwesomeIcons.fileCircleCheck, color: AppColors.primaryGreen, size: 28),
-            const SizedBox(height: 12),
-            Text(
-              '${result.rawScore}/${result.totalGraded} · ${result.percentage.toStringAsFixed(0)}%',
-              style: AppTextStyles.heading(size: 16),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              'Already graded and saved for this scan.',
-              style: AppTextStyles.body(size: 10.5, color: AppColors.textGray),
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -291,10 +195,6 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
       itemBuilder: (context, sheetIndex) {
         final result = results[sheetIndex];
         final scored = scoreOmrResult(result, appState.answerKeys[result.examCode]);
-        // Captured photos only live in memory for the current scan session
-        // (AppState.capturedPages) -- guard against index mismatch (e.g. a
-        // persisted-only view with nothing captured this run) rather than
-        // assuming a 1:1 match with results.
         final imagePath = sheetIndex < appState.capturedPages.length
             ? appState.capturedPages[sheetIndex].path
             : null;

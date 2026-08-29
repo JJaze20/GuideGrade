@@ -2,16 +2,19 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:camera/camera.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
-import '../../models/activity_model.dart';
 import '../../models/answer_key.dart';
-import '../../models/cloud_file_model.dart';
+import '../../models/local_batch.dart';
 import '../../models/omr_scan_result.dart';
 import '../../models/user.dart';
 import '../omr/omr_decoder.dart';
+import '../omr/omr_scorer.dart';
 import '../omr/omr_templates.dart';
+import '../services/batch_repository.dart';
+import '../services/local_batch_repository.dart';
 import '../services/local_storage_service.dart';
 
 class _OmrDecodeRequest {
@@ -37,18 +40,12 @@ void _saveDebugVisualization(_DebugVizRequest request) {
 }
 
 /// A lightweight in-memory app state shared across screens via
-/// ChangeNotifierProvider-style access (kept dependency-free by
-/// using InheritedNotifier through [AppStateScope]).
-///
-/// This mirrors the mock `state` object used in the HTML prototype
-/// (recentActivities, activeExamCode, sync timestamps, etc.).
+/// [AppStateScope] (an InheritedNotifier, so no third-party state package).
 class AppState extends ChangeNotifier {
   /// The signed-in, Firestore-approved user for this session — null until a
   /// login screen successfully authorizes a sign-in (see
   /// AuthService._authorize) and cleared again on logout. [AppRoutes]'s
-  /// route guard keys off this (not just Firebase's own auth state) so a
-  /// protected screen can never be reached without having actually passed
-  /// Firestore authorization, not merely Firebase authentication.
+  /// route guard keys off this (not just Firebase's own auth state).
   UserModel? currentUser;
 
   void setCurrentUser(UserModel? user) {
@@ -56,90 +53,58 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  String activeExamCode = 'AT'; // AT | TAT | QTM
+  /// Sheet-layout lookup key for the active exam type. AT | TAT | QTM.
+  /// This alone never identifies a scan session — see [scanBatch].
+  String activeExamCode = 'AT';
 
   /// Manually-entered answer keys (see AnswerKeyEntryScreen), one per exam
-  /// code that's had a key saved. Also where the Firestore Final answer key
-  /// ends up after Exam Setup loads and converts it (see
-  /// core/omr/answer_key_adapter.dart) -- the scorer only ever reads this
-  /// map, regardless of which path populated it.
+  /// code that's had a key saved. The scorer only ever reads this map.
   final Map<String, AnswerKey> answerKeys = {};
 
+  final LocalStorageService _localStorage = LocalStorageService();
+
+  /// The one storage seam for the `Batch -> Scans -> Results` model. Local
+  /// today; a cloud implementation can replace this without touching the
+  /// screens that use it.
+  final BatchRepository batchRepository = LocalBatchRepository();
+
   // --------------------------------------------------------------------
-  // Real scan-session identity. Populated by Exam Setup once a real
-  // Firestore ExamModel and BatchModel have both been selected --
-  // [activeExamCode] alone is never sufficient to identify a scan session
-  // against Firestore, since it's just the sheet-layout lookup key and
-  // carries no exam/batch identity. GuideGrade stores no examinee personal
-  // data: [scanRef] is a non-personal technical identifier (e.g. a
-  // Firestore-generated document ID) that only keeps result documents in
-  // the same exam+batch from colliding. Cleared only by [clearScanSession]
-  // -- NOT by [resetScanProgress], since Exam Results still needs this
-  // identity after scanning finishes in order to persist a ResultModel.
+  // Active scan session. A scan can only ever be started against a real
+  // [LocalBatch] (see startScanSession), so every captured sheet and every
+  // result is guaranteed to belong to a selected, exam-type-compatible
+  // batch. Cleared by [clearScanSession] — NOT by [resetScanProgress],
+  // since Exam Results still needs this identity after scanning finishes in
+  // order to persist the session into the batch.
   // --------------------------------------------------------------------
-  String? scanExamId;
-  String? scanExamTitle;
-  int? scanTotalItems;
-  String? scanBatchId;
-  String? scanBatchCode;
+  LocalBatch? scanBatch;
   String? scanRef;
 
-  /// True once a real exam+batch plus a non-personal [scanRef] have all
-  /// been set for this session -- i.e. it's safe to persist a ResultModel
-  /// against them.
-  bool get hasRealScanSession =>
-      scanExamId != null && scanBatchId != null && scanRef != null;
+  String? get scanBatchId => scanBatch?.id;
+  String? get scanBatchCode => scanBatch?.batchCode;
 
-  void setScanSession({
-    required String examId,
-    required String examCode,
-    required String examTitle,
-    required int totalItems,
-    required String batchId,
-    required String batchCode,
-    required String scanRef,
-  }) {
-    scanExamId = examId;
-    activeExamCode = examCode;
-    scanExamTitle = examTitle;
-    scanTotalItems = totalItems;
-    scanBatchId = batchId;
-    scanBatchCode = batchCode;
-    this.scanRef = scanRef;
+  /// True once a real batch has been selected for this scan session — i.e.
+  /// it's safe to persist scans + results against it.
+  bool get hasRealScanSession => scanBatch != null;
+
+  /// Begins a scan session bound to [batch]. The exam type follows the
+  /// batch, so the scanner and scorer can't drift onto a different layout.
+  void startScanSession(LocalBatch batch) {
+    scanBatch = batch;
+    activeExamCode = batch.examCode;
+    scanRef = 's_${DateTime.now().millisecondsSinceEpoch}';
     notifyListeners();
   }
 
   void clearScanSession() {
-    scanExamId = null;
-    scanExamTitle = null;
-    scanTotalItems = null;
-    scanBatchId = null;
-    scanBatchCode = null;
+    scanBatch = null;
     scanRef = null;
     notifyListeners();
   }
 
   String get answerKeyStatus => answerKeys.containsKey(activeExamCode) ? 'Loaded Success' : 'Not Uploaded';
 
-  String databaseLastSynced = 'June 15, 2026, 04:30 PM';
-  String localLastUpdated = 'June 16, 2026, 09:15 AM';
-
-  final LocalStorageService _localStorage = LocalStorageService();
-
-  /// The diagnostic batches/results registry shown on Staff Home. Persisted
-  /// to device storage via [_localStorage] — [loadPersistedData] populates
-  /// this at startup, and every mutation ([addBatch], [markBatchDone])
-  /// saves it back, so batches survive app restarts and version upgrades
-  /// rather than resetting to mock data every launch.
-  final List<ActivityModel> recentActivities = [];
-
-  /// Loads persisted app data. Called once at startup, before the first
-  /// frame, so the registry never flashes empty then populates.
+  /// Loads persisted app data (answer keys). Called once at startup.
   Future<void> loadPersistedData() async {
-    final activities = await _localStorage.loadActivities();
-    recentActivities
-      ..clear()
-      ..addAll(activities);
     final keys = await _localStorage.loadAnswerKeys();
     answerKeys
       ..clear()
@@ -147,12 +112,7 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  final List<CloudFileModel> databaseCloudFiles = const [
-    CloudFileModel(name: 'Admission Exam - Batch 01-A (Synced)', code: 'AT', total: 50, timestamp: '06/04/2026'),
-  ];
-
   int currentScannedPage = 0;
-  int totalToScan = 50;
 
   /// Raw captured sheet photos for the in-progress scan session, one per
   /// page, in capture order. Cleared by [resetScanProgress].
@@ -166,44 +126,16 @@ class AppState extends ChangeNotifier {
   bool isProcessingScans = false;
   String? scanProcessingError;
 
+  /// Outcome of the last [persistCapturedSessionToBatch] run.
+  bool isSavingToBatch = false;
+  int savedScanCount = 0;
+  int savedGradedCount = 0;
+  String? batchSaveError;
+  bool sessionPersistedToBatch = false;
+
   /// Where the last processCapturedPages() run wrote debug visualization
-  /// images (corner-detection + bubble-grid overlays), if it managed to.
-  /// Diagnostic only — never blocks or affects real scan results.
+  /// images. Diagnostic only — never blocks or affects real scan results.
   String? lastDebugImagesDir;
-
-  List<ActivityModel> get pendingBatches =>
-      recentActivities.where((a) => a.status == 'Pending').toList();
-
-  void addBatch({required String title, required String typeCode}) {
-    String typeLabel = 'Admission Exam';
-    if (typeCode == 'TAT') typeLabel = 'Teaching Aptitude';
-    if (typeCode == 'QTM') typeLabel = 'Quantitative Math';
-
-    recentActivities.insert(
-      0,
-      ActivityModel(
-        type: typeLabel,
-        date: 'Pending Check',
-        batch: title,
-        status: 'Pending',
-        examCode: typeCode,
-      ),
-    );
-    notifyListeners();
-    _localStorage.saveActivities(recentActivities);
-  }
-
-  void markBatchDone(String batchName) {
-    final idx = recentActivities.indexWhere((a) => a.batch == batchName);
-    if (idx != -1) {
-      recentActivities[idx] = recentActivities[idx].copyWith(
-        status: 'Done',
-        date: 'Just now',
-      );
-      notifyListeners();
-      _localStorage.saveActivities(recentActivities);
-    }
-  }
 
   void setActiveExamCode(String code) {
     activeExamCode = code;
@@ -221,6 +153,11 @@ class AppState extends ChangeNotifier {
     capturedPages.clear();
     scannedResults.clear();
     scanProcessingError = null;
+    isSavingToBatch = false;
+    savedScanCount = 0;
+    savedGradedCount = 0;
+    batchSaveError = null;
+    sessionPersistedToBatch = false;
     notifyListeners();
   }
 
@@ -250,9 +187,6 @@ class AppState extends ChangeNotifier {
     final debugDir = await _prepareDebugImagesDir();
     lastDebugImagesDir = debugDir;
 
-    // Process every page independently: a failure on one sheet shouldn't
-    // hide debug output for it (debug images are most useful for exactly
-    // the pages that fail) or block decoding the rest of the batch.
     final errors = <String>[];
     var pageIndex = 0;
     for (final page in capturedPages) {
@@ -277,9 +211,70 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Writes the just-finished scan session into its bound [scanBatch]:
+  /// copies every captured image into the batch container, grades each
+  /// decoded sheet against the loaded Final answer key (if any), and
+  /// attaches a [LocalScanResult]. Idempotent per session via
+  /// [sessionPersistedToBatch].
+  Future<void> persistCapturedSessionToBatch() async {
+    final batch = scanBatch;
+    if (batch == null || sessionPersistedToBatch || isSavingToBatch) return;
+    if (scannedResults.isEmpty) return;
+
+    isSavingToBatch = true;
+    batchSaveError = null;
+    notifyListeners();
+
+    final answerKey = answerKeys[batch.examCode];
+    final firebaseUser = FirebaseAuth.instance.currentUser;
+    final uid = firebaseUser?.uid ?? '';
+    final name = firebaseUser?.displayName ?? currentUser?.displayName ?? 'Unknown';
+
+    var savedScans = 0;
+    var savedGraded = 0;
+    try {
+      final pairCount =
+          capturedPages.length < scannedResults.length ? capturedPages.length : scannedResults.length;
+      for (var i = 0; i < pairCount; i++) {
+        final decoded = scannedResults[i];
+        final scored = scoreOmrResult(decoded, answerKey);
+        final graded = scored.totalGraded > 0;
+        final result = LocalScanResult(
+          rawScore: scored.rawScore,
+          totalGraded: scored.totalGraded,
+          totalItems: scored.items.length,
+          percentage: scored.percentage,
+          status: graded ? 'Graded' : 'Ungraded',
+          scannedAt: DateTime.now(),
+          processedByUid: uid,
+          processedByName: name,
+        );
+        await batchRepository.addScan(
+          batchId: batch.id,
+          decoded: decoded,
+          sourceImage: File(capturedPages[i].path),
+          result: result,
+        );
+        savedScans++;
+        if (graded) savedGraded++;
+      }
+      // Refresh the bound batch so callers see the new counts/status.
+      final refreshed = await batchRepository.getBatchById(batch.id);
+      if (refreshed != null) scanBatch = refreshed;
+
+      savedScanCount = savedScans;
+      savedGradedCount = savedGraded;
+      sessionPersistedToBatch = true;
+    } catch (e) {
+      batchSaveError = 'Could not save the scans to the batch: $e';
+    } finally {
+      isSavingToBatch = false;
+      notifyListeners();
+    }
+  }
+
   /// App-external "omr_debug" folder for [processCapturedPages]'s debug
-  /// visualization images. Returns null (silently) if unavailable rather
-  /// than failing the real scan over a diagnostic feature.
+  /// visualization images. Returns null (silently) if unavailable.
   Future<String?> _prepareDebugImagesDir() async {
     try {
       final base = await getExternalStorageDirectory();
@@ -290,11 +285,6 @@ class AppState extends ChangeNotifier {
     } catch (_) {
       return null;
     }
-  }
-
-  void syncLocalToDatabase() {
-    databaseLastSynced = localLastUpdated;
-    notifyListeners();
   }
 }
 

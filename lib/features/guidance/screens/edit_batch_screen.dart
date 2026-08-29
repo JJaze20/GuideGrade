@@ -3,15 +3,15 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
-import '../../../core/services/firestore_service.dart';
-import '../../../models/batch.dart';
+import '../../../core/state/app_state.dart';
+import '../../../models/local_batch.dart';
 import '../../../shared/widgets/primary_button.dart';
 
 /// Edit Batch screen for Guidance Council users.
-/// Allows editing of existing batches with status-based restrictions.
+/// Allows editing of existing local batches with status-based restrictions.
 class EditBatchScreen extends StatefulWidget {
-  final BatchModel? batch;
-  
+  final LocalBatch? batch;
+
   const EditBatchScreen({super.key, this.batch});
 
   @override
@@ -19,20 +19,18 @@ class EditBatchScreen extends StatefulWidget {
 }
 
 class _EditBatchScreenState extends State<EditBatchScreen> {
-  final FirestoreService _firestoreService = FirestoreService();
-  
   final _formKey = GlobalKey<FormState>();
-  
+
   late final TextEditingController _batchCodeController;
   late final TextEditingController _descriptionController;
   late final TextEditingController _expectedCountController;
-  
+
   late String _selectedStatus;
-  
+
   bool _isLoading = true;
   bool _isSaving = false;
-  
-  BatchModel? _batch;
+
+  LocalBatch? _batch;
 
   @override
   void initState() {
@@ -41,7 +39,7 @@ class _EditBatchScreenState extends State<EditBatchScreen> {
   }
 
   Future<void> _loadBatch() async {
-    final args = widget.batch ?? ModalRoute.of(context)?.settings.arguments as BatchModel?;
+    final args = widget.batch ?? ModalRoute.of(context)?.settings.arguments as LocalBatch?;
     if (args == null) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -87,7 +85,7 @@ class _EditBatchScreenState extends State<EditBatchScreen> {
         updatedAt: DateTime.now(),
       );
 
-      await _firestoreService.updateBatch(updatedBatch);
+      await AppStateScope.of(context).batchRepository.updateBatch(updatedBatch);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -96,7 +94,7 @@ class _EditBatchScreenState extends State<EditBatchScreen> {
         Navigator.of(context).pop(true);
       }
     } catch (e) {
-      print('Error updating batch: $e');
+      debugPrint('Error updating batch: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error updating batch: $e')),
@@ -232,7 +230,7 @@ class _EditBatchScreenState extends State<EditBatchScreen> {
                   ),
                   const SizedBox(width: 12),
                   Expanded(
-                    child: _buildInfoField('Actual Count', '${_batch!.actualCount}'),
+                    child: _buildInfoField('Scans Captured', '${_batch!.scanCount}'),
                   ),
                 ],
               ),

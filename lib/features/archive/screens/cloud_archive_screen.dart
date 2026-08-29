@@ -3,187 +3,238 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
+import '../../../core/routes/app_routes.dart';
 import '../../../core/state/app_state.dart';
+import '../../../models/local_batch.dart';
 import '../../../shared/widgets/app_bottom_nav.dart';
 import '../../../shared/widgets/app_header_bar.dart';
 
-/// Cloud Storage Archive — mirrors SCREENS.CLOUD_ARCHIVE.
-/// Shows sync status, unsynced/cloud counts, a "Synchronize Database"
-/// action, and the list of verified cloud archives.
-class CloudArchiveScreen extends StatelessWidget {
+/// Archive — every locally saved batch, organized around the batch rather
+/// than around individual scans. Each card is a batch container (exam type,
+/// scan count, whether results exist, date saved); opening one shows all of
+/// its scanned images and their results.
+class CloudArchiveScreen extends StatefulWidget {
   const CloudArchiveScreen({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    final appState = AppStateScope.of(context);
+  State<CloudArchiveScreen> createState() => _CloudArchiveScreenState();
+}
 
+class _CloudArchiveScreenState extends State<CloudArchiveScreen> {
+  bool _didInit = false;
+  bool _loading = true;
+  List<LocalBatch> _batches = [];
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_didInit) return;
+    _didInit = true;
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    final batches = await AppStateScope.of(context).batchRepository.getBatches();
+    if (!mounted) return;
+    setState(() {
+      _batches = batches;
+      _loading = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.lightBg,
-      appBar: const AppHeaderBar(title: 'CLOUD STORAGE ARCHIVE'),
+      appBar: AppHeaderBar(
+        title: 'ARCHIVE',
+        // Placeholder — cloud sync is not wired yet (partner to implement via
+        // a cloud BatchRepository). Mirrors the per-batch button in the
+        // batch detail screen.
+        trailing: Opacity(
+          opacity: 0.6,
+          child: IconButton(
+            visualDensity: VisualDensity.compact,
+            icon: const FaIcon(FontAwesomeIcons.cloudArrowUp, size: 15, color: Colors.white),
+            tooltip: 'Back up to cloud',
+            onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Cloud backup isn’t available yet — coming in a future update.'),
+              ),
+            ),
+          ),
+        ),
+      ),
       body: SafeArea(
         top: false,
-        child: ListenableBuilder(
-          listenable: appState,
-          builder: (context, _) {
-            final pendingSyncCount =
-                appState.recentActivities.where((a) => a.isDone && !a.batch.contains('(Synced)')).length;
-
-            return ListView(
-              padding: const EdgeInsets.all(16),
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: AppColors.cardBorder),
-                  ),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 36,
-                        height: 36,
-                        decoration: const BoxDecoration(color: Color(0xFFECFDF5), shape: BoxShape.circle),
-                        child: const FaIcon(FontAwesomeIcons.cloudArrowUp, size: 14, color: AppColors.primaryGreen),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text('NDMU Central Hub Status', style: AppTextStyles.heading(size: 12)),
-                            Text(
-                              'DB Connected • Secure TLS 1.3',
-                              style: AppTextStyles.body(size: 9, color: AppColors.textGray),
-                            ),
-                          ],
-                        ),
-                      ),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                        decoration: BoxDecoration(color: AppColors.emerald100, borderRadius: BorderRadius.circular(20)),
-                        child: const Text('ONLINE', style: TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: Color(0xFF065F46))),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 12),
-
-                Row(
-                  children: [
-                    Expanded(
-                      child: _StatBox(label: 'UNSYNCED LOGS', value: '$pendingSyncCount', color: AppColors.warmRedOrange),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: _StatBox(
-                        label: 'CLOUD ARCHIVES',
-                        value: '${appState.databaseCloudFiles.length}',
-                        color: AppColors.darkNavy,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-
-                Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(colors: [AppColors.slate900, AppColors.slate950]),
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Database Core Synchronization',
-                        style: TextStyle(color: Color(0xFF6EE7B7), fontSize: 12, fontWeight: FontWeight.bold),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        'Push local diagnostic tables and match against server logs.',
-                        style: TextStyle(color: Colors.grey.shade300, fontSize: 10),
-                      ),
-                      const SizedBox(height: 8),
-                      Divider(color: Colors.white.withOpacity(0.1), height: 1),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Local Sync State: ${appState.localLastUpdated}',
-                        style: TextStyle(color: Colors.grey.shade400, fontSize: 9, fontFamily: 'monospace'),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        'Database State: ${appState.databaseLastSynced}',
-                        style: TextStyle(color: Colors.grey.shade400, fontSize: 9, fontFamily: 'monospace'),
-                      ),
-                      const SizedBox(height: 10),
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton.icon(
-                          onPressed: () {
-                            appState.syncLocalToDatabase();
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('Database synchronized successfully!')),
-                            );
-                          },
-                          icon: const FaIcon(FontAwesomeIcons.arrowsRotate, size: 13),
-                          label: const Text('SYNCHRONIZE DATABASE'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: AppColors.primaryGreen,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 11),
-                            textStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 14),
-
-                Row(
-                  children: [
-                    const FaIcon(FontAwesomeIcons.server, size: 11, color: AppColors.primaryGreen),
-                    const SizedBox(width: 6),
-                    Text('Verified Cloud Database Archives', style: AppTextStyles.heading(size: 11.5)),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                ...appState.databaseCloudFiles.map((cf) => Container(
-                      margin: const EdgeInsets.only(bottom: 6),
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: AppColors.cardBorder),
-                      ),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(cf.name, style: AppTextStyles.body(size: 10.5, weight: FontWeight.w700)),
-                                Text(
-                                  '${cf.timestamp} • Code: ${cf.code} • N=${cf.total}',
-                                  style: AppTextStyles.body(size: 8.5, color: AppColors.textGray),
-                                ),
-                              ],
-                            ),
-                          ),
-                          const FaIcon(FontAwesomeIcons.cloud, size: 13, color: AppColors.primaryGreen),
-                        ],
-                      ),
-                    )),
-              ],
-            );
-          },
+        child: RefreshIndicator(
+          onRefresh: _load,
+          child: _loading
+              ? const Center(child: CircularProgressIndicator())
+              : _batches.isEmpty
+                  ? _buildEmptyState()
+                  : _buildList(),
         ),
       ),
       bottomNavigationBar: const AppBottomNav(activeTab: 'cloud'),
     );
   }
+
+  Widget _buildList() {
+    final gradedTotal = _batches.where((b) => b.resultsAvailable).length;
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Row(
+          children: [
+            Expanded(child: _StatBox(label: 'SAVED BATCHES', value: '${_batches.length}', color: AppColors.darkNavy)),
+            const SizedBox(width: 10),
+            Expanded(child: _StatBox(label: 'WITH RESULTS', value: '$gradedTotal', color: AppColors.primaryGreen)),
+          ],
+        ),
+        const SizedBox(height: 14),
+        Row(
+          children: [
+            const FaIcon(FontAwesomeIcons.boxArchive, size: 11, color: AppColors.primaryGreen),
+            const SizedBox(width: 6),
+            Text('Locally Saved Batches', style: AppTextStyles.heading(size: 11.5)),
+          ],
+        ),
+        const SizedBox(height: 8),
+        ..._batches.map(_buildBatchCard),
+      ],
+    );
+  }
+
+  Widget _buildBatchCard(LocalBatch batch) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: InkWell(
+        onTap: () => Navigator.of(context)
+            .pushNamed(AppRoutes.batchArchiveDetail, arguments: batch.id)
+            .then((_) => _load()),
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: AppColors.cardBorder),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          batch.description.isNotEmpty ? batch.description : 'Batch ${batch.batchCode}',
+                          style: AppTextStyles.body(size: 12.5, weight: FontWeight.w700),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 2),
+                        Text(batch.batchCode, style: AppTextStyles.body(size: 9.5, color: AppColors.textGray)),
+                      ],
+                    ),
+                  ),
+                  _statusChip(batch.status),
+                ],
+              ),
+              const SizedBox(height: 10),
+              _line(FontAwesomeIcons.fileLines, 'Exam Type: ${batch.examTitle} (${batch.examCode})'),
+              const SizedBox(height: 4),
+              _line(FontAwesomeIcons.images, 'Scans: ${batch.scanCount}'),
+              const SizedBox(height: 4),
+              _line(
+                batch.resultsAvailable ? FontAwesomeIcons.circleCheck : FontAwesomeIcons.circleMinus,
+                batch.resultsAvailable
+                    ? 'Results available (${batch.gradedCount}/${batch.scanCount} graded)'
+                    : 'No results yet',
+                color: batch.resultsAvailable ? AppColors.primaryGreen : AppColors.textGray,
+              ),
+              const SizedBox(height: 4),
+              _line(FontAwesomeIcons.solidCalendar, 'Saved ${_fmtDate(batch.updatedAt)}'),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _line(FaIconData icon, String text, {Color? color}) {
+    return Row(
+      children: [
+        FaIcon(icon, size: 10, color: color ?? AppColors.textGray),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(
+            text,
+            style: AppTextStyles.body(size: 9.5, color: color ?? AppColors.textGray),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _statusChip(String status) {
+    Color bg;
+    Color fg;
+    switch (status) {
+      case 'Draft':
+        bg = const Color(0xFFFEF3C7);
+        fg = const Color(0xFF92400E);
+        break;
+      case 'Active':
+        bg = const Color(0xFFDBEAFE);
+        fg = const Color(0xFF1E40AF);
+        break;
+      case 'Completed':
+        bg = const Color(0xFFD1FAE5);
+        fg = const Color(0xFF065F46);
+        break;
+      default:
+        bg = const Color(0xFFF3F4F6);
+        fg = const Color(0xFF374151);
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
+      child: Text(status, style: AppTextStyles.body(size: 9.5, weight: FontWeight.w600, color: fg)),
+    );
+  }
+
+  Widget _buildEmptyState() {
+    return ListView(
+      children: [
+        const SizedBox(height: 120),
+        const Center(child: FaIcon(FontAwesomeIcons.boxOpen, size: 44, color: AppColors.textGray)),
+        const SizedBox(height: 14),
+        Center(
+          child: Text('No saved batches yet', style: AppTextStyles.body(size: 12, weight: FontWeight.w700)),
+        ),
+        const SizedBox(height: 6),
+        Center(
+          child: Text(
+            'Scan a batch to see it archived here.',
+            style: AppTextStyles.body(size: 10, color: AppColors.textGray),
+          ),
+        ),
+      ],
+    );
+  }
+
+  static const _months = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  ];
+
+  String _fmtDate(DateTime d) => '${_months[d.month - 1]} ${d.day}, ${d.year}';
 }
 
 class _StatBox extends StatelessWidget {

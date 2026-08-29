@@ -3,13 +3,20 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
+import '../../../core/constants/exam_catalog.dart';
 import '../../../core/routes/app_routes.dart';
 import '../../../core/state/app_state.dart';
+import '../../../models/local_batch.dart';
 import '../../../shared/widgets/primary_button.dart';
 
-/// Configure Exam Session — mirrors SCREENS.EXAM_SETUP.
-/// Lets staff pick a pending batch and upload/confirm the answer key
-/// before launching the OMR scanner.
+/// Select Compatible Batch — the batch-binding step of the scan workflow.
+///
+/// The exam type was chosen on the Exam Hub; this screen shows only the
+/// batches whose exam type matches it, so a scan can never be started
+/// against an incompatible batch. If none exist yet, it routes to Create
+/// Batch with the exam type pre-locked. Once a batch is picked and the
+/// scanner launches, [AppState.startScanSession] binds every captured sheet
+/// and result to it.
 class ExamSetupScreen extends StatefulWidget {
   const ExamSetupScreen({super.key});
 
@@ -18,27 +25,58 @@ class ExamSetupScreen extends StatefulWidget {
 }
 
 class _ExamSetupScreenState extends State<ExamSetupScreen> {
-  late final TextEditingController _sessionIdController;
-  String? _selectedBatch;
+  bool _didInit = false;
+  bool _loading = true;
+  List<LocalBatch> _batches = [];
+  LocalBatch? _selected;
 
   @override
-  void initState() {
-    super.initState();
-    final randomId = 1000 + DateTime.now().millisecondsSinceEpoch % 9000;
-    _sessionIdController = TextEditingController(text: 'NDMU-OMR-RUN-$randomId');
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_didInit) return;
+    _didInit = true;
+    _loadBatches();
   }
 
-  @override
-  void dispose() {
-    _sessionIdController.dispose();
-    super.dispose();
+  Future<void> _loadBatches() async {
+    setState(() => _loading = true);
+    final appState = AppStateScope.of(context);
+    final all = await appState.batchRepository.getBatchesByExamCode(appState.activeExamCode);
+    final scannable = all.where((b) => b.canScan).toList()
+      ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    if (!mounted) return;
+    // Keep the current selection only if it's still in the list.
+    final priorId = _selected?.id;
+    LocalBatch? stillSelected;
+    for (final b in scannable) {
+      if (b.id == priorId) stillSelected = b;
+    }
+    setState(() {
+      _batches = scannable;
+      _selected = stillSelected;
+      _loading = false;
+    });
+  }
+
+  String get _examTitle {
+    final code = AppStateScope.of(context).activeExamCode;
+    return examCatalog
+        .firstWhere((e) => e.examCode == code, orElse: () => examCatalog.first)
+        .title;
+  }
+
+  Future<void> _createCompatibleBatch() async {
+    final code = AppStateScope.of(context).activeExamCode;
+    final created = await Navigator.of(context).pushNamed(
+      AppRoutes.createBatch,
+      arguments: code,
+    );
+    if (created == true) _loadBatches();
   }
 
   @override
   Widget build(BuildContext context) {
     final appState = AppStateScope.of(context);
-    final assignableBatches = appState.pendingBatches;
-    _selectedBatch ??= assignableBatches.isNotEmpty ? assignableBatches.first.batch : null;
 
     return Scaffold(
       backgroundColor: AppColors.lightBg,
@@ -46,166 +84,294 @@ class _ExamSetupScreenState extends State<ExamSetupScreen> {
         backgroundColor: Colors.white,
         foregroundColor: AppColors.textDark,
         elevation: 0.5,
-        title: Text('Configure Exam Session', style: AppTextStyles.heading(size: 13)),
+        title: Text('Select Batch', style: AppTextStyles.heading(size: 13)),
       ),
       body: SafeArea(
-        child: ListenableBuilder(
-          listenable: appState,
-          builder: (context, _) {
-            return Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Expanded(
-                    child: SingleChildScrollView(
-                      child: Container(
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(color: AppColors.cardBorder),
-                        ),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _buildExamTypeCard(appState.activeExamCode),
+              const SizedBox(height: 14),
+              Expanded(
+                child: _loading
+                    ? const Center(child: CircularProgressIndicator())
+                    : SingleChildScrollView(
                         child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            Text('Session Target Log Reference ID', style: AppTextStyles.body(size: 11, weight: FontWeight.w700)),
-                            const SizedBox(height: 6),
-                            TextField(controller: _sessionIdController),
+                            if (_batches.isEmpty)
+                              _buildNoCompatibleBatch()
+                            else
+                              _buildBatchPicker(),
                             const SizedBox(height: 16),
-
-                            Text('Select Assigned Batch (Unchecked Only)', style: AppTextStyles.body(size: 11, weight: FontWeight.w700)),
-                            const SizedBox(height: 6),
-                            DropdownButtonFormField<String>(
-                              value: _selectedBatch,
-                              hint: const Text('No pending batches available'),
-                              items: assignableBatches
-                                  .map((b) => DropdownMenuItem(
-                                        value: b.batch,
-                                        child: Text('${b.batch} [${b.examCode}]', style: AppTextStyles.body(size: 12)),
-                                      ))
-                                  .toList(),
-                              onChanged: (val) {
-                                setState(() => _selectedBatch = val);
-                                final matched = appState.recentActivities.firstWhere(
-                                  (a) => a.batch == val,
-                                  orElse: () => appState.recentActivities.first,
-                                );
-                                appState.setActiveExamCode(matched.examCode);
-                              },
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              'Only cohorts lacking complete test records can be scheduled for OMR camera tracking.',
-                              style: AppTextStyles.body(size: 9, color: AppColors.textGray),
-                            ),
-                            const SizedBox(height: 16),
-
-                            Text('Exam Answer Key Setup', style: AppTextStyles.body(size: 11, weight: FontWeight.w700)),
-                            const SizedBox(height: 6),
-                            Container(
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: AppColors.lightBg,
-                                borderRadius: BorderRadius.circular(14),
-                                border: Border.all(color: const Color(0xFFE2E8F0)),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: [
-                                  Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                    children: [
-                                      Text('Status:', style: AppTextStyles.body(size: 10, color: AppColors.textGray, weight: FontWeight.w600)),
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                        decoration: BoxDecoration(
-                                          color: appState.answerKeyStatus == 'Loaded Success'
-                                              ? AppColors.emerald100
-                                              : const Color(0xFFFEF3C7),
-                                          borderRadius: BorderRadius.circular(6),
-                                        ),
-                                        child: Text(
-                                          appState.answerKeyStatus == 'Loaded Success' ? '🔑 KEY LOADED' : '⚠️ PENDING KEY',
-                                          style: TextStyle(
-                                            fontSize: 9,
-                                            fontWeight: FontWeight.w700,
-                                            color: appState.answerKeyStatus == 'Loaded Success'
-                                                ? const Color(0xFF065F46)
-                                                : const Color(0xFF92400E),
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 8),
-                                  OutlinedButton.icon(
-                                    onPressed: () => Navigator.of(context).pushNamed(AppRoutes.answerKeyEntry),
-                                    icon: const FaIcon(FontAwesomeIcons.penToSquare, size: 13, color: AppColors.primaryGreen),
-                                    label: const Text('ADD EXAM ANSWER KEY'),
-                                    style: OutlinedButton.styleFrom(
-                                      foregroundColor: AppColors.textDark,
-                                      side: const BorderSide(color: Color(0xFFCBD5E1)),
-                                      padding: const EdgeInsets.symmetric(vertical: 10),
-                                      textStyle: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
+                            _buildAnswerKeyCard(appState),
                           ],
                         ),
                       ),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  PrimaryButton(
-                    label: 'LAUNCH OMR SCANNER LOOP',
-                    icon: FontAwesomeIcons.camera,
-                    onPressed: () => _launchScanner(appState),
-                  ),
-                ],
               ),
-            );
-          },
+              const SizedBox(height: 12),
+              PrimaryButton(
+                label: 'LAUNCH OMR SCANNER LOOP',
+                icon: FontAwesomeIcons.camera,
+                onPressed: _selected == null ? null : () => _launchScanner(appState),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  /// Warns before launching the scanner if this exam has no answer key
-  /// yet — without one, scored results silently render every confidently
-  /// decoded item in the same green used for a verified-correct answer
-  /// (see ScoredItem.isCorrect: null when ungraded, and `null == false`
-  /// is false, so it falls into the "correct" branch), which reads as "all
-  /// correct" when nothing was actually checked. Not a hard block — a key
-  /// can legitimately be added after scanning — just makes sure that's a
-  /// deliberate choice, not something staff find out from an
-  /// unexpectedly-all-green results screen.
+  Widget _buildExamTypeCard(String code) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.cardBorder),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: const Color(0xFFECFDF5),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: const FaIcon(FontAwesomeIcons.fileLines, size: 16, color: AppColors.primaryGreen),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('EXAM TYPE', style: AppTextStyles.body(size: 8.5, weight: FontWeight.w800, color: AppColors.primaryGreen)),
+                const SizedBox(height: 2),
+                Text(_examTitle, style: AppTextStyles.heading(size: 13)),
+              ],
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(color: AppColors.lightBg, borderRadius: BorderRadius.circular(20)),
+            child: Text(code, style: AppTextStyles.body(size: 10, weight: FontWeight.w700)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildNoCompatibleBatch() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFFBEB),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFFCD34D)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              const FaIcon(FontAwesomeIcons.triangleExclamation, size: 14, color: Color(0xFF92400E)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'No compatible batch for $_examTitle',
+                  style: AppTextStyles.body(size: 11, weight: FontWeight.w700, color: const Color(0xFF92400E)),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Every scan must belong to a batch of the same exam type. Create one to start scanning.',
+            style: AppTextStyles.body(size: 9.5, color: const Color(0xFF92400E)),
+          ),
+          const SizedBox(height: 12),
+          OutlinedButton.icon(
+            onPressed: _createCompatibleBatch,
+            icon: const FaIcon(FontAwesomeIcons.folderPlus, size: 13, color: Color(0xFF92400E)),
+            label: const Text('CREATE COMPATIBLE BATCH'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: const Color(0xFF92400E),
+              side: const BorderSide(color: Color(0xFFFCD34D)),
+              padding: const EdgeInsets.symmetric(vertical: 10),
+              textStyle: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBatchPicker() {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.cardBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('Select Compatible Batch', style: AppTextStyles.body(size: 11, weight: FontWeight.w700)),
+              TextButton.icon(
+                onPressed: _createCompatibleBatch,
+                icon: const FaIcon(FontAwesomeIcons.plus, size: 10, color: AppColors.primaryGreen),
+                label: const Text('New', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700)),
+                style: TextButton.styleFrom(
+                  foregroundColor: AppColors.primaryGreen,
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          ..._batches.map(_buildBatchTile),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBatchTile(LocalBatch batch) {
+    final selected = _selected?.id == batch.id;
+    return InkWell(
+      onTap: () => setState(() => _selected = batch),
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        margin: const EdgeInsets.only(top: 8),
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: selected ? AppColors.emerald100 : AppColors.lightBg,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: selected ? AppColors.primaryGreen : AppColors.cardBorder,
+            width: selected ? 1.5 : 1,
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              selected ? Icons.radio_button_checked : Icons.radio_button_unchecked,
+              size: 18,
+              color: selected ? AppColors.primaryGreen : AppColors.textGray,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    batch.description.isNotEmpty ? batch.description : 'Batch ${batch.batchCode}',
+                    style: AppTextStyles.body(size: 11.5, weight: FontWeight.w700),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '${batch.batchCode}  ·  ${batch.scanCount}/${batch.expectedCount} sheets  ·  ${batch.status}',
+                    style: AppTextStyles.body(size: 9, color: AppColors.textGray),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAnswerKeyCard(AppState appState) {
+    final loaded = appState.answerKeyStatus == 'Loaded Success';
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.cardBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('Exam Answer Key Setup', style: AppTextStyles.body(size: 11, weight: FontWeight.w700)),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('Status:', style: AppTextStyles.body(size: 10, color: AppColors.textGray, weight: FontWeight.w600)),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: loaded ? AppColors.emerald100 : const Color(0xFFFEF3C7),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  loaded ? '🔑 KEY LOADED' : '⚠️ PENDING KEY',
+                  style: TextStyle(
+                    fontSize: 9,
+                    fontWeight: FontWeight.w700,
+                    color: loaded ? const Color(0xFF065F46) : const Color(0xFF92400E),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: () => Navigator.of(context).pushNamed(AppRoutes.answerKeyEntry),
+            icon: const FaIcon(FontAwesomeIcons.penToSquare, size: 13, color: AppColors.primaryGreen),
+            label: const Text('ADD EXAM ANSWER KEY'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppColors.textDark,
+              side: const BorderSide(color: Color(0xFFCBD5E1)),
+              padding: const EdgeInsets.symmetric(vertical: 10),
+              textStyle: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _launchScanner(AppState appState) async {
+    if (_selected == null) return;
+
     if (appState.answerKeyStatus != 'Loaded Success') {
       final addKeyFirst = await _showNoAnswerKeyDialog();
-      if (addKeyFirst == null) return; // dismissed — don't launch either way
+      if (addKeyFirst == null) return;
       if (addKeyFirst) {
         if (!mounted) return;
         Navigator.of(context).pushNamed(AppRoutes.answerKeyEntry);
         return;
       }
     }
+
     appState.resetScanProgress();
+    appState.startScanSession(_selected!);
     if (!mounted) return;
     Navigator.of(context).pushNamed(AppRoutes.examScanning);
   }
 
-  /// Returns true to go add the key first, false to scan without one now,
-  /// or null if dismissed (treated the same as "don't launch").
   Future<bool?> _showNoAnswerKeyDialog() {
     return showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('No Answer Key Set'),
         content: const Text(
-          'This exam has no answer key yet. Sheets can still be scanned, but nothing will be graded until a key is added.',
+          'This exam has no answer key yet. Sheets can still be scanned and saved to the batch, '
+          'but nothing will be graded until a key is added.',
         ),
         actions: [
           TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Scan Without Key')),

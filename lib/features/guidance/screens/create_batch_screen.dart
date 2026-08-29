@@ -4,37 +4,48 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
 import '../../../core/constants/exam_catalog.dart';
-import '../../../core/services/firestore_service.dart';
-import '../../../models/batch.dart';
+import '../../../core/state/app_state.dart';
 import '../../../shared/widgets/primary_button.dart';
 
 /// Create Batch screen for Guidance Council users.
-/// Allows creation of new batches linked to exams.
+///
+/// Creates a new local batch bound to one exam type. When reached from the
+/// scan workflow (no compatible batch existed yet), [initialExamCode]
+/// pre-selects and locks the exam type so the new batch is guaranteed
+/// compatible with the scan the user was trying to start.
 class CreateBatchScreen extends StatefulWidget {
-  const CreateBatchScreen({super.key});
+  final String? initialExamCode;
+
+  const CreateBatchScreen({super.key, this.initialExamCode});
 
   @override
   State<CreateBatchScreen> createState() => _CreateBatchScreenState();
 }
 
 class _CreateBatchScreenState extends State<CreateBatchScreen> {
-  final FirestoreService _firestoreService = FirestoreService();
   final FirebaseAuth _auth = FirebaseAuth.instance;
-  
+
   final _formKey = GlobalKey<FormState>();
-  
+
   final _descriptionController = TextEditingController();
   final _expectedCountController = TextEditingController(text: '30');
 
   ExamCatalogEntry? _selectedExam;
   String _generatedBatchCode = '';
-
   bool _isSaving = false;
+
+  bool get _examLocked => widget.initialExamCode != null;
 
   @override
   void initState() {
     super.initState();
     _generateBatchCode();
+    if (widget.initialExamCode != null) {
+      _selectedExam = examCatalog.firstWhere(
+        (e) => e.examCode == widget.initialExamCode,
+        orElse: () => examCatalog.first,
+      );
+    }
   }
 
   @override
@@ -54,79 +65,44 @@ class _CreateBatchScreenState extends State<CreateBatchScreen> {
     });
   }
 
-  Future<bool> _checkBatchCodeUniqueness(String batchCode) async {
-    if (batchCode.isEmpty) return false;
-    
-    try {
-      final existingBatch = await _firestoreService.getBatchByCode(batchCode);
-      return existingBatch == null;
-    } catch (e) {
-      print('Error checking batch code: $e');
-      return false;
-    }
-  }
-
   Future<void> _createBatch() async {
-    if (!_formKey.currentState!.validate()) {
-      return;
-    }
+    if (!_formKey.currentState!.validate()) return;
 
     if (_selectedExam == null) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Please select an exam')),
-        );
-      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please select an exam type')),
+      );
       return;
     }
 
     setState(() => _isSaving = true);
 
+    final repo = AppStateScope.of(context).batchRepository;
     try {
-      // Check batch code uniqueness
-      final isUnique = await _checkBatchCodeUniqueness(_generatedBatchCode);
-      
-      if (!isUnique) {
-        _generateBatchCode(); // Generate new code
+      // Local batch-code uniqueness check.
+      final existing = await repo.getBatches();
+      if (existing.any((b) => b.batchCode == _generatedBatchCode)) {
+        _generateBatchCode();
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Batch code already exists. Generated a new code.')),
           );
+          setState(() => _isSaving = false);
         }
-        setState(() => _isSaving = false);
         return;
       }
 
-      // Get current user
       final currentUser = _auth.currentUser;
-      if (currentUser == null) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Unable to get user information.')),
-          );
-        }
-        setState(() => _isSaving = false);
-        return;
-      }
 
-      // Create batch
-      final batch = BatchModel(
-        batchId: '',
+      await repo.createBatch(
         batchCode: _generatedBatchCode,
-        examId: _selectedExam!.examCode,
         examCode: _selectedExam!.examCode,
         examTitle: _selectedExam!.title,
-        status: 'Draft',
         description: _descriptionController.text.trim(),
         expectedCount: int.parse(_expectedCountController.text),
-        actualCount: 0,
-        createdByUid: currentUser.uid,
-        createdByName: currentUser.displayName ?? 'Unknown',
-        createdAt: DateTime.now(),
-        updatedAt: DateTime.now(),
+        createdByUid: currentUser?.uid ?? '',
+        createdByName: currentUser?.displayName ?? 'Unknown',
       );
-
-      await _firestoreService.createBatch(batch);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -135,7 +111,6 @@ class _CreateBatchScreenState extends State<CreateBatchScreen> {
         Navigator.of(context).pop(true);
       }
     } catch (e) {
-      print('Error creating batch: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error creating batch: $e')),
@@ -162,6 +137,20 @@ class _CreateBatchScreenState extends State<CreateBatchScreen> {
           child: ListView(
             padding: const EdgeInsets.all(16),
             children: [
+              if (_examLocked)
+                Container(
+                  margin: const EdgeInsets.only(bottom: 16),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: AppColors.emerald100,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    'Creating a batch for ${_selectedExam?.title ?? widget.initialExamCode} '
+                    'so you can start scanning.',
+                    style: AppTextStyles.body(size: 10, color: const Color(0xFF065F46), weight: FontWeight.w600),
+                  ),
+                ),
               _buildSection('Basic Information'),
               const SizedBox(height: 16),
               _buildTextField(
@@ -175,11 +164,11 @@ class _CreateBatchScreenState extends State<CreateBatchScreen> {
               _buildTextField(
                 label: 'Description',
                 controller: _descriptionController,
-                hint: 'e.g., Morning Session A',
+                hint: 'e.g., BSIT - 1A',
                 required: false,
               ),
               const SizedBox(height: 16),
-              _buildSection('Exam Selection'),
+              _buildSection('Exam Type'),
               const SizedBox(height: 16),
               _buildExamDropdown(),
               const SizedBox(height: 16),
@@ -315,8 +304,10 @@ class _CreateBatchScreenState extends State<CreateBatchScreen> {
       children: [
         Row(
           children: [
-            Text('Exam', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600)),
+            Text('Exam Type', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600)),
             Text(' *', style: AppTextStyles.body(size: 10.5, color: Colors.red)),
+            if (_examLocked)
+              Text('  (locked)', style: AppTextStyles.body(size: 9, color: AppColors.textGray)),
           ],
         ),
         const SizedBox(height: 6),
@@ -335,18 +326,22 @@ class _CreateBatchScreenState extends State<CreateBatchScreen> {
               borderRadius: BorderRadius.circular(10),
               borderSide: BorderSide(color: AppColors.primaryGreen),
             ),
+            disabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: BorderSide(color: AppColors.cardBorder.withOpacity(0.5)),
+            ),
+            filled: _examLocked,
+            fillColor: AppColors.lightBg.withOpacity(0.5),
             contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
           ),
-          hint: Text('Select an exam', style: AppTextStyles.body(size: 11)),
+          hint: Text('Select an exam type', style: AppTextStyles.body(size: 11)),
           items: examCatalog.map((exam) {
             return DropdownMenuItem(
               value: exam,
               child: Text('${exam.title} (${exam.examCode})', style: AppTextStyles.body(size: 11)),
             );
           }).toList(),
-          onChanged: (value) {
-            setState(() => _selectedExam = value);
-          },
+          onChanged: _examLocked ? null : (value) => setState(() => _selectedExam = value),
         ),
       ],
     );

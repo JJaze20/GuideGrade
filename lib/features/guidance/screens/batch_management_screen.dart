@@ -4,8 +4,8 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
 import '../../../core/routes/app_routes.dart';
-import '../../../core/services/firestore_service.dart';
-import '../../../models/batch.dart';
+import '../../../core/state/app_state.dart';
+import '../../../models/local_batch.dart';
 import '../widgets/batch_list_item.dart';
 
 /// Batch Management screen for Guidance Council users.
@@ -18,20 +18,27 @@ class BatchManagementScreen extends StatefulWidget {
 }
 
 class _BatchManagementScreenState extends State<BatchManagementScreen> {
-  final FirestoreService _firestoreService = FirestoreService();
-  
   final TextEditingController _searchController = TextEditingController();
-  
-  List<BatchModel> _allBatches = [];
-  List<BatchModel> _filteredBatches = [];
+
+  List<LocalBatch> _allBatches = [];
+  List<LocalBatch> _filteredBatches = [];
   String _selectedStatusFilter = 'All'; // All, Draft, Active, Completed, Archived
   bool _isLoading = true;
+
+  bool _didInit = false;
 
   @override
   void initState() {
     super.initState();
-    _loadBatches();
     _searchController.addListener(_onSearchChanged);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_didInit) return;
+    _didInit = true;
+    _loadBatches();
   }
 
   @override
@@ -44,14 +51,14 @@ class _BatchManagementScreenState extends State<BatchManagementScreen> {
     setState(() => _isLoading = true);
     
     try {
-      final batches = await _firestoreService.getBatches();
+      final batches = await AppStateScope.of(context).batchRepository.getBatches();
       setState(() {
         _allBatches = batches;
         _applyFilters();
         _isLoading = false;
       });
     } catch (e) {
-      print('Error loading batches: $e');
+      debugPrint('Error loading batches: $e');
       setState(() => _isLoading = false);
     }
   }
@@ -89,7 +96,7 @@ class _BatchManagementScreenState extends State<BatchManagementScreen> {
     }
   }
 
-  void _navigateToEditBatch(BatchModel batch) async {
+  void _navigateToEditBatch(LocalBatch batch) async {
     final result = await Navigator.of(context).pushNamed(
       AppRoutes.editBatch,
       arguments: batch,
@@ -99,7 +106,8 @@ class _BatchManagementScreenState extends State<BatchManagementScreen> {
     }
   }
 
-  Future<void> _confirmDeleteBatch(BatchModel batch) async {
+  Future<void> _confirmDeleteBatch(LocalBatch batch) async {
+    final repo = AppStateScope.of(context).batchRepository;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
@@ -126,7 +134,7 @@ class _BatchManagementScreenState extends State<BatchManagementScreen> {
     if (confirmed != true) return;
 
     try {
-      await _firestoreService.deleteBatch(batch.batchId);
+      await repo.deleteBatch(batch.id);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Batch "${batch.batchCode}" deleted.')),

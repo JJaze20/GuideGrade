@@ -3,11 +3,11 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
-import '../../../models/batch.dart';
+import '../../../models/local_batch.dart';
 
-/// Reusable widget for displaying a single batch in the list.
+/// Reusable widget for displaying a single local batch in the list.
 class BatchListItem extends StatelessWidget {
-  final BatchModel batch;
+  final LocalBatch batch;
   final VoidCallback onTap;
   final VoidCallback onDelete;
 
@@ -70,9 +70,13 @@ class BatchListItem extends StatelessWidget {
             const SizedBox(height: 10),
             Row(
               children: [
-                _buildInfoChip(batch.examTitle),
+                _buildInfoChip('${batch.examTitle} (${batch.examCode})'),
                 const SizedBox(width: 8),
-                _buildInfoChip('${batch.actualCount}/${batch.expectedCount} sheets'),
+                _buildInfoChip('${batch.scanCount}/${batch.expectedCount} sheets'),
+                if (batch.resultsAvailable) ...[
+                  const SizedBox(width: 8),
+                  _buildInfoChip('Results ✓'),
+                ],
               ],
             ),
           ],

@@ -14,6 +14,7 @@ import '../../features/exam/screens/exam_scanning_screen.dart';
 import '../../features/exam/screens/exam_results_screen.dart';
 import '../../features/exam/screens/answer_key_entry_screen.dart';
 import '../../features/archive/screens/cloud_archive_screen.dart';
+import '../../features/archive/screens/batch_archive_detail_screen.dart';
 import '../../features/admin/screens/admin_dashboard_screen.dart';
 import '../../features/guidance/screens/exam_management_screen.dart';
 import '../../features/guidance/screens/exam_sheet_preview_screen.dart';
@@ -25,7 +26,7 @@ import '../../features/admin/screens/create_user_screen.dart';
 import '../../features/admin/screens/edit_user_screen.dart';
 import '../../features/admin/screens/system_logs_screen.dart';
 import '../constants/exam_catalog.dart';
-import '../../models/batch.dart';
+import '../../models/local_batch.dart';
 import '../../models/user.dart';
 
 /// Centralized route names. Keeping these as constants avoids typos
@@ -44,6 +45,7 @@ class AppRoutes {
   static const String examResults = '/exam-results';
   static const String answerKeyEntry = '/answer-key-entry';
   static const String cloudArchive = '/cloud-archive';
+  static const String batchArchiveDetail = '/batch-archive-detail';
   static const String adminDashboard = '/admin-dashboard';
   static const String examManagement = '/exam-management';
   static const String examSheetPreview = '/exam-sheet-preview';
@@ -89,6 +91,7 @@ class AppRoutes {
     createBatch,
     editBatch,
     cloudArchive,
+    batchArchiveDetail,
   };
 
   /// Generates routes for [MaterialApp.onGenerateRoute]. Using this
@@ -173,6 +176,8 @@ class AppRoutes {
         return _slide(const AnswerKeyEntryScreen());
       case cloudArchive:
         return _fade(const CloudArchiveScreen());
+      case batchArchiveDetail:
+        return _slide(BatchArchiveDetailScreen(batchId: settings.arguments as String));
       case adminDashboard:
         return _fade(const AdminDashboardScreen());
       case examManagement:
@@ -182,9 +187,9 @@ class AppRoutes {
       case batchManagement:
         return _fade(const BatchManagementScreen());
       case createBatch:
-        return _fade(const CreateBatchScreen());
+        return _fade(CreateBatchScreen(initialExamCode: settings.arguments as String?));
       case editBatch:
-        return _fade(EditBatchScreen(batch: settings.arguments as BatchModel?));
+        return _fade(EditBatchScreen(batch: settings.arguments as LocalBatch?));
       case userManagement:
         return _fade(const UserManagementScreen());
       case createUser:

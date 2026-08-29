@@ -531,14 +531,29 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
               child: const Icon(Icons.close, color: Colors.white, size: 16),
             ),
           ),
-          Text(
-            'Sheet Document #${appState.currentScannedPage + 1}',
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 12,
-              fontWeight: FontWeight.bold,
-              fontFamily: 'monospace',
-            ),
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (appState.scanBatchCode != null)
+                Text(
+                  '${appState.scanBatchCode} · ${appState.activeExamCode}',
+                  style: const TextStyle(
+                    color: Color(0xFF6EE7B7),
+                    fontSize: 9,
+                    fontWeight: FontWeight.w600,
+                    fontFamily: 'monospace',
+                  ),
+                ),
+              Text(
+                'Sheet Document #${appState.currentScannedPage + 1}',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  fontFamily: 'monospace',
+                ),
+              ),
+            ],
           ),
           const SizedBox(width: 32),
         ],
