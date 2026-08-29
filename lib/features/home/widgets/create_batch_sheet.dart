@@ -29,7 +29,6 @@ class CreateBatchSheet extends StatefulWidget {
 
 class _CreateBatchSheetState extends State<CreateBatchSheet> {
   final _titleController = TextEditingController();
-  final _namesController = TextEditingController();
   String _selectedType = 'AT';
 
   final Map<String, String> _typeOptions = const {
@@ -41,7 +40,6 @@ class _CreateBatchSheetState extends State<CreateBatchSheet> {
   @override
   void dispose() {
     _titleController.dispose();
-    _namesController.dispose();
     super.dispose();
   }
 
@@ -83,7 +81,7 @@ class _CreateBatchSheetState extends State<CreateBatchSheet> {
           ),
           const SizedBox(height: 4),
           Text(
-            'Register a group target code and populate its initial un-checked examinee roster profiles.',
+            'Register a group target code for a new un-checked diagnostic session.',
             style: AppTextStyles.body(size: 10.5, color: AppColors.textGray),
           ),
           const SizedBox(height: 16),
@@ -103,14 +101,6 @@ class _CreateBatchSheetState extends State<CreateBatchSheet> {
                 .map((e) => DropdownMenuItem(value: e.key, child: Text(e.value, style: AppTextStyles.body(size: 12))))
                 .toList(),
             onChanged: (v) => setState(() => _selectedType = v ?? 'AT'),
-          ),
-          const SizedBox(height: 12),
-          Text('Add Examinees (Comma Separated Names)', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w700)),
-          const SizedBox(height: 4),
-          TextField(
-            controller: _namesController,
-            maxLines: 3,
-            decoration: const InputDecoration(hintText: 'JUAN DELA CRUZ, MARIA CLARA, PEDRO PENDUKO'),
           ),
           const SizedBox(height: 18),
           PrimaryButton(label: 'SAVE & REGISTER BATCH', onPressed: _save),

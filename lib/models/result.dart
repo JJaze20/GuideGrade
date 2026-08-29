@@ -3,18 +3,20 @@
 /// an existing one (which does not).
 enum ResultPersistOutcome { created, updated }
 
-/// Result model representing one examinee's graded outcome in the
-/// Firestore results collection.
+/// Result model representing one graded sheet's outcome in the Firestore
+/// results collection.
 ///
-/// One document per exam + batch + examinee, by construction -- see
-/// [buildId]. Deliberately does not duplicate the answer key or store more
-/// examinee detail than [examineeId]; both are looked up by ID when needed.
+/// One document per exam + batch + scanned sheet, by construction -- see
+/// [buildId]. GuideGrade deliberately stores no examinee personal data:
+/// [scanRef] is a non-personal technical identifier (a Firestore-generated
+/// document ID / opaque scan-session token) whose only job is to keep two
+/// results in the same exam+batch from colliding.
 class ResultModel {
   final String resultId;
   final String examId;
-  final String examCode; // denormalized for display, same pattern as BatchModel/ExamineeModel
+  final String examCode; // denormalized for display, same pattern as BatchModel
   final String batchId;
-  final String examineeId;
+  final String scanRef; // non-personal technical id for this scanned sheet
   final int rawScore;
   final int totalGraded; // items actually covered by the Final answer key used
   final int totalItems; // from the exam/template, for context even if totalGraded is less
@@ -29,7 +31,7 @@ class ResultModel {
     required this.examId,
     required this.examCode,
     required this.batchId,
-    required this.examineeId,
+    required this.scanRef,
     required this.rawScore,
     required this.totalGraded,
     required this.totalItems,
@@ -40,16 +42,18 @@ class ResultModel {
     required this.processedByName,
   });
 
-  /// Deterministic document ID -- one result per exam+batch+examinee.
+  /// Deterministic document ID -- one result per exam+batch+scanned sheet.
   /// Writing to this ID is what makes duplicate results impossible by
   /// construction, and what makes a retried/interrupted write safe to
-  /// simply retry (see FirestoreService.persistResult).
+  /// simply retry (see FirestoreService.persistResult). [scanRef] must be a
+  /// non-personal identifier that is unique per scanned sheet so two sheets
+  /// in the same exam+batch can never overwrite each other.
   static String buildId({
     required String examId,
     required String batchId,
-    required String examineeId,
+    required String scanRef,
   }) =>
-      '${examId}_${batchId}_$examineeId';
+      '${examId}_${batchId}_$scanRef';
 
   factory ResultModel.fromFirestore(Map<String, dynamic> data, String documentId) {
     return ResultModel(
@@ -57,7 +61,7 @@ class ResultModel {
       examId: data['examId'] as String,
       examCode: data['examCode'] as String,
       batchId: data['batchId'] as String,
-      examineeId: data['examineeId'] as String,
+      scanRef: data['scanRef'] as String,
       rawScore: data['rawScore'] as int,
       totalGraded: data['totalGraded'] as int,
       totalItems: data['totalItems'] as int,
@@ -75,7 +79,7 @@ class ResultModel {
       'examId': examId,
       'examCode': examCode,
       'batchId': batchId,
-      'examineeId': examineeId,
+      'scanRef': scanRef,
       'rawScore': rawScore,
       'totalGraded': totalGraded,
       'totalItems': totalItems,

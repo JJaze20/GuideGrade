@@ -17,11 +17,12 @@ import 'scanned_image_viewer_screen.dart';
 ///
 /// Shows what the OMR decoder read off each scanned sheet in this session
 /// (AppState.scannedResults), and — when this session has a real
-/// exam+batch+examinee identity (see AppState.setScanSession, populated by
-/// Exam Setup) and a usable Final answer key was loaded — persists one
-/// ResultModel for the selected examinee to Firestore, which becomes the
-/// durable record (survives navigating away and coming back, unlike
-/// AppState.scannedResults, which is only ever in-memory for this run).
+/// exam+batch identity plus a non-personal scan reference (see
+/// AppState.setScanSession, populated by Exam Setup) and a usable Final
+/// answer key was loaded — persists one ResultModel for this scan to
+/// Firestore, which becomes the durable record (survives navigating away
+/// and coming back, unlike AppState.scannedResults, which is only ever
+/// in-memory for this run).
 ///
 /// Persistence happens once, from an explicit post-frame method
 /// ([_persistResults]) guarded against repeat calls — never as a side
@@ -59,21 +60,21 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
     if (!mounted) return;
     final appState = AppStateScope.of(context);
 
-    // No real exam/batch/examinee identity for this session (e.g. a
-    // manual/local-only run) -- nothing durable to save. The in-memory
-    // scannedResults still render below as before.
+    // No real exam/batch identity for this session (e.g. a manual/local-only
+    // run) -- nothing durable to save. The in-memory scannedResults still
+    // render below as before.
     if (!appState.hasRealScanSession) return;
 
     final examId = appState.scanExamId!;
     final batchId = appState.scanBatchId!;
-    final examineeId = appState.scanExamineeId!;
+    final scanRef = appState.scanRef!;
 
     // Already persisted earlier in this same app run (e.g. the user left
     // this screen and came back) -- just re-display it, don't re-score or
     // re-increment actualCount.
     if (appState.scannedResults.isEmpty) {
       final existing = await _firestoreService.getResultById(
-        ResultModel.buildId(examId: examId, batchId: batchId, examineeId: examineeId),
+        ResultModel.buildId(examId: examId, batchId: batchId, scanRef: scanRef),
       );
       if (!mounted) return;
       if (existing != null) setState(() => _persistedResult = existing);
@@ -100,11 +101,11 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
       final currentUser = FirebaseAuth.instance.currentUser;
 
       final result = ResultModel(
-        resultId: ResultModel.buildId(examId: examId, batchId: batchId, examineeId: examineeId),
+        resultId: ResultModel.buildId(examId: examId, batchId: batchId, scanRef: scanRef),
         examId: examId,
         examCode: appState.activeExamCode,
         batchId: batchId,
-        examineeId: examineeId,
+        scanRef: scanRef,
         rawScore: rawScore,
         totalGraded: totalGraded,
         totalItems: totalItems,
@@ -148,7 +149,7 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
         builder: (dialogContext) => AlertDialog(
           title: const Text('Batch Complete?'),
           content: Text(
-            'All expected examinees (${batch.expectedCount}) have been scanned for batch '
+            'All expected sheets (${batch.expectedCount}) have been scanned for batch '
             '${batch.batchCode}. Mark this batch as Completed?',
           ),
           actions: [
@@ -219,8 +220,8 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
       icon = FontAwesomeIcons.triangleExclamation;
     } else if (_persistedResult != null) {
       message = _persistOutcome == ResultPersistOutcome.updated
-          ? 'Existing result updated for ${appState.scanExamineeName ?? "this examinee"}.'
-          : 'Result saved for ${appState.scanExamineeName ?? "this examinee"}.';
+          ? 'Existing result updated for this scan.'
+          : 'Result saved for this scan.';
       background = AppColors.emerald100;
       foreground = const Color(0xFF065F46);
       icon = FontAwesomeIcons.circleCheck;
@@ -258,7 +259,7 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
             ),
             const SizedBox(height: 6),
             Text(
-              'Already graded and saved for this examinee.',
+              'Already graded and saved for this scan.',
               style: AppTextStyles.body(size: 10.5, color: AppColors.textGray),
             ),
           ],

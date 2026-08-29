@@ -67,26 +67,28 @@ class AppState extends ChangeNotifier {
 
   // --------------------------------------------------------------------
   // Real scan-session identity. Populated by Exam Setup once a real
-  // Firestore ExamModel, BatchModel, and ExamineeModel have all been
-  // selected -- [activeExamCode] alone is never sufficient to identify a
-  // scan session against Firestore, since it's just the sheet-layout
-  // lookup key and carries no exam/batch/examinee identity. Cleared only
-  // by [clearScanSession] -- NOT by [resetScanProgress], since Exam
-  // Results still needs this identity after scanning finishes in order to
-  // persist a ResultModel.
+  // Firestore ExamModel and BatchModel have both been selected --
+  // [activeExamCode] alone is never sufficient to identify a scan session
+  // against Firestore, since it's just the sheet-layout lookup key and
+  // carries no exam/batch identity. GuideGrade stores no examinee personal
+  // data: [scanRef] is a non-personal technical identifier (e.g. a
+  // Firestore-generated document ID) that only keeps result documents in
+  // the same exam+batch from colliding. Cleared only by [clearScanSession]
+  // -- NOT by [resetScanProgress], since Exam Results still needs this
+  // identity after scanning finishes in order to persist a ResultModel.
   // --------------------------------------------------------------------
   String? scanExamId;
   String? scanExamTitle;
   int? scanTotalItems;
   String? scanBatchId;
   String? scanBatchCode;
-  String? scanExamineeId;
-  String? scanExamineeName;
+  String? scanRef;
 
-  /// True once a real exam+batch+examinee have all been selected for this
-  /// session -- i.e. it's safe to persist a ResultModel against them.
+  /// True once a real exam+batch plus a non-personal [scanRef] have all
+  /// been set for this session -- i.e. it's safe to persist a ResultModel
+  /// against them.
   bool get hasRealScanSession =>
-      scanExamId != null && scanBatchId != null && scanExamineeId != null;
+      scanExamId != null && scanBatchId != null && scanRef != null;
 
   void setScanSession({
     required String examId,
@@ -95,8 +97,7 @@ class AppState extends ChangeNotifier {
     required int totalItems,
     required String batchId,
     required String batchCode,
-    required String examineeId,
-    required String examineeName,
+    required String scanRef,
   }) {
     scanExamId = examId;
     activeExamCode = examCode;
@@ -104,8 +105,7 @@ class AppState extends ChangeNotifier {
     scanTotalItems = totalItems;
     scanBatchId = batchId;
     scanBatchCode = batchCode;
-    scanExamineeId = examineeId;
-    scanExamineeName = examineeName;
+    this.scanRef = scanRef;
     notifyListeners();
   }
 
@@ -115,8 +115,7 @@ class AppState extends ChangeNotifier {
     scanTotalItems = null;
     scanBatchId = null;
     scanBatchCode = null;
-    scanExamineeId = null;
-    scanExamineeName = null;
+    scanRef = null;
     notifyListeners();
   }
 

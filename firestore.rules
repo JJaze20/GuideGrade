@@ -15,7 +15,7 @@ rules_version = '2';
 //                         MUST NOT read or write confidential examination
 //                         data.
 //   guidance_council   -- the confidential examination workflow (exams,
-//                         answer keys, batches, examinees, and any future
+//                         answer keys, batches, and any future
 //                         confidential examination collection). MUST NOT
 //                         manage other users and MUST NOT read/write logs.
 //
@@ -120,16 +120,6 @@ service cloud.firestore {
     }
 
     // ------------------------------------------------------------------
-    // examinees/{examineeId} -- confidential student examination data.
-    // Guidance Council only.
-    // ------------------------------------------------------------------
-    match /examinees/{examineeId} {
-      allow read: if isGuidanceCouncil();
-      // deleteExaminee() is a real, used app feature (edit_examinee_screen.dart).
-      allow create, update, delete: if isGuidanceCouncil();
-    }
-
-    // ------------------------------------------------------------------
     // answer_keys/{answerKeyId} -- confidential examination data.
     // Guidance Council only.
     // ------------------------------------------------------------------
@@ -141,8 +131,8 @@ service cloud.firestore {
 
     // ------------------------------------------------------------------
     // results/{resultId} -- confidential examination data (one graded
-    // outcome per exam+batch+examinee). Guidance Council only, same
-    // posture as exams/batches/examinees/answer_keys above. system_admin
+    // outcome per exam+batch scanned sheet). Guidance Council only, same
+    // posture as exams/batches/answer_keys above. system_admin
     // gets no rule here at all, so it falls through to the default-deny
     // catch-all below, exactly like the other confidential collections.
     // NOT deployed as part of this change -- see the A1/A2 implementation
@@ -221,7 +211,7 @@ service cloud.firestore {
     }
 
     // Default deny for anything not explicitly matched above -- this is
-    // also what makes exams/batches/examinees/answer_keys unreadable and
+    // also what makes exams/batches/answer_keys unreadable and
     // unwritable by system_admin: there is no admin-inclusive rule for any
     // of those collections, so a system_admin request falls all the way
     // through to here and is denied. Any future confidential examination
