@@ -128,6 +128,63 @@ class AuthService {
     return _authorize(authCredential.user, requiredRole: requiredRole);
   }
 
+  /// Restores an already-authenticated session's approved [UserModel]
+  /// *without* a fresh interactive sign-in — for a cold app start, where
+  /// Firebase Auth already has a persisted session (it keeps one in local,
+  /// secure storage that survives an app restart or being fully killed,
+  /// independent of network) but nothing in this app's own state
+  /// remembers who that is, since [UserModel] only ever lived in
+  /// [AppState.currentUser] — an in-memory field, gone the instant the
+  /// process is. Call this once at startup, before the route guard runs
+  /// (see AppRoutes.onGenerateRoute's doc comment), to skip straight past
+  /// the login screen when possible.
+  ///
+  /// Deliberately **does not** call [signOut] on an ambiguous failure (no
+  /// network and nothing cached yet, or any other lookup error) — unlike
+  /// [_authorize], which is right to sign out on failure since that path
+  /// only ever runs during an interactive attempt that hasn't actually let
+  /// anyone in yet. Signing out *here* would destroy the one thing making
+  /// offline use possible at all, the next time this device has no
+  /// connection, over what might just be "haven't gone online since
+  /// install." Returns null in that case — the caller falls back to
+  /// showing the login screen for *this* launch, exactly as if this method
+  /// didn't exist, and Firebase's session stays intact to try again.
+  ///
+  /// A **definitive** denial (the Firestore record was found — fresh or
+  /// from cache — and says inactive, or an unrecognized role) is still
+  /// signed out, same as [_authorize]: that's a real, trustworthy answer
+  /// either way, not a "we don't know."
+  ///
+  /// `cloud_firestore` keeps its own on-device cache of every document
+  /// already fetched (enabled by default on mobile, not configured
+  /// anywhere in this app) — the user document this reads was already
+  /// fetched once during the original interactive login, so this resolves
+  /// from that cache with no network needed on every restore after the
+  /// first.
+  Future<UserModel?> restoreSession() async {
+    final user = _auth.currentUser;
+    if (user == null) return null;
+
+    UserModel? firestoreUser;
+    try {
+      firestoreUser = await _firestoreService
+          .getUserById(user.uid)
+          .timeout(const Duration(seconds: 8));
+    } catch (e) {
+      print('Auth: session restore lookup failed for ${user.uid} (leaving session intact): $e');
+      return null;
+    }
+
+    if (firestoreUser == null) return null;
+
+    if (!firestoreUser.isActive || !_knownRoles.contains(firestoreUser.role)) {
+      await signOut();
+      return null;
+    }
+
+    return firestoreUser;
+  }
+
   Future<void> signOut() async {
     await _auth.signOut();
     final googleSignIn = _googleSignIn;

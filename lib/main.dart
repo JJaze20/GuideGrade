@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'core/constants/app_theme.dart';
 import 'core/routes/app_routes.dart';
+import 'core/services/auth_service.dart';
 import 'core/state/app_state.dart';
 import 'core/utils/platform_utils.dart';
 import 'firebase_options.dart';
@@ -34,6 +35,22 @@ Future<void> main() async {
 
   final appState = AppState();
   await appState.loadPersistedData();
+
+  // Restore an already-approved session from Firebase's own persisted auth
+  // state (survives an app restart or kill, independent of network) before
+  // the route guard in AppRoutes ever runs — without this, AppState.
+  // currentUser (in-memory only) is always null on a fresh process, so
+  // every cold start bounced to the login screen even for an already
+  // signed-in user, online or off. See AuthService.restoreSession's doc
+  // comment for why this never signs the session out on an ambiguous
+  // (e.g. offline, nothing cached yet) failure — only a definitive denial.
+  try {
+    final restored = await AuthService().restoreSession();
+    if (restored != null) appState.setCurrentUser(restored);
+  } catch (e) {
+    print('Session restore failed: $e');
+  }
+
   runApp(GuideGradeApp(appState: appState));
 }
 
