@@ -16,14 +16,19 @@ import '../../../shared/widgets/primary_button.dart';
 class CreateBatchScreen extends StatefulWidget {
   final String? initialExamCode;
 
-  const CreateBatchScreen({super.key, this.initialExamCode});
+  /// Test seam only. Production always resolves [FirebaseAuth.instance];
+  /// a test injects a fake so batch creation can run without Firebase.
+  @visibleForTesting
+  final FirebaseAuth? auth;
+
+  const CreateBatchScreen({super.key, this.initialExamCode, this.auth});
 
   @override
   State<CreateBatchScreen> createState() => _CreateBatchScreenState();
 }
 
 class _CreateBatchScreenState extends State<CreateBatchScreen> {
-  final FirebaseAuth _auth = FirebaseAuth.instance;
+  FirebaseAuth get _auth => widget.auth ?? FirebaseAuth.instance;
 
   final _formKey = GlobalKey<FormState>();
 
@@ -77,7 +82,8 @@ class _CreateBatchScreenState extends State<CreateBatchScreen> {
 
     setState(() => _isSaving = true);
 
-    final repo = AppStateScope.of(context).batchRepository;
+    final appState = AppStateScope.of(context);
+    final repo = appState.batchRepository;
     try {
       // Local batch-code uniqueness check.
       final existing = await repo.getBatches();
@@ -101,7 +107,10 @@ class _CreateBatchScreenState extends State<CreateBatchScreen> {
         description: _descriptionController.text.trim(),
         expectedCount: int.parse(_expectedCountController.text),
         createdByUid: currentUser?.uid ?? '',
-        createdByName: currentUser?.displayName ?? 'Unknown',
+        // The validated, Firestore-backed identity — not the Firebase Auth
+        // client profile, whose displayName can be null even when the
+        // account has one (see AppState.currentUser / UserModel).
+        createdByName: appState.currentUser?.displayName ?? 'Unknown',
       );
 
       if (mounted) {
