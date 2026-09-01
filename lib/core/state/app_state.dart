@@ -16,6 +16,9 @@ import '../omr/omr_templates.dart';
 import '../services/batch_repository.dart';
 import '../services/local_batch_repository.dart';
 import '../services/local_storage_service.dart';
+import '../sync/sync_client.dart';
+import '../sync/sync_job.dart';
+import '../sync/sync_manager.dart';
 
 class _OmrDecodeRequest {
   final String imagePath;
@@ -54,9 +57,44 @@ String? _rectifyOmrPage(_RectifyRequest request) {
   return const OmrDecoder().rectifyForOverlay(request.imagePath, request.template, request.outputPath);
 }
 
+/// Where one exam's answer key stands relative to the cloud, derived purely
+/// from the local `PUSH_ANSWER_KEY` queue jobs — no network read.
+enum AnswerKeySyncStatus {
+  /// No cloud data plane on this run ([AppState.syncManager] is null).
+  notConfigured,
+
+  /// No pending or blocked job — the last push (if any) settled.
+  upToDate,
+
+  /// A push is queued or in flight.
+  pending,
+
+  /// A push hit `conflict('answer_key_changed')` and is parked as
+  /// `blockedConflict`; the user must adopt the cloud copy or force-push.
+  conflict,
+}
+
 /// A lightweight in-memory app state shared across screens via
 /// [AppStateScope] (an InheritedNotifier, so no third-party state package).
 class AppState extends ChangeNotifier {
+  /// [batchRepository] defaults to a bare [LocalBatchRepository]; the wired
+  /// app injects a [SyncingBatchRepository] (paired with [syncManager]) when
+  /// the cloud data plane is configured. Existing `AppState()` callers are
+  /// unaffected. This phase only holds the dependencies — nothing here
+  /// drives the [syncManager].
+  AppState({
+    BatchRepository? batchRepository,
+    this.syncManager,
+    LocalStorageService? localStorage,
+  })  : batchRepository = batchRepository ?? LocalBatchRepository(),
+        _localStorage = localStorage ?? LocalStorageService();
+
+  /// The offline sync coordinator, or null when the cloud data plane is not
+  /// configured for this run. Held for later wiring phases (answer-key
+  /// push, login/lifecycle control); no code in this phase starts, pauses,
+  /// or drains it.
+  final SyncManager? syncManager;
+
   /// The signed-in, Firestore-approved user for this session — null until a
   /// login screen successfully authorizes a sign-in (see
   /// AuthService._authorize) and cleared again on logout. [AppRoutes]'s
@@ -65,7 +103,30 @@ class AppState extends ChangeNotifier {
 
   void setCurrentUser(UserModel? user) {
     currentUser = user;
+    _applySyncRunStateFor(user);
     notifyListeners();
+  }
+
+  /// Runs the offline sync engine only while an **active Guidance Council**
+  /// user is signed in; pauses it for a System Administrator, an inactive
+  /// account, an unknown role, or logout. No-op when the cloud data plane
+  /// is not configured ([syncManager] is null).
+  ///
+  /// This is the only place [syncManager]'s run state is driven. Role and
+  /// active status are read from the app's own [UserModel] — Firebase custom
+  /// claims are never inspected here. Pausing stops new jobs from starting
+  /// but never deletes the persisted queue, `sync_state.json`, or any
+  /// pending job.
+  void _applySyncRunStateFor(UserModel? user) {
+    final manager = syncManager;
+    if (manager == null) return;
+    final activeGuidance =
+        user != null && user.isActive && user.isGuidanceCouncil;
+    if (activeGuidance) {
+      unawaited(manager.start());
+    } else {
+      manager.pause();
+    }
   }
 
   /// Sheet-layout lookup key for the active exam type. AT | TAT | QTM.
@@ -76,12 +137,12 @@ class AppState extends ChangeNotifier {
   /// code that's had a key saved. The scorer only ever reads this map.
   final Map<String, AnswerKey> answerKeys = {};
 
-  final LocalStorageService _localStorage = LocalStorageService();
+  final LocalStorageService _localStorage;
 
-  /// The one storage seam for the `Batch -> Scans -> Results` model. Local
-  /// today; a cloud implementation can replace this without touching the
-  /// screens that use it.
-  final BatchRepository batchRepository = LocalBatchRepository();
+  /// The one storage seam for the `Batch -> Scans -> Results` model. A
+  /// [SyncingBatchRepository] in the wired app, a bare [LocalBatchRepository]
+  /// otherwise; either way the screens only ever see [BatchRepository].
+  final BatchRepository batchRepository;
 
   // --------------------------------------------------------------------
   // Active scan session. A scan can only ever be started against a real
@@ -299,10 +360,197 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setAnswerKey(AnswerKey key) {
+  /// Saves [key] locally — the source of truth — then, when the cloud data
+  /// plane is configured ([syncManager] non-null), mirrors it to the sync
+  /// queue: exactly one `PUSH_ANSWER_KEY` job (identity = exam code) plus
+  /// one fire-and-forget [SyncManager.wake].
+  ///
+  /// Sequence: local save → enqueue → wake → return. The local save is
+  /// awaited and its exception propagates (nothing is enqueued or woken on
+  /// failure). The cloud mirror is best-effort: a queue failure is logged
+  /// (type only) and swallowed, never turning a successful local save into
+  /// a reported failure. No Supabase/network call is made from here.
+  Future<void> setAnswerKey(AnswerKey key) async {
     answerKeys[key.examCode] = key;
-    unawaited(_localStorage.saveAnswerKeys(answerKeys));
     notifyListeners();
+    await _localStorage.saveAnswerKeys(answerKeys);
+    await _enqueueAnswerKeyPush(key.examCode);
+  }
+
+  Future<void> _enqueueAnswerKeyPush(String examCode) async {
+    final manager = syncManager;
+    if (manager == null) return; // local-only run: nothing to mirror
+
+    var enqueued = false;
+    try {
+      await manager.queue.enqueue(SyncJob.create(
+        type: SyncJobType.pushAnswerKey,
+        entityId: examCode,
+      ));
+      enqueued = true;
+    } catch (error) {
+      _logSyncFailure(error);
+    }
+    if (enqueued) {
+      unawaited(_safeWake(manager));
+    }
+  }
+
+  Future<void> _safeWake(SyncManager manager) async {
+    try {
+      await manager.wake();
+    } catch (error) {
+      _logSyncFailure(error);
+    }
+  }
+
+  void _logSyncFailure(Object error) {
+    // Type only — matches the sanitized logging used across the sync layer.
+    debugPrint('AppState: answer-key sync step failed (${error.runtimeType})');
+  }
+
+  /// The cloud-sync standing of [examCode]'s answer key, read only from the
+  /// local `PUSH_ANSWER_KEY` jobs (see [AnswerKeySyncStatus]). A
+  /// `blockedConflict` job wins over a pending one.
+  AnswerKeySyncStatus answerKeySyncStatusFor(String examCode) {
+    final manager = syncManager;
+    if (manager == null) return AnswerKeySyncStatus.notConfigured;
+
+    final dedupeKey = SyncJob.dedupeKeyFor(
+      type: SyncJobType.pushAnswerKey,
+      entityId: examCode,
+    );
+    final jobs = manager.queue.jobsWithDedupeKey(dedupeKey);
+    if (jobs.any((j) => j.status == SyncJobStatus.blockedConflict)) {
+      return AnswerKeySyncStatus.conflict;
+    }
+    if (jobs.any((j) =>
+        j.status == SyncJobStatus.pending ||
+        j.status == SyncJobStatus.inProgress)) {
+      return AnswerKeySyncStatus.pending;
+    }
+    return AnswerKeySyncStatus.upToDate;
+  }
+
+  /// A short, user-facing label for [examCode]'s answer-key sync standing —
+  /// never an internal code (`blockedConflict` / `answer_key_changed` are
+  /// not surfaced). Deliberately separate from [answerKeyStatus], which only
+  /// means "a key is loaded in memory", not "the cloud has this key".
+  String answerKeySyncLabelFor(String examCode) {
+    if (!answerKeys.containsKey(examCode)) return 'Not set';
+    switch (answerKeySyncStatusFor(examCode)) {
+      case AnswerKeySyncStatus.notConfigured:
+        return 'Local';
+      case AnswerKeySyncStatus.pending:
+        return 'Syncing';
+      case AnswerKeySyncStatus.conflict:
+        return 'Conflict';
+      case AnswerKeySyncStatus.upToDate:
+        return 'Synced';
+    }
+  }
+
+  /// Read-only fetch of the current cloud answer key for [examCode], routed
+  /// through the sync layer's [SyncClient] so no screen ever imports or
+  /// calls Supabase. Null when there is no cloud data plane on this run.
+  ///
+  /// The returned [CloudAnswerKeyRead] is already sanitized by the client —
+  /// version, answers, updated-by *name* and updated-at only; never a UID,
+  /// an email or a token. Callers hold it in memory only.
+  Future<CloudAnswerKeyRead?> readCloudAnswerKey(String examCode) {
+    final manager = syncManager;
+    if (manager == null) return Future<CloudAnswerKeyRead?>.value(null);
+    return manager.client.readAnswerKey(examCode);
+  }
+
+  /// Resolve an answer-key conflict by taking the cloud copy: overwrite the
+  /// local [AnswerKey] with [answers], persist it, set the local sync
+  /// baseline to the cloud [cloudVersion] / [updatedAt], and drop the parked
+  /// `PUSH_ANSWER_KEY` job(s). No push is enqueued and no network call is
+  /// made.
+  Future<void> adoptAnswerKeyFromCloud(
+    String examCode, {
+    required int cloudVersion,
+    required Map<String, String> answers,
+    required DateTime updatedAt,
+  }) async {
+    answerKeys[examCode] =
+        AnswerKey(examCode: examCode, correctChoices: Map.of(answers));
+    notifyListeners();
+    await _localStorage.saveAnswerKeys(answerKeys);
+
+    final manager = syncManager;
+    if (manager == null) return;
+
+    manager.queue.state.setAnswerKeyPushed(
+      examCode,
+      version: cloudVersion,
+      updatedAt: updatedAt.toUtc(),
+    );
+    await _safeSaveState(manager);
+    await _removeAnswerKeyJobs(examCode, manager);
+  }
+
+  /// Resolve an answer-key conflict by keeping the local copy: drop the
+  /// parked job(s) and enqueue a fresh `PUSH_ANSWER_KEY` whose [SyncJob.meta]
+  /// carries only `force=true` and the [expectedCloudVersion] the user just
+  /// reviewed, then wake the manager once. The local [AnswerKey] is left
+  /// unchanged; the guarded force push in `SupabaseSyncClient` still refuses
+  /// if the cloud moved past [expectedCloudVersion].
+  Future<void> prepareAnswerKeyForcePush(
+    String examCode,
+    int expectedCloudVersion,
+  ) async {
+    final manager = syncManager;
+    if (manager == null) return;
+
+    await _removeAnswerKeyJobs(examCode, manager);
+
+    var enqueued = false;
+    try {
+      await manager.queue.enqueue(SyncJob.create(
+        type: SyncJobType.pushAnswerKey,
+        entityId: examCode,
+        meta: {
+          'force': 'true',
+          'expectedCloudVersion': expectedCloudVersion.toString(),
+        },
+      ));
+      enqueued = true;
+    } catch (error) {
+      _logSyncFailure(error);
+    }
+    if (enqueued) {
+      unawaited(_safeWake(manager));
+    }
+  }
+
+  /// Remove every `PUSH_ANSWER_KEY` job for [examCode] that is not already
+  /// running. Awaited (this is not a hot path) and best-effort per job.
+  Future<void> _removeAnswerKeyJobs(
+    String examCode,
+    SyncManager manager,
+  ) async {
+    final dedupeKey = SyncJob.dedupeKeyFor(
+      type: SyncJobType.pushAnswerKey,
+      entityId: examCode,
+    );
+    for (final job in manager.queue.jobsWithDedupeKey(dedupeKey)) {
+      if (job.status == SyncJobStatus.inProgress) continue;
+      try {
+        await manager.queue.remove(job.id);
+      } catch (error) {
+        _logSyncFailure(error);
+      }
+    }
+  }
+
+  Future<void> _safeSaveState(SyncManager manager) async {
+    try {
+      await manager.queue.saveState();
+    } catch (error) {
+      _logSyncFailure(error);
+    }
   }
 
   void resetScanProgress() {

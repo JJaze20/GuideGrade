@@ -43,3 +43,19 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Environment files — NEVER commit these (may hold keys / connection strings).
+.env
+*.env
+
+# Firebase / Google Cloud service-account credentials — NEVER commit these.
+# Used only by the local Admin SDK claim script in tools/firebase-claims/.
+*serviceAccount*.json
+*service-account*.json
+*firebase-adminsdk*.json
+gcp-*.json
+google-credentials*.json
+tools/firebase-claims/node_modules/
+tools/firebase-claims/*.json
+!tools/firebase-claims/package.json
+!tools/firebase-claims/package-lock.json
