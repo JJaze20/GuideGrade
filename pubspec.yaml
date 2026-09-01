@@ -45,6 +45,10 @@ dependencies:
   path_provider: ^2.1.5
   shared_preferences: ^2.3.3
   printing: ^5.13.0
+  # Phase 3: Supabase used ONLY as a data/storage plane authorized by the
+  # existing Firebase identity via Supabase's native Firebase third-party
+  # auth. No Supabase Auth sign-in is ever called (see lib/main.dart).
+  supabase_flutter: ^2.5.0
 
 dev_dependencies:
   flutter_test:
