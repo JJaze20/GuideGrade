@@ -1,11 +1,24 @@
+// Startup logging goes to the console by design (before any UI or logger
+// exists); the file has always used `print` for this.
+// ignore_for_file: avoid_print
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show Supabase;
 import 'core/constants/app_theme.dart';
 import 'core/routes/app_routes.dart';
 import 'core/services/auth_service.dart';
+import 'core/services/batch_repository.dart';
+import 'core/services/local_batch_repository.dart';
+import 'core/services/local_storage_service.dart';
 import 'core/state/app_state.dart';
+import 'core/sync/supabase_sync_client.dart';
+import 'core/sync/sync_manager.dart';
+import 'core/sync/sync_queue.dart';
+import 'core/sync/syncing_batch_repository.dart';
 import 'core/utils/platform_utils.dart';
 import 'firebase_options.dart';
 
@@ -33,7 +46,85 @@ Future<void> main() async {
     // Continue even if Firebase fails - allows UI to render
   }
 
-  final appState = AppState();
+  // Supabase (Phase 3): a data/storage plane authorized by the EXISTING
+  // Firebase identity via Supabase's native Firebase third-party auth.
+  //
+  // - No Supabase Auth is ever used: signInWithPassword / signUp /
+  //   signInWithOAuth are never called anywhere. The Firebase ID token is
+  //   the bearer, supplied on demand by the [accessToken] callback below;
+  //   on logout FirebaseAuth clears currentUser, the callback returns null,
+  //   and every Supabase request falls back to anonymous.
+  // - URL + publishable (anon) key come from --dart-define and are never
+  //   hardcoded. No service_role key or JWT secret is present in the app.
+  // - When the defines are absent (a plain `flutter run`), Supabase is left
+  //   uninitialized and nothing else in the app is affected.
+  const supabaseUrl = String.fromEnvironment('SUPABASE_URL');
+  const supabasePublishableKey = String.fromEnvironment('SUPABASE_ANON_KEY');
+  var supabaseReady = false;
+  if (supabaseUrl.isNotEmpty && supabasePublishableKey.isNotEmpty) {
+    try {
+      await Supabase.initialize(
+        url: supabaseUrl,
+        publishableKey: supabasePublishableKey,
+        accessToken: () async {
+          final user = FirebaseAuth.instance.currentUser;
+          return user == null ? null : await user.getIdToken();
+        },
+      );
+      supabaseReady = true;
+      print('Supabase initialized (third-party auth: Firebase)');
+    } catch (e) {
+      print('Supabase initialization error: $e');
+      // Non-fatal: the local-only app keeps working without the cloud plane.
+    }
+  } else {
+    print('Supabase not initialized (SUPABASE_URL / SUPABASE_ANON_KEY not set)');
+  }
+
+  // Sync infrastructure (Phase 9B-5A): exactly one SyncManager for the app,
+  // wired by constructor injection over the local storage layer. restore()
+  // reloads the durable job queue and reconciles it against local truth,
+  // but NOTHING is processed or uploaded here — processQueue() / start()
+  // are deliberately not called in this phase. With Supabase unconfigured
+  // the app behaves exactly as before, on a bare LocalBatchRepository.
+  final localStorage = LocalStorageService();
+  final localBatchRepository = LocalBatchRepository();
+  BatchRepository appBatchRepository = localBatchRepository;
+  SyncManager? syncManager;
+
+  if (supabaseReady) {
+    final syncQueue = SyncQueue();
+    final manager = SyncManager(
+      queue: syncQueue,
+      client: SupabaseSyncClient(
+        batches: localBatchRepository,
+        localStorage: localStorage,
+        identity: _FirebaseSyncIdentity(),
+        // SyncQueue.restore() can swap queue.state, so resolve it lazily.
+        getSyncState: () => syncQueue.state,
+      ),
+      batchRepository: localBatchRepository,
+      loadAnswerKeys: localStorage.loadAnswerKeys,
+    );
+    try {
+      await manager.restore();
+      print('Sync queue restored (processing NOT started)');
+    } catch (e) {
+      print('Sync queue restore error: ${e.runtimeType}');
+    }
+    syncManager = manager;
+    appBatchRepository = SyncingBatchRepository(
+      local: localBatchRepository,
+      syncManager: manager,
+    );
+  } else {
+    print('Sync infrastructure skipped (Supabase not configured)');
+  }
+
+  final appState = AppState(
+    batchRepository: appBatchRepository,
+    syncManager: syncManager,
+  );
   await appState.loadPersistedData();
 
   // Restore an already-approved session from Firebase's own persisted auth
@@ -52,6 +143,26 @@ Future<void> main() async {
   }
 
   runApp(GuideGradeApp(appState: appState));
+}
+
+/// Bridges Supabase's [SyncIdentity] port to Firebase Auth, kept in
+/// `main.dart` so `lib/core/sync` never imports `firebase_auth`. Read-only:
+/// it exposes the current uid / display name and can force a token refresh;
+/// it never signs in or out.
+class _FirebaseSyncIdentity implements SyncIdentity {
+  @override
+  String? get uid => FirebaseAuth.instance.currentUser?.uid;
+
+  @override
+  String? get displayName => FirebaseAuth.instance.currentUser?.displayName;
+
+  @override
+  Future<bool> refreshToken() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return false;
+    await user.getIdToken(true); // force-refresh so the next request re-reads it
+    return true;
+  }
 }
 
 /// Root widget for the Guide Grade app.
