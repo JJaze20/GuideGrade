@@ -24,6 +24,18 @@ class OmrCorner {
   const OmrCorner(this.xFrac, this.yFrac);
 }
 
+/// A fractional bounding box (0.0-1.0 of the page, top-left origin — same
+/// convention as [BubblePos]/[OmrCorner]). Used only to crop a printed
+/// hand-written field (Last Name / First Name) out of a perspective-
+/// corrected scan for on-device OCR; never used for bubble scoring.
+class OmrFieldRect {
+  final double xFrac;
+  final double yFrac;
+  final double widthFrac;
+  final double heightFrac;
+  const OmrFieldRect(this.xFrac, this.yFrac, this.widthFrac, this.heightFrac);
+}
+
 class OmrExamTemplate {
   final String examCode;
   final double pageWidthPt;
@@ -42,6 +54,11 @@ class OmrExamTemplate {
   final double bubbleRadiusYPt;
   final List<OmrCorner> cornerMarkers;
   final List<OmrSection> sections;
+  /// Where the printed, hand-written Last Name / First Name / MI boxes are
+  /// on the sheet — see [OmrFieldRect].
+  final OmrFieldRect lastNameFieldRect;
+  final OmrFieldRect firstNameFieldRect;
+  final OmrFieldRect middleInitialFieldRect;
   const OmrExamTemplate({
     required this.examCode,
     required this.pageWidthPt,
@@ -50,6 +67,9 @@ class OmrExamTemplate {
     required this.bubbleRadiusYPt,
     required this.cornerMarkers,
     required this.sections,
+    required this.lastNameFieldRect,
+    required this.firstNameFieldRect,
+    required this.middleInitialFieldRect,
   });
 }
 
@@ -60,6 +80,9 @@ final OmrExamTemplate _omrPT = OmrExamTemplate(
   bubbleRadiusPt: 6.0,
   bubbleRadiusYPt: 6.0,
   cornerMarkers: const [OmrCorner(0.04032, 0.02851), OmrCorner(0.94745, 0.02851), OmrCorner(0.04032, 0.76138), OmrCorner(0.94745, 0.76138)],
+  lastNameFieldRect: const OmrFieldRect(0.07391, 0.10690, 0.20159, 0.04039),
+  firstNameFieldRect: const OmrFieldRect(0.27550, 0.10690, 0.18479, 0.04039),
+  middleInitialFieldRect: const OmrFieldRect(0.46029, 0.10690, 0.06720, 0.04039),
   sections: const [
     OmrSection(
       name: "Personality Profile",
@@ -262,6 +285,9 @@ final OmrExamTemplate _omrTAT = OmrExamTemplate(
   bubbleRadiusPt: 8.0,
   bubbleRadiusYPt: 6.4,
   cornerMarkers: const [OmrCorner(0.02564, 0.03922), OmrCorner(0.91880, 0.03922), OmrCorner(0.02564, 0.90196), OmrCorner(0.91880, 0.90196)],
+  lastNameFieldRect: const OmrFieldRect(0.04701, 0.13889, 0.29808, 0.02451),
+  firstNameFieldRect: const OmrFieldRect(0.34509, 0.13889, 0.26496, 0.02451),
+  middleInitialFieldRect: const OmrFieldRect(0.61004, 0.13889, 0.09936, 0.02451),
   sections: const [
     OmrSection(
       name: "Test I",
@@ -421,6 +447,9 @@ final OmrExamTemplate _omrQTM = OmrExamTemplate(
   bubbleRadiusPt: 8.0,
   bubbleRadiusYPt: 6.4,
   cornerMarkers: const [OmrCorner(0.03922, 0.02564), OmrCorner(0.94118, 0.02564), OmrCorner(0.03922, 0.93803), OmrCorner(0.94118, 0.93803)],
+  lastNameFieldRect: const OmrFieldRect(0.07190, 0.10256, 0.37647, 0.02350),
+  firstNameFieldRect: const OmrFieldRect(0.44837, 0.10256, 0.33464, 0.02350),
+  middleInitialFieldRect: const OmrFieldRect(0.78301, 0.10256, 0.12549, 0.02350),
   sections: const [
     OmrSection(
       name: "Qualifying Test in Mathematics",
@@ -498,6 +527,9 @@ final OmrExamTemplate _omrAT = OmrExamTemplate(
   bubbleRadiusPt: 8.0,
   bubbleRadiusYPt: 8.0,
   cornerMarkers: const [OmrCorner(0.04032, 0.02851), OmrCorner(0.86682, 0.02851), OmrCorner(0.04032, 0.98706), OmrCorner(0.86682, 0.98706)],
+  lastNameFieldRect: const OmrFieldRect(0.07391, 0.10690, 0.18223, 0.04039),
+  firstNameFieldRect: const OmrFieldRect(0.25615, 0.10690, 0.16705, 0.04039),
+  middleInitialFieldRect: const OmrFieldRect(0.42320, 0.10690, 0.06074, 0.04039),
   sections: const [
     OmrSection(
       name: "Answer Document",

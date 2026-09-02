@@ -9,6 +9,8 @@ import '../../../core/omr/omr_scorer.dart';
 import '../../../core/omr/omr_templates.dart';
 import '../../../core/routes/app_routes.dart';
 import '../../../core/state/app_state.dart';
+import '../../../core/sync/sync_job.dart';
+import '../../../core/sync/sync_manager.dart';
 import '../../../models/local_batch.dart';
 import '../../../shared/widgets/examinee_dialog.dart';
 import '../../exam/screens/scanned_image_viewer_screen.dart';
@@ -28,6 +30,7 @@ class BatchArchiveDetailScreen extends StatefulWidget {
 class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
   bool _didInit = false;
   bool _loading = true;
+  bool _syncing = false;
   LocalBatch? _batch;
   final Map<String, File> _images = {};
   final Map<String, File> _rectifiedImages = {};
@@ -113,7 +116,7 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
                         ),
                       ],
                       const SizedBox(height: 12),
-                      _buildCloudBackupButton(),
+                      _buildSyncToCloudButton(batch, appState),
                       const SizedBox(height: 16),
                       Row(
                         children: [
@@ -242,35 +245,119 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
     );
   }
 
-  /// Placeholder entry point for cloud backup. Intentionally non-functional
-  /// for now — the real implementation lands when a cloud `BatchRepository`
-  /// is added (see project_batch_centric_storage memory / the SyncingBatch-
-  /// Repository plan). This button just marks where that hooks in.
-  // TODO(partner): wire to RemoteBatchDataSource.uploadBatch(batchId) once
-  // the cloud BatchRepository exists. Should push batch.json + every
-  // images/<scanId>.jpg for this batch to Firestore + Firebase Storage.
-  Widget _buildCloudBackupButton() {
-    return Opacity(
-      opacity: 0.55,
-      child: OutlinedButton.icon(
-        onPressed: () {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Cloud backup isn’t available yet — coming in a future update.'),
+  /// Forces a manual sync pass and reports this batch's own outcome.
+  ///
+  /// [SyncManager.syncNow] drains the whole shared job queue (per-batch
+  /// scoping isn't something the queue offers), so the button's job is
+  /// really "nudge everything now" — the status line below it is what
+  /// actually tells the user whether *this* batch made it, since a global
+  /// drain can still leave some of a batch's own jobs `failedPermanent` /
+  /// `blockedConflict` (e.g. a bad payload, or an answer-key conflict) even
+  /// after it runs.
+  Widget _buildSyncToCloudButton(LocalBatch batch, AppState appState) {
+    final syncManager = appState.syncManager;
+    if (syncManager == null) {
+      // No cloud data plane configured for this run (Supabase not
+      // initialized) -- nothing to sync, so nothing to show here.
+      return const SizedBox.shrink();
+    }
+
+    return ListenableBuilder(
+      listenable: syncManager,
+      builder: (context, _) {
+        final jobs = syncManager.queue.jobs.where((j) => j.batchId == batch.id).toList();
+        final pending = jobs.where((j) => j.isPending || j.isInProgress).length;
+        final failed = jobs.where((j) => j.status == SyncJobStatus.failedPermanent).length;
+        final blocked = jobs.where((j) => j.status == SyncJobStatus.blockedConflict).length;
+        final busy = _syncing || syncManager.isRunning;
+
+        String statusText;
+        Color statusColor;
+        if (jobs.isEmpty) {
+          statusText = 'Fully synced to cloud';
+          statusColor = AppColors.primaryGreen;
+        } else if (failed > 0 || blocked > 0) {
+          final parts = [
+            if (failed > 0) '$failed failed',
+            if (blocked > 0) '$blocked blocked',
+            if (pending > 0) '$pending pending',
+          ];
+          statusText = parts.join(' · ');
+          statusColor = const Color(0xFF991B1B);
+        } else {
+          statusText = '$pending item${pending == 1 ? '' : 's'} pending sync';
+          statusColor = const Color(0xFF92400E);
+        }
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            OutlinedButton.icon(
+              onPressed: busy ? null : () => _syncToCloud(batch, syncManager),
+              icon: busy
+                  ? const SizedBox(
+                      width: 13,
+                      height: 13,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const FaIcon(FontAwesomeIcons.cloudArrowUp, size: 13, color: AppColors.darkNavy),
+              label: Text(busy ? 'SYNCING…' : 'SYNC TO CLOUD'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppColors.darkNavy,
+                side: const BorderSide(color: Color(0xFFCBD5E1)),
+                padding: const EdgeInsets.symmetric(vertical: 11),
+                minimumSize: const Size.fromHeight(0),
+                textStyle: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, letterSpacing: 0.3),
+              ),
             ),
-          );
-        },
-        icon: const FaIcon(FontAwesomeIcons.cloudArrowUp, size: 13, color: AppColors.darkNavy),
-        label: const Text('BACK UP THIS BATCH TO CLOUD'),
-        style: OutlinedButton.styleFrom(
-          foregroundColor: AppColors.darkNavy,
-          side: const BorderSide(color: Color(0xFFCBD5E1)),
-          padding: const EdgeInsets.symmetric(vertical: 11),
-          minimumSize: const Size.fromHeight(0),
-          textStyle: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, letterSpacing: 0.3),
-        ),
-      ),
+            const SizedBox(height: 6),
+            Text(statusText, style: AppTextStyles.body(size: 9.5, color: statusColor, weight: FontWeight.w600)),
+          ],
+        );
+      },
     );
+  }
+
+  Future<void> _syncToCloud(LocalBatch batch, SyncManager syncManager) async {
+    setState(() => _syncing = true);
+    try {
+      // syncNow() only pulls forward jobs still `pending` -- a
+      // `failedPermanent` content push (e.g. one that hit a since-fixed
+      // validation bug) is left exactly as it is, by design (see
+      // SyncManager.syncNow's doc comment), so it never gets swept up by a
+      // plain "sync now". Reviving it here -- but only the batch's own
+      // content-push jobs, and only failedPermanent, never
+      // blockedConflict -- is what "tap Sync to Cloud" should mean to a
+      // user looking at a stuck batch; a conflict (e.g. an answer key
+      // changed elsewhere) still needs an actual resolution, not a blind
+      // retry that could clobber someone else's change.
+      final queue = syncManager.queue;
+      for (final job in queue.jobs) {
+        if (job.batchId != batch.id) continue;
+        if (job.status != SyncJobStatus.failedPermanent) continue;
+        if (!job.isBatchContentPush) continue;
+        await queue.update(job.copyWith(
+          status: SyncJobStatus.pending,
+          attempts: 0,
+          nextAttemptAt: DateTime.now().toUtc(),
+          clearLastErrorCode: true,
+        ));
+      }
+      await syncManager.syncNow();
+    } finally {
+      if (mounted) setState(() => _syncing = false);
+    }
+    if (!mounted) return;
+
+    final jobs = syncManager.queue.jobs.where((j) => j.batchId == batch.id);
+    final stuck = jobs.where((j) =>
+        j.status == SyncJobStatus.failedPermanent || j.status == SyncJobStatus.blockedConflict);
+    final message = jobs.isEmpty
+        ? 'This batch is fully synced to the cloud.'
+        : stuck.isNotEmpty
+            ? '${stuck.length} item(s) for this batch could not sync — see status below.'
+            : 'Sync started — some items are still uploading.';
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<void> _tagExaminee(LocalBatch batch, LocalScan scan, int index) async {
@@ -279,9 +366,24 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
         if (s.id != scan.id) (s.examinee?.examineeNumber.trim() ?? ''),
     }..removeWhere((e) => e.isEmpty);
 
+    // Only offered when there's no confirmed tag yet — see
+    // showExamineeDialog's doc comment.
+    final ocrLast = scan.ocrLastNameGuess;
+    final ocrFirst = scan.ocrFirstNameGuess;
+    final ocrMiddle = scan.ocrMiddleNameGuess;
+    final ocrSuggestion = scan.examinee == null && (ocrLast != null || ocrFirst != null || ocrMiddle != null)
+        ? ExamineeInfo(
+            lastName: ocrLast ?? '',
+            firstName: ocrFirst ?? '',
+            middleName: ocrMiddle ?? '',
+            examineeNumber: '',
+          )
+        : null;
+
     final res = await showExamineeDialog(
       context,
       initial: scan.examinee,
+      ocrSuggestion: ocrSuggestion,
       sheetLabel: 'Sheet ${index + 1}',
       otherNumbers: others,
     );
@@ -389,7 +491,14 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
                 const SizedBox(height: 4),
                 Text(
                   tagged
-                      ? 'Sheet ${index + 1} · Examinee ${examinee.examineeNumber}'
+                      ? (examinee.isComplete
+                          ? 'Sheet ${index + 1} · Examinee ${examinee.examineeNumber}'
+                          // A name with no examinee number means OCR
+                          // auto-filled it at scan time (see
+                          // AppState.persistCapturedSessionToBatch) —
+                          // staff still need to open Edit student to add
+                          // the number.
+                          : 'Sheet ${index + 1} · needs examinee #')
                       : '${scored.items.length} items · $blankCount blank · $ambiguousCount flagged',
                   style: AppTextStyles.body(size: 9, color: AppColors.textGray),
                 ),

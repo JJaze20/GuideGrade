@@ -47,25 +47,7 @@ class _CloudArchiveScreenState extends State<CloudArchiveScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.lightBg,
-      appBar: AppHeaderBar(
-        title: 'ARCHIVE',
-        // Placeholder — cloud sync is not wired yet (partner to implement via
-        // a cloud BatchRepository). Mirrors the per-batch button in the
-        // batch detail screen.
-        trailing: Opacity(
-          opacity: 0.6,
-          child: IconButton(
-            visualDensity: VisualDensity.compact,
-            icon: const FaIcon(FontAwesomeIcons.cloudArrowUp, size: 15, color: Colors.white),
-            tooltip: 'Back up to cloud',
-            onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Cloud backup isn’t available yet — coming in a future update.'),
-              ),
-            ),
-          ),
-        ),
-      ),
+      appBar: const AppHeaderBar(title: 'ARCHIVE'),
       body: SafeArea(
         top: false,
         child: RefreshIndicator(

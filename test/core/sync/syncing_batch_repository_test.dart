@@ -143,6 +143,9 @@ class _FakeLocal implements LocalBatchRepository {
     File? rectifiedImage,
     LocalScanResult? result,
     ExamineeInfo? examinee,
+    String? ocrLastNameGuess,
+    String? ocrFirstNameGuess,
+    String? ocrMiddleNameGuess,
   }) async {
     calls.add('addScan:$batchId');
     _maybeThrow('addScan');
@@ -157,6 +160,10 @@ class _FakeLocal implements LocalBatchRepository {
     required File sourceImage,
     File? rectifiedImage,
     LocalScanResult? result,
+    ExamineeInfo? examinee,
+    String? ocrLastNameGuess,
+    String? ocrFirstNameGuess,
+    String? ocrMiddleNameGuess,
   }) async {
     calls.add('replaceScan:$batchId/$scanId');
     _maybeThrow('replaceScan');

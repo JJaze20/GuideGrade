@@ -227,8 +227,9 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
     BuildContext context,
     AppState appState,
     int sheetIndex,
-    ExamineeInfo? current,
-  ) async {
+    ExamineeInfo? current, {
+    LocalScan? scan,
+  }) async {
     final batch = appState.scanBatch;
     final scanIndex = appState.sessionScanOffset + sheetIndex;
     if (batch == null || scanIndex >= batch.scans.length) return;
@@ -238,9 +239,24 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
         if (s.id != thisId) (s.examinee?.examineeNumber.trim() ?? ''),
     }..removeWhere((e) => e.isEmpty);
 
+    // Only offered when there's no confirmed tag yet — see
+    // showExamineeDialog's doc comment.
+    final ocrLast = scan?.ocrLastNameGuess;
+    final ocrFirst = scan?.ocrFirstNameGuess;
+    final ocrMiddle = scan?.ocrMiddleNameGuess;
+    final ocrSuggestion = current == null && (ocrLast != null || ocrFirst != null || ocrMiddle != null)
+        ? ExamineeInfo(
+            lastName: ocrLast ?? '',
+            firstName: ocrFirst ?? '',
+            middleName: ocrMiddle ?? '',
+            examineeNumber: '',
+          )
+        : null;
+
     final res = await showExamineeDialog(
       context,
       initial: current,
+      ocrSuggestion: ocrSuggestion,
       sheetLabel: 'Sheet ${sheetIndex + 1}',
       otherNumbers: others,
     );
@@ -385,22 +401,32 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
     }
 
     if (tagged) {
+      // A name alone (no examinee number) means OCR auto-filled it at scan
+      // time (see AppState.persistCapturedSessionToBatch) — not yet staff-
+      // confirmed, so this gets a distinct "needs number" treatment rather
+      // than the same checkmark a fully-tagged sheet gets.
+      final complete = examinee!.isComplete;
+      final icon = complete ? FontAwesomeIcons.userCheck : FontAwesomeIcons.userPen;
+      final color = complete ? AppColors.primaryGreen : AppColors.amber800;
+      final label = complete
+          ? '${examinee.displayName} · #${examinee.examineeNumber}'
+          : '${examinee.displayName} — needs examinee #';
       return Row(
         children: [
-          const FaIcon(FontAwesomeIcons.userCheck, size: 11, color: AppColors.primaryGreen),
+          FaIcon(icon, size: 11, color: color),
           const SizedBox(width: 6),
           Expanded(
             child: Text(
-              '${examinee!.displayName} · #${examinee.examineeNumber}',
+              label,
               style: AppTextStyles.body(size: 9.5, weight: FontWeight.w600),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
           ),
           TextButton(
-            onPressed: () => _tagExaminee(context, appState, sheetIndex, examinee),
+            onPressed: () => _tagExaminee(context, appState, sheetIndex, examinee, scan: scan),
             style: TextButton.styleFrom(
-              foregroundColor: AppColors.primaryGreen,
+              foregroundColor: color,
               padding: const EdgeInsets.symmetric(horizontal: 6),
               minimumSize: Size.zero,
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -414,7 +440,7 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
     return Align(
       alignment: Alignment.centerLeft,
       child: OutlinedButton.icon(
-        onPressed: () => _tagExaminee(context, appState, sheetIndex, null),
+        onPressed: () => _tagExaminee(context, appState, sheetIndex, null, scan: scan),
         icon: const FaIcon(FontAwesomeIcons.userPlus, size: 11, color: AppColors.darkNavy),
         label: const Text('Tag student'),
         style: OutlinedButton.styleFrom(

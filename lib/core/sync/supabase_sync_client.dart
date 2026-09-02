@@ -277,6 +277,12 @@ class SupabaseSyncClient implements SyncClient {
     return DateTime.tryParse(raw)?.toUtc();
   }
 
+  /// Blank-after-trim (including null) -> null; otherwise the original
+  /// string, untrimmed. See the `examinee_number`/`first_name`/`last_name`
+  /// comment in [pushScan] for why this matters.
+  static String? _blankToNull(String? value) =>
+      (value == null || value.trim().isEmpty) ? null : value;
+
   static bool _mapsEqual(Map<String, String> a, Map<String, String> b) {
     if (a.length != b.length) return false;
     for (final entry in a.entries) {
@@ -520,11 +526,18 @@ class SupabaseSyncClient implements SyncClient {
       'processed_by_uid': result?.processedByUid,
       'processed_by_name': result?.processedByName,
 
-      // examinee identity (null as a group when untagged). The tag-audit
+      // examinee identity (null as a group when untagged). Blank-after-trim
+      // strings are sent as null, not "" -- ExamineeInfo.isEmpty only
+      // clears the whole tag when EVERY field is blank (see
+      // LocalBatchRepository.setScanExaminee), so a tag can legitimately
+      // have a name but no examinee number yet (e.g. an OCR-suggested name,
+      // or staff hasn't entered the number). Sending "" for that column
+      // trips the cloud schema's CHECK constraint (SQLSTATE 23514) and
+      // permanently fails this scan's push -- null does not. The tag-audit
       // columns are added below, and ONLY for a tag/clear-triggered push.
-      'first_name': examinee?.firstName,
-      'last_name': examinee?.lastName,
-      'examinee_number': examinee?.examineeNumber,
+      'first_name': _blankToNull(examinee?.firstName),
+      'last_name': _blankToNull(examinee?.lastName),
+      'examinee_number': _blankToNull(examinee?.examineeNumber),
       'middle_name': null, // not modelled by the app
 
       // duplicate-number override — not tracked by the app

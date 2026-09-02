@@ -164,6 +164,9 @@ class LocalBatchRepository implements BatchRepository {
     File? rectifiedImage,
     LocalScanResult? result,
     ExamineeInfo? examinee,
+    String? ocrLastNameGuess,
+    String? ocrFirstNameGuess,
+    String? ocrMiddleNameGuess,
   }) async {
     final root = await _root();
     final batch = await _readManifest(_manifestFile(root, batchId));
@@ -203,6 +206,9 @@ class LocalBatchRepository implements BatchRepository {
       decoded: decoded,
       result: result,
       examinee: examinee,
+      ocrLastNameGuess: ocrLastNameGuess,
+      ocrFirstNameGuess: ocrFirstNameGuess,
+      ocrMiddleNameGuess: ocrMiddleNameGuess,
     );
 
     final updated = batch.copyWith(
@@ -223,6 +229,10 @@ class LocalBatchRepository implements BatchRepository {
     required File sourceImage,
     File? rectifiedImage,
     LocalScanResult? result,
+    ExamineeInfo? examinee,
+    String? ocrLastNameGuess,
+    String? ocrFirstNameGuess,
+    String? ocrMiddleNameGuess,
   }) async {
     final root = await _root();
     final batch = await _readManifest(_manifestFile(root, batchId));
@@ -262,7 +272,10 @@ class LocalBatchRepository implements BatchRepository {
       capturedAt: DateTime.now(),
       decoded: decoded,
       result: result,
-      examinee: existing.examinee, // same physical sheet -- keep its tag
+      examinee: examinee ?? existing.examinee, // default: same physical sheet -- keep its tag
+      ocrLastNameGuess: ocrLastNameGuess ?? existing.ocrLastNameGuess,
+      ocrFirstNameGuess: ocrFirstNameGuess ?? existing.ocrFirstNameGuess,
+      ocrMiddleNameGuess: ocrMiddleNameGuess ?? existing.ocrMiddleNameGuess,
     );
 
     final scans = [...batch.scans];

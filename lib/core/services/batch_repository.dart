@@ -60,8 +60,11 @@ abstract class BatchRepository {
   /// carrying [decoded] (and [result]/[examinee] when known at capture
   /// time). [rectifiedImage], when given, is also copied in and is purely
   /// display material for the graded overlay (see
-  /// [resolveScanRectifiedImage]) — never part of [decoded]/scoring. Returns
-  /// the updated batch.
+  /// [resolveScanRectifiedImage]) — never part of [decoded]/scoring.
+  /// [ocrLastNameGuess]/[ocrFirstNameGuess], when given, are on-device OCR's
+  /// best-effort read of the sheet's handwritten name field — stored only
+  /// to pre-fill the tag-student dialog later (see [LocalScan]), never
+  /// treated as a confirmed [ExamineeInfo]. Returns the updated batch.
   ///
   /// Throws [BatchScanLimitExceededException], with nothing written to
   /// disk, if the batch is already at its scan-count cap — see
@@ -74,14 +77,25 @@ abstract class BatchRepository {
     File? rectifiedImage,
     LocalScanResult? result,
     ExamineeInfo? examinee,
+    String? ocrLastNameGuess,
+    String? ocrFirstNameGuess,
+    String? ocrMiddleNameGuess,
   });
 
   /// Replaces an existing scan's stored image/decode/result in place —
-  /// same scan id, position in the batch, and examinee tag as before; only
-  /// the photo/decode/result/rectified image actually change. Used by
-  /// "Rescan" in the batch archive, when a sheet's original capture needs
-  /// to be redone (e.g. a bad photo) without losing its place or its
-  /// student tag. Throws if [scanId] doesn't exist in [batchId].
+  /// same scan id and position in the batch; only the photo/decode/
+  /// result/rectified image actually change. Used by "Rescan" in the batch
+  /// archive, when a sheet's original capture needs to be redone (e.g. a
+  /// bad photo). Throws if [scanId] doesn't exist in [batchId].
+  ///
+  /// [examinee], when given, replaces the stored tag; omitted (the
+  /// default), the existing tag is kept as-is — this is what "same
+  /// physical sheet, just a bad photo" means. Callers that recompute an
+  /// OCR name guess against the new photo (see
+  /// AppState.finishRescan) pass a refreshed [examinee] only when the
+  /// existing tag wasn't already staff-confirmed, and pass
+  /// [ocrLastNameGuess]/[ocrFirstNameGuess]/[ocrMiddleNameGuess] alongside
+  /// it the same way [addScan] does.
   Future<LocalBatch> replaceScan({
     required String batchId,
     required String scanId,
@@ -89,6 +103,10 @@ abstract class BatchRepository {
     required File sourceImage,
     File? rectifiedImage,
     LocalScanResult? result,
+    ExamineeInfo? examinee,
+    String? ocrLastNameGuess,
+    String? ocrFirstNameGuess,
+    String? ocrMiddleNameGuess,
   });
 
   /// Attaches/overwrites the grading outcome for one already-stored scan.

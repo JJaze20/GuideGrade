@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:camera/camera.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -10,6 +11,7 @@ import '../../models/answer_key.dart';
 import '../../models/local_batch.dart';
 import '../../models/omr_scan_result.dart';
 import '../../models/user.dart';
+import '../omr/name_ocr_service.dart';
 import '../omr/omr_decoder.dart';
 import '../omr/omr_scorer.dart';
 import '../omr/omr_templates.dart';
@@ -55,6 +57,73 @@ class _RectifyRequest {
 /// in ScannedImageViewerScreen; never feeds back into scoring.
 String? _rectifyOmrPage(_RectifyRequest request) {
   return const OmrDecoder().rectifyForOverlay(request.imagePath, request.template, request.outputPath);
+}
+
+class _CropNameFieldsRequest {
+  final String imagePath;
+  final OmrExamTemplate template;
+  final String lastNameOutPath;
+  final String firstNameOutPath;
+  final String middleInitialOutPath;
+  const _CropNameFieldsRequest(
+    this.imagePath,
+    this.template,
+    this.lastNameOutPath,
+    this.firstNameOutPath,
+    this.middleInitialOutPath,
+  );
+}
+
+/// Runs [OmrDecoder.cropNameFields] on a background isolate — pure OpenCV
+/// pixel work, safe off the main isolate unlike the OCR step itself (see
+/// NameOcrService, which must run on the main isolate as it's a platform
+/// channel call). Takes the original captured photo, not the (much
+/// lower-resolution) rectified display copy — see cropNameFields' doc
+/// comment for why.
+({String lastName, String firstName, String middleInitial})? _cropNameFields(_CropNameFieldsRequest request) {
+  return const OmrDecoder().cropNameFields(
+    request.imagePath,
+    request.template,
+    lastNameOutPath: request.lastNameOutPath,
+    firstNameOutPath: request.firstNameOutPath,
+    middleInitialOutPath: request.middleInitialOutPath,
+  );
+}
+
+/// Whether [a] and [b] (both last names, case-insensitive) look like
+/// different people rather than the same name with a bit of OCR noise —
+/// used by [AppState.finishRescan] to catch a rescan accidentally done
+/// against a *different* physical sheet. A small edit-distance bound
+/// (scaled to length, floor of 2) tolerates a typical single-letter OCR
+/// misread; anything past that reads as a genuinely different name.
+bool _namesLikelyDiffer(String a, String b) {
+  final la = a.trim().toLowerCase();
+  final lb = b.trim().toLowerCase();
+  if (la.isEmpty || lb.isEmpty || la == lb) return false;
+  final distance = _levenshteinDistance(la, lb);
+  final threshold = math.max(2, (math.max(la.length, lb.length) * 0.3).round());
+  return distance > threshold;
+}
+
+/// Classic edit-distance DP — see NameOcrService's own copy for the same
+/// algorithm applied to a different comparison (label-vs-recognized-text
+/// there, name-vs-name here); kept separate since one lives in a
+/// native-only file and the other needs to run from this shared file.
+int _levenshteinDistance(String a, String b) {
+  if (a == b) return 0;
+  if (a.isEmpty) return b.length;
+  if (b.isEmpty) return a.length;
+  var previous = List<int>.generate(b.length + 1, (j) => j);
+  for (var i = 1; i <= a.length; i++) {
+    final current = List<int>.filled(b.length + 1, 0);
+    current[0] = i;
+    for (var j = 1; j <= b.length; j++) {
+      final cost = a[i - 1] == b[j - 1] ? 0 : 1;
+      current[j] = [current[j - 1] + 1, previous[j] + 1, previous[j - 1] + cost].reduce((v, e) => v < e ? v : e);
+    }
+    previous = current;
+  }
+  return previous[b.length];
 }
 
 /// Where one exam's answer key stands relative to the cloud, derived purely
@@ -277,6 +346,75 @@ class AppState extends ChangeNotifier {
         processedByName: name,
       );
       final rectifiedPath = rectifiedImagePaths.isNotEmpty ? rectifiedImagePaths.last : null;
+
+      // Re-run the same best-effort OCR guess as a fresh scan gets (see
+      // persistCapturedSessionToBatch) against the retaken photo, then
+      // decide what to do with it:
+      //  - No existing tag, or an existing tag staff never confirmed with
+      //    an examinee number (i.e. it's itself just a prior OCR guess or
+      //    empty): refresh the name from this fresh read, same as a normal
+      //    scan's auto-fill.
+      //  - An existing tag staff already confirmed (has a number): never
+      //    silently overwritten. Instead, if the fresh read's last name
+      //    clearly disagrees with the confirmed one, this looks like a
+      //    *different* physical sheet was just rescanned into this slot —
+      //    abort before saving anything and surface [rescanSaveError]
+      //    (already wired to a SnackBar in exam_scanning_screen.dart).
+      LocalScan? existingScan;
+      for (final s in batch.scans) {
+        if (s.id == scanId) {
+          existingScan = s;
+          break;
+        }
+      }
+      final existingExaminee = existingScan?.examinee;
+      final template = omrTemplates[batch.examCode];
+      final nameCropDir = await _prepareNameCropDir();
+      String? ocrLastNameGuess;
+      String? ocrFirstNameGuess;
+      String? ocrMiddleNameGuess;
+      if (template != null && nameCropDir != null) {
+        try {
+          final crops = await compute(
+            _cropNameFields,
+            _CropNameFieldsRequest(
+              capturedPages.last.path,
+              template,
+              '$nameCropDir/${scanId}_rescan_last.jpg',
+              '$nameCropDir/${scanId}_rescan_first.jpg',
+              '$nameCropDir/${scanId}_rescan_mi.jpg',
+            ),
+          );
+          if (crops != null) {
+            const nameOcr = NameOcrService();
+            ocrLastNameGuess = await nameOcr.recognizeName(crops.lastName, fieldLabel: 'Last Name');
+            ocrFirstNameGuess = await nameOcr.recognizeName(crops.firstName, fieldLabel: 'First Name');
+            ocrMiddleNameGuess = await nameOcr.recognizeName(crops.middleInitial, fieldLabel: 'MI');
+          }
+        } catch (_) {
+          // Leave all three guesses null -- a bad crop/OCR call must never
+          // block saving the rescan itself.
+        }
+      }
+
+      if (existingExaminee != null && existingExaminee.isComplete) {
+        if (ocrLastNameGuess != null && _namesLikelyDiffer(existingExaminee.lastName, ocrLastNameGuess)) {
+          rescanSaveError = 'This looks like a different sheet: detected "$ocrLastNameGuess", but '
+              'this slot is tagged "${existingExaminee.lastName}". Rescan cancelled — clear the '
+              'student tag first if you meant to replace it.';
+          return false;
+        }
+      }
+      final refreshedExaminee = (existingExaminee == null || !existingExaminee.isComplete) &&
+              (ocrLastNameGuess != null || ocrFirstNameGuess != null || ocrMiddleNameGuess != null)
+          ? ExamineeInfo(
+              lastName: ocrLastNameGuess ?? '',
+              firstName: ocrFirstNameGuess ?? '',
+              middleName: ocrMiddleNameGuess ?? '',
+              examineeNumber: existingExaminee?.examineeNumber ?? '',
+            )
+          : null;
+
       final updated = await batchRepository.replaceScan(
         batchId: batch.id,
         scanId: scanId,
@@ -284,6 +422,10 @@ class AppState extends ChangeNotifier {
         sourceImage: File(capturedPages.last.path),
         rectifiedImage: rectifiedPath == null ? null : File(rectifiedPath),
         result: result,
+        examinee: refreshedExaminee,
+        ocrLastNameGuess: ocrLastNameGuess,
+        ocrFirstNameGuess: ocrFirstNameGuess,
+        ocrMiddleNameGuess: ocrMiddleNameGuess,
       );
       scanBatch = updated;
       rescanScanId = null;
@@ -655,6 +797,11 @@ class AppState extends ChangeNotifier {
     final firebaseUser = FirebaseAuth.instance.currentUser;
     final uid = firebaseUser?.uid ?? '';
     final name = firebaseUser?.displayName ?? currentUser?.displayName ?? 'Unknown';
+    // Both null-checked below; a missing template or crop dir just means no
+    // OCR suggestion for this batch, never a blocked save.
+    final template = omrTemplates[batch.examCode];
+    final nameCropDir = await _prepareNameCropDir();
+    const nameOcr = NameOcrService();
 
     var savedScans = 0;
     var savedGraded = 0;
@@ -676,6 +823,53 @@ class AppState extends ChangeNotifier {
           processedByName: name,
         );
         final rectifiedPath = i < rectifiedImagePaths.length ? rectifiedImagePaths[i] : null;
+
+        // Best-effort on-device OCR suggestion for the tag-student dialog —
+        // never blocks saving. See NameOcrService's doc comment on why a
+        // guess can come back null. Whatever comes back (even just a last
+        // name) is used to pre-label the sheet immediately, rather than
+        // waiting for staff to open Tag Student — see [autoExaminee] below.
+        // A name never comes from OCR alone with confidence higher than
+        // "probably right", so this deliberately never fills
+        // [ExamineeInfo.examineeNumber]: staff must still open Tag Student
+        // to add that number (and fix the name if OCR got it wrong), so a
+        // batch's untagged/duplicate-number checks (which key off
+        // [ExamineeInfo.isComplete]/[examineeNumber]) are unaffected by an
+        // auto-filled name alone.
+        String? ocrLastNameGuess;
+        String? ocrFirstNameGuess;
+        String? ocrMiddleNameGuess;
+        if (template != null && nameCropDir != null) {
+          try {
+            final crops = await compute(
+              _cropNameFields,
+              _CropNameFieldsRequest(
+                capturedPages[i].path,
+                template,
+                '$nameCropDir/${scanRef}_${i}_last.jpg',
+                '$nameCropDir/${scanRef}_${i}_first.jpg',
+                '$nameCropDir/${scanRef}_${i}_mi.jpg',
+              ),
+            );
+            if (crops != null) {
+              ocrLastNameGuess = await nameOcr.recognizeName(crops.lastName, fieldLabel: 'Last Name');
+              ocrFirstNameGuess = await nameOcr.recognizeName(crops.firstName, fieldLabel: 'First Name');
+              ocrMiddleNameGuess = await nameOcr.recognizeName(crops.middleInitial, fieldLabel: 'MI');
+            }
+          } catch (_) {
+            // Leave all three guesses null — a bad crop/OCR call must
+            // never block saving the scan itself.
+          }
+        }
+        final autoExaminee = (ocrLastNameGuess != null || ocrFirstNameGuess != null || ocrMiddleNameGuess != null)
+            ? ExamineeInfo(
+                lastName: ocrLastNameGuess ?? '',
+                firstName: ocrFirstNameGuess ?? '',
+                middleName: ocrMiddleNameGuess ?? '',
+                examineeNumber: '',
+              )
+            : null;
+
         try {
           await batchRepository.addScan(
             batchId: batch.id,
@@ -683,6 +877,10 @@ class AppState extends ChangeNotifier {
             sourceImage: File(capturedPages[i].path),
             rectifiedImage: rectifiedPath == null ? null : File(rectifiedPath),
             result: result,
+            examinee: autoExaminee,
+            ocrLastNameGuess: ocrLastNameGuess,
+            ocrFirstNameGuess: ocrFirstNameGuess,
+            ocrMiddleNameGuess: ocrMiddleNameGuess,
           );
           savedScans++;
           if (graded) savedGraded++;
@@ -758,6 +956,22 @@ class AppState extends ChangeNotifier {
     try {
       final base = await getTemporaryDirectory();
       final dir = Directory('${base.path}/omr_rectified');
+      if (!dir.existsSync()) dir.createSync(recursive: true);
+      return dir.path;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Scratch space for the Last Name/First Name crops fed to on-device OCR
+  /// (see NameOcrService) — small, transient images, never referenced by a
+  /// saved [LocalScan]. Lives under the OS temp directory like
+  /// [_prepareRectifiedImagesDir]'s own folder, so it's cleared the same way
+  /// (no explicit cleanup here, matching that existing precedent).
+  Future<String?> _prepareNameCropDir() async {
+    try {
+      final base = await getTemporaryDirectory();
+      final dir = Directory('${base.path}/omr_name_crops');
       if (!dir.existsSync()) dir.createSync(recursive: true);
       return dir.path;
     } catch (_) {

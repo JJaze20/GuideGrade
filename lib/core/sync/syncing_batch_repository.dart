@@ -117,6 +117,9 @@ class SyncingBatchRepository implements BatchRepository {
     File? rectifiedImage,
     LocalScanResult? result,
     ExamineeInfo? examinee,
+    String? ocrLastNameGuess,
+    String? ocrFirstNameGuess,
+    String? ocrMiddleNameGuess,
   }) async {
     final batch = await local.addScan(
       batchId: batchId,
@@ -125,6 +128,14 @@ class SyncingBatchRepository implements BatchRepository {
       rectifiedImage: rectifiedImage,
       result: result,
       examinee: examinee,
+      // OCR guesses are a device-local suggestion only — forwarded to the
+      // local store so the tag-student dialog can read them back, but
+      // deliberately never included in any cloud upsert below (see
+      // supabase_sync_client.dart's column builders, which this method
+      // never touches).
+      ocrLastNameGuess: ocrLastNameGuess,
+      ocrFirstNameGuess: ocrFirstNameGuess,
+      ocrMiddleNameGuess: ocrMiddleNameGuess,
     );
 
     // The scan LocalBatchRepository just appended is the last one.
@@ -158,6 +169,10 @@ class SyncingBatchRepository implements BatchRepository {
     required File sourceImage,
     File? rectifiedImage,
     LocalScanResult? result,
+    ExamineeInfo? examinee,
+    String? ocrLastNameGuess,
+    String? ocrFirstNameGuess,
+    String? ocrMiddleNameGuess,
   }) async {
     final batch = await local.replaceScan(
       batchId: batchId,
@@ -166,6 +181,10 @@ class SyncingBatchRepository implements BatchRepository {
       sourceImage: sourceImage,
       rectifiedImage: rectifiedImage,
       result: result,
+      examinee: examinee,
+      ocrLastNameGuess: ocrLastNameGuess,
+      ocrFirstNameGuess: ocrFirstNameGuess,
+      ocrMiddleNameGuess: ocrMiddleNameGuess,
     );
     _fireEnqueue([
       _pushScan(batchId, scanId),

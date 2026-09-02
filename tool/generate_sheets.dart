@@ -776,6 +776,48 @@ void _paintItems(
   }
 }
 
+/// The Last Name / First Name column boxes in the ID table's name row —
+/// top-left-origin points, same coordinate convention as bubble positions
+/// and corner markers (see [_cornerMarkers]). [_paintSimpleHeader] and
+/// [_paintNdmuHeader] draw these two columns' widths from here rather than
+/// each hardcoding its own fractions, and [_emitTemplate] reads the same
+/// values to record [OmrExamTemplate.lastNameFieldRect]/[firstNameFieldRect]
+/// — one shared computation so the printed box and the crop rect a future
+/// OCR step reads from a scan can never drift apart.
+typedef _FieldBox = ({double x, double y, double width, double height});
+
+({_FieldBox lastName, _FieldBox firstName, _FieldBox middleInitial}) _nameFieldBoxes(ExamLayout layout) {
+  final exam = layout.exam;
+  switch (exam.headerKind) {
+    case HeaderKind.simple:
+      final y = exam.contentTop + kBrandRowHeight + kSubtitleRowHeight + kGapAfterSubtitle;
+      final tableWidth = layout.contentWidth;
+      final lastWidth = tableWidth * 0.24;
+      final firstWidth = tableWidth * 0.22;
+      final miWidth = tableWidth * 0.08;
+      return (
+        lastName: (x: exam.contentLeft, y: y, width: lastWidth, height: kTableHeight),
+        firstName: (x: exam.contentLeft + lastWidth, y: y, width: firstWidth, height: kTableHeight),
+        middleInitial: (x: exam.contentLeft + lastWidth + firstWidth, y: y, width: miWidth, height: kTableHeight),
+      );
+    case HeaderKind.ndmu:
+      final compact = exam.compactNdmuHeader;
+      final width = layout.contentWidth;
+      final headerWidth = compact ? math.min(width, 620.0) : width;
+      final letterheadHeight = compact ? kCompactLetterheadHeight : kLetterheadHeight;
+      final idRowHeight = compact ? kCompactIdRowHeight : kIdRowHeight;
+      final y = exam.contentTop + letterheadHeight + (compact ? kCompactGapAfterLetterhead : kGapAfterLetterhead);
+      final lastWidth = headerWidth * 0.45;
+      final firstWidth = headerWidth * 0.4;
+      final miWidth = headerWidth * 0.15;
+      return (
+        lastName: (x: exam.contentLeft, y: y, width: lastWidth, height: idRowHeight),
+        firstName: (x: exam.contentLeft + lastWidth, y: y, width: firstWidth, height: idRowHeight),
+        middleInitial: (x: exam.contentLeft + lastWidth + firstWidth, y: y, width: miWidth, height: idRowHeight),
+      );
+  }
+}
+
 /// GuideGrade's own generic brand header (AT/PT) — these are only
 /// structurally inspired by third-party commercial tests (OLSAT/16PF), so
 /// they keep GuideGrade's own branding rather than reproducing those
@@ -801,12 +843,15 @@ void _paintSimpleHeader(
   canvas.drawString(regular, 10, 'Guidance and Testing Center', kContentLeft, flip(y + 10));
   y += kSubtitleRowHeight + kGapAfterSubtitle;
 
-  // Name / exam info table.
+  // Name / exam info table. Last Name/First Name widths come from
+  // _nameFieldBoxes (shared with _emitTemplate's OCR crop rect) rather than
+  // being hardcoded here a second time.
   final tableWidth = layout.contentWidth;
+  final nameBoxes = _nameFieldBoxes(layout);
   final columns = [
-    ('Last Name', tableWidth * 0.24),
-    ('First Name', tableWidth * 0.22),
-    ('MI', tableWidth * 0.08),
+    ('Last Name', nameBoxes.lastName.width),
+    ('First Name', nameBoxes.firstName.width),
+    ('MI', nameBoxes.middleInitial.width),
     ('Exam Code', tableWidth * 0.18),
     ('Batch', tableWidth * 0.14),
     ('Date', tableWidth * 0.14),
@@ -899,7 +944,14 @@ void _paintNdmuHeader(
     canvas.strokePath();
   }
   final labelOffset = compact ? 8.0 : 9.0;
-  final nameCols = [('Last Name', headerWidth * 0.45), ('First Name', headerWidth * 0.4), ('MI', headerWidth * 0.15)];
+  // Last Name/First Name widths come from _nameFieldBoxes (shared with
+  // _emitTemplate's OCR crop rect) rather than being hardcoded here again.
+  final nameBoxes = _nameFieldBoxes(layout);
+  final nameCols = [
+    ('Last Name', nameBoxes.lastName.width),
+    ('First Name', nameBoxes.firstName.width),
+    ('MI', nameBoxes.middleInitial.width),
+  ];
   var colX = kContentLeft;
   for (final (label, w) in nameCols) {
     if (colX > kContentLeft) {
@@ -1078,6 +1130,18 @@ class OmrCorner {
   const OmrCorner(this.xFrac, this.yFrac);
 }
 
+/// A fractional bounding box (0.0-1.0 of the page, top-left origin — same
+/// convention as [BubblePos]/[OmrCorner]). Used only to crop a printed
+/// hand-written field (Last Name / First Name) out of a perspective-
+/// corrected scan for on-device OCR; never used for bubble scoring.
+class OmrFieldRect {
+  final double xFrac;
+  final double yFrac;
+  final double widthFrac;
+  final double heightFrac;
+  const OmrFieldRect(this.xFrac, this.yFrac, this.widthFrac, this.heightFrac);
+}
+
 class OmrExamTemplate {
   final String examCode;
   final double pageWidthPt;
@@ -1096,6 +1160,11 @@ class OmrExamTemplate {
   final double bubbleRadiusYPt;
   final List<OmrCorner> cornerMarkers;
   final List<OmrSection> sections;
+  /// Where the printed, hand-written Last Name / First Name / MI boxes are
+  /// on the sheet — see [OmrFieldRect].
+  final OmrFieldRect lastNameFieldRect;
+  final OmrFieldRect firstNameFieldRect;
+  final OmrFieldRect middleInitialFieldRect;
   const OmrExamTemplate({
     required this.examCode,
     required this.pageWidthPt,
@@ -1104,6 +1173,9 @@ class OmrExamTemplate {
     required this.bubbleRadiusYPt,
     required this.cornerMarkers,
     required this.sections,
+    required this.lastNameFieldRect,
+    required this.firstNameFieldRect,
+    required this.middleInitialFieldRect,
   });
 }
 ''';
@@ -1115,6 +1187,10 @@ String _emitTemplate(ExamLayout layout) {
   final varName = '_omr${exam.code}';
   final corners = _cornerMarkers(layout);
   final cornersDart = corners.map((c) => 'OmrCorner(${_formatFrac(c.$1 / exam.pageWidthPt)}, ${_formatFrac(c.$2 / exam.pageHeightPt)})').join(', ');
+  final nameBoxes = _nameFieldBoxes(layout);
+  String fieldRectDart(_FieldBox box) =>
+      'OmrFieldRect(${_formatFrac(box.x / exam.pageWidthPt)}, ${_formatFrac(box.y / exam.pageHeightPt)}, '
+      '${_formatFrac(box.width / exam.pageWidthPt)}, ${_formatFrac(box.height / exam.pageHeightPt)})';
 
   // Merge all pages belonging to the same section back into one
   // OmrSection (its items map spans every page it was laid out across).
@@ -1126,6 +1202,9 @@ String _emitTemplate(ExamLayout layout) {
   buffer.writeln('  bubbleRadiusPt: ${exam.bubbleRadius},');
   buffer.writeln('  bubbleRadiusYPt: ${bubbleRadiusYFor(exam)},');
   buffer.writeln('  cornerMarkers: const [$cornersDart],');
+  buffer.writeln('  lastNameFieldRect: const ${fieldRectDart(nameBoxes.lastName)},');
+  buffer.writeln('  firstNameFieldRect: const ${fieldRectDart(nameBoxes.firstName)},');
+  buffer.writeln('  middleInitialFieldRect: const ${fieldRectDart(nameBoxes.middleInitial)},');
   buffer.writeln('  sections: const [');
   for (final section in exam.sections) {
     buffer.writeln('    OmrSection(');

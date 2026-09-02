@@ -1,29 +1,40 @@
 import 'omr_scan_result.dart';
 
 /// The student a scanned sheet belongs to. Attached per [LocalScan],
-/// normally entered by staff on the results/review screen while holding the
-/// physical sheet (there is no OCR — see the archive/review UI).
+/// entered by staff on the results/review screen — optionally pre-filled
+/// from an on-device OCR guess of the sheet's handwritten name field (see
+/// [LocalScan.ocrLastNameGuess]/[ocrFirstNameGuess] and
+/// showExamineeDialog's `ocrSuggestion` param), but always staff-confirmed
+/// before it's saved here; OCR alone never writes an [ExamineeInfo].
 ///
 /// [examineeNumber] is the identifying field results are keyed to for a
 /// person; [firstName]/[lastName] are for human-readable lists and exports.
 class ExamineeInfo {
   final String firstName;
   final String lastName;
+
+  /// Optional — unlike [firstName]/[lastName], never required for
+  /// [isComplete]. Many students go by initial only or don't have one.
+  final String middleName;
   final String examineeNumber;
 
   const ExamineeInfo({
     required this.firstName,
     required this.lastName,
+    this.middleName = '',
     required this.examineeNumber,
   });
 
-  /// "Last, First" — falls back to whichever half is present.
+  /// "Last, First M." — falls back to whichever of last/first is present,
+  /// and omits the middle initial entirely when [middleName] is blank.
   String get displayName {
     final last = lastName.trim();
     final first = firstName.trim();
-    if (last.isNotEmpty && first.isNotEmpty) return '$last, $first';
+    final middle = middleName.trim();
+    final middleInitial = middle.isEmpty ? '' : ' ${middle[0].toUpperCase()}.';
+    if (last.isNotEmpty && first.isNotEmpty) return '$last, $first$middleInitial';
     if (last.isNotEmpty) return last;
-    if (first.isNotEmpty) return first;
+    if (first.isNotEmpty) return '$first$middleInitial';
     return 'Unnamed';
   }
 
@@ -35,24 +46,33 @@ class ExamineeInfo {
   bool get isEmpty =>
       firstName.trim().isEmpty &&
       lastName.trim().isEmpty &&
+      middleName.trim().isEmpty &&
       examineeNumber.trim().isEmpty;
 
-  ExamineeInfo copyWith({String? firstName, String? lastName, String? examineeNumber}) =>
+  ExamineeInfo copyWith({
+    String? firstName,
+    String? lastName,
+    String? middleName,
+    String? examineeNumber,
+  }) =>
       ExamineeInfo(
         firstName: firstName ?? this.firstName,
         lastName: lastName ?? this.lastName,
+        middleName: middleName ?? this.middleName,
         examineeNumber: examineeNumber ?? this.examineeNumber,
       );
 
   Map<String, dynamic> toJson() => {
         'firstName': firstName,
         'lastName': lastName,
+        'middleName': middleName,
         'examineeNumber': examineeNumber,
       };
 
   factory ExamineeInfo.fromJson(Map<String, dynamic> json) => ExamineeInfo(
         firstName: json['firstName'] as String? ?? '',
         lastName: json['lastName'] as String? ?? '',
+        middleName: json['middleName'] as String? ?? '',
         examineeNumber: json['examineeNumber'] as String? ?? '',
       );
 }
@@ -252,6 +272,16 @@ class LocalScan {
   /// results or archive-detail screen).
   final ExamineeInfo? examinee;
 
+  /// On-device OCR's best-effort guess at the handwritten Last Name / First
+  /// Name fields (see NameOcrService), or null when recognition found
+  /// nothing usable. Purely a suggestion to pre-fill showExamineeDialog
+  /// with — device-local only, never mirrored to the cloud sync layer (see
+  /// AppState.persistCapturedSessionToBatch), and never read once
+  /// [examinee] itself is set.
+  final String? ocrLastNameGuess;
+  final String? ocrFirstNameGuess;
+  final String? ocrMiddleNameGuess;
+
   const LocalScan({
     required this.id,
     required this.imageFileName,
@@ -260,6 +290,9 @@ class LocalScan {
     required this.decoded,
     this.result,
     this.examinee,
+    this.ocrLastNameGuess,
+    this.ocrFirstNameGuess,
+    this.ocrMiddleNameGuess,
   });
 
   LocalScan copyWith({
@@ -275,6 +308,9 @@ class LocalScan {
         decoded: decoded,
         result: result ?? this.result,
         examinee: clearExaminee ? null : (examinee ?? this.examinee),
+        ocrLastNameGuess: ocrLastNameGuess,
+        ocrFirstNameGuess: ocrFirstNameGuess,
+        ocrMiddleNameGuess: ocrMiddleNameGuess,
       );
 
   Map<String, dynamic> toJson() => {
@@ -285,6 +321,9 @@ class LocalScan {
         'decoded': decoded.toJson(),
         'result': result?.toJson(),
         'examinee': examinee?.toJson(),
+        'ocrLastNameGuess': ocrLastNameGuess,
+        'ocrFirstNameGuess': ocrFirstNameGuess,
+        'ocrMiddleNameGuess': ocrMiddleNameGuess,
       };
 
   factory LocalScan.fromJson(Map<String, dynamic> json) => LocalScan(
@@ -299,6 +338,9 @@ class LocalScan {
         examinee: json['examinee'] == null
             ? null
             : ExamineeInfo.fromJson(json['examinee'] as Map<String, dynamic>),
+        ocrLastNameGuess: json['ocrLastNameGuess'] as String?,
+        ocrFirstNameGuess: json['ocrFirstNameGuess'] as String?,
+        ocrMiddleNameGuess: json['ocrMiddleNameGuess'] as String?,
       );
 }
 

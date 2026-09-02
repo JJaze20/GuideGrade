@@ -45,4 +45,13 @@ class OmrDecoder {
       _unsupported();
 
   String? rectifyForOverlay(String imagePath, OmrExamTemplate template, String outputPath) => _unsupported();
+
+  ({String lastName, String firstName, String middleInitial})? cropNameFields(
+    String imagePath,
+    OmrExamTemplate template, {
+    required String lastNameOutPath,
+    required String firstNameOutPath,
+    required String middleInitialOutPath,
+  }) =>
+      _unsupported();
 }

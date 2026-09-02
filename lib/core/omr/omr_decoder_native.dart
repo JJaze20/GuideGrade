@@ -32,6 +32,18 @@ class OmrDecoder {
   /// sampling geometry below is tuned against this scale.
   static const double _canonicalPxPerPt = 2.0;
 
+  /// Canonical pixels per PDF point used only for [cropNameFields] — much
+  /// higher than [_canonicalPxPerPt]. Confirmed on a real device scan that
+  /// cropping straight from a [_canonicalPxPerPt]-scale rectified image
+  /// gave name-field crops as small as ~200x68px: fine for OCR-ing the
+  /// crisp printed field label, but too low-resolution for the actual
+  /// handwritten answer to be recognized at all. [_canonicalPxPerPt] itself
+  /// is tuned for bubble sampling and shared by scoring — bumped up here
+  /// only, in a warp this method runs independently (see its doc comment),
+  /// rather than raising the shared constant and risking a scoring
+  /// regression for a display-only OCR suggestion.
+  static const double _ocrCanonicalPxPerPt = 6.0;
+
   /// CLAHE clip limit, per exam code — how aggressively contrast gets
   /// re-normalized before thresholding (see the CLAHE comment in
   /// [decode]). Not a single global value: confirmed against real scans
@@ -467,6 +479,101 @@ class OmrDecoder {
               try {
                 cv.imwrite(outputPath, warped);
                 return outputPath;
+              } finally {
+                warped.dispose();
+              }
+            } finally {
+              transform.dispose();
+              srcCorners.dispose();
+              dstCorners.dispose();
+            }
+          } finally {
+            if (!identical(orientedSrc, src)) orientedSrc.dispose();
+          }
+        } finally {
+          if (!identical(oriented, gray)) oriented.dispose();
+        }
+      } finally {
+        gray.dispose();
+      }
+    } finally {
+      src.dispose();
+    }
+  }
+
+  /// Crops the Last Name / First Name / MI boxes (see
+  /// [OmrExamTemplate.lastNameFieldRect]/[firstNameFieldRect]/
+  /// [middleInitialFieldRect]) for on-device OCR (see NameOcrService)
+  /// directly out of [imagePath] — the original captured photo, not a
+  /// rectified/display copy. Runs its own corner search and perspective
+  /// warp at [_ocrCanonicalPxPerPt] (much higher than [rectifyForOverlay]'s
+  /// [_canonicalPxPerPt]) so the handwritten answer itself has enough real
+  /// pixels to be recognizable — see [_ocrCanonicalPxPerPt]'s doc comment
+  /// for why a shared low-res rectified copy wasn't good enough. Purely a
+  /// display/suggestion input, same isolation as [rectifyForOverlay]: its
+  /// own `imread`/corner search/warp, sharing no Mat or intermediate value
+  /// with [decode] or [rectifyForOverlay] — never touches scoring. Returns
+  /// all three written paths, or null if the sheet's corners couldn't be
+  /// found in this photo.
+  ({String lastName, String firstName, String middleInitial})? cropNameFields(
+    String imagePath,
+    OmrExamTemplate template, {
+    required String lastNameOutPath,
+    required String firstNameOutPath,
+    required String middleInitialOutPath,
+  }) {
+    final src = cv.imread(imagePath);
+    try {
+      if (src.isEmpty) return null;
+      final gray = cv.cvtColor(src, cv.COLOR_BGR2GRAY);
+      try {
+        cv.Mat oriented;
+        List<cv.Point2f> corners;
+        int? rotationCode;
+        try {
+          (oriented, corners, rotationCode) = _orientAndFindCorners(gray, template);
+        } on StateError {
+          return null;
+        }
+        try {
+          final orientedSrc = rotationCode == null ? src : cv.rotate(src, rotationCode);
+          try {
+            final canonicalWidth = (template.pageWidthPt * _ocrCanonicalPxPerPt).round();
+            final canonicalHeight = (template.pageHeightPt * _ocrCanonicalPxPerPt).round();
+            final dstCorners = cv.VecPoint2f.fromList([
+              for (final corner in template.cornerMarkers)
+                cv.Point2f(corner.xFrac * canonicalWidth, corner.yFrac * canonicalHeight),
+            ]);
+            final srcCorners = cv.VecPoint2f.fromList(corners);
+            final transform = cv.getPerspectiveTransform2f(srcCorners, dstCorners);
+            try {
+              final warped = cv.warpPerspective(orientedSrc, transform, (canonicalWidth, canonicalHeight));
+              try {
+                void writeField(OmrFieldRect field, String outPath) {
+                  final rect = _clampedRect(
+                    field.xFrac * canonicalWidth,
+                    field.yFrac * canonicalHeight,
+                    (field.xFrac + field.widthFrac) * canonicalWidth,
+                    (field.yFrac + field.heightFrac) * canonicalHeight,
+                    canonicalWidth,
+                    canonicalHeight,
+                  );
+                  final roi = warped.region(rect);
+                  try {
+                    cv.imwrite(outPath, roi);
+                  } finally {
+                    roi.dispose();
+                  }
+                }
+
+                writeField(template.lastNameFieldRect, lastNameOutPath);
+                writeField(template.firstNameFieldRect, firstNameOutPath);
+                writeField(template.middleInitialFieldRect, middleInitialOutPath);
+                return (
+                  lastName: lastNameOutPath,
+                  firstName: firstNameOutPath,
+                  middleInitial: middleInitialOutPath,
+                );
               } finally {
                 warped.dispose();
               }
