@@ -901,7 +901,7 @@ void _paintSimpleHeader(
     canvas.drawLine(colX, flip(y), colX, flip(y + kTableHeight));
     canvas.strokePath();
     canvas.setColor(kGray);
-    canvas.drawString(regular, 7, label, colX + 3, flip(y + 10));
+    canvas.drawString(regular, 8, label, colX + 3, flip(y + 10));
     colX += w;
   }
   y += kTableHeight + kGapAfterTable;
@@ -995,12 +995,12 @@ void _paintNdmuHeader(
       canvas.strokePath();
     }
     canvas.setColor(kGray);
-    canvas.drawString(regular, 7, label, colX + 3, flip(y + labelOffset));
+    canvas.drawString(regular, 8, label, colX + 3, flip(y + labelOffset));
     colX += w;
   }
   canvas.setColor(kGray);
-  canvas.drawString(regular, 7, 'School Last Attended', kContentLeft + 3, flip(y + idRowHeight + labelOffset));
-  canvas.drawString(regular, 7, 'Address of School Last Attended', kContentLeft + 3, flip(y + idRowHeight * 2 + labelOffset));
+  canvas.drawString(regular, 8, 'School Last Attended', kContentLeft + 3, flip(y + idRowHeight + labelOffset));
+  canvas.drawString(regular, 8, 'Address of School Last Attended', kContentLeft + 3, flip(y + idRowHeight * 2 + labelOffset));
   if (compact) {
     // TAT-compact only: Date/Birth/Age fields fit in the School/Address
     // rows' own leftover width, positioned well clear of each row's own
