@@ -892,10 +892,13 @@ class SupabaseSyncClient implements SyncClient {
           refreshed = true;
           if (await _safeRefresh()) continue;
         }
+        _logGuard('postgrest error code=$code (${e.runtimeType})');
         return classifyPostgrestCode(code);
       } on TimeoutException {
+        _logGuard('postgrest transport error (TimeoutException)');
         return const SyncOutcome.transient('network');
       } on SocketException {
+        _logGuard('postgrest transport error (SocketException)');
         return const SyncOutcome.transient('network');
       } catch (e) {
         _logUnclassified(e);
@@ -918,10 +921,13 @@ class SupabaseSyncClient implements SyncClient {
           refreshed = true;
           if (await _safeRefresh()) continue;
         }
+        _logGuard('storage error status=$status op=${op.name} (${e.runtimeType})');
         return classifyStorageStatus(status, op);
       } on TimeoutException {
+        _logGuard('storage transport error op=${op.name} (TimeoutException)');
         return const SyncOutcome.transient('network');
       } on SocketException {
+        _logGuard('storage transport error op=${op.name} (SocketException)');
         return const SyncOutcome.transient('network');
       } catch (e) {
         _logUnclassified(e);
@@ -942,5 +948,14 @@ class SupabaseSyncClient implements SyncClient {
     // Type only — the message may embed a payload, token or PII.
     // ignore: avoid_print
     print('SupabaseSyncClient: unclassified ${error.runtimeType}');
+  }
+
+  /// One-line trace of a caught + classified Supabase failure. Carries only
+  /// the sanitized status/error code, the Storage op, and the exception
+  /// runtimeType — never `e.message` (which can hold a row snapshot or
+  /// hint), a token, a key, or a URL. Reaches `adb logcat` in release.
+  void _logGuard(String detail) {
+    // ignore: avoid_print
+    print('SupabaseSyncClient: $detail');
   }
 }
