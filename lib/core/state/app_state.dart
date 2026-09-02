@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:camera/camera.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -155,8 +156,12 @@ class AppState extends ChangeNotifier {
     BatchRepository? batchRepository,
     this.syncManager,
     LocalStorageService? localStorage,
+    Stream<List<ConnectivityResult>>? connectivityStream,
+    this.reconnectSyncDebounce = const Duration(seconds: 2),
   })  : batchRepository = batchRepository ?? LocalBatchRepository(),
-        _localStorage = localStorage ?? LocalStorageService();
+        _localStorage = localStorage ?? LocalStorageService() {
+    _wireReconnectSync(connectivityStream);
+  }
 
   /// The offline sync coordinator, or null when the cloud data plane is not
   /// configured for this run. Held for later wiring phases (answer-key
@@ -196,6 +201,95 @@ class AppState extends ChangeNotifier {
     } else {
       manager.pause();
     }
+  }
+
+  // --- automatic offline -> online synchronization -------------------------
+  //
+  // A single connectivity subscription (owned here, the sync lifecycle
+  // integration point) that, on a *disconnected -> connected* edge, asks the
+  // EXISTING [SyncManager] to drain its existing queue via [SyncManager.
+  // syncNow] — which pulls every still-pending job's retry backoff forward
+  // to now and runs one drain pass. It never touches the queue, jobs,
+  // Supabase, Storage, or local data directly, and never revives
+  // failedPermanent / blockedConflict jobs. It respects
+  // [_applySyncRunStateFor]: the drain fires only while a manager exists and
+  // `isActive` (an active Guidance Council session).
+
+  /// How long to wait after a disconnected -> connected edge before asking
+  /// the sync manager to drain, so rapid flapping collapses into one
+  /// attempt. Injectable so tests need no real 2-second wait.
+  final Duration reconnectSyncDebounce;
+
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
+  Timer? _reconnectSyncTimer;
+  bool _reconnectDisposed = false;
+
+  /// Assume online at startup so only a genuine offline->online transition
+  /// (not the first event on an already-online device) triggers a drain.
+  bool _wasOnline = true;
+
+  void _wireReconnectSync(Stream<List<ConnectivityResult>>? stream) {
+    // No cloud data plane -> nothing to drain, so never subscribe.
+    if (stream == null || syncManager == null) return;
+    _connectivitySub = stream.listen(
+      _onConnectivityChanged,
+      onError: (_) {
+        // A platform-channel hiccup must never crash the app or the sync
+        // engine; connectivity is a best-effort nudge only.
+      },
+    );
+  }
+
+  /// connectivity_plus 7.3.1: `onConnectivityChanged` is
+  /// `Stream<List<ConnectivityResult>>`; the list is never empty and
+  /// contains `ConnectivityResult.none` only as its sole element when
+  /// offline. "Online" therefore means any element other than `none`,
+  /// which also covers wifi/mobile/ethernet/vpn/bluetooth reported
+  /// simultaneously.
+  void _onConnectivityChanged(List<ConnectivityResult> results) {
+    if (_reconnectDisposed) return;
+    final online = results.any((r) => r != ConnectivityResult.none);
+    final wasOnline = _wasOnline;
+    _wasOnline = online;
+
+    if (online && !wasOnline) {
+      // Disconnected -> connected: (re)arm a one-shot debounce so rapid
+      // flapping collapses into a single drain attempt once things settle.
+      _reconnectSyncTimer?.cancel();
+      _reconnectSyncTimer = Timer(reconnectSyncDebounce, _fireReconnectSync);
+    } else if (!online) {
+      // Dropped again before the debounce elapsed: abandon the attempt.
+      _reconnectSyncTimer?.cancel();
+      _reconnectSyncTimer = null;
+    }
+  }
+
+  void _fireReconnectSync() {
+    _reconnectSyncTimer = null;
+    if (_reconnectDisposed) return;
+    final manager = syncManager;
+    if (manager == null || !manager.isActive) return;
+    unawaited(_safeSyncNow(manager));
+  }
+
+  Future<void> _safeSyncNow(SyncManager manager) async {
+    try {
+      await manager.syncNow();
+    } catch (error) {
+      // Type only — never surface a raw error from a background nudge.
+      debugPrint('AppState: reconnect sync failed (${error.runtimeType})');
+    }
+  }
+
+  @override
+  void dispose() {
+    if (_reconnectDisposed) return; // idempotent
+    _reconnectDisposed = true;
+    _reconnectSyncTimer?.cancel();
+    _reconnectSyncTimer = null;
+    unawaited(_connectivitySub?.cancel());
+    _connectivitySub = null;
+    super.dispose();
   }
 
   /// Sheet-layout lookup key for the active exam type. AT | TAT | QTM.

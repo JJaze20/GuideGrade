@@ -5,6 +5,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show Supabase;
@@ -124,6 +125,10 @@ Future<void> main() async {
   final appState = AppState(
     batchRepository: appBatchRepository,
     syncManager: syncManager,
+    // Automatic offline -> online sync: AppState subscribes to this only
+    // when a SyncManager exists, and on a disconnected -> connected edge
+    // asks it to drain the existing queue (SyncManager.syncNow).
+    connectivityStream: Connectivity().onConnectivityChanged,
   );
   await appState.loadPersistedData();
 
