@@ -167,10 +167,12 @@ const double kCompactNdmuHeaderHeight =
     kCompactNdmuInstructionHeight +
     kCompactGapBeforeNdmuGrid;
 
-double headerHeightFor(ExamSpec exam) => switch (exam.headerKind) {
-  HeaderKind.simple => kSimpleHeaderHeight,
-  HeaderKind.ndmu => exam.compactNdmuHeader ? kCompactNdmuHeaderHeight : kNdmuHeaderHeight,
-};
+double headerHeightFor(ExamSpec exam) =>
+    exam.headerHeightOverride ??
+    switch (exam.headerKind) {
+      HeaderKind.simple => kSimpleHeaderHeight,
+      HeaderKind.ndmu => exam.compactNdmuHeader ? kCompactNdmuHeaderHeight : kNdmuHeaderHeight,
+    };
 
 /// Row 30's bubble center sits `(kRowsPerColumn - 1) * kRowPitch` below row
 /// 1's, plus bubble radius clearance below that. Same for every exam — only
@@ -191,7 +193,8 @@ exam.rowPitch + 2 * exam.bubbleRadius;
 /// oval bubble's measured fill by roughly half, confirmed against a real
 /// scan where it was enough to make every marked item read ambiguous.
 double bubbleRadiusYFor(ExamSpec exam) =>
-    exam.headerKind == HeaderKind.ndmu ? exam.bubbleRadius * 0.8 : exam.bubbleRadius;
+    exam.bubbleRadiusYOverride ??
+    (exam.headerKind == HeaderKind.ndmu ? exam.bubbleRadius * 0.8 : exam.bubbleRadius);
 
 // ---------------------------------------------------------------------------
 // Brand colors, matching lib/core/constants/app_colors.dart.
@@ -295,6 +298,31 @@ class ExamSpec {
   /// bigger instead of most of the page going to the header.
   final bool compactNdmuHeader;
 
+  /// Direct override for [headerHeightFor]'s result — freezes the header
+  /// budget at this exact value regardless of which [headerKind]/
+  /// [compactNdmuHeader] content variant is actually drawn inside it. Null
+  /// (the default) uses the normal computed height. Exists for a header
+  /// swap on an exam whose bubble grid is already printed and in use (AT's
+  /// swap from [HeaderKind.simple] to a compact NDMU header): the compact
+  /// NDMU content is shorter than AT's old simple header, so without this
+  /// override the grid's start position (`contentTop + headerHeightFor`)
+  /// would shift up and no longer match already-printed sheets. Setting
+  /// this to AT's old [kSimpleHeaderHeight] keeps that position bit-
+  /// identical — the new header content just gets a little extra
+  /// breathing room before the grid instead of the grid moving.
+  final double? headerHeightOverride;
+
+  /// Direct override for [bubbleRadiusYFor]'s result — see
+  /// [headerHeightOverride]'s doc comment for the same reasoning applied to
+  /// bubble shape instead of header height. [bubbleRadiusYFor] normally
+  /// infers oval-vs-circle bubbles from [headerKind] alone (NDMU forms draw
+  /// flattened ovals, everything else true circles), but AT's header swap
+  /// to [HeaderKind.ndmu] must not also flip its already-printed circular
+  /// bubbles into ovals — this keeps them a true circle
+  /// ([ExamSpec.bubbleRadius] in both directions) independent of the
+  /// header-kind-driven default.
+  final double? bubbleRadiusYOverride;
+
   const ExamSpec(
       this.code,
       this.title,
@@ -318,6 +346,8 @@ class ExamSpec {
         this.labelGapPt,
         this.suppressSectionInTitle = false,
         this.compactNdmuHeader = false,
+        this.headerHeightOverride,
+        this.bubbleRadiusYOverride,
       });
 }
 
@@ -457,6 +487,26 @@ final List<ExamSpec> kExams = [
     choicePitch: 26,
     rowPitch: 27,
     rowsPerColumn: 24,
+    // NDMU letterhead (same as QTM's) instead of GuideGrade's own generic
+    // header -- real AT sheets are already printed with the bubble grid at
+    // its current position, so headerHeightOverride freezes the header
+    // budget at AT's old kSimpleHeaderHeight even though the compact NDMU
+    // header content itself is a bit shorter (see headerHeightOverride's
+    // doc comment) -- the grid's start position doesn't move a single
+    // point from this change.
+    headerKind: HeaderKind.ndmu,
+    compactNdmuHeader: true,
+    headerHeightOverride: kSimpleHeaderHeight,
+    // Keep true-circle bubbles (AT's already-printed sheets have them) --
+    // see bubbleRadiusYOverride's doc comment. Without this,
+    // bubbleRadiusYFor would infer flattened NDMU-style ovals purely from
+    // headerKind now being HeaderKind.ndmu, which isn't what's printed.
+    bubbleRadiusYOverride: 8,
+    letterheadLines: const [
+      'Guidance and Testing Center',
+      'NOTRE DAME OF MARBEL UNIVERSITY',
+      'City of Koronadal, South Cotabato',
+    ],
     // Printed header reads just "Admission Test (AT)" -- no "- OLSAT",
     // no "- Answer Document" section suffix. SectionSpec.name above is
     // untouched (still "Answer Document"), so scoring/answer-key grouping
@@ -1105,6 +1155,181 @@ void _paintNdmuHeader(
   canvas.drawString(regular, compact ? 6 : 7, 'Use a No. 2 pencil. Fill the circle completely.', kContentLeft, flip(y + (compact ? 7 : 9)));
 }
 
+/// AT's back-page "Score Record" — printed on the reverse of the bubble
+/// sheet, filled in by hand by whoever grades it (raw scores, percentiles,
+/// etc.), never scanned/decoded by the app itself (no corner markers, not
+/// part of OmrExamTemplate/_emitTemplate at all).
+///
+/// AT is only ever *structurally* inspired by OLSAT-style score-record
+/// forms — same functional layout (score-category boxes, a Total/Verbal/
+/// Nonverbal results table, a Cluster Analysis table), using standard
+/// psychometric terminology (Raw Score, Percentile Rank, Stanine — used
+/// industry-wide, not any one publisher's IP) — but never that publisher's
+/// name, logo, copyright notice, or their own proprietary named scores/
+/// product codes. See tool/generate_sheets.dart's header-kind comment for
+/// the same policy already applied to AT's front page.
+void _paintAtScoreRecordPage(PdfGraphics canvas, ExamSpec exam, PdfFont regular, PdfFont bold) {
+  double flip(double topLeftY) => exam.pageHeightPt - topLeftY;
+  final contentWidth = exam.pageWidthPt - kContentLeft - exam.markerPad - exam.pageMargin;
+
+  var y = kContentTop;
+
+  // Letterhead -- same 3 lines as the front page, smaller.
+  for (var i = 0; i < exam.letterheadLines.length; i++) {
+    final line = exam.letterheadLines[i];
+    final size = i == 1 ? 11.0 : 8.0;
+    final font = i == 1 ? bold : regular;
+    final metrics = font.stringMetrics(line) * size;
+    canvas.setColor(i == 1 ? kNavy : kGray);
+    canvas.drawString(font, size, line, kContentLeft + (contentWidth - metrics.advanceWidth) / 2, flip(y + size));
+    y += size + 3;
+  }
+  y += 8;
+
+  // Title.
+  canvas.setColor(kNavy);
+  final title = '${exam.title} - Score Record';
+  final titleMetrics = bold.stringMetrics(title) * 14;
+  canvas.drawString(bold, 14, title, kContentLeft + (contentWidth - titleMetrics.advanceWidth) / 2, flip(y + 14));
+  y += 14 + 14;
+
+  // ID table.
+  const idRows = ['Date', 'Name', 'Examiner', 'School', 'Date of Birth', 'Gender', 'Grade', 'Age (years/months)'];
+  const idRowHeight = 18.0;
+  final idTableHeight = idRowHeight * idRows.length;
+  canvas.setColor(kBlack);
+  canvas.setLineWidth(1);
+  canvas.drawRect(kContentLeft, flip(y + idTableHeight), contentWidth, idTableHeight);
+  canvas.strokePath();
+  for (var i = 1; i < idRows.length; i++) {
+    final lineY = y + idRowHeight * i;
+    canvas.drawLine(kContentLeft, flip(lineY), kContentLeft + contentWidth, flip(lineY));
+    canvas.strokePath();
+  }
+  for (var i = 0; i < idRows.length; i++) {
+    canvas.setColor(kGray);
+    canvas.drawString(regular, 9, idRows[i], kContentLeft + 6, flip(y + idRowHeight * i + 12));
+  }
+  y += idTableHeight + 16;
+
+  // Score-category boxes: Verbal Comprehension / Figural Reasoning on one
+  // row, Verbal Reasoning / Quantitative Reasoning on the next, Total off
+  // to the side spanning both -- same shape as the reference photo's strip.
+  const boxRowHeight = 26.0;
+  final totalBoxWidth = 70.0;
+  final categoryWidth = (contentWidth - totalBoxWidth - 20) / 2;
+  void scoreBox(String label, double bx, double by, double bw, double bh) {
+    canvas.setColor(kGray);
+    canvas.drawString(regular, 9, label, bx, flip(by + 10));
+    canvas.setColor(kBlack);
+    canvas.setLineWidth(1);
+    canvas.drawRect(bx + bw - 34, flip(by + bh), 34, bh - 6);
+    canvas.strokePath();
+  }
+
+  scoreBox('Verbal Comprehension', kContentLeft, y, categoryWidth, boxRowHeight);
+  scoreBox('Figural Reasoning', kContentLeft + categoryWidth + 20, y, categoryWidth, boxRowHeight);
+  scoreBox('Verbal Reasoning', kContentLeft, y + boxRowHeight, categoryWidth, boxRowHeight);
+  scoreBox('Quantitative Reasoning', kContentLeft + categoryWidth + 20, y + boxRowHeight, categoryWidth, boxRowHeight);
+  final totalX = kContentLeft + contentWidth - totalBoxWidth;
+  canvas.setColor(kNavy);
+  canvas.drawString(bold, 10, 'Total', totalX, flip(y + 12));
+  canvas.setColor(kBlack);
+  canvas.setLineWidth(1.5);
+  canvas.drawRect(totalX, flip(y + boxRowHeight * 2 - 4), totalBoxWidth, boxRowHeight);
+  canvas.strokePath();
+  y += boxRowHeight * 2 + 18;
+
+  // Scores table: Total / Verbal / Nonverbal columns x Raw Score /
+  // Percentile Rank / Stanine rows.
+  canvas.setColor(kNavy);
+  canvas.drawString(bold, 11, 'Scores', kContentLeft, flip(y + 11));
+  y += 18;
+  const scoreCols = ['', 'Total', 'Verbal', 'Nonverbal'];
+  const scoreRows = ['Raw Score', 'Percentile Rank', 'Stanine'];
+  const scoreLabelWidth = 120.0;
+  final scoreColWidth = (contentWidth - scoreLabelWidth) / 3;
+  const scoreRowHeight = 20.0;
+  final scoreTableHeight = scoreRowHeight * (scoreRows.length + 1);
+  canvas.setColor(kBlack);
+  canvas.setLineWidth(1);
+  canvas.drawRect(kContentLeft, flip(y + scoreTableHeight), contentWidth, scoreTableHeight);
+  canvas.strokePath();
+  for (var i = 1; i <= scoreRows.length; i++) {
+    final lineY = y + scoreRowHeight * i;
+    canvas.drawLine(kContentLeft, flip(lineY), kContentLeft + contentWidth, flip(lineY));
+    canvas.strokePath();
+  }
+  for (var i = 1; i < scoreCols.length; i++) {
+    final lineX = kContentLeft + scoreLabelWidth + scoreColWidth * (i - 1);
+    canvas.drawLine(lineX, flip(y), lineX, flip(y + scoreTableHeight));
+    canvas.strokePath();
+  }
+  canvas.setColor(kGray);
+  for (var c = 1; c < scoreCols.length; c++) {
+    final colX = kContentLeft + scoreLabelWidth + scoreColWidth * (c - 1);
+    final metrics = bold.stringMetrics(scoreCols[c]) * 9;
+    canvas.drawString(bold, 9, scoreCols[c], colX + (scoreColWidth - metrics.advanceWidth) / 2, flip(y + 13));
+  }
+  for (var r = 0; r < scoreRows.length; r++) {
+    canvas.drawString(regular, 9, scoreRows[r], kContentLeft + 6, flip(y + scoreRowHeight * (r + 1) + 13));
+  }
+  y += scoreTableHeight + 6;
+  canvas.setColor(kGray);
+  canvas.drawString(regular, 7, 'Verbal = Verbal Comprehension + Verbal Reasoning', kContentLeft, flip(y + 8));
+  canvas.drawString(regular, 7, 'Nonverbal = Figural Reasoning + Quantitative Reasoning', kContentLeft, flip(y + 18));
+  y += 30;
+
+  // Cluster Analysis table: Number Right / Below Average / Average / Above
+  // Average columns x category rows (sub-categories indented).
+  canvas.setColor(kNavy);
+  canvas.drawString(bold, 11, 'Cluster Analysis', kContentLeft, flip(y + 11));
+  y += 18;
+  const clusterCols = ['', 'Number Right', 'Below Average', 'Average', 'Above Average'];
+  const clusterRows = [
+    ('Total', false),
+    ('Verbal', false),
+    ('Verbal Comprehension', true),
+    ('Verbal Reasoning', true),
+    ('Nonverbal', false),
+    ('Figural Reasoning', true),
+    ('Quantitative Reasoning', true),
+  ];
+  const clusterLabelWidth = 150.0;
+  final clusterColWidth = (contentWidth - clusterLabelWidth) / 4;
+  const clusterRowHeight = 18.0;
+  final clusterTableHeight = clusterRowHeight * (clusterRows.length + 1);
+  canvas.setColor(kBlack);
+  canvas.setLineWidth(1);
+  canvas.drawRect(kContentLeft, flip(y + clusterTableHeight), contentWidth, clusterTableHeight);
+  canvas.strokePath();
+  for (var i = 1; i <= clusterRows.length; i++) {
+    final lineY = y + clusterRowHeight * i;
+    canvas.drawLine(kContentLeft, flip(lineY), kContentLeft + contentWidth, flip(lineY));
+    canvas.strokePath();
+  }
+  for (var i = 1; i < clusterCols.length; i++) {
+    final lineX = kContentLeft + clusterLabelWidth + clusterColWidth * (i - 1);
+    canvas.drawLine(lineX, flip(y), lineX, flip(y + clusterTableHeight));
+    canvas.strokePath();
+  }
+  canvas.setColor(kGray);
+  for (var c = 1; c < clusterCols.length; c++) {
+    final colX = kContentLeft + clusterLabelWidth + clusterColWidth * (c - 1);
+    final metrics = bold.stringMetrics(clusterCols[c]) * 8;
+    canvas.drawString(bold, 8, clusterCols[c], colX + (clusterColWidth - metrics.advanceWidth) / 2, flip(y + 12));
+  }
+  for (var r = 0; r < clusterRows.length; r++) {
+    final (label, indented) = clusterRows[r];
+    canvas.drawString(regular, 9, label, kContentLeft + (indented ? 16 : 6), flip(y + clusterRowHeight * (r + 1) + 12));
+  }
+  y += clusterTableHeight + 20;
+
+  // Footer -- GuideGrade/NDMU only, no publisher name or copyright notice.
+  canvas.setColor(kGray);
+  canvas.drawString(regular, 7, 'GuideGrade - Guidance Automated Test Diagnostic Checking', kContentLeft, flip(y));
+}
+
 // ---------------------------------------------------------------------------
 // Dart template emission
 // ---------------------------------------------------------------------------
@@ -1283,6 +1508,23 @@ Future<void> main() async {
           ),
         );
       }
+    }
+
+    // AT only: a back-page Score Record, printed on the reverse of the
+    // bubble sheet -- purely informational (filled in by hand after
+    // grading), never scanned, so it's added straight to the PDF here with
+    // no corner markers and no bearing on layout/_emitTemplate at all.
+    if (exam.code == 'AT') {
+      pdf.addPage(
+        pw.Page(
+          pageFormat: PdfPageFormat(exam.pageWidthPt, exam.pageHeightPt),
+          margin: pw.EdgeInsets.zero,
+          build: (context) => pw.CustomPaint(
+            size: PdfPoint(exam.pageWidthPt, exam.pageHeightPt),
+            painter: (canvas, size) => _paintAtScoreRecordPage(canvas, exam, regular, bold),
+          ),
+        ),
+      );
     }
 
     final bytes = await pdf.save();
