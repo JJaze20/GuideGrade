@@ -14,3 +14,30 @@
 -dontwarn com.google.mlkit.vision.text.japanese.JapaneseTextRecognizerOptions
 -dontwarn com.google.mlkit.vision.text.korean.KoreanTextRecognizerOptions$Builder
 -dontwarn com.google.mlkit.vision.text.korean.KoreanTextRecognizerOptions
+
+# The -dontwarn rules above only silence R8's compile-time "can't resolve
+# this class" error for the per-language recognizer variants this app never
+# uses -- they do NOT keep the classes google_mlkit_text_recognition's Latin
+# TextRecognizer actually calls at runtime. Without an explicit -keep, R8 is
+# free to strip/rename members that the plugin's Java<->Dart method-channel
+# bridge and the underlying Play Services ML Kit module reach via
+# reflection, which silently breaks OCR in release builds specifically
+# (debug builds skip R8 entirely, so this never showed up there) --
+# confirmed 2026-09-02: name auto-fill (see
+# lib/core/omr/name_ocr_service_native.dart) worked in `flutter run --debug`
+# but stayed blank in an otherwise-identical `flutter build apk --release`.
+#
+# A first attempt only kept vision.text/vision.common and made things worse:
+# ML Kit's dependency-injection component registry (com.google.mlkit.common.
+# sdkinternal.*, used by every ML Kit vision API, not just text) got stripped
+# since it was never listed, and R8 (re)computed a *different* reachable set
+# once some mlkit classes were rooted -- the app then crashed on launch
+# entirely (MlKitInitProvider failing "Unsatisfied dependency ... com.google.
+# mlkit.common.sdkinternal.d"), confirmed via a real device logcat. Keeping
+# the whole com.google.mlkit package (not just its vision.text/vision.common
+# sub-packages) avoids this whack-a-mole across ML Kit's own internal wiring.
+-keep class com.google.mlkit.** { *; }
+-keep class com.google.android.gms.internal.mlkit_vision_text_common.** { *; }
+-keep class com.google.android.gms.internal.mlkit_vision_text_bundled_common.** { *; }
+-keep class com.google.android.gms.internal.mlkit_vision_common.** { *; }
+-keep class com.google.android.gms.internal.mlkit_common.** { *; }

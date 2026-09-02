@@ -560,7 +560,43 @@ class OmrDecoder {
                   );
                   final roi = warped.region(rect);
                   try {
-                    cv.imwrite(outPath, roi);
+                    // Pencil handwriting has much lower/uneven contrast
+                    // against paper than the crisp printed field label —
+                    // confirmed on a real scan (via a temporary raw-OCR-text
+                    // log) that ML Kit's text *detector* can fail to flag a
+                    // faint handwritten line as text at all, rather than
+                    // misreading it, so the printed label gets recognized
+                    // and the handwriting is silently dropped before
+                    // recognition ever runs. CLAHE re-normalizes local
+                    // contrast (same technique already used before
+                    // thresholding for bubble detection) to close that gap
+                    // before handing the crop to OCR — small tile grid since
+                    // this crop is much smaller than a full page, clip limit
+                    // matching the other small-ROI CLAHE use
+                    // (_findMarkerInRegion). A light blur afterward tamps
+                    // down the noise CLAHE can amplify in an otherwise
+                    // near-blank paper region.
+                    final grayRoi = cv.cvtColor(roi, cv.COLOR_BGR2GRAY);
+                    try {
+                      final clahe = cv.createCLAHE(clipLimit: 3, tileGridSize: (4, 4));
+                      try {
+                        final enhanced = clahe.apply(grayRoi);
+                        try {
+                          final blurred = cv.gaussianBlur(enhanced, (3, 3), 0);
+                          try {
+                            cv.imwrite(outPath, blurred);
+                          } finally {
+                            blurred.dispose();
+                          }
+                        } finally {
+                          enhanced.dispose();
+                        }
+                      } finally {
+                        clahe.dispose();
+                      }
+                    } finally {
+                      grayRoi.dispose();
+                    }
                   } finally {
                     roi.dispose();
                   }
