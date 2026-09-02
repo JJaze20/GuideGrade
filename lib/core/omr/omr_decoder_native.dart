@@ -74,6 +74,50 @@ class OmrDecoder {
   /// values require darker pixels to count as "ink".
   static const double _adaptiveThresholdC = 12;
 
+  /// Low-light adaptive tuning: "normal" mean brightness (0-255) a well-lit
+  /// captured sheet reads at, measured on the same grayscale Mat CLAHE is
+  /// about to run on (or, for [_findMarkerInRegion], on that corner's own
+  /// local search ROI — its own light can differ from the rest of the page,
+  /// e.g. a shadow or silhouette over just one corner). At or above this,
+  /// [_darknessFactor] is 0 and every adaptive helper below returns its
+  /// input unchanged — the existing per-exam-tuned CLAHE/threshold values
+  /// this project's daylight accuracy (AT ~94%, QTM ~95%) was measured
+  /// against are a mathematical no-op case of this, not a separate path.
+  /// Below it, correction scales in proportionally. Not yet calibrated
+  /// against a real low-light scan — a reasonable starting point pending
+  /// the on-device validation in the low-light accuracy plan's Phase 3, not
+  /// a final tuned value the way the per-exam constants above are.
+  static const double _referenceBrightness = 170.0;
+
+  /// How far below [_referenceBrightness] the adaptive scaling below
+  /// saturates at its maximum adjustment. Also pending real-scan
+  /// calibration.
+  static const double _maxDarknessRange = 100.0;
+
+  /// 0 at/above [_referenceBrightness], ramping linearly to 1 at
+  /// [_referenceBrightness] - [_maxDarknessRange] and clamped there for
+  /// anything darker still — how far into "dark" territory a measured mean
+  /// brightness reads, for scaling CLAHE/threshold parameters
+  /// proportionally to how dark the actual photo is rather than as a hard
+  /// on/off switch at some arbitrary cutoff.
+  static double _darknessFactor(double meanBrightness) =>
+      ((_referenceBrightness - meanBrightness) / _maxDarknessRange).clamp(0.0, 1.0);
+
+  /// Scales a CLAHE clip limit up to double at maximum measured darkness,
+  /// unchanged at/above [_referenceBrightness] — stronger local-contrast
+  /// stretching for a genuinely dim or shadowed photo, where the existing
+  /// fixed per-exam clip limits (tuned against normally-lit scans) don't
+  /// pull the paper-vs-ink gap open far enough on their own.
+  static double _adaptiveClipLimit(double base, double meanBrightness) =>
+      base * (1 + _darknessFactor(meanBrightness));
+
+  /// Scales the adaptive-threshold C constant down to half at maximum
+  /// measured darkness, unchanged at/above [_referenceBrightness] — a more
+  /// permissive "is this ink" decision for when CLAHE alone hasn't fully
+  /// closed a dim photo's paper-vs-ink gap back to a normally-lit one's.
+  static double _adaptiveThresholdCFor(double base, double meanBrightness) =>
+      base * (1 - _darknessFactor(meanBrightness) * 0.5);
+
   /// Absolute floor an item's best-filled bubble must clear before it's
   /// even considered for marking, used only as a last-resort sanity check
   /// (see [_readBubbles]) — everything with 3+ choices decides "is
@@ -349,41 +393,76 @@ class OmrDecoder {
               // per-pixel noise survives into the ink map, where it inflates
               // a blank neighbor bubble's fill reading enough to erode a
               // genuine mark's margin over it.
-              final clahe = cv.createCLAHE(
-                clipLimit: _claheClipLimitFor(template.examCode),
-                tileGridSize: (8, 8),
-              );
+              //
+              // Both the clip limit and the threshold constant are then
+              // additionally scaled for how dark this particular photo
+              // measures (see _adaptiveClipLimit/_adaptiveThresholdCFor) —
+              // a no-op at/above _referenceBrightness, so a normally-lit
+              // capture goes through this exact same per-exam-tuned path as
+              // before; only a measurably dim/shadowed one gets the extra
+              // correction.
+              final warpedMeanScalar = warped.mean();
+              double warpedBrightness;
               try {
-                final normalized = clahe.apply(warped);
+                warpedBrightness = warpedMeanScalar.val1;
+              } finally {
+                warpedMeanScalar.dispose();
+              }
+              // Low light usually means the camera compensated with a
+              // higher ISO, which means more sensor noise going into CLAHE
+              // — exactly the noise-amplification risk the comment above
+              // already describes, just worse than what the post-CLAHE
+              // blur alone was tuned to absorb. An edge-preserving
+              // bilateral filter ahead of CLAHE, strength scaled by how
+              // dark this photo measures, tamps that down before it ever
+              // reaches CLAHE — skipped entirely (claheInput stays
+              // identical to warped) at/above _referenceBrightness, so a
+              // normally-lit capture never pays this filter's real cost
+              // (bilateral filtering is meaningfully slower than a plain
+              // blur).
+              final darkness = _darknessFactor(warpedBrightness);
+              final claheInput = darkness > 0
+                  ? cv.bilateralFilter(warped, 5, 50 * darkness, 50 * darkness)
+                  : warped;
+              try {
+                final clahe = cv.createCLAHE(
+                  clipLimit: _adaptiveClipLimit(_claheClipLimitFor(template.examCode), warpedBrightness),
+                  tileGridSize: (8, 8),
+                );
                 try {
-                  final blurred = cv.gaussianBlur(normalized, (5, 5), 0);
+                  final normalized = clahe.apply(claheInput);
                   try {
-                    final inkMap = cv.adaptiveThreshold(
-                      blurred,
-                      255,
-                      cv.ADAPTIVE_THRESH_GAUSSIAN_C,
-                      cv.THRESH_BINARY_INV,
-                      _adaptiveThresholdBlockSize,
-                      _adaptiveThresholdC,
-                    );
+                    final blurred = cv.gaussianBlur(normalized, (5, 5), 0);
                     try {
-                      return _readBubbles(
-                        inkMap,
-                        template,
-                        canonicalWidth,
-                        canonicalHeight,
+                      final inkMap = cv.adaptiveThreshold(
+                        blurred,
+                        255,
+                        cv.ADAPTIVE_THRESH_GAUSSIAN_C,
+                        cv.THRESH_BINARY_INV,
+                        _adaptiveThresholdBlockSize,
+                        _adaptiveThresholdCFor(_adaptiveThresholdC, warpedBrightness),
                       );
+                      try {
+                        return _readBubbles(
+                          inkMap,
+                          template,
+                          canonicalWidth,
+                          canonicalHeight,
+                        );
+                      } finally {
+                        inkMap.dispose();
+                      }
                     } finally {
-                      inkMap.dispose();
+                      blurred.dispose();
                     }
                   } finally {
-                    blurred.dispose();
+                    normalized.dispose();
                   }
                 } finally {
-                  normalized.dispose();
+                  clahe.dispose();
                 }
               } finally {
-                clahe.dispose();
+                if (!identical(claheInput, warped)) claheInput.dispose();
               }
             } finally {
               warped.dispose();
@@ -797,45 +876,64 @@ class OmrDecoder {
                   warpedGray,
                 );
                 // Kept identical to the real decode path above (clipLimit,
-                // blur kernel) so this debug output actually reflects what
+                // blur kernel, and now the same brightness-adaptive scaling
+                // too) so this debug output actually reflects what
                 // _readBubbles saw, not a different pipeline.
-                final clahe = cv.createCLAHE(
-                  clipLimit: _claheClipLimitFor(template.examCode),
-                  tileGridSize: (8, 8),
-                );
+                final warpedGrayMeanScalar = warpedGray.mean();
+                double warpedGrayBrightness;
                 try {
-                  final normalized = clahe.apply(warpedGray);
+                  warpedGrayBrightness = warpedGrayMeanScalar.val1;
+                } finally {
+                  warpedGrayMeanScalar.dispose();
+                }
+                // Same darkness-scaled bilateral pre-filter decode() now
+                // runs — a no-op Mat reference (not a real filter call) at/
+                // above _referenceBrightness.
+                final grayDarkness = _darknessFactor(warpedGrayBrightness);
+                final grayClaheInput = grayDarkness > 0
+                    ? cv.bilateralFilter(warpedGray, 5, 50 * grayDarkness, 50 * grayDarkness)
+                    : warpedGray;
+                try {
+                  final clahe = cv.createCLAHE(
+                    clipLimit: _adaptiveClipLimit(_claheClipLimitFor(template.examCode), warpedGrayBrightness),
+                    tileGridSize: (8, 8),
+                  );
                   try {
-                    cv.imwrite(
-                      '$outputDir/sheet${pageIndex}_clahe.jpg',
-                      normalized,
-                    );
-                    final blurred = cv.gaussianBlur(normalized, (5, 5), 0);
+                    final normalized = clahe.apply(grayClaheInput);
                     try {
-                      final inkMap = cv.adaptiveThreshold(
-                        blurred,
-                        255,
-                        cv.ADAPTIVE_THRESH_GAUSSIAN_C,
-                        cv.THRESH_BINARY_INV,
-                        _adaptiveThresholdBlockSize,
-                        _adaptiveThresholdC,
+                      cv.imwrite(
+                        '$outputDir/sheet${pageIndex}_clahe.jpg',
+                        normalized,
                       );
+                      final blurred = cv.gaussianBlur(normalized, (5, 5), 0);
                       try {
-                        cv.imwrite(
-                          '$outputDir/sheet${pageIndex}_inkmap.jpg',
-                          inkMap,
+                        final inkMap = cv.adaptiveThreshold(
+                          blurred,
+                          255,
+                          cv.ADAPTIVE_THRESH_GAUSSIAN_C,
+                          cv.THRESH_BINARY_INV,
+                          _adaptiveThresholdBlockSize,
+                          _adaptiveThresholdCFor(_adaptiveThresholdC, warpedGrayBrightness),
                         );
+                        try {
+                          cv.imwrite(
+                            '$outputDir/sheet${pageIndex}_inkmap.jpg',
+                            inkMap,
+                          );
+                        } finally {
+                          inkMap.dispose();
+                        }
                       } finally {
-                        inkMap.dispose();
+                        blurred.dispose();
                       }
                     } finally {
-                      blurred.dispose();
+                      normalized.dispose();
                     }
                   } finally {
-                    normalized.dispose();
+                    clahe.dispose();
                   }
                 } finally {
-                  clahe.dispose();
+                  if (!identical(grayClaheInput, warpedGray)) grayClaheInput.dispose();
                 }
               } finally {
                 warpedGray.dispose();
@@ -1299,7 +1397,20 @@ class OmrDecoder {
   ) {
     final roi = gray.region(region);
     try {
-      final clahe = cv.createCLAHE(clipLimit: 3, tileGridSize: (4, 4));
+      // Brightness measured on this corner's own search ROI, not the whole
+      // photo — a shadow or silhouette can fall over just one corner while
+      // the rest of the sheet is fine, and the other 3 corners' searches
+      // shouldn't get a correction they don't need because of it. A no-op
+      // at/above _referenceBrightness, same as decode()'s own adaptive
+      // scaling.
+      final roiMeanScalar = roi.mean();
+      double roiBrightness;
+      try {
+        roiBrightness = roiMeanScalar.val1;
+      } finally {
+        roiMeanScalar.dispose();
+      }
+      final clahe = cv.createCLAHE(clipLimit: _adaptiveClipLimit(3, roiBrightness), tileGridSize: (4, 4));
       try {
         final enhanced = clahe.apply(roi);
         try {
@@ -1313,7 +1424,7 @@ class OmrDecoder {
               cv.ADAPTIVE_THRESH_GAUSSIAN_C,
               cv.THRESH_BINARY_INV,
               blockSize,
-              8,
+              _adaptiveThresholdCFor(8, roiBrightness),
             );
             try {
               // Ordinary photo blur/JPEG softening can still break a
