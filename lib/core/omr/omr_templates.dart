@@ -527,9 +527,9 @@ final OmrExamTemplate _omrAT = OmrExamTemplate(
   bubbleRadiusPt: 8.0,
   bubbleRadiusYPt: 8.0,
   cornerMarkers: const [OmrCorner(0.04032, 0.02851), OmrCorner(0.86682, 0.02851), OmrCorner(0.04032, 0.98706), OmrCorner(0.86682, 0.98706)],
-  lastNameFieldRect: const OmrFieldRect(0.07391, 0.10096, 0.34169, 0.01782),
-  firstNameFieldRect: const OmrFieldRect(0.41560, 0.10096, 0.30372, 0.01782),
-  middleInitialFieldRect: const OmrFieldRect(0.71933, 0.10096, 0.11390, 0.01782),
+  lastNameFieldRect: const OmrFieldRect(0.07391, 0.10690, 0.18223, 0.04039),
+  firstNameFieldRect: const OmrFieldRect(0.25615, 0.10690, 0.16705, 0.04039),
+  middleInitialFieldRect: const OmrFieldRect(0.42320, 0.10690, 0.06074, 0.04039),
   sections: const [
     OmrSection(
       name: "Answer Document",

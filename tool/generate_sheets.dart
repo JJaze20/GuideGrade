@@ -79,10 +79,14 @@ const int kRowsPerColumn = 30;
 
 // ---------------------------------------------------------------------------
 // Header block. Two kinds:
-//  - simple: GuideGrade's own generic brand header (AT/PT — these are only
-//    structurally inspired by third-party commercial tests, so they keep
-//    generic branding rather than reproducing OLSAT/16PF's own).
-//  - ndmu: the real NDMU Guidance Center letterhead + ID-field table +
+//  - simple: the 6-column Last Name/First Name/MI/Exam Code/Batch/Date ID
+//    table (AT/PT — these are only structurally inspired by third-party
+//    commercial tests, so they keep generic branding rather than
+//    reproducing OLSAT/16PF's own). The brand block on top of that table
+//    is either GuideGrade's own generic wordmark (PT) or NDMU's real
+//    letterhead (AT, via ExamSpec.letterheadLines) — see
+//    _paintSimpleHeader.
+//  - ndmu: the real NDMU Guidance Center letterhead + full ID-field table +
 //    scores block (QTM/TAT — NDMU's own documents, reproduced closely).
 // Each exam reserves a fixed height for its own kind on every page, so its
 // content bounding box — and therefore its corner markers — stays
@@ -167,12 +171,10 @@ const double kCompactNdmuHeaderHeight =
     kCompactNdmuInstructionHeight +
     kCompactGapBeforeNdmuGrid;
 
-double headerHeightFor(ExamSpec exam) =>
-    exam.headerHeightOverride ??
-    switch (exam.headerKind) {
-      HeaderKind.simple => kSimpleHeaderHeight,
-      HeaderKind.ndmu => exam.compactNdmuHeader ? kCompactNdmuHeaderHeight : kNdmuHeaderHeight,
-    };
+double headerHeightFor(ExamSpec exam) => switch (exam.headerKind) {
+  HeaderKind.simple => kSimpleHeaderHeight,
+  HeaderKind.ndmu => exam.compactNdmuHeader ? kCompactNdmuHeaderHeight : kNdmuHeaderHeight,
+};
 
 /// Row 30's bubble center sits `(kRowsPerColumn - 1) * kRowPitch` below row
 /// 1's, plus bubble radius clearance below that. Same for every exam — only
@@ -193,8 +195,7 @@ exam.rowPitch + 2 * exam.bubbleRadius;
 /// oval bubble's measured fill by roughly half, confirmed against a real
 /// scan where it was enough to make every marked item read ambiguous.
 double bubbleRadiusYFor(ExamSpec exam) =>
-    exam.bubbleRadiusYOverride ??
-    (exam.headerKind == HeaderKind.ndmu ? exam.bubbleRadius * 0.8 : exam.bubbleRadius);
+    exam.headerKind == HeaderKind.ndmu ? exam.bubbleRadius * 0.8 : exam.bubbleRadius;
 
 // ---------------------------------------------------------------------------
 // Brand colors, matching lib/core/constants/app_colors.dart.
@@ -298,31 +299,6 @@ class ExamSpec {
   /// bigger instead of most of the page going to the header.
   final bool compactNdmuHeader;
 
-  /// Direct override for [headerHeightFor]'s result — freezes the header
-  /// budget at this exact value regardless of which [headerKind]/
-  /// [compactNdmuHeader] content variant is actually drawn inside it. Null
-  /// (the default) uses the normal computed height. Exists for a header
-  /// swap on an exam whose bubble grid is already printed and in use (AT's
-  /// swap from [HeaderKind.simple] to a compact NDMU header): the compact
-  /// NDMU content is shorter than AT's old simple header, so without this
-  /// override the grid's start position (`contentTop + headerHeightFor`)
-  /// would shift up and no longer match already-printed sheets. Setting
-  /// this to AT's old [kSimpleHeaderHeight] keeps that position bit-
-  /// identical — the new header content just gets a little extra
-  /// breathing room before the grid instead of the grid moving.
-  final double? headerHeightOverride;
-
-  /// Direct override for [bubbleRadiusYFor]'s result — see
-  /// [headerHeightOverride]'s doc comment for the same reasoning applied to
-  /// bubble shape instead of header height. [bubbleRadiusYFor] normally
-  /// infers oval-vs-circle bubbles from [headerKind] alone (NDMU forms draw
-  /// flattened ovals, everything else true circles), but AT's header swap
-  /// to [HeaderKind.ndmu] must not also flip its already-printed circular
-  /// bubbles into ovals — this keeps them a true circle
-  /// ([ExamSpec.bubbleRadius] in both directions) independent of the
-  /// header-kind-driven default.
-  final double? bubbleRadiusYOverride;
-
   const ExamSpec(
       this.code,
       this.title,
@@ -346,8 +322,6 @@ class ExamSpec {
         this.labelGapPt,
         this.suppressSectionInTitle = false,
         this.compactNdmuHeader = false,
-        this.headerHeightOverride,
-        this.bubbleRadiusYOverride,
       });
 }
 
@@ -487,21 +461,13 @@ final List<ExamSpec> kExams = [
     choicePitch: 26,
     rowPitch: 27,
     rowsPerColumn: 24,
-    // NDMU letterhead (same as QTM's) instead of GuideGrade's own generic
-    // header -- real AT sheets are already printed with the bubble grid at
-    // its current position, so headerHeightOverride freezes the header
-    // budget at AT's old kSimpleHeaderHeight even though the compact NDMU
-    // header content itself is a bit shorter (see headerHeightOverride's
-    // doc comment) -- the grid's start position doesn't move a single
-    // point from this change.
-    headerKind: HeaderKind.ndmu,
-    compactNdmuHeader: true,
-    headerHeightOverride: kSimpleHeaderHeight,
-    // Keep true-circle bubbles (AT's already-printed sheets have them) --
-    // see bubbleRadiusYOverride's doc comment. Without this,
-    // bubbleRadiusYFor would infer flattened NDMU-style ovals purely from
-    // headerKind now being HeaderKind.ndmu, which isn't what's printed.
-    bubbleRadiusYOverride: 8,
+    // Stays on the plain HeaderKind.simple layout (6-column Last Name/
+    // First Name/MI/Exam Code/Batch/Date row, same as before) -- only the
+    // brand block's *content* changes: _paintSimpleHeader draws these
+    // letterhead lines instead of the "Guide"+"Grade" wordmark whenever
+    // letterheadLines is non-empty, in the exact same fixed vertical
+    // budget, so nothing below it (the ID table, title, bubble grid) moves
+    // at all.
     letterheadLines: const [
       'Guidance and Testing Center',
       'NOTRE DAME OF MARBEL UNIVERSITY',
@@ -868,10 +834,16 @@ typedef _FieldBox = ({double x, double y, double width, double height});
   }
 }
 
-/// GuideGrade's own generic brand header (AT/PT) — these are only
-/// structurally inspired by third-party commercial tests (OLSAT/16PF), so
-/// they keep GuideGrade's own branding rather than reproducing those
-/// tests' names or logos.
+/// AT/PT's header — structurally the same 6-column ID table (Last Name/
+/// First Name/MI/Exam Code/Batch/Date) either way, but the brand block on
+/// top is either GuideGrade's own generic wordmark (PT — only
+/// structurally inspired by a third-party commercial test, so it keeps
+/// GuideGrade's own branding rather than reproducing that test's name or
+/// logo) or NDMU's real letterhead (AT — swapped in via
+/// [ExamSpec.letterheadLines], reusing the field [_paintNdmuHeader]
+/// already uses for the same purpose on QTM/TAT). Either way the brand
+/// block consumes exactly [kBrandRowHeight] + [kSubtitleRowHeight] +
+/// [kGapAfterSubtitle], so the ID table/title/grid below it never moves.
 void _paintSimpleHeader(
   PdfGraphics canvas,
   ExamSpec exam,
@@ -882,16 +854,30 @@ void _paintSimpleHeader(
   double Function(double) flip,
 ) {
   var y = kContentTop;
-  canvas.setColor(kRedOrange);
-  canvas.drawString(bold, 20, 'Guide', kContentLeft, flip(y + 20));
-  final guideWidth = (bold.stringMetrics('Guide') * 20).advanceWidth;
-  canvas.setColor(kGreen);
-  canvas.drawString(bold, 20, 'Grade', kContentLeft + guideWidth, flip(y + 20));
-  y += kBrandRowHeight;
+  if (exam.letterheadLines.isEmpty) {
+    canvas.setColor(kRedOrange);
+    canvas.drawString(bold, 20, 'Guide', kContentLeft, flip(y + 20));
+    final guideWidth = (bold.stringMetrics('Guide') * 20).advanceWidth;
+    canvas.setColor(kGreen);
+    canvas.drawString(bold, 20, 'Grade', kContentLeft + guideWidth, flip(y + 20));
+    y += kBrandRowHeight;
 
-  canvas.setColor(kGray);
-  canvas.drawString(regular, 10, 'Guidance and Testing Center', kContentLeft, flip(y + 10));
-  y += kSubtitleRowHeight + kGapAfterSubtitle;
+    canvas.setColor(kGray);
+    canvas.drawString(regular, 10, 'Guidance and Testing Center', kContentLeft, flip(y + 10));
+    y += kSubtitleRowHeight + kGapAfterSubtitle;
+  } else {
+    var ly = y + 10;
+    for (var i = 0; i < exam.letterheadLines.length; i++) {
+      final line = exam.letterheadLines[i];
+      final size = i == 1 ? 11.0 : 8.0;
+      final font = i == 1 ? bold : regular;
+      final metrics = font.stringMetrics(line) * size;
+      canvas.setColor(i == 1 ? kNavy : kGray);
+      canvas.drawString(font, size, line, kContentLeft + (layout.contentWidth - metrics.advanceWidth) / 2, flip(ly));
+      ly += size + 3;
+    }
+    y += kBrandRowHeight + kSubtitleRowHeight + kGapAfterSubtitle;
+  }
 
   // Name / exam info table. Last Name/First Name widths come from
   // _nameFieldBoxes (shared with _emitTemplate's OCR crop rect) rather than
@@ -1172,26 +1158,9 @@ void _paintAtScoreRecordPage(PdfGraphics canvas, ExamSpec exam, PdfFont regular,
   double flip(double topLeftY) => exam.pageHeightPt - topLeftY;
   final contentWidth = exam.pageWidthPt - kContentLeft - exam.markerPad - exam.pageMargin;
 
+  // No letterhead, no title -- just the tables, starting right at the top
+  // of the page.
   var y = kContentTop;
-
-  // Letterhead -- same 3 lines as the front page, smaller.
-  for (var i = 0; i < exam.letterheadLines.length; i++) {
-    final line = exam.letterheadLines[i];
-    final size = i == 1 ? 11.0 : 8.0;
-    final font = i == 1 ? bold : regular;
-    final metrics = font.stringMetrics(line) * size;
-    canvas.setColor(i == 1 ? kNavy : kGray);
-    canvas.drawString(font, size, line, kContentLeft + (contentWidth - metrics.advanceWidth) / 2, flip(y + size));
-    y += size + 3;
-  }
-  y += 8;
-
-  // Title.
-  canvas.setColor(kNavy);
-  final title = '${exam.title} - Score Record';
-  final titleMetrics = bold.stringMetrics(title) * 14;
-  canvas.drawString(bold, 14, title, kContentLeft + (contentWidth - titleMetrics.advanceWidth) / 2, flip(y + 14));
-  y += 14 + 14;
 
   // ID table.
   const idRows = ['Date', 'Name', 'Examiner', 'School', 'Date of Birth', 'Gender', 'Grade', 'Age (years/months)'];
@@ -1212,33 +1181,35 @@ void _paintAtScoreRecordPage(PdfGraphics canvas, ExamSpec exam, PdfFont regular,
   }
   y += idTableHeight + 16;
 
-  // Score-category boxes: Verbal Comprehension / Figural Reasoning on one
-  // row, Verbal Reasoning / Quantitative Reasoning on the next, Total off
-  // to the side spanning both -- same shape as the reference photo's strip.
-  const boxRowHeight = 26.0;
-  final totalBoxWidth = 70.0;
-  final categoryWidth = (contentWidth - totalBoxWidth - 20) / 2;
-  void scoreBox(String label, double bx, double by, double bw, double bh) {
-    canvas.setColor(kGray);
-    canvas.drawString(regular, 9, label, bx, flip(by + 10));
-    canvas.setColor(kBlack);
-    canvas.setLineWidth(1);
-    canvas.drawRect(bx + bw - 34, flip(by + bh), 34, bh - 6);
+  // Score-category boxes -- same bordered-table style as the Scores/
+  // Cluster Analysis tables below (one label column, one score-entry
+  // column), rather than individually-positioned floating boxes, so every
+  // row's box lines up under the same left edge with no per-row math to
+  // get wrong.
+  const scoreBoxRows = ['Verbal Comprehension', 'Verbal Reasoning', 'Figural Reasoning', 'Quantitative Reasoning', 'Total'];
+  const scoreBoxRowHeight = 20.0;
+  const scoreBoxEntryWidth = 90.0;
+  final scoreBoxLabelWidth = contentWidth - scoreBoxEntryWidth;
+  final scoreBoxTableHeight = scoreBoxRowHeight * scoreBoxRows.length;
+  canvas.setColor(kBlack);
+  canvas.setLineWidth(1);
+  canvas.drawRect(kContentLeft, flip(y + scoreBoxTableHeight), contentWidth, scoreBoxTableHeight);
+  canvas.strokePath();
+  for (var i = 1; i < scoreBoxRows.length; i++) {
+    final lineY = y + scoreBoxRowHeight * i;
+    canvas.drawLine(kContentLeft, flip(lineY), kContentLeft + contentWidth, flip(lineY));
     canvas.strokePath();
   }
-
-  scoreBox('Verbal Comprehension', kContentLeft, y, categoryWidth, boxRowHeight);
-  scoreBox('Figural Reasoning', kContentLeft + categoryWidth + 20, y, categoryWidth, boxRowHeight);
-  scoreBox('Verbal Reasoning', kContentLeft, y + boxRowHeight, categoryWidth, boxRowHeight);
-  scoreBox('Quantitative Reasoning', kContentLeft + categoryWidth + 20, y + boxRowHeight, categoryWidth, boxRowHeight);
-  final totalX = kContentLeft + contentWidth - totalBoxWidth;
-  canvas.setColor(kNavy);
-  canvas.drawString(bold, 10, 'Total', totalX, flip(y + 12));
-  canvas.setColor(kBlack);
-  canvas.setLineWidth(1.5);
-  canvas.drawRect(totalX, flip(y + boxRowHeight * 2 - 4), totalBoxWidth, boxRowHeight);
+  final scoreBoxEntryX = kContentLeft + scoreBoxLabelWidth;
+  canvas.drawLine(scoreBoxEntryX, flip(y), scoreBoxEntryX, flip(y + scoreBoxTableHeight));
   canvas.strokePath();
-  y += boxRowHeight * 2 + 18;
+  for (var i = 0; i < scoreBoxRows.length; i++) {
+    final rowTop = y + scoreBoxRowHeight * i;
+    final isTotal = scoreBoxRows[i] == 'Total';
+    canvas.setColor(isTotal ? kNavy : kGray);
+    canvas.drawString(isTotal ? bold : regular, 9, scoreBoxRows[i], kContentLeft + 6, flip(rowTop + 13));
+  }
+  y += scoreBoxTableHeight + 18;
 
   // Scores table: Total / Verbal / Nonverbal columns x Raw Score /
   // Percentile Rank / Stanine rows.
