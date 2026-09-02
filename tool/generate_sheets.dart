@@ -79,10 +79,14 @@ const int kRowsPerColumn = 30;
 
 // ---------------------------------------------------------------------------
 // Header block. Two kinds:
-//  - simple: GuideGrade's own generic brand header (AT/PT — these are only
-//    structurally inspired by third-party commercial tests, so they keep
-//    generic branding rather than reproducing OLSAT/16PF's own).
-//  - ndmu: the real NDMU Guidance Center letterhead + ID-field table +
+//  - simple: the 6-column Last Name/First Name/MI/Exam Code/Batch/Date ID
+//    table (AT/PT — these are only structurally inspired by third-party
+//    commercial tests, so they keep generic branding rather than
+//    reproducing OLSAT/16PF's own). The brand block on top of that table
+//    is either GuideGrade's own generic wordmark (PT) or NDMU's real
+//    letterhead (AT, via ExamSpec.letterheadLines) — see
+//    _paintSimpleHeader.
+//  - ndmu: the real NDMU Guidance Center letterhead + full ID-field table +
 //    scores block (QTM/TAT — NDMU's own documents, reproduced closely).
 // Each exam reserves a fixed height for its own kind on every page, so its
 // content bounding box — and therefore its corner markers — stays
@@ -457,6 +461,18 @@ final List<ExamSpec> kExams = [
     choicePitch: 26,
     rowPitch: 27,
     rowsPerColumn: 24,
+    // Stays on the plain HeaderKind.simple layout (6-column Last Name/
+    // First Name/MI/Exam Code/Batch/Date row, same as before) -- only the
+    // brand block's *content* changes: _paintSimpleHeader draws these
+    // letterhead lines instead of the "Guide"+"Grade" wordmark whenever
+    // letterheadLines is non-empty, in the exact same fixed vertical
+    // budget, so nothing below it (the ID table, title, bubble grid) moves
+    // at all.
+    letterheadLines: const [
+      'Guidance and Testing Center',
+      'NOTRE DAME OF MARBEL UNIVERSITY',
+      'City of Koronadal, South Cotabato',
+    ],
     // Printed header reads just "Admission Test (AT)" -- no "- OLSAT",
     // no "- Answer Document" section suffix. SectionSpec.name above is
     // untouched (still "Answer Document"), so scoring/answer-key grouping
@@ -818,10 +834,16 @@ typedef _FieldBox = ({double x, double y, double width, double height});
   }
 }
 
-/// GuideGrade's own generic brand header (AT/PT) — these are only
-/// structurally inspired by third-party commercial tests (OLSAT/16PF), so
-/// they keep GuideGrade's own branding rather than reproducing those
-/// tests' names or logos.
+/// AT/PT's header — structurally the same 6-column ID table (Last Name/
+/// First Name/MI/Exam Code/Batch/Date) either way, but the brand block on
+/// top is either GuideGrade's own generic wordmark (PT — only
+/// structurally inspired by a third-party commercial test, so it keeps
+/// GuideGrade's own branding rather than reproducing that test's name or
+/// logo) or NDMU's real letterhead (AT — swapped in via
+/// [ExamSpec.letterheadLines], reusing the field [_paintNdmuHeader]
+/// already uses for the same purpose on QTM/TAT). Either way the brand
+/// block consumes exactly [kBrandRowHeight] + [kSubtitleRowHeight] +
+/// [kGapAfterSubtitle], so the ID table/title/grid below it never moves.
 void _paintSimpleHeader(
   PdfGraphics canvas,
   ExamSpec exam,
@@ -832,16 +854,30 @@ void _paintSimpleHeader(
   double Function(double) flip,
 ) {
   var y = kContentTop;
-  canvas.setColor(kRedOrange);
-  canvas.drawString(bold, 20, 'Guide', kContentLeft, flip(y + 20));
-  final guideWidth = (bold.stringMetrics('Guide') * 20).advanceWidth;
-  canvas.setColor(kGreen);
-  canvas.drawString(bold, 20, 'Grade', kContentLeft + guideWidth, flip(y + 20));
-  y += kBrandRowHeight;
+  if (exam.letterheadLines.isEmpty) {
+    canvas.setColor(kRedOrange);
+    canvas.drawString(bold, 20, 'Guide', kContentLeft, flip(y + 20));
+    final guideWidth = (bold.stringMetrics('Guide') * 20).advanceWidth;
+    canvas.setColor(kGreen);
+    canvas.drawString(bold, 20, 'Grade', kContentLeft + guideWidth, flip(y + 20));
+    y += kBrandRowHeight;
 
-  canvas.setColor(kGray);
-  canvas.drawString(regular, 10, 'Guidance and Testing Center', kContentLeft, flip(y + 10));
-  y += kSubtitleRowHeight + kGapAfterSubtitle;
+    canvas.setColor(kGray);
+    canvas.drawString(regular, 10, 'Guidance and Testing Center', kContentLeft, flip(y + 10));
+    y += kSubtitleRowHeight + kGapAfterSubtitle;
+  } else {
+    var ly = y + 10;
+    for (var i = 0; i < exam.letterheadLines.length; i++) {
+      final line = exam.letterheadLines[i];
+      final size = i == 1 ? 11.0 : 8.0;
+      final font = i == 1 ? bold : regular;
+      final metrics = font.stringMetrics(line) * size;
+      canvas.setColor(i == 1 ? kNavy : kGray);
+      canvas.drawString(font, size, line, kContentLeft + (layout.contentWidth - metrics.advanceWidth) / 2, flip(ly));
+      ly += size + 3;
+    }
+    y += kBrandRowHeight + kSubtitleRowHeight + kGapAfterSubtitle;
+  }
 
   // Name / exam info table. Last Name/First Name widths come from
   // _nameFieldBoxes (shared with _emitTemplate's OCR crop rect) rather than
@@ -865,7 +901,7 @@ void _paintSimpleHeader(
     canvas.drawLine(colX, flip(y), colX, flip(y + kTableHeight));
     canvas.strokePath();
     canvas.setColor(kGray);
-    canvas.drawString(regular, 7, label, colX + 3, flip(y + 10));
+    canvas.drawString(regular, 8, label, colX + 3, flip(y + 10));
     colX += w;
   }
   y += kTableHeight + kGapAfterTable;
@@ -959,12 +995,12 @@ void _paintNdmuHeader(
       canvas.strokePath();
     }
     canvas.setColor(kGray);
-    canvas.drawString(regular, 7, label, colX + 3, flip(y + labelOffset));
+    canvas.drawString(regular, 8, label, colX + 3, flip(y + labelOffset));
     colX += w;
   }
   canvas.setColor(kGray);
-  canvas.drawString(regular, 7, 'School Last Attended', kContentLeft + 3, flip(y + idRowHeight + labelOffset));
-  canvas.drawString(regular, 7, 'Address of School Last Attended', kContentLeft + 3, flip(y + idRowHeight * 2 + labelOffset));
+  canvas.drawString(regular, 8, 'School Last Attended', kContentLeft + 3, flip(y + idRowHeight + labelOffset));
+  canvas.drawString(regular, 8, 'Address of School Last Attended', kContentLeft + 3, flip(y + idRowHeight * 2 + labelOffset));
   if (compact) {
     // TAT-compact only: Date/Birth/Age fields fit in the School/Address
     // rows' own leftover width, positioned well clear of each row's own
@@ -1103,6 +1139,166 @@ void _paintNdmuHeader(
 
   canvas.setColor(kGray);
   canvas.drawString(regular, compact ? 6 : 7, 'Use a No. 2 pencil. Fill the circle completely.', kContentLeft, flip(y + (compact ? 7 : 9)));
+}
+
+/// AT's back-page "Score Record" — printed on the reverse of the bubble
+/// sheet, filled in by hand by whoever grades it (raw scores, percentiles,
+/// etc.), never scanned/decoded by the app itself (no corner markers, not
+/// part of OmrExamTemplate/_emitTemplate at all).
+///
+/// AT is only ever *structurally* inspired by OLSAT-style score-record
+/// forms — same functional layout (score-category boxes, a Total/Verbal/
+/// Nonverbal results table, a Cluster Analysis table), using standard
+/// psychometric terminology (Raw Score, Percentile Rank, Stanine — used
+/// industry-wide, not any one publisher's IP) — but never that publisher's
+/// name, logo, copyright notice, or their own proprietary named scores/
+/// product codes. See tool/generate_sheets.dart's header-kind comment for
+/// the same policy already applied to AT's front page.
+void _paintAtScoreRecordPage(PdfGraphics canvas, ExamSpec exam, PdfFont regular, PdfFont bold) {
+  double flip(double topLeftY) => exam.pageHeightPt - topLeftY;
+  final contentWidth = exam.pageWidthPt - kContentLeft - exam.markerPad - exam.pageMargin;
+
+  // No letterhead, no title -- just the tables, starting right at the top
+  // of the page.
+  var y = kContentTop;
+
+  // ID table.
+  const idRows = ['Date', 'Name', 'Examiner', 'School', 'Date of Birth', 'Gender', 'Grade', 'Age (years/months)'];
+  const idRowHeight = 18.0;
+  final idTableHeight = idRowHeight * idRows.length;
+  canvas.setColor(kBlack);
+  canvas.setLineWidth(1);
+  canvas.drawRect(kContentLeft, flip(y + idTableHeight), contentWidth, idTableHeight);
+  canvas.strokePath();
+  for (var i = 1; i < idRows.length; i++) {
+    final lineY = y + idRowHeight * i;
+    canvas.drawLine(kContentLeft, flip(lineY), kContentLeft + contentWidth, flip(lineY));
+    canvas.strokePath();
+  }
+  for (var i = 0; i < idRows.length; i++) {
+    canvas.setColor(kGray);
+    canvas.drawString(regular, 9, idRows[i], kContentLeft + 6, flip(y + idRowHeight * i + 12));
+  }
+  y += idTableHeight + 16;
+
+  // Score-category boxes -- same bordered-table style as the Scores/
+  // Cluster Analysis tables below (one label column, one score-entry
+  // column), rather than individually-positioned floating boxes, so every
+  // row's box lines up under the same left edge with no per-row math to
+  // get wrong.
+  const scoreBoxRows = ['Verbal Comprehension', 'Verbal Reasoning', 'Figural Reasoning', 'Quantitative Reasoning', 'Total'];
+  const scoreBoxRowHeight = 20.0;
+  const scoreBoxEntryWidth = 90.0;
+  final scoreBoxLabelWidth = contentWidth - scoreBoxEntryWidth;
+  final scoreBoxTableHeight = scoreBoxRowHeight * scoreBoxRows.length;
+  canvas.setColor(kBlack);
+  canvas.setLineWidth(1);
+  canvas.drawRect(kContentLeft, flip(y + scoreBoxTableHeight), contentWidth, scoreBoxTableHeight);
+  canvas.strokePath();
+  for (var i = 1; i < scoreBoxRows.length; i++) {
+    final lineY = y + scoreBoxRowHeight * i;
+    canvas.drawLine(kContentLeft, flip(lineY), kContentLeft + contentWidth, flip(lineY));
+    canvas.strokePath();
+  }
+  final scoreBoxEntryX = kContentLeft + scoreBoxLabelWidth;
+  canvas.drawLine(scoreBoxEntryX, flip(y), scoreBoxEntryX, flip(y + scoreBoxTableHeight));
+  canvas.strokePath();
+  for (var i = 0; i < scoreBoxRows.length; i++) {
+    final rowTop = y + scoreBoxRowHeight * i;
+    final isTotal = scoreBoxRows[i] == 'Total';
+    canvas.setColor(isTotal ? kNavy : kGray);
+    canvas.drawString(isTotal ? bold : regular, 9, scoreBoxRows[i], kContentLeft + 6, flip(rowTop + 13));
+  }
+  y += scoreBoxTableHeight + 18;
+
+  // Scores table: Total / Verbal / Nonverbal columns x Raw Score /
+  // Percentile Rank / Stanine rows.
+  canvas.setColor(kNavy);
+  canvas.drawString(bold, 11, 'Scores', kContentLeft, flip(y + 11));
+  y += 18;
+  const scoreCols = ['', 'Total', 'Verbal', 'Nonverbal'];
+  const scoreRows = ['Raw Score', 'Percentile Rank', 'Stanine'];
+  const scoreLabelWidth = 120.0;
+  final scoreColWidth = (contentWidth - scoreLabelWidth) / 3;
+  const scoreRowHeight = 20.0;
+  final scoreTableHeight = scoreRowHeight * (scoreRows.length + 1);
+  canvas.setColor(kBlack);
+  canvas.setLineWidth(1);
+  canvas.drawRect(kContentLeft, flip(y + scoreTableHeight), contentWidth, scoreTableHeight);
+  canvas.strokePath();
+  for (var i = 1; i <= scoreRows.length; i++) {
+    final lineY = y + scoreRowHeight * i;
+    canvas.drawLine(kContentLeft, flip(lineY), kContentLeft + contentWidth, flip(lineY));
+    canvas.strokePath();
+  }
+  for (var i = 1; i < scoreCols.length; i++) {
+    final lineX = kContentLeft + scoreLabelWidth + scoreColWidth * (i - 1);
+    canvas.drawLine(lineX, flip(y), lineX, flip(y + scoreTableHeight));
+    canvas.strokePath();
+  }
+  canvas.setColor(kGray);
+  for (var c = 1; c < scoreCols.length; c++) {
+    final colX = kContentLeft + scoreLabelWidth + scoreColWidth * (c - 1);
+    final metrics = bold.stringMetrics(scoreCols[c]) * 9;
+    canvas.drawString(bold, 9, scoreCols[c], colX + (scoreColWidth - metrics.advanceWidth) / 2, flip(y + 13));
+  }
+  for (var r = 0; r < scoreRows.length; r++) {
+    canvas.drawString(regular, 9, scoreRows[r], kContentLeft + 6, flip(y + scoreRowHeight * (r + 1) + 13));
+  }
+  y += scoreTableHeight + 6;
+  canvas.setColor(kGray);
+  canvas.drawString(regular, 7, 'Verbal = Verbal Comprehension + Verbal Reasoning', kContentLeft, flip(y + 8));
+  canvas.drawString(regular, 7, 'Nonverbal = Figural Reasoning + Quantitative Reasoning', kContentLeft, flip(y + 18));
+  y += 30;
+
+  // Cluster Analysis table: Number Right / Below Average / Average / Above
+  // Average columns x category rows (sub-categories indented).
+  canvas.setColor(kNavy);
+  canvas.drawString(bold, 11, 'Cluster Analysis', kContentLeft, flip(y + 11));
+  y += 18;
+  const clusterCols = ['', 'Number Right', 'Below Average', 'Average', 'Above Average'];
+  const clusterRows = [
+    ('Total', false),
+    ('Verbal', false),
+    ('Verbal Comprehension', true),
+    ('Verbal Reasoning', true),
+    ('Nonverbal', false),
+    ('Figural Reasoning', true),
+    ('Quantitative Reasoning', true),
+  ];
+  const clusterLabelWidth = 150.0;
+  final clusterColWidth = (contentWidth - clusterLabelWidth) / 4;
+  const clusterRowHeight = 18.0;
+  final clusterTableHeight = clusterRowHeight * (clusterRows.length + 1);
+  canvas.setColor(kBlack);
+  canvas.setLineWidth(1);
+  canvas.drawRect(kContentLeft, flip(y + clusterTableHeight), contentWidth, clusterTableHeight);
+  canvas.strokePath();
+  for (var i = 1; i <= clusterRows.length; i++) {
+    final lineY = y + clusterRowHeight * i;
+    canvas.drawLine(kContentLeft, flip(lineY), kContentLeft + contentWidth, flip(lineY));
+    canvas.strokePath();
+  }
+  for (var i = 1; i < clusterCols.length; i++) {
+    final lineX = kContentLeft + clusterLabelWidth + clusterColWidth * (i - 1);
+    canvas.drawLine(lineX, flip(y), lineX, flip(y + clusterTableHeight));
+    canvas.strokePath();
+  }
+  canvas.setColor(kGray);
+  for (var c = 1; c < clusterCols.length; c++) {
+    final colX = kContentLeft + clusterLabelWidth + clusterColWidth * (c - 1);
+    final metrics = bold.stringMetrics(clusterCols[c]) * 8;
+    canvas.drawString(bold, 8, clusterCols[c], colX + (clusterColWidth - metrics.advanceWidth) / 2, flip(y + 12));
+  }
+  for (var r = 0; r < clusterRows.length; r++) {
+    final (label, indented) = clusterRows[r];
+    canvas.drawString(regular, 9, label, kContentLeft + (indented ? 16 : 6), flip(y + clusterRowHeight * (r + 1) + 12));
+  }
+  y += clusterTableHeight + 20;
+
+  // Footer -- GuideGrade/NDMU only, no publisher name or copyright notice.
+  canvas.setColor(kGray);
+  canvas.drawString(regular, 7, 'GuideGrade - Guidance Automated Test Diagnostic Checking', kContentLeft, flip(y));
 }
 
 // ---------------------------------------------------------------------------
@@ -1283,6 +1479,23 @@ Future<void> main() async {
           ),
         );
       }
+    }
+
+    // AT only: a back-page Score Record, printed on the reverse of the
+    // bubble sheet -- purely informational (filled in by hand after
+    // grading), never scanned, so it's added straight to the PDF here with
+    // no corner markers and no bearing on layout/_emitTemplate at all.
+    if (exam.code == 'AT') {
+      pdf.addPage(
+        pw.Page(
+          pageFormat: PdfPageFormat(exam.pageWidthPt, exam.pageHeightPt),
+          margin: pw.EdgeInsets.zero,
+          build: (context) => pw.CustomPaint(
+            size: PdfPoint(exam.pageWidthPt, exam.pageHeightPt),
+            painter: (canvas, size) => _paintAtScoreRecordPage(canvas, exam, regular, bold),
+          ),
+        ),
+      );
     }
 
     final bytes = await pdf.save();
