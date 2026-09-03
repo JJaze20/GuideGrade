@@ -1,3 +1,4 @@
+import '../core/omr/duplicate_scan_detector.dart';
 import 'omr_scan_result.dart';
 
 /// The student a scanned sheet belongs to. Attached per [LocalScan],
@@ -173,6 +174,18 @@ class LocalBatch {
     }
     return dupes;
   }
+
+  /// Pairs of already-saved scans whose decoded marks are nearly identical
+  /// — a strong signal the same physical sheet was scanned twice into
+  /// different slots (mistaken for an unscanned sheet in the physical
+  /// stack, or picked up again after being set aside). Content-based, so it
+  /// catches this independent of whether either sheet has been tagged yet
+  /// — see [findDuplicateScanPairs]'s doc comment for the matching rule.
+  /// Empty when there's nothing to flag.
+  List<({LocalScan a, LocalScan b, double matchFraction})> get likelyDuplicateScans =>
+      findDuplicateScanPairs(scans.map((s) => s.decoded).toList())
+          .map((p) => (a: scans[p.indexA], b: scans[p.indexB], matchFraction: p.matchFraction))
+          .toList();
 
   bool get isDraft => status == 'Draft';
   bool get isActive => status == 'Active';

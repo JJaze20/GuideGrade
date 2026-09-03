@@ -115,6 +115,23 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
                           ],
                         ),
                       ],
+                      if (batch.likelyDuplicateScans.isNotEmpty) ...[
+                        const SizedBox(height: 6),
+                        Row(
+                          children: [
+                            const FaIcon(FontAwesomeIcons.clone, size: 10, color: Color(0xFF991B1B)),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(
+                                'Possible duplicate sheet${batch.likelyDuplicateScans.length == 1 ? '' : 's'} '
+                                '(same answers scanned twice): '
+                                '${batch.likelyDuplicateScans.map((p) => '${_scanLabel(batch, p.a)} & ${_scanLabel(batch, p.b)}').join(', ')}',
+                                style: AppTextStyles.body(size: 9.5, color: const Color(0xFF991B1B), weight: FontWeight.w600),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
                       const SizedBox(height: 12),
                       _buildSyncToCloudButton(batch, appState),
                       const SizedBox(height: 16),
@@ -171,6 +188,15 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
         ],
       ),
     );
+  }
+
+  /// Same "tagged name, else Sheet N" convention used throughout this
+  /// screen's per-scan labels (see `_buildScanCard`) — used for the
+  /// possible-duplicate banner, which references two scans by position.
+  String _scanLabel(LocalBatch batch, LocalScan scan) {
+    final examinee = scan.examinee;
+    if (examinee != null && !examinee.isEmpty) return examinee.displayName;
+    return 'Sheet ${batch.scans.indexOf(scan) + 1}';
   }
 
   Widget _kv(String k, String v) {

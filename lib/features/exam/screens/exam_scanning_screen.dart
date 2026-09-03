@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show DeviceOrientation, SystemChrome;
 
 import '../../../core/constants/app_colors.dart';
+import '../../../core/omr/duplicate_scan_detector.dart';
 import '../../../core/omr/omr_decoder.dart';
 import '../../../core/omr/omr_templates.dart';
 import '../../../core/routes/app_routes.dart';
@@ -419,6 +420,18 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
       );
       return;
     }
+    // Content-based "same physical sheet scanned twice" check — skipped
+    // while rescanning: a rescan is *expected* to match the slot it's
+    // replacing, and the wrong-sheet-in-this-slot mistake already has its
+    // own dedicated guard in AppState.finishRescan (name-mismatch check).
+    if (appState.rescanScanId == null) {
+      final warnings = _duplicateScanWarnings(appState);
+      if (warnings.isNotEmpty) {
+        final proceed = await _showDuplicateScanDialog(warnings);
+        if (!mounted) return;
+        if (!proceed) return;
+      }
+    }
     if (appState.rescanScanId != null) {
       // Rescanning one existing sheet in an archived batch, not building a
       // normal multi-sheet session -- overwrite it in place and return to
@@ -435,6 +448,76 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
       return;
     }
     Navigator.of(context).pushReplacementNamed(AppRoutes.examResults);
+  }
+
+  /// Human-readable warnings for every pair of decoded sheets that look
+  /// like the same physical sheet scanned twice — both within this
+  /// session's own captures, and against sheets already saved to
+  /// [AppState.scanBatch] from an earlier session. Empty when nothing
+  /// looks duplicated. See duplicate_scan_detector.dart for the matching
+  /// rule.
+  List<String> _duplicateScanWarnings(AppState appState) {
+    final results = appState.scannedResults;
+    final warnings = <String>[];
+    for (final match in findDuplicateScanPairs(results)) {
+      warnings.add(
+        'Sheet ${match.indexA + 1} looks like the same sheet as Sheet ${match.indexB + 1} you just scanned.',
+      );
+    }
+    final batch = appState.scanBatch;
+    if (batch != null) {
+      for (var i = 0; i < results.length; i++) {
+        for (final scan in batch.scans) {
+          if (!looksLikeDuplicateScan(results[i], scan.decoded)) continue;
+          final examinee = scan.examinee;
+          final label = (examinee != null && !examinee.isEmpty)
+              ? examinee.displayName
+              : 'an already-saved sheet';
+          warnings.add('Sheet ${i + 1} looks like a duplicate of $label already saved to this batch.');
+        }
+      }
+    }
+    return warnings;
+  }
+
+  /// Advisory only — staff can always continue. Never blocks the save the
+  /// way [_showMisalignedDialog] blocks a bad photo, since a false positive
+  /// here is possible (a short exam, or two students who genuinely answered
+  /// identically) and there's no way to discard just one already-captured
+  /// sheet from this screen.
+  Future<bool> _showDuplicateScanDialog(List<String> warnings) async {
+    final result = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('Possible duplicate sheet'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('These scans look like the same physical sheet was scanned more than once:'),
+              const SizedBox(height: 8),
+              ...warnings.map((w) => Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Text('•  $w'),
+                  )),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Review First'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Continue Anyway'),
+          ),
+        ],
+      ),
+    );
+    return result ?? false;
   }
 
   /// Bottom-panel status line, above the Scan Next / Compile Data buttons.
