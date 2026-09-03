@@ -1,6 +1,9 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:guidegrade/core/sync/supabase_sync_client.dart';
 import 'package:guidegrade/core/sync/sync_outcome.dart';
+import 'package:guidegrade/models/local_batch.dart';
 
 /// Pure unit tests for the parts of [SupabaseSyncClient] that do not touch a
 /// Supabase client, a network, or a platform channel: timestamp
@@ -458,6 +461,174 @@ void main() {
       expect(cols['tagged_by_name'], isNull);
       expect(cols['tagged_at'], '2026-08-31T09:15:00.000Z');
       expect(cols['examinee_updated_at'], '2026-08-31T09:15:00.000Z');
+    });
+  });
+
+  group('describeSocketException (physical-device transport diagnostics)', () {
+    test('DNS / host-lookup failure: keeps osError code+message, masks the '
+        'Supabase host, address=null port=null', () {
+      final line = SupabaseSyncClient.describeSocketException(
+        const SocketException(
+          "Failed host lookup: 'hrrylkyikxjpujdieexc.supabase.co'",
+          osError: OSError('No address associated with hostname', 7),
+        ),
+      );
+
+      expect(line, startsWith('SocketException '));
+      expect(line, contains('osErrorCode=7'));
+      expect(line, contains('osErrorMessage="No address associated with hostname"'));
+      expect(line, contains('address=null'));
+      expect(line, contains('port=null'));
+      // The project ref / host is masked, never printed verbatim.
+      expect(line, contains('<supabase-host>'));
+      expect(line, isNot(contains('hrrylkyikxjpujdieexc')));
+      expect(line, isNot(contains('.supabase.co')));
+    });
+
+    test('refused connection: keeps osError code, the resolved IP address, '
+        'and the port', () {
+      final line = SupabaseSyncClient.describeSocketException(
+        SocketException(
+          'Connection refused',
+          osError: const OSError('Connection refused', 111),
+          address: InternetAddress('203.0.113.10'), // TEST-NET-3, not real
+          port: 443,
+        ),
+      );
+
+      expect(line, contains('message="Connection refused"'));
+      expect(line, contains('osErrorCode=111'));
+      expect(line, contains('address="203.0.113.10"'));
+      expect(line, contains('port=443'));
+    });
+
+    test('no osError: reports osErrorCode=null osErrorMessage=null', () {
+      final line = SupabaseSyncClient.describeSocketException(
+        const SocketException('Connection reset by peer'),
+      );
+
+      expect(line, contains('message="Connection reset by peer"'));
+      expect(line, contains('osErrorCode=null'));
+      expect(line, contains('osErrorMessage=null'));
+      expect(line, contains('address=null'));
+      expect(line, contains('port=null'));
+    });
+
+    test('a token-shaped blob embedded in an OS string is redacted', () {
+      final line = SupabaseSyncClient.describeSocketException(
+        SocketException(
+          'boom eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.sig-value-here-1234',
+          osError: const OSError('sb_publishable_ABCDEFGHIJKLMNOPQRSTUV', -1),
+        ),
+      );
+
+      expect(line, contains('<redacted>'));
+      expect(line, isNot(contains('eyJhbGciOiJIUzI1NiJ9')));
+      expect(line, isNot(contains('sb_publishable_ABCDEFGHIJKLMNOPQRSTUV')));
+    });
+  });
+
+  group('scanIdentityColumns (examinee_all_or_nothing CHECK)', () {
+    const trioKeys = {'first_name', 'last_name', 'examinee_number'};
+
+    test('1. a complete examinee sends all three identity fields', () {
+      final cols = SupabaseSyncClient.scanIdentityColumns(
+        const ExamineeInfo(
+          firstName: 'JUAN',
+          lastName: 'CRUZ',
+          examineeNumber: '12345',
+        ),
+      );
+      expect(cols.keys.toSet(), trioKeys);
+      expect(cols['first_name'], 'JUAN');
+      expect(cols['last_name'], 'CRUZ');
+      expect(cols['examinee_number'], '12345');
+      // -> all NOT NULL branch of the CHECK.
+      expect(cols.values.every((v) => v != null), isTrue);
+    });
+
+    test('2. a partial examinee (name, blank number) sends all three as null',
+        () {
+      final cols = SupabaseSyncClient.scanIdentityColumns(
+        const ExamineeInfo(
+          firstName: 'JUAN',
+          lastName: 'CRUZ',
+          examineeNumber: '', // OCR-suggested name, number not entered yet
+        ),
+      );
+      expect(cols.keys.toSet(), trioKeys);
+      expect(cols['first_name'], isNull);
+      expect(cols['last_name'], isNull);
+      expect(cols['examinee_number'], isNull);
+      // -> all NULL branch; the old code sent CRUZ/JUAN/null == SQLSTATE 23514.
+    });
+
+    test('2b. a whitespace-only examinee number is still treated as partial',
+        () {
+      final cols = SupabaseSyncClient.scanIdentityColumns(
+        const ExamineeInfo(
+          firstName: 'JUAN',
+          lastName: 'CRUZ',
+          examineeNumber: '   ',
+        ),
+      );
+      expect(cols['first_name'], isNull);
+      expect(cols['last_name'], isNull);
+      expect(cols['examinee_number'], isNull);
+    });
+
+    test('3. a null examinee sends all three as null', () {
+      final cols = SupabaseSyncClient.scanIdentityColumns(null);
+      expect(cols.keys.toSet(), trioKeys);
+      expect(cols['first_name'], isNull);
+      expect(cols['last_name'], isNull);
+      expect(cols['examinee_number'], isNull);
+    });
+
+    test('3b. a fully empty examinee sends all three as null', () {
+      final cols = SupabaseSyncClient.scanIdentityColumns(
+        const ExamineeInfo(firstName: '', lastName: '', examineeNumber: ''),
+      );
+      expect(cols['first_name'], isNull);
+      expect(cols['last_name'], isNull);
+      expect(cols['examinee_number'], isNull);
+    });
+
+    test('4. name present but missing last name only -> still all null', () {
+      final cols = SupabaseSyncClient.scanIdentityColumns(
+        const ExamineeInfo(
+          firstName: 'JUAN',
+          lastName: '',
+          examineeNumber: '12345',
+        ),
+      );
+      expect(cols['first_name'], isNull);
+      expect(cols['last_name'], isNull);
+      expect(cols['examinee_number'], isNull);
+    });
+
+    test('5. examineeTagged mirrors ExamineeInfo.isComplete', () {
+      expect(
+        SupabaseSyncClient.examineeTagged(
+          const ExamineeInfo(
+            firstName: 'A',
+            lastName: 'B',
+            examineeNumber: 'C',
+          ),
+        ),
+        isTrue,
+      );
+      expect(
+        SupabaseSyncClient.examineeTagged(
+          const ExamineeInfo(
+            firstName: 'A',
+            lastName: 'B',
+            examineeNumber: '',
+          ),
+        ),
+        isFalse,
+      );
+      expect(SupabaseSyncClient.examineeTagged(null), isFalse);
     });
   });
 }
