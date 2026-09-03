@@ -211,6 +211,23 @@ class OmrDecoder {
   /// cross the search window.
   static const double _markerMaxAspect = 7.0;
 
+  /// A candidate blob's circularity (4*pi*area/perimeter^2 — 1.0 for a
+  /// perfect circle, ~0.785 for a square) must be at or below this. A
+  /// solid, well-filled pencil bubble is round, high-contrast, and (being
+  /// roughly circular) has a near-1:1 bounding-box aspect ratio — close
+  /// enough to the printed corner marker's own fill-ratio and aspect that
+  /// both checks above pass a filled bubble as readily as the real mark.
+  /// Confirmed on a real device: zooming in close enough that only one
+  /// marked item was in frame let the search latch onto that item's own
+  /// filled bubbles as "corner marks", passing every other check, instead
+  /// of correctly finding nothing. Circularity is the one property that
+  /// actually distinguishes them — the printed marker is a solid filled
+  /// *square* (see tool/generate_sheets.dart's corner-marker drawing:
+  /// `drawRect` + `fillPath`, not an ellipse), not a circle. 0.88 sits with
+  /// real margin above a square's ~0.785 (room for corners softened by
+  /// blur/dilation) and real margin below a circle's 1.0.
+  static const double _markerMaxCircularity = 0.88;
+
   /// Inner sample radius as a fraction of the outer bubble sample radius.
   /// The printed choice letter sits in this center zone; subtracting its
   /// ink contribution from the outer reading isolates pencil marks in the
@@ -1116,6 +1133,44 @@ class OmrDecoder {
         'The sheet appears too small in this photo. Move closer and retake.',
       );
     }
+
+    // No upper bound previously existed here — only "too small", never "too
+    // big" or "too close to the frame edge". Confirmed this lets a false
+    // pass through when the camera is zoomed in far enough that the real
+    // corner marks fall partially or fully outside the frame: the
+    // quadrant search (see _findMarkerInRegion's own doc comment — it
+    // searches the *whole* quadrant, not a small window) can still latch
+    // onto some other dark, roughly-square-ish blob near the frame edge —
+    // a bubble row, header text, page clutter — and that false quad can
+    // still happen to pass the aspect-ratio check above by coincidence.
+    // Two checks catch this instead of one, since neither alone covers
+    // every way "zoomed in too far" can present:
+    if (quadArea > imageArea * 0.85) {
+      throw StateError(
+        'The sheet fills too much of the frame. Move back so all 4 corner marks have visible margin around them, then retake.',
+      );
+    }
+    // A genuine corner mark is always printed with real margin around it
+    // (kPageMargin + kMarkerPad in tool/generate_sheets.dart) — a
+    // correctly-framed capture should never have a *found* corner sitting
+    // right at the photo's own boundary. When the camera is zoomed in
+    // past the point where the real mark is still in frame, whatever the
+    // search fell back to accepting instead is disproportionately likely
+    // to be hugging that boundary, unlike a genuine capture with visible
+    // background on every side.
+    const edgeMarginFrac = 0.015;
+    final edgeMarginX = gray.width * edgeMarginFrac;
+    final edgeMarginY = gray.height * edgeMarginFrac;
+    for (final corner in corners) {
+      if (corner.x < edgeMarginX ||
+          corner.x > gray.width - edgeMarginX ||
+          corner.y < edgeMarginY ||
+          corner.y > gray.height - edgeMarginY) {
+        throw StateError(
+          'The sheet appears too close or cropped by the frame edge. Move back so the whole sheet is visible with margin around it, then retake.',
+        );
+      }
+    }
   }
 
   /// Finds the largest convex quadrilateral near the center of the photo
@@ -1455,7 +1510,9 @@ class OmrDecoder {
 
                     double bestScore = double.infinity;
                     cv.Rect? bestRect;
-                    for (final contour in contours) {
+                    var bestContourIndex = -1;
+                    for (var ci = 0; ci < contours.length; ci++) {
+                      final contour = contours[ci];
                       final area = cv.contourArea(contour);
                       if (area < 8 || area > imageArea * 0.02) continue;
                       final rect = cv.boundingRect(contour);
@@ -1475,6 +1532,11 @@ class OmrDecoder {
                         math.min(rect.width, rect.height),
                       );
                       if (longSide / shortSide > _markerMaxAspect) continue;
+
+                      final perimeter = cv.arcLength(contour, true);
+                      if (perimeter <= 0) continue;
+                      final circularity = 4 * math.pi * area / (perimeter * perimeter);
+                      if (circularity > _markerMaxCircularity) continue;
 
                       final globalCx = region.x + rect.x + rect.width / 2;
                       final globalCy = region.y + rect.y + rect.height / 2;
@@ -1539,12 +1601,54 @@ class OmrDecoder {
                       if (score < bestScore) {
                         bestScore = score;
                         bestRect = rect;
+                        bestContourIndex = ci;
                       }
                     }
                     if (bestRect == null) return null;
-                    final cx = region.x + bestRect.x + bestRect.width / 2;
-                    final cy = region.y + bestRect.y + bestRect.height / 2;
-                    return cv.Point2f(cx.toDouble(), cy.toDouble());
+                    // The blob's true (area-weighted) centroid, not its
+                    // bounding box's midpoint — the two only coincide for a
+                    // perfectly clean, symmetric blob. Anything that
+                    // distorts the thresholded/dilated shape asymmetrically
+                    // (a shadow clipping one edge, motion blur smearing it
+                    // one way, uneven lighting eating into one side more
+                    // than another) shifts a bounding-box center away from
+                    // the mark's real physical position without shifting
+                    // the true centroid nearly as much — and since
+                    // warpPerspective fits an exact transform through
+                    // whichever 4 points it's given, even one corner's
+                    // bounding-box-center error (while the other 3 are
+                    // accurate) skews the whole warped image, which showed
+                    // up as a subtly tilted result on a real scan. Computed
+                    // by drawing just this one winning contour onto a small
+                    // mask sized to its own bounding box (not the whole ROI
+                    // — cheap, and immune to any other blob nearby) and
+                    // taking cv.moments of that.
+                    final rect = bestRect;
+                    final mask = cv.Mat.zeros(rect.height, rect.width, cv.MatType.CV_8UC1);
+                    try {
+                      cv.drawContours(
+                        mask,
+                        contours,
+                        bestContourIndex,
+                        cv.Scalar.all(255),
+                        thickness: -1,
+                        offset: cv.Point(-rect.x, -rect.y),
+                      );
+                      final m = cv.moments(mask);
+                      try {
+                        final cx = m.m00 > 0
+                            ? region.x + rect.x + m.m10 / m.m00
+                            : region.x + rect.x + rect.width / 2;
+                        final cy = m.m00 > 0
+                            ? region.y + rect.y + m.m01 / m.m00
+                            : region.y + rect.y + rect.height / 2;
+                        return cv.Point2f(cx.toDouble(), cy.toDouble());
+                      } finally {
+                        m.dispose();
+                      }
+                    } finally {
+                      mask.dispose();
+                    }
                   } finally {
                     contours.dispose();
                     hierarchy.dispose();
