@@ -336,6 +336,33 @@ class SupabaseSyncClient implements SyncClient {
     };
   }
 
+  /// True only for a **complete** local tag — first name, last name and
+  /// examinee number all non-blank ([ExamineeInfo.isComplete]). A null,
+  /// empty, or partial tag (e.g. an OCR-suggested name with no number yet)
+  /// is not "tagged" as far as the cloud is concerned.
+  static bool examineeTagged(ExamineeInfo? examinee) =>
+      examinee != null && examinee.isComplete;
+
+  /// The `scans` identity trio (`first_name` / `last_name` /
+  /// `examinee_number`) for [examinee].
+  ///
+  /// The cloud `scans` table enforces `examinee_all_or_nothing`: the trio
+  /// must be either all NULL or all NOT NULL. So a complete tag sends all
+  /// three (blank-after-trim still normalised to null by [_blankToNull] as
+  /// a belt-and-braces guard); anything else — untagged, or a partial /
+  /// OCR-only tag — sends all three as null. The name is not lost: it stays
+  /// in the local scan and is pushed by a later `PUSH_SCAN` once staff
+  /// complete the tag. Sending a partial trio is SQLSTATE 23514 and would
+  /// permanently fail the scan's push.
+  static Map<String, dynamic> scanIdentityColumns(ExamineeInfo? examinee) {
+    final tagged = examineeTagged(examinee);
+    return {
+      'first_name': tagged ? _blankToNull(examinee!.firstName) : null,
+      'last_name': tagged ? _blankToNull(examinee!.lastName) : null,
+      'examinee_number': tagged ? _blankToNull(examinee!.examineeNumber) : null,
+    };
+  }
+
   /// Deterministic, sanitized classification of a PostgREST error `code`.
   /// `401` / `PGRST301` only reach here after the guard's one
   /// refresh-and-retry, so a still-failing auth error is permanent; a
@@ -434,6 +461,45 @@ class SupabaseSyncClient implements SyncClient {
     return cleaned.length > 32 ? cleaned.substring(0, 32) : cleaned;
   }
 
+  /// A one-line, secret-safe summary of a [SocketException] for `adb logcat`:
+  /// the exception runtime type, its `message`, the platform `osError`
+  /// (`errorCode` + `message`), and the target `address` / `port` when the
+  /// exception carries them. This is exactly what is needed on a physical
+  /// device to tell apart a DNS/host-lookup failure, a refused connection,
+  /// an unreachable network, and a reset — none of which produce a
+  /// PostgREST error to classify.
+  ///
+  /// It NEVER carries a Supabase URL, an API key, a Firebase ID token, an
+  /// `Authorization` header, a request body, or PII: [_redactSensitive]
+  /// masks any `*.supabase.co` host and any token-shaped blob that an OS
+  /// string might contain. The numeric `osError` code and the `port`
+  /// (usually 443) are the diagnostic essentials and are never sensitive.
+  static String describeSocketException(SocketException e) {
+    final os = e.osError;
+    final addr = e.address;
+    return '${e.runtimeType}'
+        ' message="${_redactSensitive(e.message)}"'
+        ' osErrorCode=${os?.errorCode}'
+        ' osErrorMessage=${os == null ? 'null' : '"${_redactSensitive(os.message)}"'}'
+        ' address=${addr == null ? 'null' : '"${_redactSensitive(addr.address)}"'}'
+        ' port=${e.port ?? 'null'}';
+  }
+
+  /// Masks a `<sub>.supabase.co` host and any token-shaped blob (a JWT
+  /// `eyJ…`, an `sb_…` / `sbp_…` key, or a long base64url run) so a string
+  /// lifted from an OS-level error can never leak the project ref or a
+  /// credential. Everything else is left intact.
+  static String _redactSensitive(String input) {
+    return input
+        .replaceAll(
+          RegExp(r'[A-Za-z0-9-]+\.supabase\.co', caseSensitive: false),
+          '<supabase-host>',
+        )
+        .replaceAll(RegExp(r'eyJ[A-Za-z0-9_=-]{10,}'), '<redacted>')
+        .replaceAll(RegExp(r'\bsbp?_[A-Za-z0-9_-]{10,}'), '<redacted>')
+        .replaceAll(RegExp(r'[A-Za-z0-9_-]{40,}'), '<redacted>');
+  }
+
   // ---------------------------------------------------------------------------
   // B. pushBatch
   // ---------------------------------------------------------------------------
@@ -526,18 +592,12 @@ class SupabaseSyncClient implements SyncClient {
       'processed_by_uid': result?.processedByUid,
       'processed_by_name': result?.processedByName,
 
-      // examinee identity (null as a group when untagged). Blank-after-trim
-      // strings are sent as null, not "" -- ExamineeInfo.isEmpty only
-      // clears the whole tag when EVERY field is blank (see
-      // LocalBatchRepository.setScanExaminee), so a tag can legitimately
-      // have a name but no examinee number yet (e.g. an OCR-suggested name,
-      // or staff hasn't entered the number). Sending "" for that column
-      // trips the cloud schema's CHECK constraint (SQLSTATE 23514) and
-      // permanently fails this scan's push -- null does not. The tag-audit
-      // columns are added below, and ONLY for a tag/clear-triggered push.
-      'first_name': _blankToNull(examinee?.firstName),
-      'last_name': _blankToNull(examinee?.lastName),
-      'examinee_number': _blankToNull(examinee?.examineeNumber),
+      // examinee identity trio -- all-or-nothing per the cloud
+      // `examinee_all_or_nothing` CHECK (see [scanIdentityColumns]). A
+      // partial / OCR-only tag goes up as all-null and is pushed in full by
+      // a later PUSH_SCAN once staff complete it. The tag-audit columns are
+      // added below, ONLY for a tag/clear-triggered push.
+      ...scanIdentityColumns(examinee),
       'middle_name': null, // not modelled by the app
 
       // duplicate-number override — not tracked by the app
@@ -565,7 +625,7 @@ class SupabaseSyncClient implements SyncClient {
     // tagged-vs-cleared taken from the CURRENT local scan (not the label).
     row.addAll(examineeAuditColumns(
       meta: meta,
-      isTagged: examinee != null && !examinee.isEmpty,
+      isTagged: examineeTagged(examinee),
       identityUid: identity.uid,
       identityDisplayName: identity.displayName,
     ));
@@ -897,8 +957,8 @@ class SupabaseSyncClient implements SyncClient {
       } on TimeoutException {
         _logGuard('postgrest transport error (TimeoutException)');
         return const SyncOutcome.transient('network');
-      } on SocketException {
-        _logGuard('postgrest transport error (SocketException)');
+      } on SocketException catch (e) {
+        _logGuard('postgrest transport error: ${describeSocketException(e)}');
         return const SyncOutcome.transient('network');
       } catch (e) {
         _logUnclassified(e);
