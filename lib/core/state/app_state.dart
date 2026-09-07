@@ -12,6 +12,7 @@ import '../../models/answer_key.dart';
 import '../../models/local_batch.dart';
 import '../../models/omr_scan_result.dart';
 import '../../models/user.dart';
+import '../omr/exam_score.dart';
 import '../omr/name_ocr_service.dart';
 import '../omr/omr_decoder.dart';
 import '../omr/omr_scorer.dart';
@@ -142,6 +143,82 @@ enum AnswerKeySyncStatus {
   /// A push hit `conflict('answer_key_changed')` and is parked as
   /// `blockedConflict`; the user must adopt the cloud copy or force-push.
   conflict,
+}
+
+/// Builds the [LocalScanResult] persisted for one scanned sheet from the
+/// exam-aware [ExamScore] the official scoring layer produces.
+///
+/// Used by BOTH persistence paths ([AppState.persistCapturedSessionToBatch]
+/// for a fresh capture and [AppState.finishRescan] for a retake) so the two
+/// always persist an identically-computed result — there is no path left on
+/// the old generic scorer.
+///
+///  * [examScore] is `computeExamScoreForCode(scored)`. It is null only
+///    when no exam template is registered for `scored.examCode`; in that
+///    case the pre-exam-aware generic values are kept so an unrecognised
+///    exam still persists something.
+///  * `rawScore` / `totalItems` / the `tat*` breakdown come straight from
+///    [ExamScore]. For TAT, `rawScore` is the 160-point total and
+///    `totalItems` is 130; for AT / QTM `rawScore` is the correct-answer
+///    count and `totalItems` is the fixed 72 / 60.
+///  * `percentage` is the Admission Test's official `rawScore / 72 * 100`
+///    when [ExamScore.hasOfficialPercentage]. QTM and TAT have no official
+///    percentage, so to avoid changing the meaning of the non-nullable
+///    `LocalScanResult.percentage` field (and its result-screen / archive /
+///    batch-average consumers) in this local-persistence-only phase, they
+///    keep the existing generic `scored.percentage`. This is a documented
+///    compatibility shim, not an invented rule; per-exam percentage
+///    semantics are for the Result UI / Supabase phases.
+///  * `status` keeps the existing answer-key-availability rule
+///    ([ExamScore.isGraded] is `totalGraded > 0`).
+@visibleForTesting
+LocalScanResult buildLocalScanResult(
+  ScoredResult scored,
+  ExamScore? examScore, {
+  required String processedByUid,
+  required String processedByName,
+  DateTime? scannedAt,
+}) {
+  final now = scannedAt ?? DateTime.now();
+
+  if (examScore == null) {
+    final graded = scored.totalGraded > 0;
+    return LocalScanResult(
+      rawScore: scored.rawScore,
+      totalGraded: scored.totalGraded,
+      totalItems: scored.items.length,
+      percentage: scored.percentage,
+      status: graded ? 'Graded' : 'Ungraded',
+      scannedAt: now,
+      processedByUid: processedByUid,
+      processedByName: processedByName,
+    );
+  }
+
+  final percentage = examScore.hasOfficialPercentage
+      ? examScore.percentage
+      : scored.percentage;
+
+  return LocalScanResult(
+    rawScore: examScore.rawScore,
+    totalGraded: examScore.totalGraded,
+    totalItems: examScore.totalItems,
+    percentage: percentage,
+    status: examScore.isGraded ? 'Graded' : 'Ungraded',
+    scannedAt: now,
+    processedByUid: processedByUid,
+    processedByName: processedByName,
+    tatTest1Correct: examScore.tatTest1Correct,
+    tatTest1Wrong: examScore.tatTest1Wrong,
+    tatTest1Score: examScore.tatTest1Score,
+    tatTest2Correct: examScore.tatTest2Correct,
+    tatTest2Wrong: examScore.tatTest2Wrong,
+    tatTest2Score: examScore.tatTest2Score,
+    tatTest3Correct: examScore.tatTest3Correct,
+    tatTest3Wrong: examScore.tatTest3Wrong,
+    tatTest3Score: examScore.tatTest3Score,
+    tatTotal: examScore.tatTotal,
+  );
 }
 
 /// A lightweight in-memory app state shared across screens via
@@ -425,17 +502,12 @@ class AppState extends ChangeNotifier {
       final decoded = scannedResults.last;
       final answerKey = answerKeys[batch.examCode];
       final scored = scoreOmrResult(decoded, answerKey);
-      final graded = scored.totalGraded > 0;
       final firebaseUser = FirebaseAuth.instance.currentUser;
       final uid = firebaseUser?.uid ?? '';
       final name = firebaseUser?.displayName ?? currentUser?.displayName ?? 'Unknown';
-      final result = LocalScanResult(
-        rawScore: scored.rawScore,
-        totalGraded: scored.totalGraded,
-        totalItems: scored.items.length,
-        percentage: scored.percentage,
-        status: graded ? 'Graded' : 'Ungraded',
-        scannedAt: DateTime.now(),
+      final result = buildLocalScanResult(
+        scored,
+        computeExamScoreForCode(scored),
         processedByUid: uid,
         processedByName: name,
       );
@@ -906,13 +978,9 @@ class AppState extends ChangeNotifier {
         final decoded = scannedResults[i];
         final scored = scoreOmrResult(decoded, answerKey);
         final graded = scored.totalGraded > 0;
-        final result = LocalScanResult(
-          rawScore: scored.rawScore,
-          totalGraded: scored.totalGraded,
-          totalItems: scored.items.length,
-          percentage: scored.percentage,
-          status: graded ? 'Graded' : 'Ungraded',
-          scannedAt: DateTime.now(),
+        final result = buildLocalScanResult(
+          scored,
+          computeExamScoreForCode(scored),
           processedByUid: uid,
           processedByName: name,
         );
