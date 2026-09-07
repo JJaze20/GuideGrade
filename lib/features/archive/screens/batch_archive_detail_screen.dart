@@ -14,6 +14,7 @@ import '../../../core/sync/sync_manager.dart';
 import '../../../models/local_batch.dart';
 import '../../../shared/widgets/examinee_dialog.dart';
 import '../../exam/screens/scanned_image_viewer_screen.dart';
+import '../../exam/widgets/scan_result_summary.dart';
 
 /// Opens one archived batch: its info, exam type, every scanned image it
 /// holds, and the corresponding result for each scan, plus the summary
@@ -441,7 +442,6 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
 
     final blankCount = scored.items.where((i) => i.isBlank).length;
     final ambiguousCount = scored.items.where((i) => i.isAmbiguous).length;
-    final graded = result != null && result.isGraded;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -460,33 +460,11 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        tagged ? examinee.displayName : 'Sheet ${index + 1}',
-                        style: AppTextStyles.heading(size: 12),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    if (graded)
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(color: AppColors.emerald100, borderRadius: BorderRadius.circular(8)),
-                        child: Text(
-                          '${result.rawScore}/${result.totalGraded} · ${result.percentage.toStringAsFixed(0)}%',
-                          style: const TextStyle(fontSize: 9.5, fontWeight: FontWeight.w800, color: Color(0xFF065F46)),
-                        ),
-                      )
-                    else
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(color: const Color(0xFFFEF3C7), borderRadius: BorderRadius.circular(8)),
-                        child: const Text('Ungraded',
-                            style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w800, color: Color(0xFF92400E))),
-                      ),
-                  ],
+                Text(
+                  tagged ? examinee.displayName : 'Sheet ${index + 1}',
+                  style: AppTextStyles.heading(size: 12),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
                 const SizedBox(height: 4),
                 Text(
@@ -502,7 +480,12 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
                       : '${scored.items.length} items · $blankCount blank · $ambiguousCount flagged',
                   style: AppTextStyles.body(size: 9, color: AppColors.textGray),
                 ),
-                const SizedBox(height: 6),
+                const SizedBox(height: 8),
+                ScanResultSummary(
+                  examCode: batch.examCode,
+                  result: result,
+                ),
+                const SizedBox(height: 8),
                 Wrap(
                   spacing: 8,
                   runSpacing: 6,
