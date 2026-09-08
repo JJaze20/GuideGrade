@@ -14,6 +14,7 @@ import '../../../core/sync/sync_manager.dart';
 import '../../../models/local_batch.dart';
 import '../../../shared/widgets/examinee_dialog.dart';
 import '../../exam/screens/scanned_image_viewer_screen.dart';
+import '../../exam/widgets/scan_result_summary.dart';
 
 /// Opens one archived batch: its info, exam type, every scanned image it
 /// holds, and the corresponding result for each scan, plus the summary
@@ -134,6 +135,50 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
                       ],
                       const SizedBox(height: 12),
                       _buildSyncToCloudButton(batch, appState),
+                      if (batch.examCode == 'QTM') ...[
+                        const SizedBox(height: 10),
+                        OutlinedButton.icon(
+                          onPressed: () => Navigator.of(context).pushNamed(
+                            AppRoutes.qtmBatchAnalytics,
+                            arguments: batch.id,
+                          ),
+                          icon: const FaIcon(FontAwesomeIcons.chartSimple,
+                              size: 13, color: AppColors.darkNavy),
+                          label: const Text('View QTM Analytics'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: AppColors.darkNavy,
+                            side: const BorderSide(color: Color(0xFFCBD5E1)),
+                            padding: const EdgeInsets.symmetric(vertical: 11),
+                            minimumSize: const Size.fromHeight(0),
+                            textStyle: const TextStyle(
+                                fontSize: 10.5,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 0.3),
+                          ),
+                        ),
+                      ],
+                      if (batch.examCode == 'TAT') ...[
+                        const SizedBox(height: 10),
+                        OutlinedButton.icon(
+                          onPressed: () => Navigator.of(context).pushNamed(
+                            AppRoutes.tatBatchAnalytics,
+                            arguments: batch.id,
+                          ),
+                          icon: const FaIcon(FontAwesomeIcons.chartSimple,
+                              size: 13, color: AppColors.darkNavy),
+                          label: const Text('View TAT Analytics'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: AppColors.darkNavy,
+                            side: const BorderSide(color: Color(0xFFCBD5E1)),
+                            padding: const EdgeInsets.symmetric(vertical: 11),
+                            minimumSize: const Size.fromHeight(0),
+                            textStyle: const TextStyle(
+                                fontSize: 10.5,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 0.3),
+                          ),
+                        ),
+                      ],
                       const SizedBox(height: 16),
                       Row(
                         children: [
@@ -467,7 +512,6 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
 
     final blankCount = scored.items.where((i) => i.isBlank).length;
     final ambiguousCount = scored.items.where((i) => i.isAmbiguous).length;
-    final graded = result != null && result.isGraded;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -486,33 +530,11 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        tagged ? examinee.displayName : 'Sheet ${index + 1}',
-                        style: AppTextStyles.heading(size: 12),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    if (graded)
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(color: AppColors.emerald100, borderRadius: BorderRadius.circular(8)),
-                        child: Text(
-                          '${result.rawScore}/${result.totalGraded} · ${result.percentage.toStringAsFixed(0)}%',
-                          style: const TextStyle(fontSize: 9.5, fontWeight: FontWeight.w800, color: Color(0xFF065F46)),
-                        ),
-                      )
-                    else
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(color: const Color(0xFFFEF3C7), borderRadius: BorderRadius.circular(8)),
-                        child: const Text('Ungraded',
-                            style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w800, color: Color(0xFF92400E))),
-                      ),
-                  ],
+                Text(
+                  tagged ? examinee.displayName : 'Sheet ${index + 1}',
+                  style: AppTextStyles.heading(size: 12),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
                 const SizedBox(height: 4),
                 Text(
@@ -528,7 +550,12 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
                       : '${scored.items.length} items · $blankCount blank · $ambiguousCount flagged',
                   style: AppTextStyles.body(size: 9, color: AppColors.textGray),
                 ),
-                const SizedBox(height: 6),
+                const SizedBox(height: 8),
+                ScanResultSummary(
+                  examCode: batch.examCode,
+                  result: result,
+                ),
+                const SizedBox(height: 8),
                 Wrap(
                   spacing: 8,
                   runSpacing: 6,

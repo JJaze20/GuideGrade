@@ -59,3 +59,8 @@ tools/firebase-claims/node_modules/
 tools/firebase-claims/*.json
 !tools/firebase-claims/package.json
 !tools/firebase-claims/package-lock.json
+
+# Supabase build-config dart-defines — real URL/key stay local, never committed.
+# Each developer copies prod.example.json -> prod.json and fills in their key.
+dart_defines/*.json
+!dart_defines/prod.example.json

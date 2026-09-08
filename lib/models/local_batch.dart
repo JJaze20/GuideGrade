@@ -360,6 +360,13 @@ class LocalScan {
 /// The graded outcome of one [LocalScan]. Field-for-field aligned with the
 /// Firestore [ResultModel] so a future cloud repository can write these
 /// straight into the `results` collection.
+///
+/// The `rawScore` / `totalGraded` / `totalItems` / `percentage` fields hold
+/// the exam's headline result (for TAT, `rawScore` is the 160-point total).
+/// The nullable `tatTest{1,2,3}*` / `tatTotal` fields carry the per-test
+/// TAT breakdown and are populated only for TAT sheets; they are absent
+/// from the JSON of every non-TAT result and from any result written before
+/// this breakdown existed, so [fromJson] tolerates their absence.
 class LocalScanResult {
   final int rawScore;
   final int totalGraded; // items actually covered by the answer key used
@@ -370,6 +377,21 @@ class LocalScanResult {
   final String processedByUid;
   final String processedByName;
 
+  /// TAT per-test breakdown — null for non-TAT results and for results
+  /// persisted before the breakdown was added. `tatTest1Score` is
+  /// `correct * 2`; `tatTest2Score` / `tatTest3Score` are
+  /// `max(0, correct - wrong)`; `tatTotal` is their sum (max 160).
+  final int? tatTest1Correct;
+  final int? tatTest1Wrong;
+  final int? tatTest1Score;
+  final int? tatTest2Correct;
+  final int? tatTest2Wrong;
+  final int? tatTest2Score;
+  final int? tatTest3Correct;
+  final int? tatTest3Wrong;
+  final int? tatTest3Score;
+  final int? tatTotal;
+
   const LocalScanResult({
     required this.rawScore,
     required this.totalGraded,
@@ -379,9 +401,22 @@ class LocalScanResult {
     required this.scannedAt,
     required this.processedByUid,
     required this.processedByName,
+    this.tatTest1Correct,
+    this.tatTest1Wrong,
+    this.tatTest1Score,
+    this.tatTest2Correct,
+    this.tatTest2Wrong,
+    this.tatTest2Score,
+    this.tatTest3Correct,
+    this.tatTest3Wrong,
+    this.tatTest3Score,
+    this.tatTotal,
   });
 
   bool get isGraded => status == 'Graded';
+
+  /// Whether this result carries the TAT per-test breakdown.
+  bool get hasTatBreakdown => tatTotal != null;
 
   Map<String, dynamic> toJson() => {
         'rawScore': rawScore,
@@ -392,6 +427,18 @@ class LocalScanResult {
         'scannedAt': scannedAt.toIso8601String(),
         'processedByUid': processedByUid,
         'processedByName': processedByName,
+        // Additive: only present for TAT results. Non-TAT results keep the
+        // exact JSON shape they had before the breakdown existed.
+        if (tatTest1Correct != null) 'tatTest1Correct': tatTest1Correct,
+        if (tatTest1Wrong != null) 'tatTest1Wrong': tatTest1Wrong,
+        if (tatTest1Score != null) 'tatTest1Score': tatTest1Score,
+        if (tatTest2Correct != null) 'tatTest2Correct': tatTest2Correct,
+        if (tatTest2Wrong != null) 'tatTest2Wrong': tatTest2Wrong,
+        if (tatTest2Score != null) 'tatTest2Score': tatTest2Score,
+        if (tatTest3Correct != null) 'tatTest3Correct': tatTest3Correct,
+        if (tatTest3Wrong != null) 'tatTest3Wrong': tatTest3Wrong,
+        if (tatTest3Score != null) 'tatTest3Score': tatTest3Score,
+        if (tatTotal != null) 'tatTotal': tatTotal,
       };
 
   factory LocalScanResult.fromJson(Map<String, dynamic> json) => LocalScanResult(
@@ -403,5 +450,16 @@ class LocalScanResult {
         scannedAt: DateTime.parse(json['scannedAt'] as String),
         processedByUid: json['processedByUid'] as String? ?? '',
         processedByName: json['processedByName'] as String? ?? 'Unknown',
+        // Absent in every pre-breakdown record and in all non-TAT records.
+        tatTest1Correct: json['tatTest1Correct'] as int?,
+        tatTest1Wrong: json['tatTest1Wrong'] as int?,
+        tatTest1Score: json['tatTest1Score'] as int?,
+        tatTest2Correct: json['tatTest2Correct'] as int?,
+        tatTest2Wrong: json['tatTest2Wrong'] as int?,
+        tatTest2Score: json['tatTest2Score'] as int?,
+        tatTest3Correct: json['tatTest3Correct'] as int?,
+        tatTest3Wrong: json['tatTest3Wrong'] as int?,
+        tatTest3Score: json['tatTest3Score'] as int?,
+        tatTotal: json['tatTotal'] as int?,
       );
 }

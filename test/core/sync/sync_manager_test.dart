@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:guidegrade/core/services/local_batch_repository.dart';
 import 'package:guidegrade/core/sync/sync_client.dart';
@@ -762,5 +763,108 @@ void main() {
       queue.jobs.where((j) => j.type == SyncJobType.pushAnswerKey),
       isEmpty,
     );
+  });
+
+  // --- sync-flow diagnostics (SYNC TO CLOUD / release-APK debuggability) ---
+
+  /// Redirects `debugPrint` into a list for the current test and restores it
+  /// afterwards (the default `debugPrintThrottled` schedules via a Timer, so
+  /// a synchronous capture is required to see lines from an async drain).
+  List<String> startDebugCapture() {
+    final logs = <String>[];
+    final saved = debugPrint;
+    debugPrint = (String? message, {int? wrapWidth}) {
+      if (message != null) logs.add(message);
+    };
+    addTearDown(() => debugPrint = saved);
+    return logs;
+  }
+
+  test('35. processQueue() while inactive traces the skip reason and '
+      'dispatches nothing', () async {
+    final logs = startDebugCapture();
+    await queue.enqueue(newJob(SyncJobType.pushBatch, batchId: 'b1'));
+
+    await manager.processQueue(); // never started -> _active == false
+
+    expect(client.calls, isEmpty);
+    expect(logs, contains('SyncManager: processQueue skipped (inactive)'));
+  });
+
+  test('36. manual syncNow() while inactive traces the skip and dispatches '
+      'nothing', () async {
+    final logs = startDebugCapture();
+    await queue.enqueue(newJob(SyncJobType.pushBatch, batchId: 'b1'));
+
+    await manager.syncNow(); // never started
+
+    expect(client.calls, isEmpty);
+    expect(logs, contains('SyncManager: processQueue skipped (inactive)'));
+  });
+
+  test('37. an active drain traces PUSH_BATCH dispatch, a drain-start '
+      'snapshot, and the outcome', () async {
+    final logs = startDebugCapture();
+    await queue.enqueue(newJob(SyncJobType.pushBatch, batchId: 'b1'));
+
+    await manager.start();
+
+    expect(client.calls, ['pushBatch:b1']);
+    expect(
+      logs.any((l) => l.startsWith('SyncManager: drain start: eligible=1 pending=1 ')),
+      isTrue,
+      reason: 'drain-start queue snapshot',
+    );
+    expect(logs, contains('SyncManager: dispatch PUSH_BATCH b1 attempt=0'));
+    expect(logs, contains('SyncManager: PUSH_BATCH b1 -> success attempts=0'));
+  });
+
+  test('38. a TRANSIENT PUSH_BATCH failure is now visible and leaves the job '
+      'pending, not failedPermanent (the reported "still uploading" state)',
+      () async {
+    final logs = startDebugCapture();
+    client.outcomeByLabel['pushBatch:b1'] =
+        const SyncOutcome.transient('network');
+    final job = await queue.enqueue(newJob(SyncJobType.pushBatch, batchId: 'b1'));
+
+    await manager.start();
+
+    expect(
+      logs,
+      contains('SyncManager: PUSH_BATCH b1 -> transient(network) attempts=0'),
+    );
+    expect(queue.jobById(job!.id)!.status, SyncJobStatus.pending);
+    expect(queue.byStatus(SyncJobStatus.failedPermanent), isEmpty);
+    expect(queue.byStatus(SyncJobStatus.blockedConflict), isEmpty);
+  });
+
+  test('39. a PERMANENT PUSH_BATCH failure is traced and becomes '
+      'failedPermanent', () async {
+    final logs = startDebugCapture();
+    client.outcomeByLabel['pushBatch:b1'] =
+        const SyncOutcome.permanent('42501');
+    final job = await queue.enqueue(newJob(SyncJobType.pushBatch, batchId: 'b1'));
+
+    await manager.start();
+
+    expect(
+      logs,
+      contains('SyncManager: PUSH_BATCH b1 -> permanent(42501) attempts=0'),
+    );
+    expect(queue.jobById(job!.id)!.status, SyncJobStatus.failedPermanent);
+  });
+
+  test('40. diagnostics do not change job dispatch, ordering, or retry '
+      'semantics', () async {
+    startDebugCapture();
+    final batch = await seedBatch(scans: 1);
+    await manager.restore(); // reconcile enqueues PUSH_BATCH + PUSH_SCAN + image jobs
+
+    await manager.start();
+
+    // Same successful end state as before diagnostics existed: every job ran
+    // once, in order, and was removed on success.
+    expect(client.calls.first, 'pushBatch:${batch.id}');
+    expect(queue.jobs, isEmpty);
   });
 }

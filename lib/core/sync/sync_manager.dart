@@ -129,10 +129,21 @@ class SyncManager extends ChangeNotifier {
   /// more pass. It is not infinite: it stops as soon as no wake is pending
   /// and nothing is eligible.
   Future<void> processQueue() async {
-    if (_disposed || !_active || _processing) return;
+    if (_disposed || !_active || _processing) {
+      _diag('processQueue skipped ('
+          '${_disposed ? 'disposed' : (!_active ? 'inactive' : 'already-running')}'
+          ')');
+      return;
+    }
     _processing = true;
     _notify();
     try {
+      _diag('drain start: '
+          'eligible=${queue.eligible(_clock()).length} '
+          'pending=${queue.byStatus(SyncJobStatus.pending).length} '
+          'inProgress=${queue.byStatus(SyncJobStatus.inProgress).length} '
+          'failedPermanent=${queue.byStatus(SyncJobStatus.failedPermanent).length} '
+          'blockedConflict=${queue.byStatus(SyncJobStatus.blockedConflict).length}');
       do {
         _wakePending = false;
         while (_active && !_disposed) {
@@ -386,6 +397,7 @@ class SyncManager extends ChangeNotifier {
       : 'batch:${job.batchId}';
 
   Future<void> _runJob(SyncJob job) async {
+    _diag('dispatch ${job.typeWireName} ${job.entityId} attempt=${job.attempts}');
     if (_missingRequiredField(job) != null) {
       await _applyOutcome(job, const SyncOutcome.permanent('bad_job'));
       return;
@@ -445,6 +457,9 @@ class SyncManager extends ChangeNotifier {
   }
 
   Future<void> _applyOutcome(SyncJob job, SyncOutcome outcome) async {
+    _diag('${job.typeWireName} ${job.entityId} -> ${outcome.kind.name}'
+        '${outcome.code == null ? '' : '(${outcome.code})'} '
+        'attempts=${job.attempts}');
     if (outcome.isSuccess) {
       await queue.remove(job.id);
       // The client mutates queue.state in place on success — make it durable.
@@ -511,5 +526,14 @@ class SyncManager extends ChangeNotifier {
   void _notify() {
     if (_disposed) return;
     notifyListeners();
+  }
+
+  /// One-line sync-flow trace. Reaches `adb logcat` in a release build (same
+  /// as the existing `SyncQueue` / `SupabaseSyncClient` logs). Deliberately
+  /// carries only job wire names, entity ids, attempt counts and the
+  /// already-sanitized [SyncOutcome.code] — never a token, key, request
+  /// body, URL, or PII.
+  void _diag(String message) {
+    debugPrint('SyncManager: $message');
   }
 }

@@ -11,6 +11,7 @@ import '../../../models/local_batch.dart';
 import '../../../models/omr_scan_result.dart';
 import '../../../shared/widgets/examinee_dialog.dart';
 import '../../../shared/widgets/primary_button.dart';
+import '../widgets/scan_result_summary.dart';
 import 'scanned_image_viewer_screen.dart';
 
 /// Exam Results — shows what the OMR decoder read off each scanned sheet in
@@ -274,7 +275,6 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
   ) {
     final blankCount = scored.items.where((i) => i.isBlank).length;
     final ambiguousCount = scored.items.where((i) => i.isAmbiguous).length;
-    final isGraded = scored.totalGraded > 0;
     final examinee = scan?.examinee;
     final tagged = examinee != null && !examinee.isEmpty;
     final viewerTitle =
@@ -308,15 +308,6 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
-              if (isGraded)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(color: AppColors.emerald100, borderRadius: BorderRadius.circular(8)),
-                  child: Text(
-                    '${scored.rawScore}/${scored.totalGraded} · ${scored.percentage.toStringAsFixed(0)}%',
-                    style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: Color(0xFF065F46)),
-                  ),
-                ),
             ],
           ),
           const SizedBox(height: 4),
@@ -325,6 +316,12 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
                 ? 'Sheet ${sheetIndex + 1} · Examinee ${examinee.examineeNumber}'
                 : '${scored.items.length} items · $blankCount blank · $ambiguousCount flagged',
             style: AppTextStyles.body(size: 9, color: AppColors.textGray),
+          ),
+          const SizedBox(height: 8),
+          ScanResultSummary(
+            examCode: appState.scanBatch?.examCode ?? appState.activeExamCode,
+            result: scan?.result,
+            live: scored,
           ),
           const SizedBox(height: 8),
           _buildExamineeRow(context, appState, sheetIndex, scan, tagged, examinee),
