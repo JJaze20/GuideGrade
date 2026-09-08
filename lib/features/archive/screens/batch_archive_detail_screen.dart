@@ -118,6 +118,28 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
                       ],
                       const SizedBox(height: 12),
                       _buildSyncToCloudButton(batch, appState),
+                      if (batch.examCode == 'QTM') ...[
+                        const SizedBox(height: 10),
+                        OutlinedButton.icon(
+                          onPressed: () => Navigator.of(context).pushNamed(
+                            AppRoutes.qtmBatchAnalytics,
+                            arguments: batch.id,
+                          ),
+                          icon: const FaIcon(FontAwesomeIcons.chartSimple,
+                              size: 13, color: AppColors.darkNavy),
+                          label: const Text('View QTM Analytics'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: AppColors.darkNavy,
+                            side: const BorderSide(color: Color(0xFFCBD5E1)),
+                            padding: const EdgeInsets.symmetric(vertical: 11),
+                            minimumSize: const Size.fromHeight(0),
+                            textStyle: const TextStyle(
+                                fontSize: 10.5,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 0.3),
+                          ),
+                        ),
+                      ],
                       const SizedBox(height: 16),
                       Row(
                         children: [

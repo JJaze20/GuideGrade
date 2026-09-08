@@ -15,6 +15,7 @@ import '../../features/exam/screens/exam_results_screen.dart';
 import '../../features/exam/screens/answer_key_entry_screen.dart';
 import '../../features/archive/screens/cloud_archive_screen.dart';
 import '../../features/archive/screens/batch_archive_detail_screen.dart';
+import '../../features/archive/screens/qtm_batch_analytics_screen.dart';
 import '../../features/admin/screens/admin_dashboard_screen.dart';
 import '../../features/guidance/screens/exam_management_screen.dart';
 import '../../features/guidance/screens/exam_sheet_preview_screen.dart';
@@ -46,6 +47,7 @@ class AppRoutes {
   static const String answerKeyEntry = '/answer-key-entry';
   static const String cloudArchive = '/cloud-archive';
   static const String batchArchiveDetail = '/batch-archive-detail';
+  static const String qtmBatchAnalytics = '/qtm-batch-analytics';
   static const String adminDashboard = '/admin-dashboard';
   static const String examManagement = '/exam-management';
   static const String examSheetPreview = '/exam-sheet-preview';
@@ -92,6 +94,7 @@ class AppRoutes {
     editBatch,
     cloudArchive,
     batchArchiveDetail,
+    qtmBatchAnalytics,
   };
 
   /// Generates routes for [MaterialApp.onGenerateRoute]. Using this
@@ -178,6 +181,8 @@ class AppRoutes {
         return _fade(const CloudArchiveScreen());
       case batchArchiveDetail:
         return _slide(BatchArchiveDetailScreen(batchId: settings.arguments as String));
+      case qtmBatchAnalytics:
+        return _slide(QtmBatchAnalyticsScreen(batchId: settings.arguments as String));
       case adminDashboard:
         return _fade(const AdminDashboardScreen());
       case examManagement:
