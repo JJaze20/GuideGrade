@@ -30,9 +30,10 @@ LocalScanResult _qtmResult({
       rawScore: rawScore,
       totalGraded: 60,
       totalItems: 60,
-      // A deliberately non-zero legacy compatibility value: the widget must
-      // never surface it for QTM.
-      percentage: 58.33,
+      // Legacy compatibility value, deliberately unrelated to any tested
+      // raw score's official `raw / 60 * 100`: the widget must surface
+      // qtmPercentage(rawScore), never this field.
+      percentage: 99.9,
       status: status,
       scannedAt: _fixedAt,
       processedByUid: 'u',
@@ -194,21 +195,120 @@ void main() {
     });
   });
 
-  group('4. QTM — normal score', () {
-    testWidgets('rawScore 35 -> "35 / 60" and no percent sign anywhere',
+  group('4. QTM — graded: score / official percentage / eligibility', () {
+    testWidgets('1. rawScore 26 -> 26/60, 43.33%, incl. BSCS', (tester) async {
+      await _pump(
+        tester,
+        ScanResultSummary(examCode: 'QTM', result: _qtmResult(rawScore: 26)),
+      );
+      expect(find.text('Score'), findsOneWidget);
+      expect(find.text('26 / 60'), findsOneWidget);
+      expect(find.text('Percentage'), findsOneWidget);
+      expect(find.text('43.33%'), findsOneWidget);
+      expect(find.text('Eligibility'), findsOneWidget);
+      expect(find.textContaining('incl. BSCS'), findsOneWidget);
+      expect(find.textContaining('except BSCS'), findsNothing);
+    });
+
+    testWidgets('2. rawScore 0 -> 0/60, 0.00%, does not meet requirement',
         (tester) async {
       await _pump(
         tester,
-        ScanResultSummary(examCode: 'QTM', result: _qtmResult(rawScore: 35)),
+        ScanResultSummary(examCode: 'QTM', result: _qtmResult(rawScore: 0)),
       );
-      expect(find.text('35 / 60'), findsOneWidget);
-      expect(find.textContaining('%'), findsNothing);
-      expect(find.textContaining('58'), findsNothing); // legacy percentage
+      expect(find.text('0 / 60'), findsOneWidget);
+      expect(find.text('0.00%'), findsOneWidget);
+      expect(
+          find.textContaining('Does not meet the QTM requirement'), findsOneWidget);
+      expect(find.textContaining('BSCS'), findsNothing);
+    });
+
+    testWidgets('3. rawScore 14 -> 14/60, 23.33%, does not meet requirement',
+        (tester) async {
+      await _pump(
+        tester,
+        ScanResultSummary(examCode: 'QTM', result: _qtmResult(rawScore: 14)),
+      );
+      expect(find.text('14 / 60'), findsOneWidget);
+      expect(find.text('23.33%'), findsOneWidget);
+      expect(
+          find.textContaining('Does not meet the QTM requirement'), findsOneWidget);
+    });
+
+    testWidgets('4. rawScore 15 -> 15/60, 25.00%, except BSCS (inclusive 25%)',
+        (tester) async {
+      await _pump(
+        tester,
+        ScanResultSummary(examCode: 'QTM', result: _qtmResult(rawScore: 15)),
+      );
+      expect(find.text('15 / 60'), findsOneWidget);
+      expect(find.text('25.00%'), findsOneWidget);
+      expect(find.textContaining('except BSCS'), findsOneWidget);
+      expect(find.textContaining('incl. BSCS'), findsNothing);
+    });
+
+    testWidgets('5. rawScore 17 -> 17/60, 28.33%, except BSCS', (tester) async {
+      await _pump(
+        tester,
+        ScanResultSummary(examCode: 'QTM', result: _qtmResult(rawScore: 17)),
+      );
+      expect(find.text('17 / 60'), findsOneWidget);
+      expect(find.text('28.33%'), findsOneWidget);
+      expect(find.textContaining('except BSCS'), findsOneWidget);
+    });
+
+    testWidgets('6. rawScore 18 -> 18/60, 30.00%, incl. BSCS (inclusive 30%)',
+        (tester) async {
+      await _pump(
+        tester,
+        ScanResultSummary(examCode: 'QTM', result: _qtmResult(rawScore: 18)),
+      );
+      expect(find.text('18 / 60'), findsOneWidget);
+      expect(find.text('30.00%'), findsOneWidget);
+      expect(find.textContaining('incl. BSCS'), findsOneWidget);
+      expect(find.textContaining('except BSCS'), findsNothing);
+    });
+
+    testWidgets('7. rawScore 60 -> 60/60, 100.00%, incl. BSCS', (tester) async {
+      await _pump(
+        tester,
+        ScanResultSummary(examCode: 'QTM', result: _qtmResult(rawScore: 60)),
+      );
+      expect(find.text('60 / 60'), findsOneWidget);
+      expect(find.text('100.00%'), findsOneWidget);
+      expect(find.textContaining('incl. BSCS'), findsOneWidget);
+    });
+
+    testWidgets('9. live-only QTM (result: null): raw 18 -> 30.00%, incl. BSCS',
+        (tester) async {
+      // 18 correct + 12 wrong out of a graded QTM sheet -> live raw 18.
+      final live = _liveScored('QTM', 'Qualifying Test in Mathematics',
+          correct: 18, wrong: 12);
+      await _pump(
+        tester,
+        ScanResultSummary(examCode: 'QTM', result: null, live: live),
+      );
+      expect(find.text('18 / 60'), findsOneWidget);
+      expect(find.text('30.00%'), findsOneWidget);
+      expect(find.textContaining('incl. BSCS'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('10. legacy persisted percentage (99.9) is never rendered; '
+        'the shown percentage is qtmPercentage(rawScore)', (tester) async {
+      await _pump(
+        tester,
+        ScanResultSummary(examCode: 'QTM', result: _qtmResult(rawScore: 26)),
+      );
+      expect(find.text('43.33%'), findsOneWidget); // 26 / 60 * 100
+      expect(find.textContaining('99.9'), findsNothing);
+      expect(find.textContaining('99'), findsNothing);
     });
   });
 
   group('5. QTM — ungraded', () {
-    testWidgets('shows only "Ungraded", no percentage', (tester) async {
+    testWidgets('shows only "Ungraded" — no score, percentage or eligibility',
+        (tester) async {
       await _pump(
         tester,
         ScanResultSummary(
@@ -217,8 +317,12 @@ void main() {
         ),
       );
       expect(find.text('Ungraded'), findsOneWidget);
+      expect(find.text('Score'), findsNothing);
+      expect(find.text('Percentage'), findsNothing);
+      expect(find.text('Eligibility'), findsNothing);
       expect(find.textContaining('%'), findsNothing);
       expect(find.textContaining('/ 60'), findsNothing);
+      expect(find.textContaining('BSCS'), findsNothing);
     });
   });
 

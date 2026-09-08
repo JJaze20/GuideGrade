@@ -5,6 +5,7 @@ import '../../../core/constants/app_text_styles.dart';
 import '../../../core/omr/admission_category.dart';
 import '../../../core/omr/exam_score.dart';
 import '../../../core/omr/omr_scorer.dart';
+import '../../../core/omr/qtm_result.dart';
 import '../../../models/local_batch.dart';
 
 /// Presentation-only summary of one scanned sheet's result, sized to sit
@@ -117,14 +118,43 @@ class ScanResultSummary extends StatelessWidget {
         null => AppColors.catCutoff,
       };
 
+  static String _qtmEligibilityLabel(QtmEligibility? e) => switch (e) {
+        QtmEligibility.allCoursesIncludingBscs =>
+          'All QTM-required courses, incl. BSCS',
+        QtmEligibility.allCoursesExceptBscs =>
+          'All QTM-required courses, except BSCS',
+        QtmEligibility.notEligible => 'Does not meet the QTM requirement',
+        null => '—',
+      };
+
+  static Color _qtmEligibilityColor(QtmEligibility? e) => switch (e) {
+        QtmEligibility.allCoursesIncludingBscs => AppColors.catC,
+        QtmEligibility.allCoursesExceptBscs => AppColors.catB,
+        QtmEligibility.notEligible => AppColors.catA,
+        null => AppColors.catCutoff,
+      };
+
   // --- QTM --------------------------------------------------------------
 
+  /// Official QTM presentation: raw `/ 60`, the official percentage
+  /// (`raw / 60 * 100` via [qtmPercentage] — never the legacy
+  /// `LocalScanResult.percentage`), and the course-eligibility band
+  /// ([qtmEligibility]). Unreachable for an ungraded result — `build()`
+  /// returns the "Ungraded" pill before this runs.
   Widget _buildQtm() {
     final raw = _rawScore;
-    // No percentage for QTM: the persisted value is a legacy compatibility
-    // figure and must not be shown as if it were an official percentage.
+    final percentage = raw == null ? null : qtmPercentage(raw);
+    final eligibility = raw == null ? null : qtmEligibility(raw);
     return _block([
       _row('Score', raw == null ? '—' : '$raw / 60'),
+      if (percentage != null)
+        _row('Percentage', '${percentage.toStringAsFixed(2)}%'),
+      if (eligibility != null)
+        _row(
+          'Eligibility',
+          _qtmEligibilityLabel(eligibility),
+          valueColor: _qtmEligibilityColor(eligibility),
+        ),
     ]);
   }
 
