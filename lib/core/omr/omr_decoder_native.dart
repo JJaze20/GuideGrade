@@ -74,6 +74,50 @@ class OmrDecoder {
   /// values require darker pixels to count as "ink".
   static const double _adaptiveThresholdC = 12;
 
+  /// Low-light adaptive tuning: "normal" mean brightness (0-255) a well-lit
+  /// captured sheet reads at, measured on the same grayscale Mat CLAHE is
+  /// about to run on (or, for [_findMarkerInRegion], on that corner's own
+  /// local search ROI — its own light can differ from the rest of the page,
+  /// e.g. a shadow or silhouette over just one corner). At or above this,
+  /// [_darknessFactor] is 0 and every adaptive helper below returns its
+  /// input unchanged — the existing per-exam-tuned CLAHE/threshold values
+  /// this project's daylight accuracy (AT ~94%, QTM ~95%) was measured
+  /// against are a mathematical no-op case of this, not a separate path.
+  /// Below it, correction scales in proportionally. Not yet calibrated
+  /// against a real low-light scan — a reasonable starting point pending
+  /// the on-device validation in the low-light accuracy plan's Phase 3, not
+  /// a final tuned value the way the per-exam constants above are.
+  static const double _referenceBrightness = 170.0;
+
+  /// How far below [_referenceBrightness] the adaptive scaling below
+  /// saturates at its maximum adjustment. Also pending real-scan
+  /// calibration.
+  static const double _maxDarknessRange = 100.0;
+
+  /// 0 at/above [_referenceBrightness], ramping linearly to 1 at
+  /// [_referenceBrightness] - [_maxDarknessRange] and clamped there for
+  /// anything darker still — how far into "dark" territory a measured mean
+  /// brightness reads, for scaling CLAHE/threshold parameters
+  /// proportionally to how dark the actual photo is rather than as a hard
+  /// on/off switch at some arbitrary cutoff.
+  static double _darknessFactor(double meanBrightness) =>
+      ((_referenceBrightness - meanBrightness) / _maxDarknessRange).clamp(0.0, 1.0);
+
+  /// Scales a CLAHE clip limit up to double at maximum measured darkness,
+  /// unchanged at/above [_referenceBrightness] — stronger local-contrast
+  /// stretching for a genuinely dim or shadowed photo, where the existing
+  /// fixed per-exam clip limits (tuned against normally-lit scans) don't
+  /// pull the paper-vs-ink gap open far enough on their own.
+  static double _adaptiveClipLimit(double base, double meanBrightness) =>
+      base * (1 + _darknessFactor(meanBrightness));
+
+  /// Scales the adaptive-threshold C constant down to half at maximum
+  /// measured darkness, unchanged at/above [_referenceBrightness] — a more
+  /// permissive "is this ink" decision for when CLAHE alone hasn't fully
+  /// closed a dim photo's paper-vs-ink gap back to a normally-lit one's.
+  static double _adaptiveThresholdCFor(double base, double meanBrightness) =>
+      base * (1 - _darknessFactor(meanBrightness) * 0.5);
+
   /// Absolute floor an item's best-filled bubble must clear before it's
   /// even considered for marking, used only as a last-resort sanity check
   /// (see [_readBubbles]) — everything with 3+ choices decides "is
@@ -166,6 +210,23 @@ class OmrDecoder {
   /// long edges — a table line, a run of header text — that happen to
   /// cross the search window.
   static const double _markerMaxAspect = 7.0;
+
+  /// A candidate blob's circularity (4*pi*area/perimeter^2 — 1.0 for a
+  /// perfect circle, ~0.785 for a square) must be at or below this. A
+  /// solid, well-filled pencil bubble is round, high-contrast, and (being
+  /// roughly circular) has a near-1:1 bounding-box aspect ratio — close
+  /// enough to the printed corner marker's own fill-ratio and aspect that
+  /// both checks above pass a filled bubble as readily as the real mark.
+  /// Confirmed on a real device: zooming in close enough that only one
+  /// marked item was in frame let the search latch onto that item's own
+  /// filled bubbles as "corner marks", passing every other check, instead
+  /// of correctly finding nothing. Circularity is the one property that
+  /// actually distinguishes them — the printed marker is a solid filled
+  /// *square* (see tool/generate_sheets.dart's corner-marker drawing:
+  /// `drawRect` + `fillPath`, not an ellipse), not a circle. 0.88 sits with
+  /// real margin above a square's ~0.785 (room for corners softened by
+  /// blur/dilation) and real margin below a circle's 1.0.
+  static const double _markerMaxCircularity = 0.88;
 
   /// Inner sample radius as a fraction of the outer bubble sample radius.
   /// The printed choice letter sits in this center zone; subtracting its
@@ -349,41 +410,76 @@ class OmrDecoder {
               // per-pixel noise survives into the ink map, where it inflates
               // a blank neighbor bubble's fill reading enough to erode a
               // genuine mark's margin over it.
-              final clahe = cv.createCLAHE(
-                clipLimit: _claheClipLimitFor(template.examCode),
-                tileGridSize: (8, 8),
-              );
+              //
+              // Both the clip limit and the threshold constant are then
+              // additionally scaled for how dark this particular photo
+              // measures (see _adaptiveClipLimit/_adaptiveThresholdCFor) —
+              // a no-op at/above _referenceBrightness, so a normally-lit
+              // capture goes through this exact same per-exam-tuned path as
+              // before; only a measurably dim/shadowed one gets the extra
+              // correction.
+              final warpedMeanScalar = warped.mean();
+              double warpedBrightness;
               try {
-                final normalized = clahe.apply(warped);
+                warpedBrightness = warpedMeanScalar.val1;
+              } finally {
+                warpedMeanScalar.dispose();
+              }
+              // Low light usually means the camera compensated with a
+              // higher ISO, which means more sensor noise going into CLAHE
+              // — exactly the noise-amplification risk the comment above
+              // already describes, just worse than what the post-CLAHE
+              // blur alone was tuned to absorb. An edge-preserving
+              // bilateral filter ahead of CLAHE, strength scaled by how
+              // dark this photo measures, tamps that down before it ever
+              // reaches CLAHE — skipped entirely (claheInput stays
+              // identical to warped) at/above _referenceBrightness, so a
+              // normally-lit capture never pays this filter's real cost
+              // (bilateral filtering is meaningfully slower than a plain
+              // blur).
+              final darkness = _darknessFactor(warpedBrightness);
+              final claheInput = darkness > 0
+                  ? cv.bilateralFilter(warped, 5, 50 * darkness, 50 * darkness)
+                  : warped;
+              try {
+                final clahe = cv.createCLAHE(
+                  clipLimit: _adaptiveClipLimit(_claheClipLimitFor(template.examCode), warpedBrightness),
+                  tileGridSize: (8, 8),
+                );
                 try {
-                  final blurred = cv.gaussianBlur(normalized, (5, 5), 0);
+                  final normalized = clahe.apply(claheInput);
                   try {
-                    final inkMap = cv.adaptiveThreshold(
-                      blurred,
-                      255,
-                      cv.ADAPTIVE_THRESH_GAUSSIAN_C,
-                      cv.THRESH_BINARY_INV,
-                      _adaptiveThresholdBlockSize,
-                      _adaptiveThresholdC,
-                    );
+                    final blurred = cv.gaussianBlur(normalized, (5, 5), 0);
                     try {
-                      return _readBubbles(
-                        inkMap,
-                        template,
-                        canonicalWidth,
-                        canonicalHeight,
+                      final inkMap = cv.adaptiveThreshold(
+                        blurred,
+                        255,
+                        cv.ADAPTIVE_THRESH_GAUSSIAN_C,
+                        cv.THRESH_BINARY_INV,
+                        _adaptiveThresholdBlockSize,
+                        _adaptiveThresholdCFor(_adaptiveThresholdC, warpedBrightness),
                       );
+                      try {
+                        return _readBubbles(
+                          inkMap,
+                          template,
+                          canonicalWidth,
+                          canonicalHeight,
+                        );
+                      } finally {
+                        inkMap.dispose();
+                      }
                     } finally {
-                      inkMap.dispose();
+                      blurred.dispose();
                     }
                   } finally {
-                    blurred.dispose();
+                    normalized.dispose();
                   }
                 } finally {
-                  normalized.dispose();
+                  clahe.dispose();
                 }
               } finally {
-                clahe.dispose();
+                if (!identical(claheInput, warped)) claheInput.dispose();
               }
             } finally {
               warped.dispose();
@@ -797,45 +893,64 @@ class OmrDecoder {
                   warpedGray,
                 );
                 // Kept identical to the real decode path above (clipLimit,
-                // blur kernel) so this debug output actually reflects what
+                // blur kernel, and now the same brightness-adaptive scaling
+                // too) so this debug output actually reflects what
                 // _readBubbles saw, not a different pipeline.
-                final clahe = cv.createCLAHE(
-                  clipLimit: _claheClipLimitFor(template.examCode),
-                  tileGridSize: (8, 8),
-                );
+                final warpedGrayMeanScalar = warpedGray.mean();
+                double warpedGrayBrightness;
                 try {
-                  final normalized = clahe.apply(warpedGray);
+                  warpedGrayBrightness = warpedGrayMeanScalar.val1;
+                } finally {
+                  warpedGrayMeanScalar.dispose();
+                }
+                // Same darkness-scaled bilateral pre-filter decode() now
+                // runs — a no-op Mat reference (not a real filter call) at/
+                // above _referenceBrightness.
+                final grayDarkness = _darknessFactor(warpedGrayBrightness);
+                final grayClaheInput = grayDarkness > 0
+                    ? cv.bilateralFilter(warpedGray, 5, 50 * grayDarkness, 50 * grayDarkness)
+                    : warpedGray;
+                try {
+                  final clahe = cv.createCLAHE(
+                    clipLimit: _adaptiveClipLimit(_claheClipLimitFor(template.examCode), warpedGrayBrightness),
+                    tileGridSize: (8, 8),
+                  );
                   try {
-                    cv.imwrite(
-                      '$outputDir/sheet${pageIndex}_clahe.jpg',
-                      normalized,
-                    );
-                    final blurred = cv.gaussianBlur(normalized, (5, 5), 0);
+                    final normalized = clahe.apply(grayClaheInput);
                     try {
-                      final inkMap = cv.adaptiveThreshold(
-                        blurred,
-                        255,
-                        cv.ADAPTIVE_THRESH_GAUSSIAN_C,
-                        cv.THRESH_BINARY_INV,
-                        _adaptiveThresholdBlockSize,
-                        _adaptiveThresholdC,
+                      cv.imwrite(
+                        '$outputDir/sheet${pageIndex}_clahe.jpg',
+                        normalized,
                       );
+                      final blurred = cv.gaussianBlur(normalized, (5, 5), 0);
                       try {
-                        cv.imwrite(
-                          '$outputDir/sheet${pageIndex}_inkmap.jpg',
-                          inkMap,
+                        final inkMap = cv.adaptiveThreshold(
+                          blurred,
+                          255,
+                          cv.ADAPTIVE_THRESH_GAUSSIAN_C,
+                          cv.THRESH_BINARY_INV,
+                          _adaptiveThresholdBlockSize,
+                          _adaptiveThresholdCFor(_adaptiveThresholdC, warpedGrayBrightness),
                         );
+                        try {
+                          cv.imwrite(
+                            '$outputDir/sheet${pageIndex}_inkmap.jpg',
+                            inkMap,
+                          );
+                        } finally {
+                          inkMap.dispose();
+                        }
                       } finally {
-                        inkMap.dispose();
+                        blurred.dispose();
                       }
                     } finally {
-                      blurred.dispose();
+                      normalized.dispose();
                     }
                   } finally {
-                    normalized.dispose();
+                    clahe.dispose();
                   }
                 } finally {
-                  clahe.dispose();
+                  if (!identical(grayClaheInput, warpedGray)) grayClaheInput.dispose();
                 }
               } finally {
                 warpedGray.dispose();
@@ -1017,6 +1132,44 @@ class OmrDecoder {
       throw StateError(
         'The sheet appears too small in this photo. Move closer and retake.',
       );
+    }
+
+    // No upper bound previously existed here — only "too small", never "too
+    // big" or "too close to the frame edge". Confirmed this lets a false
+    // pass through when the camera is zoomed in far enough that the real
+    // corner marks fall partially or fully outside the frame: the
+    // quadrant search (see _findMarkerInRegion's own doc comment — it
+    // searches the *whole* quadrant, not a small window) can still latch
+    // onto some other dark, roughly-square-ish blob near the frame edge —
+    // a bubble row, header text, page clutter — and that false quad can
+    // still happen to pass the aspect-ratio check above by coincidence.
+    // Two checks catch this instead of one, since neither alone covers
+    // every way "zoomed in too far" can present:
+    if (quadArea > imageArea * 0.85) {
+      throw StateError(
+        'The sheet fills too much of the frame. Move back so all 4 corner marks have visible margin around them, then retake.',
+      );
+    }
+    // A genuine corner mark is always printed with real margin around it
+    // (kPageMargin + kMarkerPad in tool/generate_sheets.dart) — a
+    // correctly-framed capture should never have a *found* corner sitting
+    // right at the photo's own boundary. When the camera is zoomed in
+    // past the point where the real mark is still in frame, whatever the
+    // search fell back to accepting instead is disproportionately likely
+    // to be hugging that boundary, unlike a genuine capture with visible
+    // background on every side.
+    const edgeMarginFrac = 0.015;
+    final edgeMarginX = gray.width * edgeMarginFrac;
+    final edgeMarginY = gray.height * edgeMarginFrac;
+    for (final corner in corners) {
+      if (corner.x < edgeMarginX ||
+          corner.x > gray.width - edgeMarginX ||
+          corner.y < edgeMarginY ||
+          corner.y > gray.height - edgeMarginY) {
+        throw StateError(
+          'The sheet appears too close or cropped by the frame edge. Move back so the whole sheet is visible with margin around it, then retake.',
+        );
+      }
     }
   }
 
@@ -1299,7 +1452,20 @@ class OmrDecoder {
   ) {
     final roi = gray.region(region);
     try {
-      final clahe = cv.createCLAHE(clipLimit: 3, tileGridSize: (4, 4));
+      // Brightness measured on this corner's own search ROI, not the whole
+      // photo — a shadow or silhouette can fall over just one corner while
+      // the rest of the sheet is fine, and the other 3 corners' searches
+      // shouldn't get a correction they don't need because of it. A no-op
+      // at/above _referenceBrightness, same as decode()'s own adaptive
+      // scaling.
+      final roiMeanScalar = roi.mean();
+      double roiBrightness;
+      try {
+        roiBrightness = roiMeanScalar.val1;
+      } finally {
+        roiMeanScalar.dispose();
+      }
+      final clahe = cv.createCLAHE(clipLimit: _adaptiveClipLimit(3, roiBrightness), tileGridSize: (4, 4));
       try {
         final enhanced = clahe.apply(roi);
         try {
@@ -1313,7 +1479,7 @@ class OmrDecoder {
               cv.ADAPTIVE_THRESH_GAUSSIAN_C,
               cv.THRESH_BINARY_INV,
               blockSize,
-              8,
+              _adaptiveThresholdCFor(8, roiBrightness),
             );
             try {
               // Ordinary photo blur/JPEG softening can still break a
@@ -1344,7 +1510,9 @@ class OmrDecoder {
 
                     double bestScore = double.infinity;
                     cv.Rect? bestRect;
-                    for (final contour in contours) {
+                    var bestContourIndex = -1;
+                    for (var ci = 0; ci < contours.length; ci++) {
+                      final contour = contours[ci];
                       final area = cv.contourArea(contour);
                       if (area < 8 || area > imageArea * 0.02) continue;
                       final rect = cv.boundingRect(contour);
@@ -1364,6 +1532,11 @@ class OmrDecoder {
                         math.min(rect.width, rect.height),
                       );
                       if (longSide / shortSide > _markerMaxAspect) continue;
+
+                      final perimeter = cv.arcLength(contour, true);
+                      if (perimeter <= 0) continue;
+                      final circularity = 4 * math.pi * area / (perimeter * perimeter);
+                      if (circularity > _markerMaxCircularity) continue;
 
                       final globalCx = region.x + rect.x + rect.width / 2;
                       final globalCy = region.y + rect.y + rect.height / 2;
@@ -1428,12 +1601,54 @@ class OmrDecoder {
                       if (score < bestScore) {
                         bestScore = score;
                         bestRect = rect;
+                        bestContourIndex = ci;
                       }
                     }
                     if (bestRect == null) return null;
-                    final cx = region.x + bestRect.x + bestRect.width / 2;
-                    final cy = region.y + bestRect.y + bestRect.height / 2;
-                    return cv.Point2f(cx.toDouble(), cy.toDouble());
+                    // The blob's true (area-weighted) centroid, not its
+                    // bounding box's midpoint — the two only coincide for a
+                    // perfectly clean, symmetric blob. Anything that
+                    // distorts the thresholded/dilated shape asymmetrically
+                    // (a shadow clipping one edge, motion blur smearing it
+                    // one way, uneven lighting eating into one side more
+                    // than another) shifts a bounding-box center away from
+                    // the mark's real physical position without shifting
+                    // the true centroid nearly as much — and since
+                    // warpPerspective fits an exact transform through
+                    // whichever 4 points it's given, even one corner's
+                    // bounding-box-center error (while the other 3 are
+                    // accurate) skews the whole warped image, which showed
+                    // up as a subtly tilted result on a real scan. Computed
+                    // by drawing just this one winning contour onto a small
+                    // mask sized to its own bounding box (not the whole ROI
+                    // — cheap, and immune to any other blob nearby) and
+                    // taking cv.moments of that.
+                    final rect = bestRect;
+                    final mask = cv.Mat.zeros(rect.height, rect.width, cv.MatType.CV_8UC1);
+                    try {
+                      cv.drawContours(
+                        mask,
+                        contours,
+                        bestContourIndex,
+                        cv.Scalar.all(255),
+                        thickness: -1,
+                        offset: cv.Point(-rect.x, -rect.y),
+                      );
+                      final m = cv.moments(mask);
+                      try {
+                        final cx = m.m00 > 0
+                            ? region.x + rect.x + m.m10 / m.m00
+                            : region.x + rect.x + rect.width / 2;
+                        final cy = m.m00 > 0
+                            ? region.y + rect.y + m.m01 / m.m00
+                            : region.y + rect.y + rect.height / 2;
+                        return cv.Point2f(cx.toDouble(), cy.toDouble());
+                      } finally {
+                        m.dispose();
+                      }
+                    } finally {
+                      mask.dispose();
+                    }
                   } finally {
                     contours.dispose();
                     hierarchy.dispose();
