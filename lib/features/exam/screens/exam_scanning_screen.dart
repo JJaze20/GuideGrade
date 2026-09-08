@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:camera/camera.dart';
@@ -35,13 +36,31 @@ class _LiveCornersRequest {
   );
 }
 
-List<bool> _checkLiveCorners(_LiveCornersRequest request) {
-  return const OmrDecoder().checkCornersFromLuma(
+/// Corner-detection result plus a coarse mean-brightness read of the same
+/// frame — piggybacked onto this exact call (same luma bytes, same 600ms
+/// throttle, same isolate hop as the corner check) so the live low-light
+/// hint costs nothing extra. Strided sampling (every 8th pixel in both
+/// directions, ~1/64th of the frame) keeps this cheap enough for that
+/// cadence; a live hint only needs a stable exposure estimate, not every
+/// pixel.
+({List<bool> cornersFound, double meanLuma}) _checkLiveCorners(_LiveCornersRequest request) {
+  final found = const OmrDecoder().checkCornersFromLuma(
     request.lumaBytes,
     request.width,
     request.height,
     request.bytesPerRow,
   );
+  const stride = 8;
+  var sum = 0;
+  var count = 0;
+  for (var y = 0; y < request.height; y += stride) {
+    final rowStart = y * request.bytesPerRow;
+    for (var x = 0; x < request.width; x += stride) {
+      sum += request.lumaBytes[rowStart + x];
+      count++;
+    }
+  }
+  return (cornersFound: found, meanLuma: count == 0 ? 255.0 : sum / count);
 }
 
 /// OMR Scanner Loop — mirrors SCREENS.EXAM_SCANNING.
@@ -91,6 +110,28 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
   DateTime? _lastFrameCheckAt;
   bool _frameCheckInFlight = false;
 
+  /// Most recent live mean-luma read (0-255, coarse), from the same throttled
+  /// frame check as [_liveCornersFound] — see [_checkLiveCorners]. Null until
+  /// the first check completes. Drives the low-light hint and the exposure
+  /// nudge below; advisory only, same as the rest of the live guide.
+  double? _meanLuma;
+
+  /// Below this mean-luma reading, the scene counts as "low light" for the
+  /// hint/exposure-nudge below. Not tuned against real low-light captures
+  /// yet (see the low-light accuracy plan) — a reasonable starting point
+  /// pending on-device validation, not a final calibrated threshold.
+  static const double _lowLightLumaThreshold = 70;
+
+  /// Whether the user has manually turned the torch on for this session.
+  /// Manual only — see _toggleTorch's doc comment for why this isn't
+  /// automatic.
+  bool _torchOn = false;
+
+  /// Whether [_maybeNudgeExposure] has already pushed the exposure offset
+  /// up for the current low-light stretch, so it isn't re-issued on every
+  /// single throttled frame check — only on entering/leaving low light.
+  bool _exposureNudged = false;
+
   /// When all 4 corners most recently read as found, continuously — set the
   /// moment they first do, cleared the instant any check comes back with
   /// fewer than 4. [_readyToCapture] requires this to have held for
@@ -116,6 +157,27 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
     final since = _all4FoundSince;
     return since != null &&
         DateTime.now().difference(since) >= _requiredStableDuration;
+  }
+
+  /// Whether the live-checked scene currently reads as low light and the
+  /// torch isn't already on — the one condition where the caption below
+  /// prioritizes the flash hint over corner-alignment feedback, since
+  /// fixing the lighting matters more at that point than which corner
+  /// still needs adjusting.
+  bool get _isLowLight =>
+      _meanLuma != null && _meanLuma! < _lowLightLumaThreshold && !_torchOn;
+
+  /// Viewfinder caption text — the low-light hint takes priority over the
+  /// usual corner-alignment status when active (see [_isLowLight]).
+  String _viewfinderCaption() {
+    if (_isLowLight) return 'Low light — tap the flash icon';
+    if (_liveCornersFound == null) return 'Position sheet within the frame';
+    if (_readyToCapture) return 'Ready to scan';
+    if (_liveCornersFound!.every((f) => f)) return 'Hold steady…';
+    if (_liveCornersFound!.any((f) => f)) {
+      return '${_liveCornersFound!.where((f) => f).length}/4 corner marks locked';
+    }
+    return 'Align all 4 corners inside the frame';
   }
 
   /// Neutral until the first live check completes, green once all 4
@@ -247,6 +309,13 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
       _cameraController = null;
       _liveCornersFound = null;
       _all4FoundSince = null;
+      _meanLuma = null;
+      // Torch/exposure state doesn't survive disposing the controller
+      // (hardware-level, tied to the camera session) -- reset so the UI
+      // (torch icon) matches the fresh controller _setUpCamera() below is
+      // about to create, which always starts with flash off.
+      _torchOn = false;
+      _exposureNudged = false;
     } else if (state == AppLifecycleState.resumed) {
       if (_isLandscapeExam) {
         SystemChrome.setPreferredOrientations([
@@ -307,21 +376,78 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
             plane.bytesPerRow,
           ),
         )
-        .then((found) {
+        .then((result) {
           _frameCheckInFlight = false;
           if (!mounted) return;
           setState(() {
-            _liveCornersFound = found;
-            if (found.every((f) => f)) {
+            _liveCornersFound = result.cornersFound;
+            _meanLuma = result.meanLuma;
+            if (result.cornersFound.every((f) => f)) {
               _all4FoundSince ??= now;
             } else {
               _all4FoundSince = null;
             }
           });
+          unawaited(_maybeNudgeExposure(result.meanLuma));
         })
         .catchError((_) {
           _frameCheckInFlight = false;
         });
+  }
+
+  /// Secondary low-light lever alongside the manual torch toggle: nudges
+  /// the camera's exposure offset up while the scene reads dark, resets it
+  /// back to normal once it doesn't. Skipped entirely while the torch is on
+  /// (already plenty of light at that point — stacking an exposure boost on
+  /// top risks overexposing/blowing out the sheet instead of helping) and
+  /// only re-issued on actually crossing the low-light threshold (via
+  /// [_exposureNudged]), not on every throttled frame check.
+  Future<void> _maybeNudgeExposure(double meanLuma) async {
+    final controller = _cameraController;
+    if (controller == null || !controller.value.isInitialized) return;
+    final isLowLight = meanLuma < _lowLightLumaThreshold && !_torchOn;
+    if (!isLowLight) {
+      if (_exposureNudged) {
+        _exposureNudged = false;
+        try {
+          await controller.setExposureOffset(0);
+        } catch (_) {
+          // Not all devices/lenses support exposure offset control.
+        }
+      }
+      return;
+    }
+    if (_exposureNudged) return;
+    try {
+      final maxOffset = await controller.getMaxExposureOffset();
+      // A conservative fraction of the device's own max range -- enough to
+      // help recover shadow detail without blowing out highlights once the
+      // (already light-colored) sheet fills most of the frame.
+      await controller.setExposureOffset(maxOffset * 0.5);
+      _exposureNudged = true;
+    } catch (_) {
+      // Not all devices/lenses support exposure offset control; capture
+      // still works with whatever the platform default is.
+    }
+  }
+
+  /// Manual torch toggle — deliberately not automatic. Auto-enabling flash
+  /// the moment the scene reads dark would surprise the user, drain battery
+  /// without their say-so, and risk glare on glossy/laminated paper with no
+  /// accuracy upside over a one-tap toggle they control themselves. The live
+  /// low-light hint (see [_buildViewfinder]) tells them when it's worth
+  /// tapping; this is what actually flips it.
+  Future<void> _toggleTorch() async {
+    final controller = _cameraController;
+    if (controller == null || !controller.value.isInitialized) return;
+    final next = !_torchOn;
+    try {
+      await controller.setFlashMode(next ? FlashMode.torch : FlashMode.off);
+      if (!mounted) return;
+      setState(() => _torchOn = next);
+    } catch (_) {
+      // Not all devices/lenses support flash/torch control.
+    }
   }
 
   Future<void> _capture(AppState appState) async {
@@ -689,7 +815,25 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
               ),
             ],
           ),
-          const SizedBox(width: 32),
+          InkWell(
+            onTap: _cameraController?.value.isInitialized == true ? _toggleTorch : null,
+            child: Container(
+              width: 32,
+              height: 32,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: _torchOn
+                    ? AppColors.accentYellowGreen
+                    : Colors.black.withOpacity(0.4),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                _torchOn ? Icons.flash_on : Icons.flash_off,
+                color: _torchOn ? Colors.black : Colors.white,
+                size: 16,
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -745,17 +889,9 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
                     ),
                   ),
                   child: Text(
-                    _liveCornersFound == null
-                        ? 'Position sheet within the frame'
-                        : _readyToCapture
-                        ? 'Ready to scan'
-                        : _liveCornersFound!.every((f) => f)
-                        ? 'Hold steady…'
-                        : _liveCornersFound!.any((f) => f)
-                        ? '${_liveCornersFound!.where((f) => f).length}/4 corner marks locked'
-                        : 'Align all 4 corners inside the frame',
-                    style: const TextStyle(
-                      color: Color(0xFF6EE7B7),
+                    _viewfinderCaption(),
+                    style: TextStyle(
+                      color: _isLowLight ? AppColors.warmRedOrange : const Color(0xFF6EE7B7),
                       fontSize: 10,
                       fontFamily: 'monospace',
                     ),
