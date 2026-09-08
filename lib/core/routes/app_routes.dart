@@ -17,6 +17,7 @@ import '../../features/archive/screens/cloud_archive_screen.dart';
 import '../../features/archive/screens/batch_archive_detail_screen.dart';
 import '../../features/archive/screens/qtm_batch_analytics_screen.dart';
 import '../../features/archive/screens/tat_batch_analytics_screen.dart';
+import '../../features/archive/screens/at_batch_analytics_screen.dart';
 import '../../features/admin/screens/admin_dashboard_screen.dart';
 import '../../features/guidance/screens/exam_management_screen.dart';
 import '../../features/guidance/screens/exam_sheet_preview_screen.dart';
@@ -50,6 +51,7 @@ class AppRoutes {
   static const String batchArchiveDetail = '/batch-archive-detail';
   static const String qtmBatchAnalytics = '/qtm-batch-analytics';
   static const String tatBatchAnalytics = '/tat-batch-analytics';
+  static const String atBatchAnalytics = '/at-batch-analytics';
   static const String adminDashboard = '/admin-dashboard';
   static const String examManagement = '/exam-management';
   static const String examSheetPreview = '/exam-sheet-preview';
@@ -98,6 +100,7 @@ class AppRoutes {
     batchArchiveDetail,
     qtmBatchAnalytics,
     tatBatchAnalytics,
+    atBatchAnalytics,
   };
 
   /// Generates routes for [MaterialApp.onGenerateRoute]. Using this
@@ -188,6 +191,8 @@ class AppRoutes {
         return _slide(QtmBatchAnalyticsScreen(batchId: settings.arguments as String));
       case tatBatchAnalytics:
         return _slide(TatBatchAnalyticsScreen(batchId: settings.arguments as String));
+      case atBatchAnalytics:
+        return _slide(AtBatchAnalyticsScreen(batchId: settings.arguments as String));
       case adminDashboard:
         return _fade(const AdminDashboardScreen());
       case examManagement:
