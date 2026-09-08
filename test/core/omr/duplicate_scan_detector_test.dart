@@ -21,9 +21,9 @@ void main() {
     });
 
     test('tolerates a couple of differing items (decode noise)', () {
-      final a = _sheet(['A', 'B', 'C', 'D', 'A', 'B', 'C', 'D', 'A', 'B']);
-      // One item differs, one flips to blank — well within the 95% band for 10 items? (8/10 = 80%, below threshold)
-      // Use a longer sheet so a couple of differences still clears kDuplicateMatchThreshold.
+      // Use a longer sheet so a couple of differences still clears
+      // kDuplicateMatchThreshold (a short 10-item sheet would drop too far
+      // below 95% from just 2 disagreements).
       final long = List<String?>.generate(40, (i) => ['A', 'B', 'C', 'D'][i % 4]);
       final aLong = _sheet(long);
       final bLong = _sheet([...long]..[3] = 'A'..[7] = null);
