@@ -109,13 +109,16 @@ class AppRoutes {
   ///
   /// [appState] gates every non-public route on both Firebase's own auth
   /// state (`FirebaseAuth.instance.currentUser`) and the Firestore-approved
-  /// [AppState.currentUser] set by a successful login (see
-  /// `AuthService._authorize`). Checking both — not just one — matters:
-  /// Firebase can have a cached session with no corresponding approval in
-  /// this app's state (e.g. a fresh app launch, since there is no session
-  /// restore), and [AppState.currentUser] only ever gets set through a
-  /// login screen that has already passed Firestore authorization. Neither
-  /// signal alone is sufficient; a route is protected only when both hold.
+  /// [AppState.currentUser] set either by a successful login (see
+  /// `AuthService._authorize`) or, on a fresh cold start, by
+  /// `AuthService.restoreSession` (called in `main()`, before `runApp`).
+  /// Checking both — not just one — matters: Firebase can have a cached
+  /// session with no corresponding approval in this app's state (restore
+  /// failed, or hasn't run yet), and [AppState.currentUser] only ever gets
+  /// set through a path that's already passed Firestore authorization.
+  /// Neither signal alone is sufficient; a route is protected only when
+  /// both hold. [_landingScreen] uses this same pair of signals to decide
+  /// what `login` (this app's `initialRoute`) actually shows.
   ///
   /// Beyond that, an approved user's *role* additionally gates
   /// [_adminOnlyRoutes] and [_guidanceOnlyRoutes] against each other — a
@@ -163,8 +166,14 @@ class AppRoutes {
 
     switch (settings.name) {
       case login:
-        // Platform-specific login screen
-        return _fade(PlatformUtils.isWeb ? const AdminLoginScreen() : const MobileLoginScreen());
+        // This is initialRoute (see main.dart's MaterialApp) — the very
+        // first route generated on every cold start, before the guard
+        // above ever runs (login is public). _landingScreen is what
+        // actually makes AuthService.restoreSession visible to the user:
+        // skip straight past the login screen when a session was already
+        // restored, instead of always building the login screen here
+        // regardless of that.
+        return _fade(_landingScreen(appState));
       case mobileLogin:
         return _fade(const MobileLoginScreen());
       case adminLogin:
@@ -214,8 +223,23 @@ class AppRoutes {
       case systemLogs:
         return _fade(const SystemLogsScreen());
       default:
-        return _fade(PlatformUtils.isWeb ? const AdminLoginScreen() : const MobileLoginScreen());
+        return _fade(_landingScreen(appState));
     }
+  }
+
+  /// What `login`/an unrecognized route should actually show: the
+  /// already-approved user's own home screen when one exists (same
+  /// approve + role signals as the guard above), otherwise the
+  /// platform-appropriate login screen. Deliberately not applied to
+  /// [mobileLogin]/[adminLogin] — those are explicit "show me this exact
+  /// platform's login screen" requests, kept unconditional.
+  static Widget _landingScreen(AppState appState) {
+    final approvedUser = appState.currentUser;
+    final isApproved = FirebaseAuth.instance.currentUser != null && approvedUser != null;
+    if (!isApproved) {
+      return PlatformUtils.isWeb ? const AdminLoginScreen() : const MobileLoginScreen();
+    }
+    return approvedUser.role == 'system_admin' ? const AdminDashboardScreen() : const StaffHomeScreen();
   }
 
   static Route<dynamic> _fade(Widget child) {

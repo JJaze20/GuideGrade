@@ -1,10 +1,21 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.CAMERA"/>
     <uses-feature android:name="android.hardware.camera" android:required="true"/>
+    <!-- Required for the BiometricPrompt shown by AppLockGate (local_auth). -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC"/>
     <application
         android:label="guidegrade"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:fullBackupContent="false">
+        <!-- Locally saved batches (lib/core/services/local_batch_repository.dart)
+             hold examinee names/numbers, scores, and photographed answer
+             sheets. allowBackup="false" keeps Android's automatic cloud
+             backup from ever copying that off the device unencrypted,
+             independent of (and in addition to) encrypting the files
+             themselves. fullBackupContent="false" covers the older
+             pre-Android-12 backup path the same way. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"

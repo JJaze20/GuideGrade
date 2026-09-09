@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
@@ -28,23 +29,41 @@ import '../../../core/omr/omr_templates.dart';
 /// [AppState.rectifiedImagePaths]) this falls back to the plain photo with
 /// no overlay, exactly as before.
 class ScannedImageViewerScreen extends StatelessWidget {
-  final String imagePath;
+  /// The original sheet photo, as a file path (an in-session, not-yet
+  /// persisted capture) or already-loaded bytes (an archived scan, whose
+  /// image is decrypted before this screen ever sees it — see
+  /// [BatchRepository.resolveScanImage]). Exactly one must be given.
+  final String? imagePath;
+  final Uint8List? imageBytes;
   final String title;
   final List<ScoredItem> scoredItems;
   final String? rectifiedImagePath;
+  final Uint8List? rectifiedImageBytes;
   final OmrExamTemplate? template;
 
   const ScannedImageViewerScreen({
     super.key,
-    required this.imagePath,
+    this.imagePath,
+    this.imageBytes,
     required this.title,
     required this.scoredItems,
     this.rectifiedImagePath,
+    this.rectifiedImageBytes,
     this.template,
-  });
+  }) : assert(
+          imagePath != null || imageBytes != null,
+          'ScannedImageViewerScreen needs either imagePath or imageBytes.',
+        );
 
   bool get _hasOverlay =>
-      rectifiedImagePath != null && template != null && scoredItems.any((i) => i.correctChoice != null);
+      (rectifiedImagePath != null || rectifiedImageBytes != null) &&
+      template != null &&
+      scoredItems.any((i) => i.correctChoice != null);
+
+  Widget _mainImage() => imageBytes != null ? Image.memory(imageBytes!) : Image.file(File(imagePath!));
+
+  Widget _rectifiedImage() =>
+      rectifiedImageBytes != null ? Image.memory(rectifiedImageBytes!) : Image.file(File(rectifiedImagePath!));
 
   @override
   Widget build(BuildContext context) {
@@ -85,7 +104,7 @@ class ScannedImageViewerScreen extends StatelessWidget {
                   child: _hasOverlay
                       ? Stack(
                           children: [
-                            Image.file(File(rectifiedImagePath!)),
+                            _rectifiedImage(),
                             Positioned.fill(
                               child: CustomPaint(
                                 painter: _GradedOverlayPainter(
@@ -96,7 +115,7 @@ class ScannedImageViewerScreen extends StatelessWidget {
                             ),
                           ],
                         )
-                      : Image.file(File(imagePath)),
+                      : _mainImage(),
                 ),
               ),
             ),

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import '../../models/local_batch.dart';
 import '../../models/omr_scan_result.dart';
@@ -60,11 +61,11 @@ class SyncingBatchRepository implements BatchRepository {
       local.getBatchesByExamCode(examCode);
 
   @override
-  Future<File> resolveScanImage(String batchId, LocalScan scan) =>
+  Future<Uint8List?> resolveScanImage(String batchId, LocalScan scan) =>
       local.resolveScanImage(batchId, scan);
 
   @override
-  Future<File?> resolveScanRectifiedImage(String batchId, LocalScan scan) =>
+  Future<Uint8List?> resolveScanRectifiedImage(String batchId, LocalScan scan) =>
       local.resolveScanRectifiedImage(batchId, scan);
 
   // ---------------------------------------------------------------------------

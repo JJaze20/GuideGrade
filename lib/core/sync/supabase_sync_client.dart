@@ -661,13 +661,17 @@ class SupabaseSyncClient implements SyncClient {
     if (scan == null) return const SyncOutcome.success();
 
     if (variant == 'original') {
-      final file = await batches.resolveScanImage(batchId, scan);
-      if (!file.existsSync()) {
+      // resolveScanImage now hands back already-decrypted bytes (see
+      // LocalBatchRepository's doc comment) rather than a File — the
+      // upload itself is still plaintext bytes over Supabase's own
+      // TLS-protected API, same as before; only the *local* copy is
+      // encrypted at rest.
+      final bytes = await batches.resolveScanImage(batchId, scan);
+      if (bytes == null) {
         // Scan row still exists locally but its bytes are gone — not
         // recoverable, so stop retrying.
         return const SyncOutcome.permanent('local_file_missing');
       }
-      final bytes = await file.readAsBytes();
       return _guardStorage(StorageOp.write, () async {
         await _client.storage.from(storageBucket).uploadBinary(
               originalImageKey(batchId, scanId),
@@ -681,8 +685,8 @@ class SupabaseSyncClient implements SyncClient {
     }
 
     // variant == 'rectified'
-    final rectified = await batches.resolveScanRectifiedImage(batchId, scan);
-    if (rectified == null || !rectified.existsSync()) {
+    final bytes = await batches.resolveScanRectifiedImage(batchId, scan);
+    if (bytes == null) {
       // The local rescan dropped the rectified overlay: make the cloud
       // match by removing any existing object. 404 counts as done.
       return _guardStorage(StorageOp.delete, () async {
@@ -693,7 +697,6 @@ class SupabaseSyncClient implements SyncClient {
         return const SyncOutcome.success();
       });
     }
-    final bytes = await rectified.readAsBytes();
     return _guardStorage(StorageOp.write, () async {
       await _client.storage.from(storageBucket).uploadBinary(
             rectifiedImageKey(batchId, scanId),

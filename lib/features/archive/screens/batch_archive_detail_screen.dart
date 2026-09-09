@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
@@ -8,6 +8,7 @@ import '../../../core/constants/app_text_styles.dart';
 import '../../../core/omr/omr_scorer.dart';
 import '../../../core/omr/omr_templates.dart';
 import '../../../core/routes/app_routes.dart';
+import '../../../core/services/batch_repository.dart';
 import '../../../core/state/app_state.dart';
 import '../../../core/sync/sync_job.dart';
 import '../../../core/sync/sync_manager.dart';
@@ -33,8 +34,6 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
   bool _loading = true;
   bool _syncing = false;
   LocalBatch? _batch;
-  final Map<String, File> _images = {};
-  final Map<String, File> _rectifiedImages = {};
 
   @override
   void didChangeDependencies() {
@@ -44,16 +43,17 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
     _load();
   }
 
+  /// Only fetches the batch's manifest — decoded from `batch.enc` in one
+  /// shot regardless of scan count (see [LocalBatchRepository]), so this
+  /// stays fast even for a batch with hundreds of scans. Deliberately does
+  /// **not** resolve any scan's image here: each is decrypted lazily, only
+  /// when its own card is actually built (see [_ScanThumbnail] and
+  /// [_viewScan]) — resolving every image up front is exactly what would
+  /// turn a large batch into a multi-second stall before this screen could
+  /// show anything.
   Future<void> _load() async {
     final repo = AppStateScope.of(context).batchRepository;
     final batch = await repo.getBatchById(widget.batchId);
-    if (batch != null) {
-      for (final scan in batch.scans) {
-        _images[scan.id] = await repo.resolveScanImage(batch.id, scan);
-        final rectified = await repo.resolveScanRectifiedImage(batch.id, scan);
-        if (rectified != null) _rectifiedImages[scan.id] = rectified;
-      }
-    }
     if (!mounted) return;
     setState(() {
       _batch = batch;
@@ -82,145 +82,150 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
                     child: Text('This batch could not be found.',
                         style: AppTextStyles.body(size: 11, color: AppColors.textGray)),
                   )
-                : ListView(
+                // A real ListView.builder, not an eagerly-built list of
+                // every scan card up front -- for a batch with hundreds of
+                // scans, only the cards actually visible (plus a small
+                // buffer) are ever built, and each card's own thumbnail
+                // decrypt only happens when *that card* is built (see
+                // _ScanThumbnail). Index 0 is the header block; indices
+                // 1..scanCount map to _buildScanCard(i - 1).
+                : ListView.builder(
                     padding: const EdgeInsets.all(16),
-                    children: [
-                      _buildHeader(batch),
-                      const SizedBox(height: 14),
-                      _buildSummary(batch),
-                      if (batch.scans.isNotEmpty && batch.untaggedScanCount > 0) ...[
-                        const SizedBox(height: 8),
-                        Row(
-                          children: [
-                            const FaIcon(FontAwesomeIcons.userClock, size: 10, color: Color(0xFF92400E)),
-                            const SizedBox(width: 6),
-                            Text(
-                              '${batch.untaggedScanCount} of ${batch.scanCount} sheets have no student assigned',
-                              style: AppTextStyles.body(size: 9.5, color: const Color(0xFF92400E), weight: FontWeight.w600),
-                            ),
-                          ],
-                        ),
-                      ],
-                      if (batch.duplicateExamineeNumbers.isNotEmpty) ...[
-                        const SizedBox(height: 6),
-                        Row(
-                          children: [
-                            const FaIcon(FontAwesomeIcons.triangleExclamation, size: 10, color: Color(0xFF991B1B)),
-                            const SizedBox(width: 6),
-                            Expanded(
-                              child: Text(
-                                'Examinee number reused: ${batch.duplicateExamineeNumbers.join(', ')}',
-                                style: AppTextStyles.body(size: 9.5, color: const Color(0xFF991B1B), weight: FontWeight.w600),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                      if (batch.likelyDuplicateScans.isNotEmpty) ...[
-                        const SizedBox(height: 6),
-                        Row(
-                          children: [
-                            const FaIcon(FontAwesomeIcons.clone, size: 10, color: Color(0xFF991B1B)),
-                            const SizedBox(width: 6),
-                            Expanded(
-                              child: Text(
-                                'Possible duplicate sheet${batch.likelyDuplicateScans.length == 1 ? '' : 's'} '
-                                '(same answers scanned twice): '
-                                '${batch.likelyDuplicateScans.map((p) => '${_scanLabel(batch, p.a)} & ${_scanLabel(batch, p.b)}').join(', ')}',
-                                style: AppTextStyles.body(size: 9.5, color: const Color(0xFF991B1B), weight: FontWeight.w600),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                      const SizedBox(height: 12),
-                      _buildSyncToCloudButton(batch, appState),
-                      if (batch.examCode == 'QTM') ...[
-                        const SizedBox(height: 10),
-                        OutlinedButton.icon(
-                          onPressed: () => Navigator.of(context).pushNamed(
-                            AppRoutes.qtmBatchAnalytics,
-                            arguments: batch.id,
-                          ),
-                          icon: const FaIcon(FontAwesomeIcons.chartSimple,
-                              size: 13, color: AppColors.darkNavy),
-                          label: const Text('View QTM Analytics'),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: AppColors.darkNavy,
-                            side: const BorderSide(color: Color(0xFFCBD5E1)),
-                            padding: const EdgeInsets.symmetric(vertical: 11),
-                            minimumSize: const Size.fromHeight(0),
-                            textStyle: const TextStyle(
-                                fontSize: 10.5,
-                                fontWeight: FontWeight.w700,
-                                letterSpacing: 0.3),
-                          ),
-                        ),
-                      ],
-                      if (batch.examCode == 'TAT') ...[
-                        const SizedBox(height: 10),
-                        OutlinedButton.icon(
-                          onPressed: () => Navigator.of(context).pushNamed(
-                            AppRoutes.tatBatchAnalytics,
-                            arguments: batch.id,
-                          ),
-                          icon: const FaIcon(FontAwesomeIcons.chartSimple,
-                              size: 13, color: AppColors.darkNavy),
-                          label: const Text('View TAT Analytics'),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: AppColors.darkNavy,
-                            side: const BorderSide(color: Color(0xFFCBD5E1)),
-                            padding: const EdgeInsets.symmetric(vertical: 11),
-                            minimumSize: const Size.fromHeight(0),
-                            textStyle: const TextStyle(
-                                fontSize: 10.5,
-                                fontWeight: FontWeight.w700,
-                                letterSpacing: 0.3),
-                          ),
-                        ),
-                      ],
-                      if (batch.examCode == 'AT') ...[
-                        const SizedBox(height: 10),
-                        OutlinedButton.icon(
-                          onPressed: () => Navigator.of(context).pushNamed(
-                            AppRoutes.atBatchAnalytics,
-                            arguments: batch.id,
-                          ),
-                          icon: const FaIcon(FontAwesomeIcons.chartSimple,
-                              size: 13, color: AppColors.darkNavy),
-                          label: const Text('View Admission Test Analytics'),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: AppColors.darkNavy,
-                            side: const BorderSide(color: Color(0xFFCBD5E1)),
-                            padding: const EdgeInsets.symmetric(vertical: 11),
-                            minimumSize: const Size.fromHeight(0),
-                            textStyle: const TextStyle(
-                                fontSize: 10.5,
-                                fontWeight: FontWeight.w700,
-                                letterSpacing: 0.3),
-                          ),
-                        ),
-                      ],
-                      const SizedBox(height: 16),
-                      Row(
-                        children: [
-                          const FaIcon(FontAwesomeIcons.images, size: 12, color: AppColors.primaryGreen),
-                          const SizedBox(width: 6),
-                          Text('Scanned Sheets & Results', style: AppTextStyles.heading(size: 12)),
-                        ],
-                      ),
-                      const SizedBox(height: 10),
-                      if (batch.scans.isEmpty)
-                        Text('No scans were saved to this batch.',
-                            style: AppTextStyles.body(size: 10, color: AppColors.textGray))
-                      else
-                        ...List.generate(
-                          batch.scans.length,
-                          (i) => _buildScanCard(batch, i, appState),
-                        ),
-                    ],
+                    itemCount: 1 + batch.scans.length,
+                    itemBuilder: (context, i) {
+                      if (i == 0) return _buildHeaderSection(batch, appState);
+                      return _buildScanCard(batch, i - 1, appState);
+                    },
                   ),
       ),
+    );
+  }
+
+  /// Everything above the per-scan cards: batch info, summary stats,
+  /// warning banners, cloud-sync button, per-exam analytics links, and the
+  /// "Scanned Sheets & Results" section header. Built once, as item 0 of
+  /// the archive's [ListView.builder] (see [build]).
+  Widget _buildHeaderSection(LocalBatch batch, AppState appState) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildHeader(batch),
+        const SizedBox(height: 14),
+        _buildSummary(batch),
+        if (batch.scans.isNotEmpty && batch.untaggedScanCount > 0) ...[
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              const FaIcon(FontAwesomeIcons.userClock, size: 10, color: Color(0xFF92400E)),
+              const SizedBox(width: 6),
+              Text(
+                '${batch.untaggedScanCount} of ${batch.scanCount} sheets have no student assigned',
+                style: AppTextStyles.body(size: 9.5, color: const Color(0xFF92400E), weight: FontWeight.w600),
+              ),
+            ],
+          ),
+        ],
+        if (batch.duplicateExamineeNumbers.isNotEmpty) ...[
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              const FaIcon(FontAwesomeIcons.triangleExclamation, size: 10, color: Color(0xFF991B1B)),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  'Examinee number reused: ${batch.duplicateExamineeNumbers.join(', ')}',
+                  style: AppTextStyles.body(size: 9.5, color: const Color(0xFF991B1B), weight: FontWeight.w600),
+                ),
+              ),
+            ],
+          ),
+        ],
+        if (batch.likelyDuplicateScans.isNotEmpty) ...[
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              const FaIcon(FontAwesomeIcons.clone, size: 10, color: Color(0xFF991B1B)),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  'Possible duplicate sheet${batch.likelyDuplicateScans.length == 1 ? '' : 's'} '
+                  '(same answers scanned twice): '
+                  '${batch.likelyDuplicateScans.map((p) => '${_scanLabel(batch, p.a)} & ${_scanLabel(batch, p.b)}').join(', ')}',
+                  style: AppTextStyles.body(size: 9.5, color: const Color(0xFF991B1B), weight: FontWeight.w600),
+                ),
+              ),
+            ],
+          ),
+        ],
+        const SizedBox(height: 12),
+        _buildSyncToCloudButton(batch, appState),
+        if (batch.examCode == 'QTM') ...[
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            onPressed: () => Navigator.of(context).pushNamed(
+              AppRoutes.qtmBatchAnalytics,
+              arguments: batch.id,
+            ),
+            icon: const FaIcon(FontAwesomeIcons.chartSimple, size: 13, color: AppColors.darkNavy),
+            label: const Text('View QTM Analytics'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppColors.darkNavy,
+              side: const BorderSide(color: Color(0xFFCBD5E1)),
+              padding: const EdgeInsets.symmetric(vertical: 11),
+              minimumSize: const Size.fromHeight(0),
+              textStyle: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, letterSpacing: 0.3),
+            ),
+          ),
+        ],
+        if (batch.examCode == 'TAT') ...[
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            onPressed: () => Navigator.of(context).pushNamed(
+              AppRoutes.tatBatchAnalytics,
+              arguments: batch.id,
+            ),
+            icon: const FaIcon(FontAwesomeIcons.chartSimple, size: 13, color: AppColors.darkNavy),
+            label: const Text('View TAT Analytics'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppColors.darkNavy,
+              side: const BorderSide(color: Color(0xFFCBD5E1)),
+              padding: const EdgeInsets.symmetric(vertical: 11),
+              minimumSize: const Size.fromHeight(0),
+              textStyle: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, letterSpacing: 0.3),
+            ),
+          ),
+        ],
+        if (batch.examCode == 'AT') ...[
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            onPressed: () => Navigator.of(context).pushNamed(
+              AppRoutes.atBatchAnalytics,
+              arguments: batch.id,
+            ),
+            icon: const FaIcon(FontAwesomeIcons.chartSimple, size: 13, color: AppColors.darkNavy),
+            label: const Text('View Admission Test Analytics'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppColors.darkNavy,
+              side: const BorderSide(color: Color(0xFFCBD5E1)),
+              padding: const EdgeInsets.symmetric(vertical: 11),
+              minimumSize: const Size.fromHeight(0),
+              textStyle: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, letterSpacing: 0.3),
+            ),
+          ),
+        ],
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            const FaIcon(FontAwesomeIcons.images, size: 12, color: AppColors.primaryGreen),
+            const SizedBox(width: 6),
+            Text('Scanned Sheets & Results', style: AppTextStyles.heading(size: 12)),
+          ],
+        ),
+        const SizedBox(height: 10),
+        if (batch.scans.isEmpty)
+          Text('No scans were saved to this batch.',
+              style: AppTextStyles.body(size: 10, color: AppColors.textGray)),
+      ],
     );
   }
 
@@ -527,7 +532,6 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
   Widget _buildScanCard(LocalBatch batch, int index, AppState appState) {
     final scan = batch.scans[index];
     final scored = scoreOmrResult(scan.decoded, appState.answerKeys[batch.examCode]);
-    final file = _images[scan.id];
     final result = scan.result;
     final examinee = scan.examinee;
     final tagged = examinee != null && !examinee.isEmpty;
@@ -546,7 +550,12 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _thumbnail(file, scored, index),
+          _ScanThumbnail(
+            key: ValueKey(scan.id),
+            batchId: batch.id,
+            scan: scan,
+            repository: appState.batchRepository,
+          ),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
@@ -609,30 +618,17 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
                         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       ),
                     ),
-                    if (file != null)
-                      TextButton.icon(
-                        onPressed: () => Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => ScannedImageViewerScreen(
-                              imagePath: file.path,
-                              title: tagged
-                                  ? 'Sheet ${index + 1} — ${examinee.displayName}'
-                                  : 'Sheet ${index + 1}',
-                              scoredItems: scored.items,
-                              rectifiedImagePath: _rectifiedImages[scan.id]?.path,
-                              template: omrTemplates[scored.examCode],
-                            ),
-                          ),
-                        ),
-                        icon: const FaIcon(FontAwesomeIcons.magnifyingGlassPlus, size: 11, color: AppColors.primaryGreen),
-                        label: const Text('View Scan', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700)),
-                        style: TextButton.styleFrom(
-                          foregroundColor: AppColors.primaryGreen,
-                          padding: const EdgeInsets.symmetric(horizontal: 4),
-                          minimumSize: Size.zero,
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        ),
+                    TextButton.icon(
+                      onPressed: () => _viewScan(batch, scan, scored, index, tagged, examinee),
+                      icon: const FaIcon(FontAwesomeIcons.magnifyingGlassPlus, size: 11, color: AppColors.primaryGreen),
+                      label: const Text('View Scan', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700)),
+                      style: TextButton.styleFrom(
+                        foregroundColor: AppColors.primaryGreen,
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       ),
+                    ),
                   ],
                 ),
               ],
@@ -643,29 +639,39 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
     );
   }
 
-  Widget _thumbnail(File? file, ScoredResult scored, int index) {
-    Widget placeholder = Container(
-      width: 64,
-      height: 84,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: AppColors.lightBg,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: AppColors.cardBorder),
-      ),
-      child: const FaIcon(FontAwesomeIcons.image, size: 16, color: AppColors.textGray),
-    );
-
-    if (file == null || !file.existsSync()) return placeholder;
-
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(8),
-      child: Image.file(
-        file,
-        width: 64,
-        height: 84,
-        fit: BoxFit.cover,
-        errorBuilder: (_, _, _) => placeholder,
+  /// Opens the full scan viewer for one sheet, decrypting its image(s) on
+  /// demand right here rather than reusing anything [_ScanThumbnail] may
+  /// have already decrypted — a single extra decrypt on a deliberate tap
+  /// is cheap (see [BatchCryptoService]'s doc comment) and keeps this
+  /// screen from having to thread decrypted bytes back out of that widget.
+  Future<void> _viewScan(
+    LocalBatch batch,
+    LocalScan scan,
+    ScoredResult scored,
+    int index,
+    bool tagged,
+    ExamineeInfo? examinee,
+  ) async {
+    final repo = AppStateScope.of(context).batchRepository;
+    final bytes = await repo.resolveScanImage(batch.id, scan);
+    if (!mounted) return;
+    if (bytes == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("This sheet's photo could not be found.")),
+      );
+      return;
+    }
+    final rectifiedBytes = await repo.resolveScanRectifiedImage(batch.id, scan);
+    if (!mounted) return;
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ScannedImageViewerScreen(
+          imageBytes: bytes,
+          title: tagged && examinee != null ? 'Sheet ${index + 1} — ${examinee.displayName}' : 'Sheet ${index + 1}',
+          scoredItems: scored.items,
+          rectifiedImageBytes: rectifiedBytes,
+          template: omrTemplates[scored.examCode],
+        ),
       ),
     );
   }
@@ -680,5 +686,65 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
     final m = d.minute.toString().padLeft(2, '0');
     final ap = d.hour < 12 ? 'AM' : 'PM';
     return '${_months[d.month - 1]} ${d.day}, ${d.year} · $h:$m $ap';
+  }
+}
+
+/// A scan's thumbnail, decrypted lazily — only once *this* card is actually
+/// built (see [BatchArchiveDetailScreen]'s [ListView.builder]), not for
+/// every scan in the batch up front. [_future] is created once in
+/// initializer position (not inline in [build]), so scrolling/rebuilding
+/// this widget while it stays mounted doesn't re-trigger a fresh decrypt —
+/// only actually leaving and re-entering the viewport (a fresh State) does,
+/// which is the same lazy-loading trade-off any large image list makes.
+class _ScanThumbnail extends StatefulWidget {
+  final String batchId;
+  final LocalScan scan;
+  final BatchRepository repository;
+
+  const _ScanThumbnail({
+    super.key,
+    required this.batchId,
+    required this.scan,
+    required this.repository,
+  });
+
+  @override
+  State<_ScanThumbnail> createState() => _ScanThumbnailState();
+}
+
+class _ScanThumbnailState extends State<_ScanThumbnail> {
+  late final Future<Uint8List?> _future = widget.repository.resolveScanImage(widget.batchId, widget.scan);
+
+  static Widget _placeholder() => Container(
+        width: 64,
+        height: 84,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: AppColors.lightBg,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: AppColors.cardBorder),
+        ),
+        child: const FaIcon(FontAwesomeIcons.image, size: 16, color: AppColors.textGray),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<Uint8List?>(
+      future: _future,
+      builder: (context, snapshot) {
+        final bytes = snapshot.data;
+        if (bytes == null) return _placeholder();
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: Image.memory(
+            bytes,
+            width: 64,
+            height: 84,
+            fit: BoxFit.cover,
+            errorBuilder: (_, _, _) => _placeholder(),
+          ),
+        );
+      },
+    );
   }
 }
