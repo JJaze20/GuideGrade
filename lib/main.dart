@@ -11,6 +11,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show Supabase;
 import 'core/constants/app_theme.dart';
 import 'core/routes/app_routes.dart';
+import 'core/services/app_lock_gate.dart';
 import 'core/services/auth_service.dart';
 import 'core/services/batch_repository.dart';
 import 'core/services/local_batch_repository.dart';
@@ -201,6 +202,17 @@ class _GuideGradeAppState extends State<GuideGradeApp> {
         theme: AppTheme.light,
         initialRoute: AppRoutes.login,
         onGenerateRoute: (settings) => AppRoutes.onGenerateRoute(settings, widget.appState),
+        // Device fingerprint/face/PIN gate on every open (cold start or
+        // resumed from background) while signed in -- see AppLockGate's
+        // doc comment. Mobile only: the Web admin console is a different
+        // portal (System Administrator, no confidential exam data) and
+        // device biometrics aren't the right model for a browser tab.
+        builder: PlatformUtils.isWeb
+            ? null
+            : (context, child) => AppLockGate(
+                  appState: widget.appState,
+                  child: child ?? const SizedBox.shrink(),
+                ),
       ),
     );
   }

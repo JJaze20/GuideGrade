@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:guidegrade/core/services/batch_repository.dart';
@@ -95,13 +96,13 @@ class _FakeLocal implements LocalBatchRepository {
   }
 
   @override
-  Future<File> resolveScanImage(String batchId, LocalScan scan) async {
+  Future<Uint8List?> resolveScanImage(String batchId, LocalScan scan) async {
     calls.add('resolveScanImage:$batchId/${scan.id}');
-    return File('fake/${scan.id}.jpg');
+    return Uint8List(0);
   }
 
   @override
-  Future<File?> resolveScanRectifiedImage(String batchId, LocalScan scan) async {
+  Future<Uint8List?> resolveScanRectifiedImage(String batchId, LocalScan scan) async {
     calls.add('resolveScanRectifiedImage:$batchId/${scan.id}');
     return null;
   }

@@ -59,6 +59,19 @@ dependencies:
   # opencv_dart in omr_decoder.dart.
   google_mlkit_text_recognition: ^0.15.0
   connectivity_plus: ^7.3.1
+  # Encrypts locally saved batch data at rest (batch.json + scan images) --
+  # see lib/core/services/batch_crypto_service.dart. flutter_secure_storage
+  # holds the AES key in the Android Keystore / iOS Keychain rather than in
+  # a plain file; cryptography does the actual AES-256-GCM encrypt/decrypt.
+  flutter_secure_storage: ^9.2.2
+  cryptography: ^2.7.0
+  # Re-lock gate (lib/core/services/app_lock_gate.dart) -- device
+  # fingerprint/face/PIN required every time the app is opened, cold start
+  # or resumed from background, while a session is signed in. Entirely
+  # on-device; needs no network, so it doesn't conflict with offline
+  # access. Requires MainActivity to be a FlutterFragmentActivity (see
+  # android/.../MainActivity.kt) -- BiometricPrompt needs a FragmentActivity host.
+  local_auth: ^2.3.0
 
 dev_dependencies:
   flutter_test:

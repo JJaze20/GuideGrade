@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import '../../models/local_batch.dart';
 import '../../models/omr_scan_result.dart';
@@ -124,11 +125,15 @@ abstract class BatchRepository {
     ExamineeInfo? examinee,
   });
 
-  /// Absolute file for a stored scan image, for display.
-  Future<File> resolveScanImage(String batchId, LocalScan scan);
+  /// Decrypted bytes of a stored scan image (see [LocalBatchRepository]'s
+  /// doc comment — every image is encrypted at rest), or null if the file
+  /// is missing on disk. Every scan has an original image in principle, so
+  /// null here means something is actually wrong (deleted out from under
+  /// the app), not a normal "none yet" case.
+  Future<Uint8List?> resolveScanImage(String batchId, LocalScan scan);
 
-  /// Absolute file for [scan]'s perspective-corrected image, or null when
+  /// Decrypted bytes of [scan]'s perspective-corrected image, or null when
   /// none was stored for it (see [LocalScan.rectifiedImageFileName]) or the
   /// file is missing on disk.
-  Future<File?> resolveScanRectifiedImage(String batchId, LocalScan scan);
+  Future<Uint8List?> resolveScanRectifiedImage(String batchId, LocalScan scan);
 }
