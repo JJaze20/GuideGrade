@@ -82,6 +82,11 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
   String? _cameraError;
   bool _isCapturing = false;
 
+  /// Captured in [didChangeDependencies] so [dispose] can still reach it
+  /// once this element is detached (AppStateScope.of(context) isn't safe
+  /// there). Used only to toggle [AppState.scannerActive].
+  AppState? _appState;
+
   /// Whether the active exam's sheet is a landscape page (currently just
   /// TAT — see OmrExamTemplate.pageWidthPt/pageHeightPt). Set once in
   /// [didChangeDependencies] from the exam active when this screen opened,
@@ -213,7 +218,12 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
     // build()/didChangeDependencies() onward — calling it in initState()
     // itself throws, since the widget isn't fully attached to the tree
     // yet at that point.
-    final template = omrTemplates[AppStateScope.of(context).activeExamCode];
+    _appState = AppStateScope.of(context);
+    // Keep AppLockGate out of the scanning flow entirely (see
+    // AppState.scannerActive) — this screen's own lifecycle churn would
+    // otherwise loop its biometric prompt, most visibly on landscape TAT.
+    _appState!.setScannerActive(true);
+    final template = omrTemplates[_appState!.activeExamCode];
     _isLandscapeExam =
         template != null && template.pageWidthPt > template.pageHeightPt;
     // A landscape-page exam (TAT) unlocks landscape device rotation for
@@ -331,6 +341,9 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    // Scanning flow is over -- let AppLockGate resume normal behavior on
+    // the next background/return (see AppState.scannerActive).
+    _appState?.setScannerActive(false);
     // Restore the app-wide portrait lock (see main.dart) that
     // didChangeDependencies loosened for this one landscape-page exam --
     // every other screen is still built for a tall portrait frame, so

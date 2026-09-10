@@ -87,7 +87,12 @@ class _AppLockGateState extends State<AppLockGate> with WidgetsBindingObserver {
       _deviceSupportsLock = supported;
       if (!supported) _locked = false;
     });
-    if (_locked && supported) unawaited(_authenticate());
+    // Never open the prompt while the live scanner is up -- see
+    // AppState.scannerActive. (Reaching that screen already required an
+    // unlocked, interactive app, so nothing's exposed by holding off.)
+    if (_locked && supported && !widget.appState.scannerActive) {
+      unawaited(_authenticate());
+    }
   }
 
   @override
@@ -110,6 +115,14 @@ class _AppLockGateState extends State<AppLockGate> with WidgetsBindingObserver {
     if (_suppressNextResume) {
       _suppressNextResume = false;
       debugPrint('AppLockGate: suppressed a resume caused by the prompt itself closing');
+      return;
+    }
+    // The live scanner screen churns the app lifecycle on its own (camera
+    // teardown/rebuild, and a landscape exam re-applies its orientation on
+    // every resume), firing `resumed` events that aren't real reopens.
+    // Stay out of that flow completely -- see AppState.scannerActive.
+    if (widget.appState.scannerActive) {
+      debugPrint('AppLockGate: scanner active, skipping re-lock');
       return;
     }
     if (widget.appState.currentUser == null) return;

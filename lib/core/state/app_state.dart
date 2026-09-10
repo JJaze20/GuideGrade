@@ -395,6 +395,22 @@ class AppState extends ChangeNotifier {
   LocalBatch? scanBatch;
   String? scanRef;
 
+  /// True only while [ExamScanningScreen] (the live camera screen) is
+  /// mounted. [AppLockGate] reads this to stay out of the scanning flow
+  /// entirely: that screen churns the app lifecycle (camera teardown on
+  /// pause, and for a landscape exam like TAT a fresh
+  /// SystemChrome.setPreferredOrientations on every resume), which fires
+  /// extra `resumed` events the lock gate's "resumed == app reopened"
+  /// heuristic can't tell apart from a real reopen — the result was a
+  /// biometric prompt that re-armed itself in a loop mid-scan. Set by that
+  /// screen's didChangeDependencies / dispose; not persisted, not part of
+  /// any scan session's identity.
+  bool scannerActive = false;
+
+  void setScannerActive(bool value) {
+    scannerActive = value;
+  }
+
   String? get scanBatchId => scanBatch?.id;
   String? get scanBatchCode => scanBatch?.batchCode;
 
