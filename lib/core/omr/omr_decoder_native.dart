@@ -345,6 +345,20 @@ class OmrDecoder {
   /// blur/dilation) and real margin below a circle's 1.0.
   static const double _markerMaxCircularity = 0.88;
 
+  /// TEMPORARY diagnostic switch for fiducial-marker selection. When true,
+  /// [_refineCorners] and [_findMarkerInRegion] print `[OMR FIDUCIAL DEBUG]`
+  /// lines describing every candidate blob, the anchors, and the winners.
+  /// Purely observational — no threshold, filter, or selection decision
+  /// reads this or the extra metrics it logs. Remove once fiducial
+  /// classification is retuned.
+  static const bool _kFiducialDebug = true;
+
+  /// TEMPORARY. Synchronous stdout (not debugPrint, whose throttle can drop
+  /// the tail when the decode isolate tears down) — every line reaches
+  /// logcat as `I/flutter`.
+  // ignore: avoid_print
+  static void _fidLog(String line) => print('[OMR FIDUCIAL DEBUG] $line');
+
   /// Inner sample radius as a fraction of the outer bubble sample radius.
   /// The printed choice letter sits in this center zone; subtracting its
   /// ink contribution from the outer reading isolates pencil marks in the
@@ -1165,10 +1179,46 @@ class OmrDecoder {
     const labels = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
     final pageQuad = _detectPageQuad(gray);
     final quadrants = _quadrantsFor(gray.width, gray.height, pageQuad);
+    // ---- TEMPORARY fiducial-selection instrumentation (diagnostic only) ----
+    if (_kFiducialDebug) {
+      _fidLog(
+        '===== pass on ${gray.width}x${gray.height} image | '
+        'pageQuad=${pageQuad == null ? "null (fallback: literal photo corners)" : pageQuad.map((p) => "(${p.$1.toStringAsFixed(0)},${p.$2.toStringAsFixed(0)})").join(" ")} =====',
+      );
+      for (var i = 0; i < quadrants.length; i++) {
+        final (region, ax, ay) = quadrants[i];
+        _fidLog(
+          'anchor q=${labels[i]} = (${ax.toStringAsFixed(1)},${ay.toStringAsFixed(1)}) '
+          'searchRegion=(${region.x},${region.y},${region.width},${region.height})',
+        );
+      }
+    }
+    // ----------------------------------------------------------------------
     final found = List<cv.Point2f?>.generate(quadrants.length, (i) {
       final (region, anchorX, anchorY) = quadrants[i];
-      return _findMarkerInRegion(gray, region, anchorX, anchorY);
+      return _findMarkerInRegion(
+        gray,
+        region,
+        anchorX,
+        anchorY,
+        debugTag: _kFiducialDebug ? labels[i] : null,
+      );
     });
+    // ---- TEMPORARY: winners + final four corner coordinates ----
+    if (_kFiducialDebug) {
+      for (var i = 0; i < found.length; i++) {
+        final p = found[i];
+        _fidLog(
+          'WINNER  q=${labels[i]} = '
+          '${p == null ? "NOT FOUND" : "(${p.x.toStringAsFixed(1)},${p.y.toStringAsFixed(1)})"}',
+        );
+      }
+      _fidLog(
+        'final corners TL/TR/BL/BR = '
+        '${found.map((p) => p == null ? "null" : "(${p.x.toStringAsFixed(1)},${p.y.toStringAsFixed(1)})").join(" ")}',
+      );
+    }
+    // -----------------------------------------------------------
 
     // All 4 fiducial marks must be found directly — no reconstructing a
     // missing one from the other 3. An earlier version tolerated exactly 1
@@ -1616,8 +1666,9 @@ class OmrDecoder {
     cv.Mat gray,
     cv.Rect region,
     double anchorX,
-    double anchorY,
-  ) {
+    double anchorY, {
+    String? debugTag,
+  }) {
     final roi = gray.region(region);
     try {
       // Brightness measured on this corner's own search ROI, not the whole
@@ -1682,8 +1733,132 @@ class OmrDecoder {
                     for (var ci = 0; ci < contours.length; ci++) {
                       final contour = contours[ci];
                       final area = cv.contourArea(contour);
-                      if (area < 8 || area > imageArea * 0.02) continue;
+                      // ---- metrics ----
+                      // rect / boxArea / longSide / shortSide / perimeter /
+                      // circularity are computed here (ahead of the first
+                      // `continue`) ONLY so the temporary instrumentation
+                      // below can print a uniform row for every candidate.
+                      // cv.boundingRect and cv.arcLength are pure and their
+                      // values are used exactly where they were before; no
+                      // accept/reject condition changed.
                       final rect = cv.boundingRect(contour);
+                      final boxArea = (rect.width * rect.height).toDouble();
+                      final longSide = math.max(rect.width, rect.height);
+                      final shortSide = math.max(
+                        1,
+                        math.min(rect.width, rect.height),
+                      );
+                      final aspect = longSide / shortSide;
+                      final extent = boxArea > 0 ? area / boxArea : 0.0;
+                      final perimeter = cv.arcLength(contour, true);
+                      final circularity = perimeter > 0
+                          ? 4 * math.pi * area / (perimeter * perimeter)
+                          : 0.0;
+
+                      // ---- diagnostic-only extras (never gate anything) ----
+                      var approxVerts = -1;
+                      var rectangularity = -1.0;
+                      var inkDensity = -1.0;
+                      var solidity = -1.0;
+                      if (_kFiducialDebug && debugTag != null && area >= 8) {
+                        try {
+                          final ap =
+                              cv.approxPolyDP(contour, 0.04 * perimeter, true);
+                          try {
+                            approxVerts = ap.length;
+                          } finally {
+                            ap.dispose();
+                          }
+                        } catch (_) {}
+                        try {
+                          final mar = cv.minAreaRect(contour);
+                          try {
+                            final marArea = mar.size.width * mar.size.height;
+                            if (marArea > 0) rectangularity = area / marArea;
+                          } finally {
+                            mar.dispose();
+                          }
+                        } catch (_) {}
+                        try {
+                          final hullMat = cv.convexHull(contour);
+                          try {
+                            final hullVp = cv.VecPoint.fromMat(hullMat);
+                            try {
+                              final hullArea = cv.contourArea(hullVp);
+                              if (hullArea > 0) solidity = area / hullArea;
+                            } finally {
+                              hullVp.dispose();
+                            }
+                          } finally {
+                            hullMat.dispose();
+                          }
+                        } catch (_) {}
+                        try {
+                          final m = cv.Mat.zeros(
+                            rect.height,
+                            rect.width,
+                            cv.MatType.CV_8UC1,
+                          );
+                          try {
+                            cv.drawContours(
+                              m,
+                              contours,
+                              ci,
+                              cv.Scalar.all(255),
+                              thickness: -1,
+                              offset: cv.Point(-rect.x, -rect.y),
+                            );
+                            final srcSlice = dilated.region(rect);
+                            try {
+                              final anded = cv.bitwiseAND(srcSlice, m);
+                              try {
+                                final maskPx = cv.countNonZero(m).toDouble();
+                                final inkPx = cv.countNonZero(anded).toDouble();
+                                if (maskPx > 0) inkDensity = inkPx / maskPx;
+                              } finally {
+                                anded.dispose();
+                              }
+                            } finally {
+                              srcSlice.dispose();
+                            }
+                          } finally {
+                            m.dispose();
+                          }
+                        } catch (_) {}
+                      }
+
+                      double? candContrast;
+                      double? candDistance;
+                      double? candScore;
+                      void logCand(String outcome) {
+                        if (!_kFiducialDebug || debugTag == null) return;
+                        _fidLog(
+                          'q=$debugTag c#$ci '
+                          'bbox=(${rect.x},${rect.y},${rect.width},${rect.height}) '
+                          'w=${rect.width} h=${rect.height} '
+                          'cArea=${area.toStringAsFixed(1)} '
+                          'boxArea=${boxArea.toStringAsFixed(1)} '
+                          'extent=${extent.toStringAsFixed(3)} '
+                          'aspect=${aspect.toStringAsFixed(2)} '
+                          'peri=${perimeter.toStringAsFixed(1)} '
+                          'circ=${circularity.toStringAsFixed(3)} '
+                          'contrast=${candContrast?.toStringAsFixed(1) ?? "-"} '
+                          'dist=${candDistance?.toStringAsFixed(1) ?? "-"} '
+                          'score=${candScore?.toStringAsFixed(3) ?? "-"} | '
+                          'approxV=$approxVerts '
+                          'rectangularity=${rectangularity.toStringAsFixed(3)} '
+                          'inkDensity=${inkDensity.toStringAsFixed(3)} '
+                          'solidity=${solidity.toStringAsFixed(3)} '
+                          '=> $outcome',
+                        );
+                      }
+
+                      if (area < 8 || area > imageArea * 0.02) {
+                        logCand(
+                          'REJECT area_bounds (need 8..${(imageArea * 0.02).toStringAsFixed(0)})',
+                        );
+                        continue;
+                      }
 
                       // Reject blobs that don't actually look like a printed
                       // mark (a clean filled square or thin tick) — this is
@@ -1691,20 +1866,23 @@ class OmrDecoder {
                       // whatever dark clutter happens to sit in this
                       // quadrant when the camera isn't even pointed at a
                       // sheet.
-                      final boxArea = (rect.width * rect.height).toDouble();
-                      if (boxArea <= 0 || area / boxArea < _markerMinFillRatio)
+                      if (boxArea <= 0 || area / boxArea < _markerMinFillRatio) {
+                        logCand('REJECT fill_ratio (extent<$_markerMinFillRatio)');
                         continue;
-                      final longSide = math.max(rect.width, rect.height);
-                      final shortSide = math.max(
-                        1,
-                        math.min(rect.width, rect.height),
-                      );
-                      if (longSide / shortSide > _markerMaxAspect) continue;
+                      }
+                      if (longSide / shortSide > _markerMaxAspect) {
+                        logCand('REJECT aspect (>$_markerMaxAspect)');
+                        continue;
+                      }
 
-                      final perimeter = cv.arcLength(contour, true);
-                      if (perimeter <= 0) continue;
-                      final circularity = 4 * math.pi * area / (perimeter * perimeter);
-                      if (circularity > _markerMaxCircularity) continue;
+                      if (perimeter <= 0) {
+                        logCand('REJECT perimeter<=0');
+                        continue;
+                      }
+                      if (circularity > _markerMaxCircularity) {
+                        logCand('REJECT circularity (>$_markerMaxCircularity)');
+                        continue;
+                      }
 
                       final globalCx = region.x + rect.x + rect.width / 2;
                       final globalCy = region.y + rect.y + rect.height / 2;
@@ -1712,6 +1890,7 @@ class OmrDecoder {
                         math.pow(globalCx - anchorX, 2) +
                             math.pow(globalCy - anchorY, 2),
                       );
+                      candDistance = distance;
 
                       // Contrast is measured against this blob's own local
                       // neighborhood, not one mean for the whole quadrant.
@@ -1759,13 +1938,21 @@ class OmrDecoder {
                         blobRoi.dispose();
                         localRoi.dispose();
                       }
-                      if (contrast < _markerMinContrast) continue;
+                      candContrast = contrast;
+                      if (contrast < _markerMinContrast) {
+                        logCand('REJECT contrast (<$_markerMinContrast)');
+                        continue;
+                      }
 
                       // Prefer blobs close to this quadrant's own photo
                       // corner that are also dark enough to be real
                       // fiducials, not shadow edges.
                       final score =
                           distance / math.max(contrast, _markerMinContrast);
+                      candScore = score;
+                      logCand(
+                        score < bestScore ? 'SCORED (new best)' : 'SCORED',
+                      );
                       if (score < bestScore) {
                         bestScore = score;
                         bestRect = rect;
