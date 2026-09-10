@@ -118,6 +118,123 @@ class OmrDecoder {
   static double _adaptiveThresholdCFor(double base, double meanBrightness) =>
       base * (1 - _darknessFactor(meanBrightness) * 0.5);
 
+  /// How much the perspective-corrected grayscale is downscaled before its
+  /// background-illumination field is estimated (see [_normalizeIllumination]).
+  /// A modest blur on an image this much smaller is a very large-radius blur
+  /// at full resolution — the whole point — at a fraction of the cost, which
+  /// matters when this runs on every scanned page on a phone.
+  static const int _illumDownscaleDiv = 8;
+
+  /// The brightness blank paper is rescaled back toward after the background
+  /// division in [_normalizeIllumination], clamped to this band. Too high and
+  /// a region slightly below its local background clips to pure white (a
+  /// faint mark lost); too low and the whole page drifts toward the
+  /// threshold. The window sits a little under mid-8-bit so there is headroom
+  /// above blank paper for the division to land in.
+  static const double _illumTargetLevelMin = 170;
+  static const double _illumTargetLevelMax = 230;
+
+  /// Large-scale illumination normalization, applied to the perspective-
+  /// corrected grayscale image *after* the warp and *before* CLAHE /
+  /// adaptive thresholding.
+  ///
+  /// A cast shadow, a silhouette, or an uneven LED wash is a
+  /// low-spatial-frequency, roughly multiplicative change: it scales the
+  /// light coming off a broad area of the page, with the fine detail that
+  /// actually matters (printed text, fiducial marks, a shaded bubble)
+  /// riding on top of it. Dividing the image by a heavily-smoothed estimate
+  /// of that background cancels the broad term while leaving the fine
+  /// detail, because a large-radius blur cannot be pulled down much by
+  /// features that are tiny next to its kernel — so after this, a big
+  /// shadow reads mostly as "same paper, same brightness" while text and
+  /// marks stay dark.
+  ///
+  /// The background is estimated cheaply: downscale ~[_illumDownscaleDiv]x,
+  /// Gaussian-blur at that reduced scale, upscale back.
+  ///
+  /// Best-effort and strictly non-destructive. On an empty or non-8-bit
+  /// input, a degenerate background estimate, an implausible result, or any
+  /// OpenCV error it returns [gray] *itself* — so `identical(result, gray)`
+  /// is true, the caller does not double-free, and the pipeline downstream
+  /// is byte-for-byte what it was before whenever normalization could not
+  /// help. Every intermediate Mat allocated here is disposed here; only a
+  /// newly-created return value becomes the caller's to dispose.
+  static cv.Mat _normalizeIllumination(cv.Mat gray) {
+    if (gray.isEmpty || gray.channels != 1) return gray;
+
+    cv.Mat? small;
+    cv.Mat? smallBlurred;
+    cv.Mat? background;
+    cv.Mat? result;
+    var keepResult = false;
+    try {
+      final w = gray.width;
+      final h = gray.height;
+
+      // Never shrink below a floor, or the blur below has no room to erase
+      // page content and the upscale just reproduces the input.
+      final downW = math.max(64, w ~/ _illumDownscaleDiv);
+      final downH = math.max(64, h ~/ _illumDownscaleDiv);
+      small = cv.resize(gray, (downW, downH), interpolation: cv.INTER_AREA);
+
+      // Odd kernel ~1/3 of the downscaled short side: strong enough at this
+      // scale to erase text and whole clusters of bubbles, so only the
+      // lighting field survives into the estimate. Capped so an unusually
+      // large page can't make this needlessly slow.
+      final k = ((math.min(downW, downH) ~/ 3) | 1).clamp(11, 151);
+      smallBlurred = cv.gaussianBlur(small, (k, k), 0);
+
+      background =
+          cv.resize(smallBlurred, (w, h), interpolation: cv.INTER_LINEAR);
+
+      final bgMeanScalar = background.mean();
+      final double bgMean;
+      try {
+        bgMean = bgMeanScalar.val1;
+      } finally {
+        bgMeanScalar.dispose();
+      }
+      // A near-black background estimate would make the division meaningless
+      // (OpenCV maps divide-by-~0 to 0 anyway) — nothing useful to do.
+      if (bgMean < 1.0) return gray;
+
+      final target =
+          bgMean.clamp(_illumTargetLevelMin, _illumTargetLevelMax);
+
+      // Per pixel: saturate_cast<uchar>(target * gray / background). Output
+      // type defaults to the 8-bit input type.
+      result = cv.divide(gray, background, scale: target);
+
+      final (rMeanScalar, rStdScalar) = cv.meanStdDev(result);
+      final double rMean;
+      final double rStd;
+      try {
+        rMean = rMeanScalar.val1;
+        rStd = rStdScalar.val1;
+      } finally {
+        rMeanScalar.dispose();
+        rStdScalar.dispose();
+      }
+      // A good result keeps a mostly-white sheet bright with real spread
+      // (paper vs. ink). If it came out far too dark or bright, or collapsed
+      // toward a single shade, discard it rather than hand the rest of the
+      // pipeline something worse than the raw warp.
+      if (rMean < 30 || rMean > 250 || rStd < 3) {
+        return gray;
+      }
+
+      keepResult = true;
+      return result;
+    } catch (_) {
+      return gray;
+    } finally {
+      small?.dispose();
+      smallBlurred?.dispose();
+      background?.dispose();
+      if (!keepResult) result?.dispose();
+    }
+  }
+
   /// Absolute floor an item's best-filled bubble must clear before it's
   /// even considered for marking, used only as a last-resort sanity check
   /// (see [_readBubbles]) — everything with 3+ choices decides "is
@@ -376,7 +493,21 @@ class OmrDecoder {
               canonicalWidth,
               canonicalHeight,
             ));
+            // Declared out here so the `finally` below can dispose it; it is
+            // assigned as the first statement inside the `try`.
+            cv.Mat? normalizedGray;
             try {
+              // Illumination normalization runs first, on the raw warp:
+              // divide out a large-scale estimate of the lighting/shadow
+              // field so a strong cast shadow or an uneven LED wash reaches
+              // the CLAHE + threshold stages below as a roughly evenly-lit
+              // page, which is what their (fixed and darkness-adaptive)
+              // margins already assume. Best-effort — [_normalizeIllumination]
+              // returns `warped` itself on any failure, so `identical`
+              // short-circuits every use below and the pipeline is unchanged
+              // whenever normalization couldn't help.
+              normalizedGray = _normalizeIllumination(warped);
+
               // A cast shadow (a hand, phone, or object between the light
               // source and the sheet) doesn't just darken the pixels under
               // it — a camera's auto-exposure reacts to a large dark region
@@ -418,6 +549,11 @@ class OmrDecoder {
               // capture goes through this exact same per-exam-tuned path as
               // before; only a measurably dim/shadowed one gets the extra
               // correction.
+              //
+              // Brightness is measured on `warped` (the *un*-normalized warp)
+              // on purpose: the darkness-adaptive scaling keeps its exact
+              // prior trigger behavior, and only the pixels routed *through*
+              // CLAHE/threshold change — those come from `normalizedGray`.
               final warpedMeanScalar = warped.mean();
               double warpedBrightness;
               try {
@@ -439,8 +575,9 @@ class OmrDecoder {
               // blur).
               final darkness = _darknessFactor(warpedBrightness);
               final claheInput = darkness > 0
-                  ? cv.bilateralFilter(warped, 5, 50 * darkness, 50 * darkness)
-                  : warped;
+                  ? cv.bilateralFilter(
+                      normalizedGray, 5, 50 * darkness, 50 * darkness)
+                  : normalizedGray;
               try {
                 final clahe = cv.createCLAHE(
                   clipLimit: _adaptiveClipLimit(_claheClipLimitFor(template.examCode), warpedBrightness),
@@ -479,9 +616,17 @@ class OmrDecoder {
                   clahe.dispose();
                 }
               } finally {
-                if (!identical(claheInput, warped)) claheInput.dispose();
+                if (!identical(claheInput, normalizedGray)) {
+                  claheInput.dispose();
+                }
               }
             } finally {
+              // Only a *new* Mat from _normalizeIllumination is ours to free;
+              // on its bail path it hands back `warped`, disposed just below.
+              if (normalizedGray != null &&
+                  !identical(normalizedGray, warped)) {
+                normalizedGray.dispose();
+              }
               warped.dispose();
             }
           } finally {
@@ -887,15 +1032,28 @@ class OmrDecoder {
                 canonicalWidth,
                 canonicalHeight,
               ));
+              // Declared out here so the `finally` can dispose it.
+              cv.Mat? normalizedDebugGray;
               try {
                 cv.imwrite(
                   '$outputDir/sheet${pageIndex}_warped_gray.jpg',
                   warpedGray,
                 );
+                // Same illumination normalization decode() now applies,
+                // saved as its own stage between warped_gray and clahe so a
+                // shadow's removal is directly visible. When
+                // _normalizeIllumination declines, it hands back `warpedGray`
+                // and this image is simply identical to the previous one.
+                normalizedDebugGray = _normalizeIllumination(warpedGray);
+                cv.imwrite(
+                  '$outputDir/sheet${pageIndex}_normalized.jpg',
+                  normalizedDebugGray,
+                );
                 // Kept identical to the real decode path above (clipLimit,
-                // blur kernel, and now the same brightness-adaptive scaling
-                // too) so this debug output actually reflects what
-                // _readBubbles saw, not a different pipeline.
+                // blur kernel, brightness-adaptive scaling, and now the
+                // illumination normalization too) so this debug output
+                // actually reflects what _readBubbles saw, not a different
+                // pipeline.
                 final warpedGrayMeanScalar = warpedGray.mean();
                 double warpedGrayBrightness;
                 try {
@@ -905,11 +1063,13 @@ class OmrDecoder {
                 }
                 // Same darkness-scaled bilateral pre-filter decode() now
                 // runs — a no-op Mat reference (not a real filter call) at/
-                // above _referenceBrightness.
+                // above _referenceBrightness — over the normalized image,
+                // exactly as decode() does.
                 final grayDarkness = _darknessFactor(warpedGrayBrightness);
                 final grayClaheInput = grayDarkness > 0
-                    ? cv.bilateralFilter(warpedGray, 5, 50 * grayDarkness, 50 * grayDarkness)
-                    : warpedGray;
+                    ? cv.bilateralFilter(normalizedDebugGray, 5,
+                        50 * grayDarkness, 50 * grayDarkness)
+                    : normalizedDebugGray;
                 try {
                   final clahe = cv.createCLAHE(
                     clipLimit: _adaptiveClipLimit(_claheClipLimitFor(template.examCode), warpedGrayBrightness),
@@ -950,9 +1110,17 @@ class OmrDecoder {
                     clahe.dispose();
                   }
                 } finally {
-                  if (!identical(grayClaheInput, warpedGray)) grayClaheInput.dispose();
+                  if (!identical(grayClaheInput, normalizedDebugGray)) {
+                    grayClaheInput.dispose();
+                  }
                 }
               } finally {
+                // Only a *new* Mat from _normalizeIllumination is ours here;
+                // its bail path returns `warpedGray`, disposed just below.
+                if (normalizedDebugGray != null &&
+                    !identical(normalizedDebugGray, warpedGray)) {
+                  normalizedDebugGray.dispose();
+                }
                 warpedGray.dispose();
               }
             } finally {
