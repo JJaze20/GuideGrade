@@ -28,11 +28,13 @@ class _LiveCornersRequest {
   final int width;
   final int height;
   final int bytesPerRow;
+  final OmrExamTemplate template;
   const _LiveCornersRequest(
     this.lumaBytes,
     this.width,
     this.height,
     this.bytesPerRow,
+    this.template,
   );
 }
 
@@ -43,13 +45,23 @@ class _LiveCornersRequest {
 /// directions, ~1/64th of the frame) keeps this cheap enough for that
 /// cadence; a live hint only needs a stable exposure estimate, not every
 /// pixel.
+///
+/// The decoder now returns a per-corner [CornerConfidence] tier rather than
+/// a plain found/not-found bool (see omr_decoder_native.dart's fiducial
+/// squareness scoring), but the live guide UI here hasn't been redesigned
+/// around that tri-state yet — collapsed to today's bool (confident =
+/// found) so the existing bracket/caption behavior is unchanged. The
+/// four-viewfinder tri-state UI is tracked as separate follow-up work.
 ({List<bool> cornersFound, double meanLuma}) _checkLiveCorners(_LiveCornersRequest request) {
-  final found = const OmrDecoder().checkCornersFromLuma(
+  final confidence = const OmrDecoder().checkCornersFromLuma(
     request.lumaBytes,
     request.width,
     request.height,
     request.bytesPerRow,
+    request.template,
   );
+  final found =
+      confidence.map((c) => c == CornerConfidence.confident).toList();
   const stride = 8;
   var sum = 0;
   var count = 0;
@@ -374,6 +386,7 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
             image.width,
             image.height,
             plane.bytesPerRow,
+            template,
           ),
         )
         .then((result) {
