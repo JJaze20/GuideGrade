@@ -46,13 +46,13 @@ class _LiveCornersRequest {
 /// cadence; a live hint only needs a stable exposure estimate, not every
 /// pixel.
 ///
-/// The decoder now returns a per-corner [CornerConfidence] tier rather than
-/// a plain found/not-found bool (see omr_decoder_native.dart's fiducial
-/// squareness scoring), but the live guide UI here hasn't been redesigned
-/// around that tri-state yet — collapsed to today's bool (confident =
-/// found) so the existing bracket/caption behavior is unchanged. The
-/// four-viewfinder tri-state UI is tracked as separate follow-up work.
-({List<bool> cornersFound, double meanLuma}) _checkLiveCorners(_LiveCornersRequest request) {
+/// Each corner's [CornerConfidence] tier comes straight from the decoder's
+/// squareness-scored search (see omr_decoder_native.dart) — none/low/
+/// confident, per corner, independently — so the four on-screen viewfinders
+/// can each show their own state instead of only an aggregate "X/4" count.
+({List<CornerConfidence> cornersFound, double meanLuma}) _checkLiveCorners(
+  _LiveCornersRequest request,
+) {
   final confidence = const OmrDecoder().checkCornersFromLuma(
     request.lumaBytes,
     request.width,
@@ -60,8 +60,6 @@ class _LiveCornersRequest {
     request.bytesPerRow,
     request.template,
   );
-  final found =
-      confidence.map((c) => c == CornerConfidence.confident).toList();
   const stride = 8;
   var sum = 0;
   var count = 0;
@@ -72,7 +70,7 @@ class _LiveCornersRequest {
       count++;
     }
   }
-  return (cornersFound: found, meanLuma: count == 0 ? 255.0 : sum / count);
+  return (cornersFound: confidence, meanLuma: count == 0 ? 255.0 : sum / count);
 }
 
 /// OMR Scanner Loop — mirrors SCREENS.EXAM_SCANNING.
@@ -110,15 +108,17 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
   bool _isLandscapeExam = false;
 
   /// Live, per-corner feedback: null until the first frame check completes,
-  /// then whether each of the 4 corner marks (in
-  /// [OmrExamTemplate.cornerMarkers] order) was found in the most recently
-  /// checked frame. This now also gates capture (see [_readyToCapture]) —
-  /// it isn't purely advisory any more — but the post-capture check in
-  /// [_capture] remains the authoritative gate, since it runs against the
-  /// actual full-resolution captured photo rather than these lower-effort
-  /// preview frames, and a page can still fail it even after this live
-  /// signal read all 4 as found.
-  List<bool>? _liveCornersFound;
+  /// then each of the 4 corner marks' (in [OmrExamTemplate.cornerMarkers]
+  /// order) [CornerConfidence] in the most recently checked frame — this is
+  /// what the four on-screen viewfinders each color themselves from. This
+  /// also gates capture (see [_readyToCapture]) — it isn't purely advisory
+  /// any more — but the post-capture check in [_capture] remains the
+  /// authoritative gate, since it runs the full geometry-aware validation
+  /// (including the Stage-4 rescue) against the actual full-resolution
+  /// captured photo rather than these lower-effort preview frames, and a
+  /// page can still fail it even after this live signal read all 4 as
+  /// confident.
+  List<CornerConfidence>? _liveCornersFound;
   DateTime? _lastFrameCheckAt;
   bool _frameCheckInFlight = false;
 
@@ -144,29 +144,31 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
   /// single throttled frame check — only on entering/leaving low light.
   bool _exposureNudged = false;
 
-  /// When all 4 corners most recently read as found, continuously — set the
-  /// moment they first do, cleared the instant any check comes back with
-  /// fewer than 4. [_readyToCapture] requires this to have held for
-  /// [_requiredStableDuration] before allowing a capture, so a single
-  /// flickery "4/4" frame (a brief glare, a shaky hand) can't by itself
-  /// trigger a scan.
-  DateTime? _all4FoundSince;
+  /// When the live read most recently became "recoverable" (every corner at
+  /// least [CornerConfidence.low] — no corner missing outright), set the
+  /// moment that first held and cleared the instant any corner drops back
+  /// to [CornerConfidence.none]. [_readyToCapture] requires this to have
+  /// held for [_requiredStableDuration] before allowing a capture, so a
+  /// single flickery good frame (a brief glare, a shaky hand) can't by
+  /// itself trigger a scan. Deliberately not "all 4 confident" — a GREEN or
+  /// YELLOW live verdict (see [_liveVerdict]) both allow capture; the
+  /// post-capture pass, which can also recover a genuinely low corner via
+  /// geometry, is what's actually authoritative.
+  DateTime? _captureReadySince;
 
-  /// How long all 4 corners must read as continuously found before capture
-  /// is allowed. Live checks land roughly every 600ms
-  /// ([_onCameraFrame]'s throttle), so this requires at least one
-  /// corroborating re-check beyond the frame that first read 4/4, not just
-  /// that single frame.
+  /// How long the live read must stay recoverable before capture is
+  /// allowed. Live checks land roughly every 600ms ([_onCameraFrame]'s
+  /// throttle), so this requires at least one corroborating re-check beyond
+  /// the frame that first turned recoverable, not just that single frame.
   static const Duration _requiredStableDuration = Duration(milliseconds: 500);
 
-  /// Hard gate on capture: every corner must currently read as found *and*
-  /// have done so continuously for [_requiredStableDuration]. The "Scan
-  /// Next" button is disabled whenever this is false (see [build]), and
-  /// [_capture] re-checks it defensively before ever calling
-  /// `takePicture()` — there should be no path to a capture attempt while
-  /// this is false, let alone to a scan result.
+  /// Hard gate on capture: the live read must currently be recoverable
+  /// (GREEN or YELLOW — see [_liveVerdict]) *and* have stayed that way for
+  /// [_requiredStableDuration]. The "Scan Next" button is disabled whenever
+  /// this is false (see [build]), and [_capture] re-checks it defensively
+  /// before ever calling `takePicture()`. RED never enables capture.
   bool get _readyToCapture {
-    final since = _all4FoundSince;
+    final since = _captureReadySince;
     return since != null &&
         DateTime.now().difference(since) >= _requiredStableDuration;
   }
@@ -179,27 +181,62 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
   bool get _isLowLight =>
       _meanLuma != null && _meanLuma! < _lowLightLumaThreshold && !_torchOn;
 
+  /// Overall live traffic-light read, from the four independent per-corner
+  /// tiers: RED if any corner is missing outright, GREEN only once all four
+  /// are confidently locked, YELLOW for anything recoverable in between
+  /// (matches the four viewfinders' own coloring — see [_PageGuidePainter]).
+  /// Null until the first live check completes.
+  AlignmentVerdict? get _liveVerdict {
+    final found = _liveCornersFound;
+    if (found == null) return null;
+    if (found.any((c) => c == CornerConfidence.none)) return AlignmentVerdict.red;
+    if (found.every((c) => c == CornerConfidence.confident)) {
+      return AlignmentVerdict.green;
+    }
+    return AlignmentVerdict.yellow;
+  }
+
+  static const _cornerNames = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
+
   /// Viewfinder caption text — the low-light hint takes priority over the
   /// usual corner-alignment status when active (see [_isLowLight]).
   String _viewfinderCaption() {
     if (_isLowLight) return 'Low light — tap the flash icon';
-    if (_liveCornersFound == null) return 'Position sheet within the frame';
-    if (_readyToCapture) return 'Ready to scan';
-    if (_liveCornersFound!.every((f) => f)) return 'Hold steady…';
-    if (_liveCornersFound!.any((f) => f)) {
-      return '${_liveCornersFound!.where((f) => f).length}/4 corner marks locked';
+    final found = _liveCornersFound;
+    if (found == null) return 'Align the 4 black corner squares inside the guides';
+    switch (_liveVerdict!) {
+      case AlignmentVerdict.green:
+        return _readyToCapture ? 'Ready to scan' : 'Hold steady…';
+      case AlignmentVerdict.yellow:
+        final worst = found.indexWhere((c) => c != CornerConfidence.confident);
+        final name = worst >= 0 ? _cornerNames[worst] : 'one corner';
+        return 'Corner $name uncertain — adjust if possible, or capture to continue';
+      case AlignmentVerdict.red:
+        final missing = [
+          for (var i = 0; i < found.length; i++)
+            if (found[i] == CornerConfidence.none) _cornerNames[i],
+        ];
+        if (missing.length == 4) {
+          return 'Align the 4 black corner squares inside the guides';
+        }
+        return 'Missing: ${missing.join(', ')}';
     }
-    return 'Align all 4 corners inside the frame';
   }
 
-  /// Neutral until the first live check completes, green once all 4
-  /// anchors are currently found, red otherwise (some or none found).
+  /// Neutral until the first live check completes; otherwise mirrors
+  /// [_liveVerdict] (green/amber/red) — the same tri-state the four
+  /// viewfinders each show individually, given as one at-a-glance cue too.
   Color get _scanWindowBorderColor {
-    final found = _liveCornersFound;
-    if (found == null) return AppColors.accentYellowGreen;
-    return found.every((f) => f)
-        ? AppColors.primaryGreen
-        : AppColors.warmRedOrange;
+    switch (_liveVerdict) {
+      case null:
+        return AppColors.accentYellowGreen;
+      case AlignmentVerdict.green:
+        return AppColors.primaryGreen;
+      case AlignmentVerdict.yellow:
+        return const Color(0xFFF59E0B);
+      case AlignmentVerdict.red:
+        return AppColors.warmRedOrange;
+    }
   }
 
   /// Guards the [didChangeDependencies] setup below to run exactly once —
@@ -320,7 +357,7 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
       await controller.dispose();
       _cameraController = null;
       _liveCornersFound = null;
-      _all4FoundSince = null;
+      _captureReadySince = null;
       _meanLuma = null;
       // Torch/exposure state doesn't survive disposing the controller
       // (hardware-level, tied to the camera session) -- reset so the UI
@@ -395,10 +432,12 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
           setState(() {
             _liveCornersFound = result.cornersFound;
             _meanLuma = result.meanLuma;
-            if (result.cornersFound.every((f) => f)) {
-              _all4FoundSince ??= now;
+            final recoverable =
+                !result.cornersFound.any((c) => c == CornerConfidence.none);
+            if (recoverable) {
+              _captureReadySince ??= now;
             } else {
-              _all4FoundSince = null;
+              _captureReadySince = null;
             }
           });
           unawaited(_maybeNudgeExposure(result.meanLuma));
@@ -1266,15 +1305,23 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
   }
 }
 
-/// Draws a dimmed spotlight sized to match the real proportions of the
-/// rectangle spanned by the sheet's 4 fiducial marks (not the full page —
-/// see [markerAspectRatio]), a visible outline on that rectangle so it
-/// reads as a target even against a busy background, and one L-shaped
-/// bracket per corner — colored individually from [cornersFound] — so the
-/// user can see exactly *which* corner still needs adjusting instead of
-/// only an aggregate "X/4" count. The scan window's own overall border
-/// color (see [_ExamScanningScreenState._scanWindowBorderColor]) still
-/// gives an at-a-glance all-4 cue; this adds the specific, per-corner one.
+/// Draws the overall sheet-alignment frame (a dimmed spotlight sized to the
+/// real proportions of the rectangle spanned by the sheet's 4 fiducial
+/// marks — see [markerAspectRatio] — plus a visible outline on it, for
+/// general "the sheet goes here" positioning) **and**, separately, four
+/// ZipGrade-style fiducial viewfinder boxes, one per printed black corner
+/// square. The four boxes are the primary guide for *precise* fiducial
+/// placement — always visible, before any detection happens, each colored
+/// independently from its own [cornersFound] tier (gray/red/amber/green) —
+/// so a "3/4 corner marks locked" status is immediately traceable to
+/// exactly which corner is the problem, not just a count.
+///
+/// The boxes are a visual guide and a live-search prior only — see
+/// omr_decoder_native.dart's Stage-1/Stage-2 search — never a hard crop:
+/// the full-resolution post-capture pass (and, on a Stage-1 miss, the live
+/// search itself) always falls through to searching the whole photo
+/// quadrant, so a sheet photographed at an angle with a marker outside its
+/// box still gets found and still validates.
 class _PageGuidePainter extends CustomPainter {
   const _PageGuidePainter(
     this.cornerFractions,
@@ -1293,12 +1340,22 @@ class _PageGuidePainter extends CustomPainter {
 
   /// Live per-corner detection state, same order as [cornerFractions].
   /// Null until the first live check completes, in which case every
-  /// bracket draws neutral.
-  final List<bool>? cornersFound;
+  /// viewfinder draws neutral (still visible — it's the placement guide).
+  final List<CornerConfidence>? cornersFound;
 
   static const double _insetFraction = 0.06;
-  static const double _bracketArmLength = 26;
-  static const double _bracketStrokeWidth = 4;
+
+  /// Viewfinder box size, as a fraction of the overall guide rectangle's
+  /// shorter side, clamped to a sensible on-screen pixel range so it reads
+  /// clearly on both a small phone and a tablet.
+  static const double _boxSizeFraction = 0.17;
+  static const double _boxMinSize = 46;
+  static const double _boxMaxSize = 92;
+  static const double _boxStrokeWidth = 3;
+  static const double _boxCornerRadius = 12;
+
+  static const Color _neutralColor = Colors.white;
+  static const Color _lowColor = Color(0xFFF59E0B); // amber
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -1323,10 +1380,9 @@ class _PageGuidePainter extends CustomPainter {
     );
     canvas.drawPath(dimPath, Paint()..color = Colors.black.withOpacity(0.55));
 
-    // A visible outline on the target rectangle itself — dimming alone
-    // reads as ambiguous against a busy background, this is what makes
-    // "the sheet goes exactly here" legible on its own, before any frame
-    // has even been checked.
+    // A visible outline on the overall target rectangle — general "the
+    // sheet goes here" positioning. Not a replacement for the four
+    // fiducial viewfinders below; both are shown together.
     canvas.drawRect(
       guideRect,
       Paint()
@@ -1335,16 +1391,20 @@ class _PageGuidePainter extends CustomPainter {
         ..strokeWidth = 1.5,
     );
 
-    // One bracket per corner, positioned by normalizing each marker's page
-    // fraction against the 4 markers' own bounding box — the same
+    // Four fiducial viewfinders, positioned by normalizing each marker's
+    // page fraction against the 4 markers' own bounding box — the same
     // normalization that gives markerAspectRatio its value (see the
-    // caller in build()) — so a bracket lands exactly on that marker's
-    // real position within guideRect for any exam's layout, not just a
-    // generic corner of the box.
+    // caller in build()) — so a box lands exactly on that marker's real
+    // expected position within guideRect for any exam's layout, tolerant
+    // of the sheet being rotated/keystoned since this is only ever a
+    // *prior*, not a crop (see the class doc comment).
     final minX = cornerFractions.map((c) => c.$1).reduce(math.min);
     final maxX = cornerFractions.map((c) => c.$1).reduce(math.max);
     final minY = cornerFractions.map((c) => c.$2).reduce(math.min);
     final maxY = cornerFractions.map((c) => c.$2).reduce(math.max);
+    final boxSize = (guideRect.shortestSide * _boxSizeFraction)
+        .clamp(_boxMinSize, _boxMaxSize)
+        .toDouble();
 
     for (var i = 0; i < cornerFractions.length; i++) {
       final (xFrac, yFrac) = cornerFractions[i];
@@ -1353,44 +1413,40 @@ class _PageGuidePainter extends CustomPainter {
       final point =
           guideRect.topLeft +
           Offset(localX * guideRect.width, localY * guideRect.height);
-      final found = cornersFound != null && i < cornersFound!.length
+      final tier = cornersFound != null && i < cornersFound!.length
           ? cornersFound![i]
           : null;
-      final color = found == null
-          ? Colors.white.withOpacity(0.85)
-          : found
-          ? AppColors.primaryGreen
-          : AppColors.warmRedOrange;
-      _drawBracket(
-        canvas,
-        point,
-        towardRight: localX < 0.5,
-        towardBottom: localY < 0.5,
-        color: color,
-      );
+      final color = switch (tier) {
+        null => _neutralColor,
+        CornerConfidence.none => AppColors.warmRedOrange,
+        CornerConfidence.low => _lowColor,
+        CornerConfidence.confident => AppColors.primaryGreen,
+      };
+      _drawViewfinderBox(canvas, point, boxSize, color);
     }
   }
 
-  /// Draws one L-shaped bracket at [point], arms extending toward the
-  /// guide rectangle's interior — [towardRight]/[towardBottom] say which
-  /// direction that is for this particular corner (e.g. the top-left
-  /// corner's arms extend right and down).
-  void _drawBracket(
+  /// Draws one rounded-square fiducial viewfinder centered on [point] —
+  /// a light fill "zone" wash plus a stroked border in [color], always
+  /// visible so it can guide placement before any marker has been found.
+  void _drawViewfinderBox(
     Canvas canvas,
-    Offset point, {
-    required bool towardRight,
-    required bool towardBottom,
-    required Color color,
-  }) {
-    final dx = towardRight ? _bracketArmLength : -_bracketArmLength;
-    final dy = towardBottom ? _bracketArmLength : -_bracketArmLength;
-    final paint = Paint()
-      ..color = color
-      ..strokeWidth = _bracketStrokeWidth
-      ..strokeCap = StrokeCap.round
-      ..style = PaintingStyle.stroke;
-    canvas.drawLine(point, point + Offset(dx, 0), paint);
-    canvas.drawLine(point, point + Offset(0, dy), paint);
+    Offset point,
+    double boxSize,
+    Color color,
+  ) {
+    final rrect = RRect.fromRectAndRadius(
+      Rect.fromCenter(center: point, width: boxSize, height: boxSize),
+      const Radius.circular(_boxCornerRadius),
+    );
+    canvas.drawRRect(rrect, Paint()..color = color.withOpacity(0.12));
+    canvas.drawRRect(
+      rrect,
+      Paint()
+        ..color = color.withOpacity(0.95)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = _boxStrokeWidth,
+    );
   }
 
   @override
