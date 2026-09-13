@@ -417,16 +417,44 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
         (c) => c.lensDirection == CameraLensDirection.back,
         orElse: () => cameras.first,
       );
-      controller = CameraController(
-        backCamera,
-        // veryHigh (1080p, ~2MP) over the previous `high` (720p, ~0.92MP) —
-        // a page with 72 small bubble rows needs real resolution to read
-        // reliably; 720p was giving the decoder noticeably fewer pixels
-        // per bubble than the phone's actual camera is capable of.
+      // veryHigh (1080p, ~2MP) over the previous `high` (720p, ~0.92MP) —
+      // a page with 72 small bubble rows needs real resolution to read
+      // reliably; 720p was giving the decoder noticeably fewer pixels
+      // per bubble than the phone's actual camera is capable of. Some
+      // devices' camera2 hardware level can't bind a preview+capture
+      // surface combination at that size though (CameraX throws
+      // "IllegalArgumentException: No supported surface combination" —
+      // confirmed on a real device), so step down through lower presets
+      // rather than failing the whole scan screen outright.
+      const presets = [
         ResolutionPreset.veryHigh,
-        enableAudio: false,
-      );
-      await controller.initialize();
+        ResolutionPreset.high,
+        ResolutionPreset.medium,
+      ];
+      Object? initError;
+      for (final preset in presets) {
+        final candidate = CameraController(
+          backCamera,
+          preset,
+          enableAudio: false,
+        );
+        try {
+          await candidate.initialize();
+          controller = candidate;
+          initError = null;
+          break;
+        } catch (e) {
+          initError = e;
+          await _disposeOrphanedController(candidate);
+        }
+        if (!mounted || myGen != _cameraGeneration) return;
+      }
+      if (controller == null) {
+        // Every preset failed — rethrow the last (most representative)
+        // error so the existing CameraException/catch-all handlers below
+        // format and surface it the same way as before this fallback loop.
+        throw initError!;
+      }
       if (!mounted || myGen != _cameraGeneration) {
         // Superseded (a newer generation's setup or a teardown started)
         // while this controller was mid-initialize — never adopt it, and
