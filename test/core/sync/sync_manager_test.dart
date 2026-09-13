@@ -113,6 +113,28 @@ class _FakeSyncClient implements SyncClient {
   }
 
   @override
+  Future<CloudBatchesRead> readCloudBatches() async {
+    calls.add('readCloudBatches');
+    return CloudBatchesRead.found(const []);
+  }
+
+  @override
+  Future<CloudScansRead> readCloudScans(String batchId) async {
+    calls.add('readCloudScans:$batchId');
+    return CloudScansRead.found(const []);
+  }
+
+  @override
+  Future<CloudImageRead> downloadScanImage({
+    required String batchId,
+    required String scanId,
+    required bool rectified,
+  }) async {
+    calls.add('downloadScanImage:$batchId/$scanId/$rectified');
+    return const CloudImageRead.absent();
+  }
+
+  @override
   Future<SyncOutcome> deleteBatch(String batchId) =>
       _run('deleteBatch:$batchId');
 

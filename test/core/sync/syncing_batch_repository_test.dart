@@ -192,6 +192,43 @@ class _FakeLocal implements LocalBatchRepository {
     _maybeThrow('setScanExaminee');
     return batchResult;
   }
+
+  @override
+  Future<LocalBatch> upsertBatchFromCloud(LocalBatch batch) async {
+    calls.add('upsertBatchFromCloud:${batch.id}');
+    _maybeThrow('upsertBatchFromCloud');
+    return batchResult;
+  }
+
+  @override
+  Future<LocalBatch> upsertScanFromCloud({
+    required String batchId,
+    required LocalScan scan,
+  }) async {
+    calls.add('upsertScanFromCloud:$batchId/${scan.id}');
+    _maybeThrow('upsertScanFromCloud');
+    return batchResult;
+  }
+
+  @override
+  Future<void> writeRestoredScanImage({
+    required String batchId,
+    required String scanId,
+    required Uint8List bytes,
+  }) async {
+    calls.add('writeRestoredScanImage:$batchId/$scanId');
+    _maybeThrow('writeRestoredScanImage');
+  }
+
+  @override
+  Future<void> writeRestoredScanRectifiedImage({
+    required String batchId,
+    required String scanId,
+    required Uint8List bytes,
+  }) async {
+    calls.add('writeRestoredScanRectifiedImage:$batchId/$scanId');
+    _maybeThrow('writeRestoredScanRectifiedImage');
+  }
 }
 
 /// A [SyncClient] that must never be called by the repository.
@@ -221,6 +258,28 @@ class _NeverSyncClient implements SyncClient {
   @override
   Future<CloudAnswerKeyRead> readAnswerKey(String examCode) async {
     calls.add('readAnswerKey');
+    throw StateError('SyncingBatchRepository must not call the network client');
+  }
+
+  @override
+  Future<CloudBatchesRead> readCloudBatches() async {
+    calls.add('readCloudBatches');
+    throw StateError('SyncingBatchRepository must not call the network client');
+  }
+
+  @override
+  Future<CloudScansRead> readCloudScans(String batchId) async {
+    calls.add('readCloudScans');
+    throw StateError('SyncingBatchRepository must not call the network client');
+  }
+
+  @override
+  Future<CloudImageRead> downloadScanImage({
+    required String batchId,
+    required String scanId,
+    required bool rectified,
+  }) async {
+    calls.add('downloadScanImage');
     throw StateError('SyncingBatchRepository must not call the network client');
   }
 

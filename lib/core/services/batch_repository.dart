@@ -136,4 +136,53 @@ abstract class BatchRepository {
   /// none was stored for it (see [LocalScan.rectifiedImageFileName]) or the
   /// file is missing on disk.
   Future<Uint8List?> resolveScanRectifiedImage(String batchId, LocalScan scan);
+
+  /// Cloud-restore only — never called by the scan/create/edit flows.
+  ///
+  /// Creates the local batch at [batch.id] if none exists yet. Otherwise
+  /// merges only its mutable metadata (batchCode / examTitle / description /
+  /// expectedCount / status) into the existing local batch, and only when
+  /// [batch.updatedAt] is strictly newer than what's already stored —
+  /// audit fields (createdByUid / createdByName / createdAt) and
+  /// [LocalBatch.scans] are never touched by this call. See
+  /// [upsertScanFromCloud] for scans. Returns the resulting stored batch.
+  Future<LocalBatch> upsertBatchFromCloud(LocalBatch batch);
+
+  /// Cloud-restore only — never called by the scan/create/edit flows.
+  ///
+  /// Appends [scan] to [batchId] if no local scan with [scan.id] already
+  /// exists. Otherwise a no-op that leaves the existing local scan
+  /// completely untouched — v1 cloud restoration never merges or
+  /// overwrites a scan that's already stored locally, regardless of which
+  /// is newer. Throws [StateError] if [batchId] itself doesn't exist
+  /// locally yet (call [upsertBatchFromCloud] first). Returns the
+  /// resulting stored batch.
+  Future<LocalBatch> upsertScanFromCloud({
+    required String batchId,
+    required LocalScan scan,
+  });
+
+  /// Cloud-restore only — never called by the scan/capture flow.
+  ///
+  /// Encrypts [bytes] via the same crypto service every other image write
+  /// already uses, then writes them to the exact deterministic local path
+  /// [resolveScanImage] already looks for (`images/<scanId>.enc`) — so a
+  /// restored image is indistinguishable from a captured one at read time.
+  /// [resolveScanImage]/[resolveScanRectifiedImage] are never modified by
+  /// this feature; callers that get `null` from them should call this (or
+  /// [writeRestoredScanRectifiedImage]) via `CloudRestoreService.
+  /// restoreImageIfMissing`, then resolve again.
+  Future<void> writeRestoredScanImage({
+    required String batchId,
+    required String scanId,
+    required Uint8List bytes,
+  });
+
+  /// Cloud-restore only. Same as [writeRestoredScanImage], for the
+  /// perspective-corrected overlay copy (`images/<scanId>_rectified.enc`).
+  Future<void> writeRestoredScanRectifiedImage({
+    required String batchId,
+    required String scanId,
+    required Uint8List bytes,
+  });
 }

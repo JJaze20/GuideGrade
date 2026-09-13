@@ -69,6 +69,40 @@ class SyncingBatchRepository implements BatchRepository {
       local.resolveScanRectifiedImage(batchId, scan);
 
   // ---------------------------------------------------------------------------
+  // B2. Cloud restore -- pure delegation, same as the reads above: no
+  // SyncJob is enqueued. This data just came FROM Supabase, so pushing it
+  // straight back would be a pointless round trip (and could race a
+  // concurrent edit) -- see CloudRestoreService, the only caller.
+  // ---------------------------------------------------------------------------
+
+  @override
+  Future<LocalBatch> upsertBatchFromCloud(LocalBatch batch) =>
+      local.upsertBatchFromCloud(batch);
+
+  @override
+  Future<LocalBatch> upsertScanFromCloud({
+    required String batchId,
+    required LocalScan scan,
+  }) =>
+      local.upsertScanFromCloud(batchId: batchId, scan: scan);
+
+  @override
+  Future<void> writeRestoredScanImage({
+    required String batchId,
+    required String scanId,
+    required Uint8List bytes,
+  }) =>
+      local.writeRestoredScanImage(batchId: batchId, scanId: scanId, bytes: bytes);
+
+  @override
+  Future<void> writeRestoredScanRectifiedImage({
+    required String batchId,
+    required String scanId,
+    required Uint8List bytes,
+  }) =>
+      local.writeRestoredScanRectifiedImage(batchId: batchId, scanId: scanId, bytes: bytes);
+
+  // ---------------------------------------------------------------------------
   // C. createBatch
   // ---------------------------------------------------------------------------
 

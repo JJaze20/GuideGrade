@@ -13,10 +13,12 @@ import 'core/constants/app_theme.dart';
 import 'core/routes/app_routes.dart';
 import 'core/services/app_lock_gate.dart';
 import 'core/services/auth_service.dart';
+
 import 'core/services/batch_repository.dart';
 import 'core/services/local_batch_repository.dart';
 import 'core/services/local_storage_service.dart';
 import 'core/state/app_state.dart';
+import 'core/sync/cloud_restore_service.dart';
 import 'core/sync/supabase_sync_client.dart';
 import 'core/sync/sync_manager.dart';
 import 'core/sync/sync_queue.dart';
@@ -93,6 +95,7 @@ Future<void> main() async {
   final localBatchRepository = LocalBatchRepository();
   BatchRepository appBatchRepository = localBatchRepository;
   SyncManager? syncManager;
+  CloudRestoreService? cloudRestoreService;
 
   if (supabaseReady) {
     final syncQueue = SyncQueue();
@@ -115,9 +118,22 @@ Future<void> main() async {
       print('Sync queue restore error: ${e.runtimeType}');
     }
     syncManager = manager;
-    appBatchRepository = SyncingBatchRepository(
+    final syncingRepository = SyncingBatchRepository(
       local: localBatchRepository,
       syncManager: manager,
+    );
+    appBatchRepository = syncingRepository;
+    // Cloud retrieval (additive to the push pipeline above): reuses the
+    // SAME SupabaseSyncClient instance (via manager.client) and the SAME
+    // SyncQueue, so restored data's SyncState bookkeeping is visible to
+    // this one SyncManager. v1 is manually triggered only -- see
+    // CloudArchiveScreen's "Restore from Cloud" action; nothing here calls
+    // restoreAll() automatically.
+    cloudRestoreService = CloudRestoreService(
+      client: manager.client,
+      repository: syncingRepository,
+      syncQueue: syncQueue,
+      loadAnswerKeys: localStorage.loadAnswerKeys,
     );
   } else {
     print('Sync infrastructure skipped (Supabase not configured)');
@@ -126,6 +142,7 @@ Future<void> main() async {
   final appState = AppState(
     batchRepository: appBatchRepository,
     syncManager: syncManager,
+    cloudRestoreService: cloudRestoreService,
     // Automatic offline -> online sync: AppState subscribes to this only
     // when a SyncManager exists, and on a disconnected -> connected edge
     // asks it to drain the existing queue (SyncManager.syncNow).
@@ -145,6 +162,7 @@ Future<void> main() async {
     final restored = await AuthService().restoreSession();
     if (restored != null) appState.setCurrentUser(restored);
   } catch (e) {
+
     print('Session restore failed: $e');
   }
 
