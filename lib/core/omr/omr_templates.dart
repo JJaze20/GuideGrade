@@ -3,6 +3,16 @@
 // page size varies per exam (see each OmrExamTemplate's pageWidthPt/
 // pageHeightPt), matching the printed PDFs in /answer_sheets.
 // Regenerate with: cd tool && dart run generate_sheets.dart
+//
+// EXCEPTION (2026-09-13): all four exams' lastNameFieldRect/
+// firstNameFieldRect were hand-patched to match generate_sheets.dart's new
+// _labelClearancePt/clipLabel logic, computed from standard Helvetica AFM
+// glyph widths by hand rather than by actually running the generator —
+// `dart run` can't complete in this environment (dartcv4's native-asset
+// build hook fails with no CMake/MSVC toolchain on PATH, unrelated to this
+// script but triggered for any `dart run` in this package). Re-running the
+// generator once that's possible should reproduce the same numbers; if it
+// doesn't, trust the generator's output over this hand computation.
 
 class BubblePos {
   final String choice;
@@ -80,8 +90,8 @@ final OmrExamTemplate _omrPT = OmrExamTemplate(
   bubbleRadiusPt: 6.0,
   bubbleRadiusYPt: 6.0,
   cornerMarkers: const [OmrCorner(0.04032, 0.02851), OmrCorner(0.94745, 0.02851), OmrCorner(0.04032, 0.76138), OmrCorner(0.94745, 0.76138)],
-  lastNameFieldRect: const OmrFieldRect(0.07391, 0.10690, 0.20159, 0.04039),
-  firstNameFieldRect: const OmrFieldRect(0.27550, 0.10690, 0.18479, 0.04039),
+  lastNameFieldRect: const OmrFieldRect(0.15328, 0.10690, 0.12224, 0.04039),
+  firstNameFieldRect: const OmrFieldRect(0.35480, 0.10690, 0.10545, 0.04039),
   middleInitialFieldRect: const OmrFieldRect(0.46029, 0.10690, 0.06720, 0.04039),
   sections: const [
     OmrSection(
@@ -285,8 +295,8 @@ final OmrExamTemplate _omrTAT = OmrExamTemplate(
   bubbleRadiusPt: 8.0,
   bubbleRadiusYPt: 6.4,
   cornerMarkers: const [OmrCorner(0.02564, 0.03922), OmrCorner(0.91880, 0.03922), OmrCorner(0.02564, 0.90196), OmrCorner(0.91880, 0.90196)],
-  lastNameFieldRect: const OmrFieldRect(0.04701, 0.13889, 0.29808, 0.02451),
-  firstNameFieldRect: const OmrFieldRect(0.34509, 0.13889, 0.26496, 0.02451),
+  lastNameFieldRect: const OmrFieldRect(0.09748, 0.13889, 0.24760, 0.02451),
+  firstNameFieldRect: const OmrFieldRect(0.39555, 0.13889, 0.21451, 0.02451),
   middleInitialFieldRect: const OmrFieldRect(0.61004, 0.13889, 0.09936, 0.02451),
   sections: const [
     OmrSection(
@@ -447,8 +457,8 @@ final OmrExamTemplate _omrQTM = OmrExamTemplate(
   bubbleRadiusPt: 8.0,
   bubbleRadiusYPt: 6.4,
   cornerMarkers: const [OmrCorner(0.03922, 0.02564), OmrCorner(0.94118, 0.02564), OmrCorner(0.03922, 0.93803), OmrCorner(0.94118, 0.93803)],
-  lastNameFieldRect: const OmrFieldRect(0.07190, 0.10256, 0.37647, 0.02350),
-  firstNameFieldRect: const OmrFieldRect(0.44837, 0.10256, 0.33464, 0.02350),
+  lastNameFieldRect: const OmrFieldRect(0.14903, 0.10256, 0.29928, 0.02350),
+  firstNameFieldRect: const OmrFieldRect(0.52554, 0.10256, 0.25746, 0.02350),
   middleInitialFieldRect: const OmrFieldRect(0.78301, 0.10256, 0.12549, 0.02350),
   sections: const [
     OmrSection(
@@ -527,8 +537,8 @@ final OmrExamTemplate _omrAT = OmrExamTemplate(
   bubbleRadiusPt: 8.0,
   bubbleRadiusYPt: 8.0,
   cornerMarkers: const [OmrCorner(0.04032, 0.02851), OmrCorner(0.86682, 0.02851), OmrCorner(0.04032, 0.98706), OmrCorner(0.86682, 0.98706)],
-  lastNameFieldRect: const OmrFieldRect(0.07391, 0.10690, 0.18223, 0.04039),
-  firstNameFieldRect: const OmrFieldRect(0.25615, 0.10690, 0.16705, 0.04039),
+  lastNameFieldRect: const OmrFieldRect(0.15328, 0.10690, 0.10289, 0.04039),
+  firstNameFieldRect: const OmrFieldRect(0.33546, 0.10690, 0.08772, 0.04039),
   middleInitialFieldRect: const OmrFieldRect(0.42320, 0.10690, 0.06074, 0.04039),
   sections: const [
     OmrSection(

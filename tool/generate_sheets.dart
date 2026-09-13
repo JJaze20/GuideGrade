@@ -1378,7 +1378,16 @@ class OmrExamTemplate {
 
 String _formatFrac(double v) => v.toStringAsFixed(5);
 
-String _emitTemplate(ExamLayout layout) {
+/// Same font/size/left-padding _paintSimpleHeader/_paintNdmuHeader draw the
+/// printed column caption at (`colX + 3`, size 8, [regular]) — used here to
+/// carve that exact caption's ink out of the OCR crop rect below, rather
+/// than relying solely on [cleanNameOcrText]'s after-the-fact text stripping
+/// to recognize and remove it. `+6` is slack beyond the caption's measured
+/// advance width (antialiasing/kerning fuzz at the glyph edge), not a
+/// second attempt to re-derive the caption's width.
+double _labelClearancePt(PdfFont regular, String label) => 3 + (regular.stringMetrics(label) * 8).advanceWidth + 6;
+
+String _emitTemplate(ExamLayout layout, PdfFont regular) {
   final exam = layout.exam;
   final varName = '_omr${exam.code}';
   final corners = _cornerMarkers(layout);
@@ -1387,6 +1396,19 @@ String _emitTemplate(ExamLayout layout) {
   String fieldRectDart(_FieldBox box) =>
       'OmrFieldRect(${_formatFrac(box.x / exam.pageWidthPt)}, ${_formatFrac(box.y / exam.pageHeightPt)}, '
       '${_formatFrac(box.width / exam.pageWidthPt)}, ${_formatFrac(box.height / exam.pageHeightPt)})';
+  // Last Name / First Name have long enough printed captions ("Last Name",
+  // "First Name") that OCR sometimes recognized them as the answer itself
+  // (see cleanNameOcrText's edit-distance fallback) — narrow the crop rect
+  // these two use to start right after the caption's own ink, so the OCR
+  // input is blind to the label in the first place. MI's caption ("MI") is
+  // short enough, and that field's box is already narrow enough (meant for
+  // one handwritten initial), that carving out even its small width risks
+  // leaving too little room for the initial itself — left as the full box,
+  // same as before, relying on cleanNameOcrText there instead.
+  _FieldBox clipLabel(_FieldBox box, String label) {
+    final clearance = _labelClearancePt(regular, label);
+    return (x: box.x + clearance, y: box.y, width: box.width - clearance, height: box.height);
+  }
 
   // Merge all pages belonging to the same section back into one
   // OmrSection (its items map spans every page it was laid out across).
@@ -1398,8 +1420,8 @@ String _emitTemplate(ExamLayout layout) {
   buffer.writeln('  bubbleRadiusPt: ${exam.bubbleRadius},');
   buffer.writeln('  bubbleRadiusYPt: ${bubbleRadiusYFor(exam)},');
   buffer.writeln('  cornerMarkers: const [$cornersDart],');
-  buffer.writeln('  lastNameFieldRect: const ${fieldRectDart(nameBoxes.lastName)},');
-  buffer.writeln('  firstNameFieldRect: const ${fieldRectDart(nameBoxes.firstName)},');
+  buffer.writeln('  lastNameFieldRect: const ${fieldRectDart(clipLabel(nameBoxes.lastName, 'Last Name'))},');
+  buffer.writeln('  firstNameFieldRect: const ${fieldRectDart(clipLabel(nameBoxes.firstName, 'First Name'))},');
   buffer.writeln('  middleInitialFieldRect: const ${fieldRectDart(nameBoxes.middleInitial)},');
   buffer.writeln('  sections: const [');
   for (final section in exam.sections) {
@@ -1503,7 +1525,7 @@ Future<void> main() async {
     final physicalPageCount = isTatLandscape ? 1 : layout.pages.length;
     stdout.writeln('Wrote answer_sheets/${exam.code}.pdf ($physicalPageCount page(s), content width ${layout.contentWidth.toStringAsFixed(1)}pt)');
 
-    dartFile.writeln(_emitTemplate(layout));
+    dartFile.writeln(_emitTemplate(layout, regular));
     mapEntries.add('"${exam.code}": _omr${exam.code}');
   }
 

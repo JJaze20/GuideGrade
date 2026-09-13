@@ -2,6 +2,57 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:guidegrade/core/omr/name_ocr_cleanup.dart';
 
 void main() {
+  test('removes location and letterhead mixed with names', () {
+    for (final raw in [
+      'Koronadal\nLast Name De La Cruz',
+      'De La Cruz Koronadal',
+      'City of Koronadal, South Cotabato\nDe La Cruz',
+      'NOTRE DAME OF\nMARBEL UNIVERSITY\nLast Name De La Cruz',
+      'Guidance, Honors, and Scholarship Center\nDe La Cruz',
+      'Guidance and Testing Center\nDe La Cruz',
+    ]) {
+      expect(cleanNameOcrText(raw, 'Last Name'), 'De La Cruz');
+    }
+  });
+  test('removes neighboring captions and trailing captions', () {
+    expect(cleanNameOcrText('Maria First Name', 'First Name'), 'Maria');
+    expect(
+      cleanNameOcrText('Last Name First Name Maria', 'First Name'),
+      'Maria',
+    );
+    expect(
+      cleanNameOcrText('School Last Attended\nMaria', 'First Name'),
+      'Maria',
+    );
+    expect(
+      cleanNameOcrText('Address of School Last Attended\nMaria', 'First Name'),
+      'Maria',
+    );
+    expect(
+      cleanNameOcrText('Date\nBatch\nExam Code\nMaria', 'First Name'),
+      'Maria',
+    );
+    expect(cleanNameOcrText('Koronadal\nM.I. E', 'MI'), 'E');
+  });
+  test('printed text alone produces no name', () {
+    for (final raw in [
+      'Koronadal',
+      'City of Koronadal, South Cotabato',
+      'Notre Dame of Marbel University',
+      'First Name Last Name Middle Initial',
+      'Admission Test\nAnswer Sheet',
+    ]) {
+      expect(cleanNameOcrText(raw, 'Last Name'), isNull);
+    }
+  });
+  test('does not remove fragments of names that resemble header words', () {
+    expect(
+      cleanNameOcrText('Dame Marbel South', 'Last Name'),
+      'Dame Marbel South',
+    );
+    expect(cleanNameOcrText('Koronadales', 'Last Name'), 'Koronadales');
+    expect(cleanNameOcrText('Mary Date', 'First Name'), 'Mary Date');
+  });
   test('removes exact, misread, punctuated and joined captions', () {
     for (final caption in [
       'Last Name',
