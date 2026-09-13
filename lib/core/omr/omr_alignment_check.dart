@@ -106,3 +106,85 @@ class AlignmentCheck {
         verdict = AlignmentVerdict.red,
         warpRejected = true;
 }
+
+/// Which of the (up to) 3 orientations `OmrDecoder.checkCornersFromLuma`
+/// tries against a raw camera frame actually matched the sheet — a raw
+/// preview frame can be sideways relative to the UI regardless of device
+/// lock (see that method's own doc comment). Carried out to the live
+/// diagnostic overlay (see `ExamScanningScreen`) because mapping a detected
+/// point back onto the displayed preview needs to know which orientation
+/// its fraction is measured against — see `fiducial_coordinate_mapping.dart`.
+enum FrameRotation { none, clockwise90, counterClockwise90 }
+
+/// Coarse, user-facing category for why one corner search didn't land on
+/// [CornerConfidence.confident] — surfaced only by the temporary opt-in
+/// diagnostic overlay; never read by any detection/capture decision.
+///
+///  * [confident] — nothing to explain; the corner is locked.
+///  * [shape] — the best candidate found (or, for a `none` result, the
+///    closest rejected candidate) didn't look enough like a solid printed
+///    square (see `OmrDecoder._squarenessOf`).
+///  * [position] — a real, well-shaped, high-contrast candidate was found,
+///    but too far from where it was expected — or, for a `none` result,
+///    the closest rejected candidate mapped inside the answer grid or
+///    failed the affine geometry check against the other corners.
+///  * [contrast] — the closest rejected candidate wasn't dark enough
+///    against its local background to count as ink.
+///  * [noCandidate] — nothing at all cleared even the cheapest area/aspect
+///    pre-filters near this corner.
+enum CornerRejectionCategory { confident, shape, position, contrast, noCandidate }
+
+/// Maps one of [OmrDecoder]'s internal candidate-rejection reason strings
+/// (`area`, `aspect`, `fill_ratio`, `contrast`, `low_squareness`,
+/// `inside_grid`, `geom_inconsistent`, `outscored`) to the coarser,
+/// user-facing [CornerRejectionCategory] the diagnostic overlay actually
+/// displays. Pure string mapping — kept here (not duplicated) so both the
+/// decoder and any test of this mapping use the exact same rule.
+CornerRejectionCategory categorizeRejectionReason(String rawReason) =>
+    switch (rawReason) {
+      'contrast' => CornerRejectionCategory.contrast,
+      'area' || 'aspect' || 'fill_ratio' || 'low_squareness' =>
+        CornerRejectionCategory.shape,
+      'inside_grid' || 'geom_inconsistent' || 'outscored' =>
+        CornerRejectionCategory.position,
+      _ => CornerRejectionCategory.shape,
+    };
+
+/// Per-corner diagnostic detail for the temporary opt-in live diagnostic
+/// overlay (see `ExamScanningScreen`'s `_diagnosticsEnabled`) — never used
+/// by any detection/capture decision, purely descriptive of what the
+/// decoder actually searched and found for one corner in one frame. Every
+/// geometric field is a fraction (0-1) of whichever frame [FrameRotation]
+/// says was searched, matching `checkCornersFromLuma`'s own `positions` —
+/// resolution-independent by construction, same as the rest of the live
+/// guide.
+class CornerDiagnostic {
+  /// This corner's Stage-1 search box.
+  final ({double x0, double y0, double x1, double y1}) searchBoxFrac;
+
+  /// The position this corner's search was anchored/scored against — the
+  /// template-expected corner, possibly skewed by an inaccurate
+  /// [FrameRotation]-relative page-boundary estimate (see
+  /// `OmrDecoder._detectPageQuad`'s doc comment).
+  final (double, double) anchorFrac;
+
+  /// Winning candidate's centroid, or null if nothing was accepted.
+  final (double, double)? centroidFrac;
+
+  final CornerConfidence confidence;
+  final double squareness;
+  final double contrast;
+  final double positionScore;
+  final CornerRejectionCategory rejection;
+
+  const CornerDiagnostic({
+    required this.searchBoxFrac,
+    required this.anchorFrac,
+    required this.centroidFrac,
+    required this.confidence,
+    required this.squareness,
+    required this.contrast,
+    required this.positionScore,
+    required this.rejection,
+  });
+}

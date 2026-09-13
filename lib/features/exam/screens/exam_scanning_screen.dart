@@ -8,6 +8,7 @@ import 'package:flutter/services.dart' show DeviceOrientation, SystemChrome;
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/omr/duplicate_scan_detector.dart';
+import '../../../core/omr/fiducial_coordinate_mapping.dart';
 import '../../../core/omr/fiducial_search_tuning.dart';
 import '../../../core/omr/omr_decoder.dart';
 import '../../../core/omr/omr_templates.dart';
@@ -31,13 +32,21 @@ class _LiveCornersRequest {
   final int height;
   final int bytesPerRow;
   final OmrExamTemplate template;
+
+  /// Whether to also build the (otherwise-skipped) per-corner diagnostic
+  /// detail for the temporary opt-in overlay — see
+  /// [_ExamScanningScreenState._diagnosticsEnabled]. False on every normal
+  /// frame check, so enabling diagnostics never changes what a regular
+  /// (non-debugging) session actually does.
+  final bool includeDiagnostics;
   const _LiveCornersRequest(
     this.lumaBytes,
     this.width,
     this.height,
     this.bytesPerRow,
-    this.template,
-  );
+    this.template, {
+    this.includeDiagnostics = false,
+  });
 }
 
 /// Corner-detection result plus a coarse mean-brightness read of the same
@@ -57,9 +66,15 @@ class _LiveCornersRequest {
 /// y/height) fraction of this frame (null where nothing was found) — the
 /// per-frame position data the auto-capture stability check diffs between
 /// consecutive frames (see [_ExamScanningScreenState._onCameraFrame]).
+///
+/// [diagnostics] and [rotation] are null/[FrameRotation.none] whenever
+/// [_LiveCornersRequest.includeDiagnostics] was false — the normal case;
+/// see [_ExamScanningScreenState._diagnosticsEnabled].
 ({
   List<CornerConfidence> cornersFound,
   List<(double, double)?> cornerPositions,
+  List<CornerDiagnostic>? diagnostics,
+  FrameRotation rotation,
   double meanLuma,
 }) _checkLiveCorners(_LiveCornersRequest request) {
   final result = const OmrDecoder().checkCornersFromLuma(
@@ -68,6 +83,7 @@ class _LiveCornersRequest {
     request.height,
     request.bytesPerRow,
     request.template,
+    includeDiagnostics: request.includeDiagnostics,
   );
   const stride = 8;
   var sum = 0;
@@ -82,6 +98,8 @@ class _LiveCornersRequest {
   return (
     cornersFound: result.confidence,
     cornerPositions: result.positions,
+    diagnostics: result.diagnostics,
+    rotation: result.rotation,
     meanLuma: count == 0 ? 255.0 : sum / count,
   );
 }
@@ -160,6 +178,29 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
   List<CornerConfidence>? _liveCornersFound;
   DateTime? _lastFrameCheckAt;
   bool _frameCheckInFlight = false;
+
+  /// TEMPORARY, opt-in, off by default: shows a diagnostic overlay of the
+  /// actual per-corner search boxes/detected positions/rejection reasons
+  /// the decoder is working with, distinct from the four always-visible
+  /// fixed aiming guides drawn by [_PageGuidePainter] (see
+  /// [_DiagnosticOverlayPainter]) — for investigating cases where the
+  /// fixed guides look aligned but the live indicator never reaches green.
+  /// Only reachable in a debug build (see the top bar's bug-icon toggle in
+  /// [_buildTopBar]) — this is a developer tool, not a user-facing
+  /// feature, and defaults to false even there.
+  bool _diagnosticsEnabled = false;
+
+  /// Populated only while [_diagnosticsEnabled] is true (see
+  /// [_LiveCornersRequest.includeDiagnostics]); null otherwise, same as
+  /// before diagnostics existed.
+  List<CornerDiagnostic>? _liveDiagnostics;
+
+  /// Which orientation the most recent live check's winning attempt used —
+  /// see [FrameRotation]'s doc comment and
+  /// `fiducial_coordinate_mapping.dart`'s own doc comment for the
+  /// (on-device-unverified) assumption this feeds into the overlay's
+  /// coordinate mapping.
+  FrameRotation _liveRotation = FrameRotation.none;
 
   /// TEMPORARY. Counts live-frame checks so [_onCameraFrame] can log timing
   /// only every 10th one (see [omrPerfLog]) instead of on every tick.
@@ -571,6 +612,8 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
     }
     _liveCornersFound = null;
     _liveCornerPositions = null;
+    _liveDiagnostics = null;
+    _liveRotation = FrameRotation.none;
     _captureReadySince = null;
     _autoCaptureStableSince = null;
     _autoCaptureArmed = true;
@@ -721,6 +764,7 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
             image.height,
             plane.bytesPerRow,
             template,
+            includeDiagnostics: _diagnosticsEnabled,
           ),
         )
         .then((result) {
@@ -734,6 +778,8 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
           if (!mounted || myGen != _cameraGeneration) return;
           setState(() {
             _liveCornersFound = result.cornersFound;
+            _liveDiagnostics = result.diagnostics;
+            _liveRotation = result.rotation;
             _meanLuma = result.meanLuma;
             final recoverable =
                 !result.cornersFound.any((c) => c == CornerConfidence.none);
@@ -807,8 +853,25 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
             unawaited(_capture(appState, manual: false));
           }
         })
-        .catchError((_) {
+        .catchError((Object error, StackTrace stackTrace) {
           if (myGen == _cameraGeneration) _frameCheckInFlight = false;
+          debugPrint('[ExamScanning] live corner check failed: $error');
+          if (!mounted || myGen != _cameraGeneration) return;
+          // A failed check gives no information about this frame — leaving
+          // the previous check's colors/verdict on screen would misrepresent
+          // a frame that was never actually evaluated as still found (or
+          // still not found). Clear back to the same neutral "unknown"
+          // state shown before the very first check ever completes, rather
+          // than freezing on whatever the last successful check happened to
+          // read.
+          setState(() {
+            _liveCornersFound = null;
+            _liveCornerPositions = null;
+            _liveDiagnostics = null;
+            _captureReadySince = null;
+            _autoCaptureStableSince = null;
+            _meanLuma = null;
+          });
         });
   }
 
@@ -1287,24 +1350,55 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
               ),
             ],
           ),
-          InkWell(
-            onTap: _cameraController?.value.isInitialized == true ? _toggleTorch : null,
-            child: Container(
-              width: 32,
-              height: 32,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: _torchOn
-                    ? AppColors.accentYellowGreen
-                    : Colors.black.withOpacity(0.4),
-                shape: BoxShape.circle,
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // TEMPORARY developer tool, debug-build-only and off by
+              // default (see [_diagnosticsEnabled]) — never shown in a
+              // release build, so this can't reach end users.
+              if (kDebugMode)
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: InkWell(
+                    onTap: () => setState(() => _diagnosticsEnabled = !_diagnosticsEnabled),
+                    child: Container(
+                      width: 32,
+                      height: 32,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: _diagnosticsEnabled
+                            ? AppColors.accentYellowGreen
+                            : Colors.black.withOpacity(0.4),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        Icons.bug_report_outlined,
+                        color: _diagnosticsEnabled ? Colors.black : Colors.white,
+                        size: 16,
+                      ),
+                    ),
+                  ),
+                ),
+              InkWell(
+                onTap: _cameraController?.value.isInitialized == true ? _toggleTorch : null,
+                child: Container(
+                  width: 32,
+                  height: 32,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: _torchOn
+                        ? AppColors.accentYellowGreen
+                        : Colors.black.withOpacity(0.4),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    _torchOn ? Icons.flash_on : Icons.flash_off,
+                    color: _torchOn ? Colors.black : Colors.white,
+                    size: 16,
+                  ),
+                ),
               ),
-              child: Icon(
-                _torchOn ? Icons.flash_on : Icons.flash_off,
-                color: _torchOn ? Colors.black : Colors.white,
-                size: 16,
-              ),
-            ),
+            ],
           ),
         ],
       ),
@@ -1343,6 +1437,22 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
                 ),
               ),
             ),
+            if (_diagnosticsEnabled &&
+                _liveDiagnostics != null &&
+                _cameraController!.value.previewSize != null)
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: CustomPaint(
+                    painter: _DiagnosticOverlayPainter(
+                      _liveDiagnostics!,
+                      searchedFrameSize(
+                        _cameraController!.value.previewSize!,
+                        rotated90: _liveRotation != FrameRotation.none,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             Positioned(
               top: 14,
               left: 0,
@@ -1940,4 +2050,174 @@ class _PageGuidePainter extends CustomPainter {
       !listEquals(cornerFractions, oldDelegate.cornerFractions) ||
       markerAspectRatio != oldDelegate.markerAspectRatio ||
       !listEquals(cornersFound, oldDelegate.cornersFound);
+}
+
+/// TEMPORARY, opt-in diagnostic overlay (see
+/// [_ExamScanningScreenState._diagnosticsEnabled]) — draws what the decoder
+/// actually searched and found for each corner in the most recent live
+/// frame, deliberately distinct from [_PageGuidePainter]'s four
+/// always-visible fixed aiming guides:
+///
+///  * a dashed box for each corner's actual Stage-1 search region (as
+///    opposed to [_PageGuidePainter]'s fixed box, which is sized/placed
+///    from the template alone and never moves even if the search region
+///    itself shifts with a re-estimated page boundary — see
+///    `_quadrantsFor`'s doc comment);
+///  * a small dot at the actual detected centroid, when one was found —
+///    this can land away from the fixed guide box, which is exactly the
+///    "fixed guide vs. real search region" mismatch this overlay exists to
+///    surface;
+///  * an "x" at the expected anchor point the search was scored against;
+///  * a short rejection-category label (shape/position/contrast/no
+///    candidate) for any corner not already [CornerConfidence.confident].
+///
+/// Coordinate mapping: every [CornerDiagnostic] field is a fraction of the
+/// live search's own winning-orientation frame. This paints them by
+/// treating that fraction directly as a fraction of [sourceSize] (the
+/// camera's logical preview size, oriented to match — see
+/// `fiducial_coordinate_mapping.dart`'s own doc comment for the
+/// on-device-unverified assumption this rests on) displayed with
+/// `BoxFit.cover` inside this painter's own [size] — the same fit
+/// `ExamScanningScreen._buildCameraLayer` uses for the live preview itself
+/// (see [coverFit]/[fractionToWidgetOffset]).
+class _DiagnosticOverlayPainter extends CustomPainter {
+  const _DiagnosticOverlayPainter(this.diagnostics, this.sourceSize);
+
+  final List<CornerDiagnostic> diagnostics;
+  final Size sourceSize;
+
+  static const _cornerNames = ['TL', 'TR', 'BL', 'BR'];
+
+  Offset _map(double fx, double fy, Size destSize) => fractionToWidgetOffset(
+        fx: fx,
+        fy: fy,
+        sourceSize: sourceSize,
+        destSize: destSize,
+      );
+
+  String _categoryLabel(CornerRejectionCategory c) => switch (c) {
+        CornerRejectionCategory.confident => 'ok',
+        CornerRejectionCategory.shape => 'shape',
+        CornerRejectionCategory.position => 'position',
+        CornerRejectionCategory.contrast => 'contrast',
+        CornerRejectionCategory.noCandidate => 'no candidate',
+      };
+
+  Color _categoryColor(CornerRejectionCategory c) => switch (c) {
+        CornerRejectionCategory.confident => Colors.greenAccent,
+        CornerRejectionCategory.noCandidate => Colors.redAccent,
+        _ => Colors.amberAccent,
+      };
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // A small always-on-top caption naming the assumption this overlay's
+    // mapping rests on (see this class's own doc comment) — the first
+    // thing to question if the dots below look rotated/mirrored relative
+    // to the fixed aim guides they're drawn alongside.
+    final caption = TextPainter(
+      text: const TextSpan(
+        text: 'DIAGNOSTICS — search regions & actual detections '
+            '(unverified rotation mapping)',
+        style: TextStyle(
+          color: Colors.cyanAccent,
+          fontSize: 9,
+          fontWeight: FontWeight.w700,
+          backgroundColor: Colors.black54,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout(maxWidth: size.width - 16);
+    caption.paint(canvas, Offset(8, size.height - caption.height - 8));
+
+    for (var i = 0; i < diagnostics.length; i++) {
+      final d = diagnostics[i];
+      final color = _categoryColor(d.rejection);
+
+      // Actual search box (dashed), distinct from the fixed aim guide.
+      final topLeft = _map(d.searchBoxFrac.x0, d.searchBoxFrac.y0, size);
+      final bottomRight = _map(d.searchBoxFrac.x1, d.searchBoxFrac.y1, size);
+      _drawDashedRect(
+        canvas,
+        Rect.fromPoints(topLeft, bottomRight),
+        Paint()
+          ..color = color.withOpacity(0.9)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.5,
+      );
+
+      // Expected anchor ("x").
+      final anchor = _map(d.anchorFrac.$1, d.anchorFrac.$2, size);
+      const arm = 5.0;
+      final anchorPaint = Paint()
+        ..color = Colors.white70
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5;
+      canvas.drawLine(anchor - const Offset(arm, arm), anchor + const Offset(arm, arm), anchorPaint);
+      canvas.drawLine(anchor - const Offset(arm, -arm), anchor + const Offset(arm, -arm), anchorPaint);
+
+      // Actual detected centroid, when there is one.
+      final centroidFrac = d.centroidFrac;
+      Offset labelAnchor = anchor;
+      if (centroidFrac != null) {
+        final centroid = _map(centroidFrac.$1, centroidFrac.$2, size);
+        canvas.drawCircle(centroid, 5, Paint()..color = color);
+        canvas.drawCircle(
+          centroid,
+          5,
+          Paint()
+            ..color = Colors.black87
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1,
+        );
+        labelAnchor = centroid;
+      }
+
+      final label = '${_cornerNames[i]} ${_categoryLabel(d.rejection)} '
+          'sq=${d.squareness.toStringAsFixed(2)} pos=${d.positionScore.toStringAsFixed(2)}';
+      final tp = TextPainter(
+        text: TextSpan(
+          text: label,
+          style: TextStyle(
+            color: color,
+            fontSize: 9,
+            fontWeight: FontWeight.w700,
+            backgroundColor: Colors.black54,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      tp.paint(canvas, labelAnchor + const Offset(8, 8));
+    }
+  }
+
+  void _drawDashedRect(Canvas canvas, Rect rect, Paint paint) {
+    const dashLength = 5.0;
+    const gapLength = 4.0;
+    void dashedLine(Offset from, Offset to) {
+      final total = (to - from).distance;
+      if (total == 0) return;
+      final direction = (to - from) / total;
+      var drawn = 0.0;
+      while (drawn < total) {
+        final segmentEnd = math.min(drawn + dashLength, total);
+        canvas.drawLine(
+          from + direction * drawn,
+          from + direction * segmentEnd,
+          paint,
+        );
+        drawn = segmentEnd + gapLength;
+      }
+    }
+
+    dashedLine(rect.topLeft, rect.topRight);
+    dashedLine(rect.topRight, rect.bottomRight);
+    dashedLine(rect.bottomRight, rect.bottomLeft);
+    dashedLine(rect.bottomLeft, rect.topLeft);
+  }
+
+  @override
+  bool shouldRepaint(covariant _DiagnosticOverlayPainter oldDelegate) =>
+      !identical(diagnostics, oldDelegate.diagnostics) ||
+      sourceSize != oldDelegate.sourceSize;
 }

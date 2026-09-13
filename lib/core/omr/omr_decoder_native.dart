@@ -67,6 +67,7 @@ class _MarkerSearchResult {
   final double squareness;
   final double contrast;
   final double anchorDistance;
+  final double positionScore;
   final List<_RejectedCandidate> rejected;
 
   const _MarkerSearchResult({
@@ -76,6 +77,7 @@ class _MarkerSearchResult {
     required this.squareness,
     required this.contrast,
     required this.anchorDistance,
+    this.positionScore = 0,
     required this.rejected,
   });
 
@@ -599,6 +601,49 @@ class OmrDecoder {
   /// area) free to detect an actual pencil mark.
   static const double _bubbleInnerSampleFrac = 0.6;
 
+  /// Loads a captured photo for decoding, choosing whether OpenCV applies
+  /// its own EXIF-Orientation auto-rotation (`cv.imread`'s default
+  /// behavior for `IMREAD_COLOR` — since OpenCV 3.x it rotates/flips the
+  /// decoded pixels to match the file's EXIF `Orientation` tag unless
+  /// `IMREAD_IGNORE_ORIENTATION` is passed).
+  ///
+  /// For every portrait-page template (AT/QTM/PT), the phone is captured
+  /// in its natural, never-reconfigured portrait lock, and the whole
+  /// pipeline has always been tuned against the default EXIF-aware load —
+  /// left exactly as before.
+  ///
+  /// For the one landscape-page template (TAT), [ExamScanningScreen]
+  /// physically unlocks device rotation for that screen only (see its
+  /// `_isLandscapeExam`) so the user can turn the phone sideways to fill
+  /// the frame with a wide sheet — forced via
+  /// `SystemChrome.setPreferredOrientations`, not the OS's own natural
+  /// auto-rotate. That same forced-landscape unlock has already caused a
+  /// real, confirmed device-orientation-tracking bug elsewhere in this
+  /// screen (see its `dispose()` doc comment on the landscapeLeft/
+  /// landscapeRight AppLockGate re-lock loop) — trusting the camera
+  /// plugin's own EXIF `Orientation` tag for this one screen means
+  /// trusting it correctly tracked which way the phone was actually
+  /// turned during a forced, non-standard rotation lock. Confirmed broken
+  /// on a real device (2026-09-14): a TAT capture's rectified overlay
+  /// image came out with the sheet's content rotated to portrait despite
+  /// the sheet being landscape — exactly this failure mode.
+  ///
+  /// Ignoring EXIF for TAT loads the RAW sensor buffer instead and lets
+  /// [_orientAndFindCorners]'s own rotation search (identity/90°CW/
+  /// 90°CCW/180°) determine the true orientation by actually finding the
+  /// corners — the same EXIF-independent strategy [checkCornersFromLuma]
+  /// already uses successfully for the live preview, which reads raw
+  /// camera bytes with no EXIF involved at all.
+  static cv.Mat _imreadForTemplate(String imagePath, OmrExamTemplate template) {
+    final isLandscapePage = template.pageWidthPt > template.pageHeightPt;
+    return cv.imread(
+      imagePath,
+      flags: isLandscapePage
+          ? cv.IMREAD_COLOR | cv.IMREAD_IGNORE_ORIENTATION
+          : cv.IMREAD_COLOR,
+    );
+  }
+
   /// Authoritative post-capture gate, run right after a photo is captured
   /// and before it's ever added to the batch: does the same image load +
   /// corner search as [decode], and — unlike this method's original
@@ -609,7 +654,7 @@ class OmrDecoder {
   /// normalization, CLAHE, and bubble sampling — [decode]'s genuinely
   /// expensive stages — so this remains reasonable to run on every capture.
   AlignmentCheck locateCorners(String imagePath, OmrExamTemplate template) {
-    final src = cv.imread(imagePath);
+    final src = _imreadForTemplate(imagePath, template);
     try {
       if (src.isEmpty) {
         return const AlignmentCheck.misaligned(
@@ -655,14 +700,24 @@ class OmrDecoder {
   /// [_findMarkerInRegion]) — a tight template-expected box first, the full
   /// photo quadrant if that misses — so the live guide and the post-capture
   /// gate can never disagree about whether a mark is findable in a frame.
-  ({List<CornerConfidence> confidence, List<(double, double)?> positions})
+  ({
+    List<CornerConfidence> confidence,
+    List<(double, double)?> positions,
+    List<CornerDiagnostic>? diagnostics,
+    FrameRotation rotation,
+  })
       checkCornersFromLuma(
     Uint8List lumaBytes,
     int width,
     int height,
     int bytesPerRow,
-    OmrExamTemplate template,
-  ) {
+    OmrExamTemplate template, {
+    // Temporary, opt-in only (see `ExamScanningScreen._diagnosticsEnabled`)
+    // — every field below is descriptive-only and read by nothing else in
+    // this method or its callers, so leaving this false costs nothing over
+    // the previous behavior.
+    bool includeDiagnostics = false,
+  }) {
     final full = cv.Mat.fromList(
       height,
       bytesPerRow,
@@ -691,31 +746,57 @@ class OmrDecoder {
         try {
           // Raw camera frames can be sideways even in a portrait-locked UI.
           // Retry every template, but stop as soon as all corners are confident.
-          var best = _searchLiveCorners(gray, template);
+          var best = _searchLiveCorners(
+            gray, template,
+            detailGray: cropped,
+            includeDiagnostics: includeDiagnostics,
+          );
           var bestScore = _liveConfidenceScore(best.confidence);
+          var bestRotation = FrameRotation.none;
           if (best.confidence.every((c) => c == CornerConfidence.confident)) {
-            return best;
+            return (
+              confidence: best.confidence,
+              positions: best.positions,
+              diagnostics: best.diagnostics,
+              rotation: bestRotation,
+            );
           }
           for (final code in [
             cv.ROTATE_90_CLOCKWISE,
             cv.ROTATE_90_COUNTERCLOCKWISE,
           ]) {
             final rotated = cv.rotate(gray, code);
+            final rotatedDetail = identical(gray, cropped)
+                ? rotated
+                : cv.rotate(cropped, code);
             try {
-              final candidate = _searchLiveCorners(rotated, template);
+              final candidate = _searchLiveCorners(
+                rotated, template,
+                detailGray: rotatedDetail,
+                includeDiagnostics: includeDiagnostics,
+              );
               final score = _liveConfidenceScore(candidate.confidence);
               if (score > bestScore) {
                 best = candidate;
                 bestScore = score;
+                bestRotation = code == cv.ROTATE_90_CLOCKWISE
+                    ? FrameRotation.clockwise90
+                    : FrameRotation.counterClockwise90;
               }
               if (best.confidence.every((c) => c == CornerConfidence.confident)) {
                 break;
               }
             } finally {
+              if (!identical(rotatedDetail, rotated)) rotatedDetail.dispose();
               rotated.dispose();
             }
           }
-          return best;
+          return (
+            confidence: best.confidence,
+            positions: best.positions,
+            diagnostics: best.diagnostics,
+            rotation: bestRotation,
+          );
         } finally {
           if (!identical(gray, cropped)) gray.dispose();
         }
@@ -730,8 +811,17 @@ class OmrDecoder {
   /// One live corner search pass over [gray] at whatever orientation it's
   /// already in — the body [checkCornersFromLuma] always ran, now shared
   /// so a landscape template can try it against multiple rotations.
-  ({List<CornerConfidence> confidence, List<(double, double)?> positions})
-      _searchLiveCorners(cv.Mat gray, OmrExamTemplate template) {
+  ({
+    List<CornerConfidence> confidence,
+    List<(double, double)?> positions,
+    List<CornerDiagnostic>? diagnostics,
+  })
+      _searchLiveCorners(
+    cv.Mat gray,
+    OmrExamTemplate template, {
+    cv.Mat? detailGray,
+    bool includeDiagnostics = false,
+  }) {
     final pageQuad = _detectPageQuad(gray);
     final searches = _quadrantsFor(gray.width, gray.height, pageQuad, template);
     final results = [
@@ -744,6 +834,70 @@ class OmrDecoder {
           () => _findMarkerInRegion(gray, s.quadrant, s.anchorX, s.anchorY),
         ),
     ];
+    // Bounded higher-resolution retry: once the sheet is roughly in frame
+    // (>=2 corners already confident at this frame's downscaled resolution
+    // — see [_liveCheckMaxDimension]'s doc comment), re-measure every
+    // remaining `low`-tier corner whose *shape* score (not position) is the
+    // only thing holding it back, against the original un-downscaled
+    // pixels. Bounded by construction: with >=2 already confident, at most
+    // 2 corners can be `low` here, so this never means running
+    // full-resolution detection across all 4 corners on every frame — only
+    // whichever ones are actually still uncertain.
+    //
+    // Previously this only fired with EXACTLY 3 confident corners, so two
+    // simultaneously weak corners (e.g. both dimmed by an uneven shadow, or
+    // both just slightly soft from preview downscaling) never got this
+    // retry's benefit at all and could stay stuck yellow indefinitely —
+    // confirmed by direct code review of the old `== 3` gate, not assumed.
+    if (detailGray != null && !identical(detailGray, gray) &&
+        results.where((r) => r.confidence == CornerConfidence.confident).length >= 2) {
+      final sx = detailGray.width / gray.width;
+      final sy = detailGray.height / gray.height;
+      for (var i = 0; i < results.length; i++) {
+        final r = results[i];
+        final c = r.centroid;
+        final b = r.bboxGlobal;
+        if (r.confidence != CornerConfidence.low || c == null || b == null ||
+            r.squareness >= _markerMinSquarenessConfident ||
+            r.positionScore < 0.36787944) continue;
+        final cx = (c.x + 0.5) * sx - 0.5;
+        final cy = (c.y + 0.5) * sy - 0.5;
+        final pad = math.max(12.0, math.max(b.width, b.height) * 2.0);
+        final box = _clampedRect(cx - pad * sx, cy - pad * sy,
+            cx + pad * sx, cy + pad * sy, detailGray.width, detailGray.height);
+        final detailed = _findMarkerInRegion(detailGray, box, cx, cy);
+        final p = detailed.centroid;
+        // Confirm the same blob, rather than switching to neighboring text.
+        if (detailed.confidence != CornerConfidence.confident || p == null ||
+            ((p.x - cx) / sx).abs() > b.width / 2 ||
+            ((p.y - cy) / sy).abs() > b.height / 2) continue;
+        results[i] = _MarkerSearchResult(
+          centroid: cv.Point2f((p.x + 0.5) / sx - 0.5, (p.y + 0.5) / sy - 0.5),
+          bboxGlobal: b,
+          confidence: CornerConfidence.confident,
+          squareness: detailed.squareness,
+          contrast: detailed.contrast,
+          anchorDistance: r.anchorDistance,
+          positionScore: r.positionScore,
+          rejected: r.rejected,
+        );
+      }
+    }
+
+    // Geometric cross-check + promotion + rescue — see
+    // [_crossCheckCornersByGeometry]'s doc comment. This is what lets a
+    // corner whose shape/contrast are genuinely fine, but whose position
+    // score was only measured against an inaccurate page-boundary guess
+    // (see [_detectPageQuad]), actually reach `confident` and turn the
+    // live indicator green — never by loosening the shape/contrast gates
+    // themselves, only by using the other 3 corners' own real geometry as
+    // stronger evidence of where this one has to be.
+    final points = List<cv.Point2f?>.generate(4, (i) => results[i].centroid);
+    _crossCheckCornersByGeometry(
+      points, results, gray, template,
+      allowRescueSearch: true,
+    );
+
     return (
       confidence: [for (final r in results) r.confidence],
       positions: [
@@ -752,6 +906,64 @@ class OmrDecoder {
               ? null
               : (r.centroid!.x / gray.width, r.centroid!.y / gray.height),
       ],
+      diagnostics: includeDiagnostics
+          ? [
+              for (var i = 0; i < 4; i++)
+                _buildCornerDiagnostic(results[i], searches[i], gray.width, gray.height),
+            ]
+          : null,
+    );
+  }
+
+  /// Builds one corner's [CornerDiagnostic] for the temporary opt-in live
+  /// overlay (see [checkCornersFromLuma]'s `includeDiagnostics`) — purely
+  /// descriptive, never read by any detection/capture decision. [result]
+  /// and [search] must be for the same corner index; [frameWidth]/
+  /// [frameHeight] are the frame ([gray] in [_searchLiveCorners]) they were
+  /// both measured against, used only to normalize into fractions.
+  CornerDiagnostic _buildCornerDiagnostic(
+    _MarkerSearchResult result,
+    _QuadrantSearch search,
+    int frameWidth,
+    int frameHeight,
+  ) {
+    final box = search.stage1;
+    final CornerRejectionCategory category;
+    if (result.confidence == CornerConfidence.confident) {
+      category = CornerRejectionCategory.confident;
+    } else if (result.centroid == null) {
+      // Nothing was accepted -- fall back to the single closest rejected
+      // candidate's own reason (contrast/shape/position) when there was
+      // one at all, so "nothing found" and "something was there but it
+      // failed a specific gate" read differently in the overlay.
+      category = result.rejected.isEmpty
+          ? CornerRejectionCategory.noCandidate
+          : categorizeRejectionReason(result.rejected.first.reason);
+    } else if (result.squareness < _markerMinSquarenessConfident) {
+      category = CornerRejectionCategory.shape;
+    } else {
+      // An accepted candidate always already clears the hard contrast gate
+      // (see [_findMarkerInRegion]'s `contrast < _markerMinContrast` reject)
+      // and, by this branch, the shape gate too — position is the only
+      // remaining reason a winner stays `low`.
+      category = CornerRejectionCategory.position;
+    }
+    return CornerDiagnostic(
+      searchBoxFrac: (
+        x0: box.x / frameWidth,
+        y0: box.y / frameHeight,
+        x1: (box.x + box.width) / frameWidth,
+        y1: (box.y + box.height) / frameHeight,
+      ),
+      anchorFrac: (search.anchorX / frameWidth, search.anchorY / frameHeight),
+      centroidFrac: result.centroid == null
+          ? null
+          : (result.centroid!.x / frameWidth, result.centroid!.y / frameHeight),
+      confidence: result.confidence,
+      squareness: result.squareness,
+      contrast: result.contrast,
+      positionScore: result.positionScore,
+      rejection: category,
     );
   }
 
@@ -792,6 +1004,207 @@ class OmrDecoder {
     return stage2Result.squareness >= stage1Result.squareness
         ? stage2Result
         : stage1Result;
+  }
+
+  /// Cross-checks each corner's position against the affine geometry
+  /// implied by (up to) 3 of the OTHER corners already found, then, where
+  /// possible, downgrades, promotes, or rescues using that same geometry:
+  ///
+  ///  * a candidate that maps inside the answer grid, or too far from its
+  ///    own expected position under that affine, is downgraded to
+  ///    [CornerConfidence.none] — this is what stops a shaded answer bubble
+  ///    or stray text from riding along as a "corner" even though its own
+  ///    shape/contrast scoring passed;
+  ///  * a corner stuck at [CornerConfidence.low] purely because its own
+  ///    *position* score was measured against an inaccurate expected anchor
+  ///    — [_quadrantsFor]'s anchor comes from [_detectPageQuad]'s guessed
+  ///    page boundary, which can be wrong — gets promoted to
+  ///    [CornerConfidence.confident] once the other corners' own geometry
+  ///    confirms it sits exactly where a real corner must be, without
+  ///    loosening its shape/contrast gates at all;
+  ///  * a corner with no centroid at all gets one dedicated rescue search
+  ///    of the small box the other three predict, promoted only on real
+  ///    marker evidence found there (never a bare geometric point).
+  ///
+  /// Shared by the post-capture [_refineCorners] and the live per-frame
+  /// [_searchLiveCorners] so both apply the exact same protection against a
+  /// false "corner" and the exact same geometry-based rescue/promotion —
+  /// the live guide and the post-capture gate must never disagree about
+  /// whether a mark is findable in a frame (this is also what fixes the
+  /// live indicator getting permanently stuck yellow/never-green on a
+  /// frame where the page-boundary guess is off but all 4 real marks are
+  /// genuinely visible).
+  ///
+  /// Needs >=3 corners with *some* evidence (confidence != none) to fit a
+  /// transform through; no-ops otherwise, same as before this was
+  /// extracted. Mutates [points]/[results] in place. Returns a short
+  /// user-facing note when a corner was rescued or promoted this way (or
+  /// null).
+  String? _crossCheckCornersByGeometry(
+    List<cv.Point2f?> points,
+    List<_MarkerSearchResult> results,
+    cv.Mat gray,
+    OmrExamTemplate template, {
+    required bool allowRescueSearch,
+    List<String>? labels,
+  }) {
+    const fallbackLabels = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
+    final names = labels ?? fallbackLabels;
+    final debug = _kFiducialDebug && labels != null;
+    String? note;
+
+    final usableIdx = [
+      for (var i = 0; i < 4; i++)
+        if (results[i].confidence != CornerConfidence.none) i,
+    ]..sort((a, b) {
+        final rankA = results[a].confidence == CornerConfidence.confident ? 0 : 1;
+        final rankB = results[b].confidence == CornerConfidence.confident ? 0 : 1;
+        return rankA.compareTo(rankB);
+      });
+    if (usableIdx.length < 3) return null;
+
+    final threeIdx = usableIdx.take(3).toList();
+    final threePts = [for (final i in threeIdx) points[i]!];
+    if (_nearCollinear(threePts)) return null;
+
+    final threeFracs = [
+      for (final i in threeIdx)
+        cv.Point2f(template.cornerMarkers[i].xFrac, template.cornerMarkers[i].yFrac),
+    ];
+    final imgToFrac = cv.getAffineTransform2f(
+      cv.VecPoint2f.fromList(threePts),
+      cv.VecPoint2f.fromList(threeFracs),
+    );
+    try {
+      final grid = _answerGridBboxFrac(template);
+      bool insideGrid(double fx, double fy) =>
+          fx >= grid.x0 && fx <= grid.x1 && fy >= grid.y0 && fy <= grid.y1;
+
+      // 4a: downgrade anything geometrically implausible; promote anything
+      // geometrically consistent that was only held back by its position
+      // score.
+      for (var i = 0; i < 4; i++) {
+        if (threeIdx.contains(i) || points[i] == null) continue;
+        final p = points[i]!;
+        final (fx, fy) = _applyAffine(imgToFrac, p.x.toDouble(), p.y.toDouble());
+        final marker = template.cornerMarkers[i];
+        final off = math.sqrt(
+            math.pow(fx - marker.xFrac, 2) + math.pow(fy - marker.yFrac, 2));
+        final bad = insideGrid(fx, fy) || off > _affineToleranceFrac;
+        if (bad) {
+          if (debug) {
+            _fidLog('q=${names[i]} DOWNGRADE reason=${insideGrid(fx, fy) ? "inside_grid" : "geom_inconsistent"} '
+                'frac=(${fx.toStringAsFixed(3)},${fy.toStringAsFixed(3)}) off=${off.toStringAsFixed(3)}');
+          }
+          points[i] = null;
+          results[i] = _MarkerSearchResult(
+            centroid: null,
+            bboxGlobal: results[i].bboxGlobal,
+            confidence: CornerConfidence.none,
+            squareness: results[i].squareness,
+            contrast: results[i].contrast,
+            anchorDistance: results[i].anchorDistance,
+            rejected: results[i].rejected,
+          );
+          continue;
+        }
+        if (results[i].confidence == CornerConfidence.low &&
+            results[i].squareness >= _markerMinSquarenessConfident &&
+            results[i].contrast >= _markerMinContrast) {
+          if (debug) {
+            _fidLog('q=${names[i]} PROMOTE via geometry (off=${off.toStringAsFixed(3)}, '
+                'sq=${results[i].squareness.toStringAsFixed(3)})');
+          }
+          results[i] = _MarkerSearchResult(
+            centroid: results[i].centroid,
+            bboxGlobal: results[i].bboxGlobal,
+            confidence: CornerConfidence.confident,
+            squareness: results[i].squareness,
+            contrast: results[i].contrast,
+            anchorDistance: results[i].anchorDistance,
+            positionScore: results[i].positionScore,
+            rejected: results[i].rejected,
+          );
+          note ??= '${names[i]} corner confirmed via geometry';
+        }
+      }
+
+      // 4b: dedicated rescue search for exactly the corners still missing.
+      if (allowRescueSearch) {
+        final fracToImg = cv.getAffineTransform2f(
+          cv.VecPoint2f.fromList(threeFracs),
+          cv.VecPoint2f.fromList(threePts),
+        );
+        try {
+          for (var i = 0; i < 4; i++) {
+            if (threeIdx.contains(i) || points[i] != null) continue;
+            final marker = template.cornerMarkers[i];
+            final (px, py) = _applyAffine(fracToImg, marker.xFrac, marker.yFrac);
+            final halfExtent =
+                _stage1HalfExtentFrac * math.min(gray.width, gray.height) * 0.75;
+            final rescueBox = _clampedRect(
+              px - halfExtent,
+              py - halfExtent,
+              px + halfExtent,
+              py + halfExtent,
+              gray.width,
+              gray.height,
+            );
+            final tag = debug ? '${names[i]}-rescue' : null;
+            final rescueAnchorScale = math.max(
+              1.0,
+              0.25 *
+                  (2 * kFiducialAnchorToleranceFrac * math.min(gray.width, gray.height)) *
+                  math.sqrt2,
+            );
+            final rr = _findMarkerInRegion(
+              gray, rescueBox, px, py,
+              debugTag: tag,
+              anchorScaleOverride: rescueAnchorScale,
+            );
+            final rc = rr.centroid;
+            if (rc == null ||
+                rr.squareness < _markerMinSquarenessLow ||
+                rr.contrast < _markerMinContrast) {
+              if (debug) {
+                _fidLog('q=${names[i]} RESCUE_FAILED no convincing marker '
+                    'evidence near predicted (${px.toStringAsFixed(1)},${py.toStringAsFixed(1)})');
+              }
+              continue;
+            }
+            final (rfx, rfy) = _applyAffine(imgToFrac, rc.x.toDouble(), rc.y.toDouble());
+            final roff = math.sqrt(
+                math.pow(rfx - marker.xFrac, 2) + math.pow(rfy - marker.yFrac, 2));
+            if (insideGrid(rfx, rfy) || roff > _affineToleranceFrac) {
+              if (debug) {
+                _fidLog('q=${names[i]} RESCUE_FAILED candidate found but '
+                    'geometrically inconsistent (frac=(${rfx.toStringAsFixed(3)},${rfy.toStringAsFixed(3)}))');
+              }
+              continue;
+            }
+            points[i] = rc;
+            results[i] = _MarkerSearchResult(
+              centroid: rc,
+              bboxGlobal: rr.bboxGlobal,
+              confidence: CornerConfidence.low,
+              squareness: rr.squareness,
+              contrast: rr.contrast,
+              anchorDistance: rr.anchorDistance,
+              rejected: rr.rejected,
+            );
+            note = '${names[i]} corner recovered via geometry-assisted rescue';
+            if (debug) {
+              _fidLog('q=${names[i]} RESCUED sq=${rr.squareness.toStringAsFixed(3)}');
+            }
+          }
+        } finally {
+          fracToImg.dispose();
+        }
+      }
+    } finally {
+      imgToFrac.dispose();
+    }
+    return note;
   }
 
   /// Used by [locateCorners] — the post-capture gate, and the only place
@@ -915,7 +1328,7 @@ class OmrDecoder {
     var decodeClaheMs = 0;
     var decodeThresholdMs = 0;
     var decodeBubbleReadMs = 0;
-    final src = cv.imread(imagePath);
+    final src = _imreadForTemplate(imagePath, template);
     try {
       if (src.isEmpty) {
         throw StateError('Could not read the captured photo at $imagePath.');
@@ -1198,7 +1611,7 @@ class OmrDecoder {
     OmrExamTemplate template,
     String outputPath,
   ) {
-    final src = cv.imread(imagePath);
+    final src = _imreadForTemplate(imagePath, template);
     try {
       if (src.isEmpty) return null;
       final gray = cv.cvtColor(src, cv.COLOR_BGR2GRAY);
@@ -1290,7 +1703,7 @@ class OmrDecoder {
     required String firstNameOutPath,
     required String middleInitialOutPath,
   }) {
-    final src = cv.imread(imagePath);
+    final src = _imreadForTemplate(imagePath, template);
     try {
       if (src.isEmpty) return null;
       final gray = cv.cvtColor(src, cv.COLOR_BGR2GRAY);
@@ -1414,7 +1827,7 @@ class OmrDecoder {
     int pageIndex,
   ) {
     final debugVizSw = _kPerfDebug ? (Stopwatch()..start()) : null;
-    final src = cv.imread(imagePath);
+    final src = _imreadForTemplate(imagePath, template);
     try {
       if (src.isEmpty) return;
       final gray = cv.cvtColor(src, cv.COLOR_BGR2GRAY);
@@ -1932,12 +2345,12 @@ class OmrDecoder {
 
     final points =
         List<cv.Point2f?>.generate(4, (i) => results[i].centroid);
-    String? note;
 
-    // Stage 4: geometric cross-check + dedicated rescue search. Needs 3
-    // points to fit a transform through -- prefer confident corners to seed
-    // it, but fall back to `low`-confidence ones when fewer than 3 are
-    // confident, rather than skipping this whole stage.
+    // Stage 4: geometric cross-check + promotion + dedicated rescue search
+    // (see [_crossCheckCornersByGeometry]). Needs 3 points to fit a
+    // transform through -- prefer confident corners to seed it, but fall
+    // back to `low`-confidence ones when fewer than 3 are confident, rather
+    // than skipping this whole stage.
     //
     // A `low` corner already cleared _findMarkerInRegion's own shape/
     // contrast/position filtering (it's real marker evidence, just not
@@ -1949,148 +2362,14 @@ class OmrDecoder {
     // of which had actually locked onto the wrong feature -- was ever
     // cross-checked or rescued, producing an unusable warp with no
     // indication anything had gone wrong upstream of it.
-    final usableIdx = [
-      for (var i = 0; i < 4; i++)
-        if (results[i].confidence != CornerConfidence.none) i,
-    ]..sort((a, b) {
-        final rankA = results[a].confidence == CornerConfidence.confident ? 0 : 1;
-        final rankB = results[b].confidence == CornerConfidence.confident ? 0 : 1;
-        return rankA.compareTo(rankB);
-      });
-    if (usableIdx.length >= 3) {
-      final threeIdx = usableIdx.take(3).toList();
-      final threePts = [for (final i in threeIdx) points[i]!];
-      if (!_nearCollinear(threePts)) {
-        final threeFracs = [
-          for (final i in threeIdx)
-            cv.Point2f(
-              template.cornerMarkers[i].xFrac,
-              template.cornerMarkers[i].yFrac,
-            ),
-        ];
-        final imgToFrac = cv.getAffineTransform2f(
-          cv.VecPoint2f.fromList(threePts),
-          cv.VecPoint2f.fromList(threeFracs),
-        );
-        try {
-          final grid = _answerGridBboxFrac(template);
-          bool insideGrid(double fx, double fy) =>
-              fx >= grid.x0 && fx <= grid.x1 && fy >= grid.y0 && fy <= grid.y1;
-
-          // 4a: downgrade any non-anchor point that's geometrically
-          // implausible — this is what rejects a shaded bubble even though
-          // it otherwise scored as a confident/low square.
-          for (var i = 0; i < 4; i++) {
-            if (threeIdx.contains(i) || points[i] == null) continue;
-            final p = points[i]!;
-            final (fx, fy) = _applyAffine(imgToFrac, p.x.toDouble(), p.y.toDouble());
-            final marker = template.cornerMarkers[i];
-            final off = math.sqrt(
-                math.pow(fx - marker.xFrac, 2) + math.pow(fy - marker.yFrac, 2));
-            final bad = insideGrid(fx, fy) || off > _affineToleranceFrac;
-            if (bad) {
-              if (_kFiducialDebug) {
-                _fidLog('q=${labels[i]} DOWNGRADE reason=${insideGrid(fx, fy) ? "inside_grid" : "geom_inconsistent"} '
-                    'frac=(${fx.toStringAsFixed(3)},${fy.toStringAsFixed(3)}) off=${off.toStringAsFixed(3)}');
-              }
-              points[i] = null;
-              results[i] = _MarkerSearchResult(
-                centroid: null,
-                bboxGlobal: results[i].bboxGlobal,
-                confidence: CornerConfidence.none,
-                squareness: results[i].squareness,
-                contrast: results[i].contrast,
-                anchorDistance: results[i].anchorDistance,
-                rejected: results[i].rejected,
-              );
-            }
-          }
-
-          // 4b: dedicated rescue search for exactly the corners now
-          // missing — search the small box the other three predict, and
-          // promote only on real marker evidence found there.
-          final fracToImg = cv.getAffineTransform2f(
-            cv.VecPoint2f.fromList(threeFracs),
-            cv.VecPoint2f.fromList(threePts),
-          );
-          try {
-            for (var i = 0; i < 4; i++) {
-              if (threeIdx.contains(i) || points[i] != null) continue;
-              final marker = template.cornerMarkers[i];
-              final (px, py) =
-                  _applyAffine(fracToImg, marker.xFrac, marker.yFrac);
-              final halfExtent =
-                  _stage1HalfExtentFrac * math.min(gray.width, gray.height) * 0.75;
-              final rescueBox = _clampedRect(
-                px - halfExtent,
-                py - halfExtent,
-                px + halfExtent,
-                py + halfExtent,
-                gray.width,
-                gray.height,
-              );
-              final tag = _kFiducialDebug ? '${labels[i]}-rescue' : null;
-              // Same fixed-tolerance position scoring as the Stage-1 search
-              // (see [kFiducialAnchorToleranceFrac]) — the rescue box's own
-              // size already scales with [_stage1HalfExtentFrac], but how
-              // strongly a candidate is preferred for being close to the
-              // *predicted* position shouldn't loosen just because that box
-              // grew.
-              final rescueAnchorScale = math.max(
-                1.0,
-                0.25 *
-                    (2 * kFiducialAnchorToleranceFrac * math.min(gray.width, gray.height)) *
-                    math.sqrt2,
-              );
-              final rr = _findMarkerInRegion(
-                gray, rescueBox, px, py,
-                debugTag: tag,
-                anchorScaleOverride: rescueAnchorScale,
-              );
-              final rc = rr.centroid;
-              if (rc == null ||
-                  rr.squareness < _markerMinSquarenessLow ||
-                  rr.contrast < _markerMinContrast) {
-                if (_kFiducialDebug) {
-                  _fidLog('q=${labels[i]} RESCUE_FAILED no convincing marker '
-                      'evidence near predicted (${px.toStringAsFixed(1)},${py.toStringAsFixed(1)})');
-                }
-                continue;
-              }
-              final (rfx, rfy) =
-                  _applyAffine(imgToFrac, rc.x.toDouble(), rc.y.toDouble());
-              final roff = math.sqrt(
-                  math.pow(rfx - marker.xFrac, 2) + math.pow(rfy - marker.yFrac, 2));
-              if (insideGrid(rfx, rfy) || roff > _affineToleranceFrac) {
-                if (_kFiducialDebug) {
-                  _fidLog('q=${labels[i]} RESCUE_FAILED candidate found but '
-                      'geometrically inconsistent (frac=(${rfx.toStringAsFixed(3)},${rfy.toStringAsFixed(3)}))');
-                }
-                continue;
-              }
-              points[i] = rc;
-              results[i] = _MarkerSearchResult(
-                centroid: rc,
-                bboxGlobal: rr.bboxGlobal,
-                confidence: CornerConfidence.low,
-                squareness: rr.squareness,
-                contrast: rr.contrast,
-                anchorDistance: rr.anchorDistance,
-                rejected: rr.rejected,
-              );
-              note = '${labels[i]} corner recovered via geometry-assisted rescue';
-              if (_kFiducialDebug) {
-                _fidLog('q=${labels[i]} RESCUED sq=${rr.squareness.toStringAsFixed(3)}');
-              }
-            }
-          } finally {
-            fracToImg.dispose();
-          }
-        } finally {
-          imgToFrac.dispose();
-        }
-      }
-    }
+    final note = _crossCheckCornersByGeometry(
+      points,
+      results,
+      gray,
+      template,
+      allowRescueSearch: true,
+      labels: _kFiducialDebug ? labels : null,
+    );
 
     // All 4 fiducial marks must end up with a centroid — no reconstructing
     // one from geometry alone (Stage 4b only promotes an actually-detected
@@ -2200,9 +2479,19 @@ class OmrDecoder {
   /// Tries the image as captured first (correct for every portrait-page
   /// template, and for a landscape one shot without rotating, e.g. a flat
   /// overhead photo rather than the handheld portrait-frame case), then
-  /// each 90° rotation in turn, returning whichever succeeds. Portrait-page
-  /// templates never attempt a rotation at all — there's no ambiguity to
-  /// resolve for them, and doing so would just be wasted work.
+  /// each 90° rotation, then 180°, returning whichever succeeds. Portrait-
+  /// page templates never attempt a rotation at all — there's no ambiguity
+  /// to resolve for them, and doing so would just be wasted work.
+  ///
+  /// 180° is tried too (not just the two 90°s) because
+  /// [ExamScanningScreen]'s landscape unlock allows EITHER
+  /// `DeviceOrientation.landscapeLeft` OR `landscapeRight` — turning the
+  /// phone the "other way" for the same physical sheet flips the raw
+  /// sensor buffer's content 180° from the other hold, not 90°, and (see
+  /// [_imreadForTemplate]'s doc comment) this method now runs against that
+  /// raw, EXIF-uncorrected buffer for a landscape template specifically so
+  /// it can no longer rely on the camera plugin/OS to have resolved that
+  /// ambiguity beforehand.
   ///
   /// Returns the Mat actually used (identical to [gray] when no rotation
   /// was needed, otherwise a new rotated Mat the caller must separately
@@ -2228,6 +2517,7 @@ class OmrDecoder {
     for (final code in [
       cv.ROTATE_90_CLOCKWISE,
       cv.ROTATE_90_COUNTERCLOCKWISE,
+      cv.ROTATE_180,
     ]) {
       final rotated = cv.rotate(gray, code);
       try {
@@ -3143,6 +3433,7 @@ class OmrDecoder {
                       squareness: bestSquareness,
                       contrast: bestContrast,
                       anchorDistance: bestDistance,
+                      positionScore: posScoreBest,
                       rejected: topRejects,
                     );
                   } finally {
