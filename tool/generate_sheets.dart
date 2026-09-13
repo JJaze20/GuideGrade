@@ -327,14 +327,10 @@ class ExamSpec {
 
 final List<String> _atOdd = const ['A', 'B', 'C', 'D', 'E'];
 final List<String> _atEven = const ['F', 'G', 'H', 'J', 'K'];
-final List<String> _ptChoices = const ['a', 'b', 'c'];
 final List<String> _abcd = const ['A', 'B', 'C', 'D'];
 final List<String> _tf = const ['T', 'F'];
 
 final List<ExamSpec> kExams = [
-  ExamSpec('PT', 'Personality Profile (PT)', [
-    SectionSpec('Personality Profile', 185, (n) => _ptChoices),
-  ]),
   ExamSpec(
     'TAT',
     'Teaching Aptitude Test (TAT)',
@@ -1378,16 +1374,7 @@ class OmrExamTemplate {
 
 String _formatFrac(double v) => v.toStringAsFixed(5);
 
-/// Same font/size/left-padding _paintSimpleHeader/_paintNdmuHeader draw the
-/// printed column caption at (`colX + 3`, size 8, [regular]) — used here to
-/// carve that exact caption's ink out of the OCR crop rect below, rather
-/// than relying solely on [cleanNameOcrText]'s after-the-fact text stripping
-/// to recognize and remove it. `+6` is slack beyond the caption's measured
-/// advance width (antialiasing/kerning fuzz at the glyph edge), not a
-/// second attempt to re-derive the caption's width.
-double _labelClearancePt(PdfFont regular, String label) => 3 + (regular.stringMetrics(label) * 8).advanceWidth + 6;
-
-String _emitTemplate(ExamLayout layout, PdfFont regular) {
+String _emitTemplate(ExamLayout layout) {
   final exam = layout.exam;
   final varName = '_omr${exam.code}';
   final corners = _cornerMarkers(layout);
@@ -1396,19 +1383,32 @@ String _emitTemplate(ExamLayout layout, PdfFont regular) {
   String fieldRectDart(_FieldBox box) =>
       'OmrFieldRect(${_formatFrac(box.x / exam.pageWidthPt)}, ${_formatFrac(box.y / exam.pageHeightPt)}, '
       '${_formatFrac(box.width / exam.pageWidthPt)}, ${_formatFrac(box.height / exam.pageHeightPt)})';
-  // Last Name / First Name have long enough printed captions ("Last Name",
-  // "First Name") that OCR sometimes recognized them as the answer itself
-  // (see cleanNameOcrText's edit-distance fallback) — narrow the crop rect
-  // these two use to start right after the caption's own ink, so the OCR
-  // input is blind to the label in the first place. MI's caption ("MI") is
-  // short enough, and that field's box is already narrow enough (meant for
-  // one handwritten initial), that carving out even its small width risks
-  // leaving too little room for the initial itself — left as the full box,
-  // same as before, relying on cleanNameOcrText there instead.
-  _FieldBox clipLabel(_FieldBox box, String label) {
-    final clearance = _labelClearancePt(regular, label);
-    return (x: box.x + clearance, y: box.y, width: box.width - clearance, height: box.height);
-  }
+  // Keep the full width: handwriting can start below the printed caption.
+  // Captions are removed by name_ocr_cleanup.dart after recognition.
+  //
+  // AT is the one exception: _paintSimpleHeader draws its Last Name/First
+  // Name/MI captions on their own line at the TOP of the box (baseline
+  // `y + 10`, 8pt Helvetica -- see the `drawString(regular, 8, label, colX
+  // + 3, flip(y + 10))` call above), with the handwriting filling the rest
+  // of the box beneath it, rather than continuing on the same line right
+  // after the caption (that inline style is what QTM/TAT's _paintNdmuHeader
+  // draws, and cleanNameOcrText's post-recognition stripping already
+  // handles fine -- confirmed on real AT scans that OCR was instead
+  // recognizing the caption itself as part of the name). Clip only the top
+  // atCaptionInsetPt off AT's three name fields -- 14pt covers the 10pt
+  // baseline plus a small margin for descender/antialiasing, deliberately
+  // not more, so a tall handwritten ascender starting right under the
+  // caption doesn't get cut off by the crop itself. Left edge, width, and
+  // bottom edge are untouched.
+  const atCaptionInsetPt = 14.0;
+  _FieldBox clipCaptionTop(_FieldBox box) => exam.code != 'AT'
+      ? box
+      : (
+          x: box.x,
+          y: box.y + atCaptionInsetPt,
+          width: box.width,
+          height: box.height - atCaptionInsetPt,
+        );
 
   // Merge all pages belonging to the same section back into one
   // OmrSection (its items map spans every page it was laid out across).
@@ -1420,9 +1420,9 @@ String _emitTemplate(ExamLayout layout, PdfFont regular) {
   buffer.writeln('  bubbleRadiusPt: ${exam.bubbleRadius},');
   buffer.writeln('  bubbleRadiusYPt: ${bubbleRadiusYFor(exam)},');
   buffer.writeln('  cornerMarkers: const [$cornersDart],');
-  buffer.writeln('  lastNameFieldRect: const ${fieldRectDart(clipLabel(nameBoxes.lastName, 'Last Name'))},');
-  buffer.writeln('  firstNameFieldRect: const ${fieldRectDart(clipLabel(nameBoxes.firstName, 'First Name'))},');
-  buffer.writeln('  middleInitialFieldRect: const ${fieldRectDart(nameBoxes.middleInitial)},');
+  buffer.writeln('  lastNameFieldRect: const ${fieldRectDart(clipCaptionTop(nameBoxes.lastName))},');
+  buffer.writeln('  firstNameFieldRect: const ${fieldRectDart(clipCaptionTop(nameBoxes.firstName))},');
+  buffer.writeln('  middleInitialFieldRect: const ${fieldRectDart(clipCaptionTop(nameBoxes.middleInitial))},');
   buffer.writeln('  sections: const [');
   for (final section in exam.sections) {
     buffer.writeln('    OmrSection(');
@@ -1525,7 +1525,7 @@ Future<void> main() async {
     final physicalPageCount = isTatLandscape ? 1 : layout.pages.length;
     stdout.writeln('Wrote answer_sheets/${exam.code}.pdf ($physicalPageCount page(s), content width ${layout.contentWidth.toStringAsFixed(1)}pt)');
 
-    dartFile.writeln(_emitTemplate(layout, regular));
+    dartFile.writeln(_emitTemplate(layout));
     mapEntries.add('"${exam.code}": _omr${exam.code}');
   }
 
