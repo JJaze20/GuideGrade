@@ -5,26 +5,41 @@ import 'dart:typed_data';
 import 'package:opencv_dart/opencv_dart.dart' as cv;
 
 import '../../models/omr_scan_result.dart';
+import 'fiducial_search_tuning.dart';
 import 'omr_alignment_check.dart';
 import 'omr_templates.dart';
 
-/// One search region for a single corner: a tight [stage1] box around the
-/// template-expected marker position, the full photo-[quadrant] as the
-/// fallback, and the point candidate distance is scored against.
+/// Template-centered search box, fallback quadrant, and scoring anchor.
 typedef _QuadrantSearch = ({
   cv.Rect stage1,
   cv.Rect quadrant,
   double anchorX,
   double anchorY,
+  // Fixed-tolerance position-scoring scale for the Stage-1 search only —
+  // see [kFiducialAnchorToleranceFrac]'s doc comment for why this must
+  // stay independent of `stage1`'s (enlarged) box size.
+  double stage1AnchorScale,
 });
 
-/// A candidate blob considered for a corner but not chosen — kept for the
-/// debug overlay so a bad pick (or a near-miss) can be understood.
+/// Ranked outcome of measuring every choice in one OMR item at a given
+/// (possibly zero) sampling shift -- see [OmrDecoder._measureItemAt].
+typedef _ItemMeasurement = ({
+  List<(String, ({double ringFill, double wholeFill, double centerFill, double score}))>
+      measurements,
+  String bestChoice,
+  double bestFill,
+  double runnerUpFill,
+  double floorReference,
+});
+
+/// Rejected marker candidate retained for the debug overlay.
 class _RejectedCandidate {
   /// Bounding box in full-image coordinates.
   final cv.Rect bboxGlobal;
   final double squareness;
   final double score;
+  final double area;
+  final double contrast;
 
   /// `area` | `aspect` | `fill_ratio` | `contrast` | `low_squareness` |
   /// `inside_grid` | `geom_inconsistent` | `outscored`.
@@ -34,8 +49,10 @@ class _RejectedCandidate {
     this.bboxGlobal,
     this.squareness,
     this.score,
-    this.reason,
-  );
+    this.reason, {
+    this.area = 0,
+    this.contrast = 0,
+  });
 }
 
 /// Outcome of searching one quadrant for its corner square.
@@ -64,8 +81,7 @@ class _MarkerSearchResult {
 
 }
 
-/// Result of [OmrDecoder]'s `_refineCorners` — the four fiducial centroids
-/// plus everything the callers / debug viz need about how sure it is.
+/// Refined fiducial corners, confidence, and debug geometry (TL, TR, BL, BR).
 class _RefineResult {
   /// TL, TR, BL, BR — CV centroids of the real printed squares (a rescued
   /// corner is still a detected blob, just lower confidence).
@@ -75,6 +91,10 @@ class _RefineResult {
 
   /// TL, TR, BL, BR — the Stage-1 search boxes, for the debug overlay.
   final List<cv.Rect> stage1Regions;
+
+  /// Expected marker anchors (TL, TR, BL, BR), mapped into the detected page.
+  /// Unlike search boxes, these points are not clamped to image edges.
+  final List<(double, double)> anchors;
 
   /// TL, TR, BL, BR — rejected candidates per corner, for the debug overlay.
   final List<List<_RejectedCandidate>> rejectedPerCorner;
@@ -87,162 +107,96 @@ class _RefineResult {
     required this.confidence,
     required this.verdict,
     required this.stage1Regions,
+    required this.anchors,
     required this.rejectedPerCorner,
     required this.note,
   });
 }
 
-/// Decodes a photographed answer sheet into marked choices, using the
-/// fiducial corner markers in [OmrExamTemplate.cornerMarkers] to correct for
-/// skew/perspective before sampling each [BubblePos].
-///
-/// Native (Android/iOS/desktop) implementation — backed by opencv_dart,
-/// which requires dart:ffi and a compiled native OpenCV library, neither of
-/// which exist on Web. This file is only ever selected for compilation on
-/// platforms where dart:io is available (see omr_decoder.dart's conditional
-/// export); Web gets omr_decoder_web.dart instead.
+/// Independent post-warp marker detections in TL, TR, BL, BR order.
+/// Reprojecting the four fitted source points cannot validate an exact fit.
+class _WarpVerification {
+  /// Expected canonical position per corner (`template.cornerMarkers[i]`
+  /// scaled into the warped image's own pixel space).
+  final List<cv.Point2f> expected;
+
+  /// Freshly re-detected centroid per corner, or null if nothing in the
+  /// search box cleared even [OmrDecoder._markerMinSquarenessLow].
+  final List<cv.Point2f?> redetected;
+
+  /// Canonical-px distance from [redetected] to [expected] per corner;
+  /// `double.infinity` where nothing was found.
+  final List<double> errorPx;
+  final List<CornerConfidence> confidence;
+
+  const _WarpVerification({
+    required this.expected,
+    required this.redetected,
+    required this.errorPx,
+    required this.confidence,
+  });
+}
+
+/// Native OpenCV decoder: locate fiducials, rectify the sheet, normalize lighting,
+/// and classify bubble marks. Selected by the dart:io conditional export.
 class OmrDecoder {
   const OmrDecoder();
 
-  /// How far each corner's search region extends past the photo's exact
-  /// midpoint into the opposite half, as a fraction of that dimension —
-  /// gives a corner mark sitting close to the frame's center (a small or
-  /// off-center sheet) room to still fall inside its own quadrant, without
-  /// searching so much of the photo that unrelated marks or clutter
-  /// routinely cross into the wrong quadrant. See [_quadrantsFor].
+  /// Quadrant overlap allows markers near the center of an off-center sheet.
   static const double _quadrantOverlapFrac = 0.12;
 
   /// Canonical pixels per PDF point when warping the sheet flat. Bubble
   /// sampling geometry below is tuned against this scale.
   static const double _canonicalPxPerPt = 2.0;
 
-  /// Canonical pixels per PDF point used only for [cropNameFields] — much
-  /// higher than [_canonicalPxPerPt]. Confirmed on a real device scan that
-  /// cropping straight from a [_canonicalPxPerPt]-scale rectified image
-  /// gave name-field crops as small as ~200x68px: fine for OCR-ing the
-  /// crisp printed field label, but too low-resolution for the actual
-  /// handwritten answer to be recognized at all. [_canonicalPxPerPt] itself
-  /// is tuned for bubble sampling and shared by scoring — bumped up here
-  /// only, in a warp this method runs independently (see its doc comment),
-  /// rather than raising the shared constant and risking a scoring
-  /// regression for a display-only OCR suggestion.
+  /// Higher-resolution warp for handwritten name OCR in [cropNameFields].
+  /// Keep separate from the scale used to tune bubble scoring.
   static const double _ocrCanonicalPxPerPt = 6.0;
 
-  /// CLAHE clip limit, per exam code — how aggressively contrast gets
-  /// re-normalized before thresholding (see the CLAHE comment in
-  /// [decode]). Not a single global value: confirmed against real scans
-  /// that different exams' real captures needed different amounts of
-  /// correction. QTM's scan was evenly lit, so a low clip limit (1.2) was
-  /// enough and kept ordinary sensor/JPEG noise in blank paper from being
-  /// amplified into a speckled ink map. AT's scan had a genuine page-wide
-  /// lighting gradient (visibly darker on one side in the raw photo), and
-  /// that same low clip limit left it uncorrected — the flagged items
-  /// tracked the gradient almost exactly (42% flagged in the darkest
-  /// column vs 21% in the brightest). AT needs the stronger correction the
-  /// original clipLimit 2 provided; defaulting everything else to that
-  /// same 2 until each is individually confirmed against a real scan,
-  /// rather than assuming QTM's tuning generalizes.
+  /// Per-exam contrast correction: QTM needs less to avoid amplifying noise;
+  /// other exams retain stronger correction for uneven lighting.
   static double _claheClipLimitFor(String examCode) => switch (examCode) {
     'QTM' => 1.2,
     _ => 2.0,
   };
 
-  /// Block size (must be odd) for the adaptive threshold that binarizes the
-  /// warped sheet before bubble sampling. Large enough to span several
-  /// bubbles so it tracks slow lighting gradients across the page rather
-  /// than reacting to a single bubble, small enough to still adapt to
-  /// vignetting/uneven light within the sheet.
+  /// Odd threshold window spanning several bubbles to follow lighting gradients.
   static const int _adaptiveThresholdBlockSize = 45;
 
   /// Constant subtracted from the local adaptive-threshold mean; higher
   /// values require darker pixels to count as "ink".
   static const double _adaptiveThresholdC = 12;
 
-  /// Low-light adaptive tuning: "normal" mean brightness (0-255) a well-lit
-  /// captured sheet reads at, measured on the same grayscale Mat CLAHE is
-  /// about to run on (or, for [_findMarkerInRegion], on that corner's own
-  /// local search ROI — its own light can differ from the rest of the page,
-  /// e.g. a shadow or silhouette over just one corner). At or above this,
-  /// [_darknessFactor] is 0 and every adaptive helper below returns its
-  /// input unchanged — the existing per-exam-tuned CLAHE/threshold values
-  /// this project's daylight accuracy (AT ~94%, QTM ~95%) was measured
-  /// against are a mathematical no-op case of this, not a separate path.
-  /// Below it, correction scales in proportionally. Not yet calibrated
-  /// against a real low-light scan — a reasonable starting point pending
-  /// the on-device validation in the low-light accuracy plan's Phase 3, not
-  /// a final tuned value the way the per-exam constants above are.
+  /// Brightness at which low-light adjustments become a no-op (0–255).
+  /// Darker inputs receive proportional correction; needs real low-light calibration.
   static const double _referenceBrightness = 170.0;
 
-  /// How far below [_referenceBrightness] the adaptive scaling below
-  /// saturates at its maximum adjustment. Also pending real-scan
-  /// calibration.
+  /// Brightness drop at which correction saturates; needs low-light calibration.
   static const double _maxDarknessRange = 100.0;
 
-  /// 0 at/above [_referenceBrightness], ramping linearly to 1 at
-  /// [_referenceBrightness] - [_maxDarknessRange] and clamped there for
-  /// anything darker still — how far into "dark" territory a measured mean
-  /// brightness reads, for scaling CLAHE/threshold parameters
-  /// proportionally to how dark the actual photo is rather than as a hard
-  /// on/off switch at some arbitrary cutoff.
+  /// Clamped darkness factor: 0 at reference brightness, 1 at maximum drop.
   static double _darknessFactor(double meanBrightness) =>
       ((_referenceBrightness - meanBrightness) / _maxDarknessRange).clamp(0.0, 1.0);
 
-  /// Scales a CLAHE clip limit up to double at maximum measured darkness,
-  /// unchanged at/above [_referenceBrightness] — stronger local-contrast
-  /// stretching for a genuinely dim or shadowed photo, where the existing
-  /// fixed per-exam clip limits (tuned against normally-lit scans) don't
-  /// pull the paper-vs-ink gap open far enough on their own.
+  /// Increase contrast correction up to 2× for dark inputs.
   static double _adaptiveClipLimit(double base, double meanBrightness) =>
       base * (1 + _darknessFactor(meanBrightness));
 
-  /// Scales the adaptive-threshold C constant down to half at maximum
-  /// measured darkness, unchanged at/above [_referenceBrightness] — a more
-  /// permissive "is this ink" decision for when CLAHE alone hasn't fully
-  /// closed a dim photo's paper-vs-ink gap back to a normally-lit one's.
+  /// Reduce the ink threshold offset up to 50% for dark inputs.
   static double _adaptiveThresholdCFor(double base, double meanBrightness) =>
       base * (1 - _darknessFactor(meanBrightness) * 0.5);
 
-  /// How much the perspective-corrected grayscale is downscaled before its
-  /// background-illumination field is estimated (see [_normalizeIllumination]).
-  /// A modest blur on an image this much smaller is a very large-radius blur
-  /// at full resolution — the whole point — at a fraction of the cost, which
-  /// matters when this runs on every scanned page on a phone.
+  /// Downscale factor for inexpensive, broad background-illumination estimation.
   static const int _illumDownscaleDiv = 8;
 
-  /// The brightness blank paper is rescaled back toward after the background
-  /// division in [_normalizeIllumination], clamped to this band. Too high and
-  /// a region slightly below its local background clips to pure white (a
-  /// faint mark lost); too low and the whole page drifts toward the
-  /// threshold. The window sits a little under mid-8-bit so there is headroom
-  /// above blank paper for the division to land in.
+  /// Target paper-brightness band after background division, preserving faint ink.
   static const double _illumTargetLevelMin = 170;
   static const double _illumTargetLevelMax = 230;
 
-  /// Large-scale illumination normalization, applied to the perspective-
-  /// corrected grayscale image *after* the warp and *before* CLAHE /
-  /// adaptive thresholding.
-  ///
-  /// A cast shadow, a silhouette, or an uneven LED wash is a
-  /// low-spatial-frequency, roughly multiplicative change: it scales the
-  /// light coming off a broad area of the page, with the fine detail that
-  /// actually matters (printed text, fiducial marks, a shaded bubble)
-  /// riding on top of it. Dividing the image by a heavily-smoothed estimate
-  /// of that background cancels the broad term while leaving the fine
-  /// detail, because a large-radius blur cannot be pulled down much by
-  /// features that are tiny next to its kernel — so after this, a big
-  /// shadow reads mostly as "same paper, same brightness" while text and
-  /// marks stay dark.
-  ///
-  /// The background is estimated cheaply: downscale ~[_illumDownscaleDiv]x,
-  /// Gaussian-blur at that reduced scale, upscale back.
-  ///
-  /// Best-effort and strictly non-destructive. On an empty or non-8-bit
-  /// input, a degenerate background estimate, an implausible result, or any
-  /// OpenCV error it returns [gray] *itself* — so `identical(result, gray)`
-  /// is true, the caller does not double-free, and the pipeline downstream
-  /// is byte-for-byte what it was before whenever normalization could not
-  /// help. Every intermediate Mat allocated here is disposed here; only a
-  /// newly-created return value becomes the caller's to dispose.
+  /// Normalize broad lighting variations before CLAHE and thresholding by dividing
+  /// by a downscaled, blurred background estimate.
+  /// Returns [gray] unchanged on failure or implausible output. The caller owns
+  /// a new result only; all other allocations are disposed here.
   static cv.Mat _normalizeIllumination(cv.Mat gray) {
     if (gray.isEmpty || gray.channels != 1) return gray;
 
@@ -319,90 +273,63 @@ class OmrDecoder {
     }
   }
 
-  /// Absolute floor an item's best-filled bubble must clear before it's
-  /// even considered for marking, used only as a last-resort sanity check
-  /// (see [_readBubbles]) — everything with 3+ choices decides "is
-  /// anything marked here" by comparing the best bubble against the
-  /// *other bubbles in that same item*, not this constant. That change
-  /// (see [_readBubbles]'s doc comment) is what replaced this floor as the
-  /// primary decision after real scans confirmed it: with a single global
-  /// constant, a photo with any whole-sheet contrast compression (uneven
-  /// or dim lighting — confirmed against real photos, not assumed) pushed
-  /// every bubble's fill up together, so blank items crossed this floor
-  /// and genuinely marked items failed to clear it by enough over their
-  /// row-mates. A same-row, same-lighting comparison isn't affected by
-  /// that whole-photo shift at all. Kept low (below the old 0.28) since it
-  /// only needs to catch "no real ink signal anywhere," not do the actual
-  /// discrimination.
+  /// Minimum ink signal. Mark presence primarily uses same-row bubble differences
+  /// so changes in overall lighting do not shift every item across a fixed floor.
   static const double _blankFillFloor = 0.15;
 
-  /// The gap an item's best bubble must open over the single runner-up to
-  /// be trusted as "only one choice looks marked" rather than ambiguous —
-  /// checked for every item regardless of choice count, after
-  /// [_markPresenceGap] has already decided something is there at all.
-  ///
-  /// Per exam code rather than one fixed value, same reasoning as
-  /// [_claheClipLimitFor]: confirmed against a real AT scan that even its
-  /// correctly-read items typically show as a moderately-shaded ring
-  /// rather than a solid filled disc (a real difference in how that sheet
-  /// gets marked, not a decoder issue — see the CLAHE/inkmap comparison
-  /// this was diagnosed from). AT also compares 5 choices per item
-  /// (QTM/TAT compare 2-4), so its runner-up is drawn from a bigger pool
-  /// and has more chances to land close to the real mark by chance alone.
-  /// Both push a fixed 0.15 margin into flagging genuine single marks on
-  /// AT more often than it should.
-  ///
-  /// QTM confirmed against a real scan to need the same kind of loosening,
-  /// just less of it: a real sheet showed roughly a fifth to a third of
-  /// its items marked as a thin, hollow-centered ring rather than a solid
-  /// disc (compared directly against clearly-solid marks elsewhere on the
-  /// same sheet, at the same ink density) — a consistent feature of how
-  /// that exam-taker marks, not isolated light spots.
-  ///
-  /// Pushed further to match AT's 0.10 exactly after 0.12 still left a
-  /// consistent handful flagged (items 6/7/9/22/53/56 on every one of 4
-  /// re-scans) — checked those against clearly-unflagged items on the same
-  /// sheet at this point and the difference isn't an obvious light-vs-
-  /// solid split any more, just a small margin either side of whatever
-  /// threshold is set. That's a sign real gains here are running out —
-  /// if 0.10 doesn't clear these either, that's evidence they're
-  /// genuinely marginal rather than a fixable tuning gap, not a reason to
-  /// keep lowering further.
+  /// Minimum best-to-runner-up gap for an unambiguous mark.
+  /// AT/QTM use 0.10 for lighter, ring-shaped marks observed in real scans.
   static double _ambiguousMarginFor(String examCode) => switch (examCode) {
-    'AT' => 0.10,
-    'QTM' => 0.10,
+    'AT' || 'QTM' => 0.10,
     _ => 0.15,
   };
 
-  /// The gap an item's best bubble must open over the lowest of its own
-  /// row's *other* bubbles ([_readBubbles]'s 3+-choice path) to count as
-  /// "something is marked here at all" — deliberately smaller than
-  /// [_ambiguousMargin]. A real scan showed why the two needs are
-  /// different: one genuinely shaded bubble read as a solid, dense mark in
-  /// the ink map (comfortably clearing 0.15), while a second, equally real
-  /// but more lightly shaded bubble on the same sheet produced visibly
-  /// less ink density in the same ink map — real, not noise, just fainter
-  /// pencil pressure — and fell just short of that same 0.15 gap, so it
-  /// read as confidently blank instead of even being flagged. Detecting
-  /// "is anything here" should be more sensitive than deciding "is it
-  /// unambiguous" — a light-but-real mark should fall through to the
-  /// ambiguous check below (get flagged for review) rather than being
-  /// missed outright, which [_ambiguousMargin] alone couldn't do since it
-  /// was being asked to do both jobs at once.
+  /// Minimum best-to-lowest bubble gap for mark presence, including two-choice items.
+  /// Lower than the ambiguity margin so faint marks can reach review.
   static const double _markPresenceGap = 0.08;
+
+  /// A best-to-runner-up gap at least this fraction of the item's own
+  /// presence gap (best-to-floor) counts as decisive even when it falls
+  /// short of [_ambiguousMarginFor]'s flat cutoff. Rescues genuinely
+  /// single, dominant marks that would otherwise be flagged ambiguous only
+  /// because the absolute margin required doesn't scale with how strongly
+  /// an item's ink separates from its own local blank baseline -- confirmed
+  /// against real on-device captures (2026-09-13) where a clearly-marked
+  /// TAT item (margin 0.131 against a required 0.15) was one of many
+  /// flagged ambiguous despite a visually unambiguous, single dark bubble.
+  static const double _ambiguousRelativeMarginFloor = 0.55;
+
+  /// Presence gap must clear this multiple of [_markPresenceGap] before the
+  /// relative-margin rescue above applies -- keeps genuinely faint marks
+  /// (gap barely over the floor, so its ratio to the gap is unreliable)
+  /// routed to ambiguous review as originally intended, rather than being
+  /// waved through just because they happen to dominate a razor-thin signal.
+  static const double _strongPresenceGapMultiplier = 1.5;
+
+  /// Small local re-centering search tried only for items the flat/relative
+  /// checks above still call blank or ambiguous. A single page-wide
+  /// perspective correction can leave individual rows slightly
+  /// mis-registered when the physical sheet isn't perfectly flat -- on a
+  /// real capture (2026-09-13) this measurably shifted an entire row's
+  /// sample boxes enough that a neighboring, unmarked bubble outscored the
+  /// actually-shaded one (e.g. true mark B measured 0.263 while unmarked C
+  /// measured 0.289). Each candidate re-measures every choice in the item
+  /// shifted by the same (dx, dy) -- modeling a local row-level drift, not
+  /// a per-bubble one -- and only replaces the baseline if it produces a
+  /// larger best-to-runner-up margin, so this can only rescue an
+  /// already-uncertain item, never destabilize a confident one. Fractions
+  /// are of the bubble's own outer sampling half-width/height, kept well
+  /// under half the template's own bubble-to-bubble spacing.
+  static const List<double> _itemRecenterShiftFracs = [-0.35, -0.15, 0.0, 0.15, 0.35];
 
   /// A fiducial blob must be at least this many gray levels darker than the
   /// local background to count as a real mark (not a shadow edge). Still a
   /// hard gate; also feeds `contrastScore` in the combined candidate score.
   static const double _markerMinContrast = 20;
 
-  /// Cheap early reject: a candidate whose contour area fills less than this
-  /// fraction of its axis-aligned bounding box is background texture, not a
-  /// mark. Deliberately loose — a genuinely rotated square fills its
-  /// *axis-aligned* box only ~0.5 — so real discrimination is the
-  /// rotation-invariant `rectangularity` (contour area / min-area-rect
-  /// area) inside the squareness score, not this.
-  static const double _markerMinFillRatio = 0.35;
+  /// Loose contour-to-box fill floor tolerates perspective-distorted squares.
+  /// Squareness metrics provide the stronger shape discrimination.
+  static const double _markerMinFillRatio = 0.18;
 
   /// Cheap early reject: a candidate more elongated than this (longer side /
   /// shorter side) is a table line or a run of header text, not a square.
@@ -425,8 +352,10 @@ class OmrDecoder {
   /// Stage-1 search box half-extent, as a fraction of the shorter image
   /// dimension, centered on the template-expected corner (see
   /// [_quadrantsFor]). A miss here just falls through to the full-quadrant
-  /// Stage-2 search — this is a prior, never a boundary.
-  static const double _stage1HalfExtentFrac = 0.12;
+  /// Stage-2 search — this is a prior, never a boundary. Shared with the
+  /// live viewfinder's on-screen box sizing (`fiducial_search_tuning.dart`)
+  /// so the two can never drift apart — tune there, not here.
+  static const double _stage1HalfExtentFrac = kFiducialSearchHalfExtentFrac;
 
   /// Padding added around the answer-grid bounding box (fraction of page)
   /// when testing whether a candidate maps *inside* the grid — a strong
@@ -435,24 +364,104 @@ class OmrDecoder {
   /// larger pad would swallow them.
   static const double _gridBboxPadFrac = 0.02;
 
-  /// How far (fraction of page) a candidate may sit from where the affine
-  /// transform through the other three confident corners predicts, before
-  /// it's rejected as geometrically inconsistent with a real fiducial.
-  static const double _affineToleranceFrac = 0.06;
+  /// Allowed page-fraction error from the other three corners' affine prediction.
+  /// Loose enough for perspective tilt; grid exclusion and post-warp checks
+  /// provide stricter validation.
+  static const double _affineToleranceFrac = 0.30;
+
+  /// Half-extent (canonical px) of the search box used to re-detect each
+  /// fiducial on the warped image, centered on its expected canonical
+  /// position. Derived from the sheet's own print geometry: a printed
+  /// marker is 12pt wide (24 canonical px at [_canonicalPxPerPt]=2.0), and
+  /// sits 20pt (40 canonical px) from where bubble-grid content begins —
+  /// this box stays inside that gap (8px buffer) while still comfortably
+  /// covering real reprojection drift.
+  static const double _postWarpSearchHalfExtentPx = 32.0;
+
+  /// Cap on the long side (px) of the frame [checkCornersFromLuma] actually
+  /// searches. `startImageStream` delivers frames at the same resolution
+  /// the [CameraController] is configured with for capture (there is no
+  /// separate, smaller analysis stream) — confirmed on a real device that
+  /// searching a frame at that size took 1-2+ SECONDS per live check (see
+  /// the `[OMR PERF] liveFrame=` timing), not the fraction of a second this
+  /// advisory-only live guide was designed around. At that real cadence,
+  /// ordinary hand tremor between checks routinely exceeds the auto-capture
+  /// movement threshold (tuned assuming a much faster ~600ms cadence), so
+  /// "stable" could go effectively unreachable — all 4 corners genuinely
+  /// locked, auto-capture still never firing. Live detection only needs to
+  /// be good enough to color a viewfinder and track rough motion — the
+  /// post-capture pass (`locateCorners`/`decode`) always re-searches the
+  /// real full-resolution photo independently regardless — so downscaling
+  /// this one advisory pass trades precision nobody needs here for the
+  /// responsiveness the feature actually depends on.
+  ///
+  /// TEMPORARY test value — 640 measured consistently fast (~150-300ms,
+  /// confirmed on a real device) but manual capture no longer depends on
+  /// this signal at all now, so there's room to trade some of that speed
+  /// back for resolution if it helps the small printed squares resolve
+  /// more reliably in the live guide. Testing 800 against
+  /// `[OMR PERF] liveFrame=` before considering 960 — see the capture-
+  /// architecture change this accompanied.
+  static const int _liveCheckMaxDimension = 800;
+
+  /// Post-warp reprojection error (canonical px) above which a corner is
+  /// flagged but still accepted (yellow) — roughly a marker's own
+  /// half-width, i.e. the expected noise floor of a clean warp + re-detect.
+  static const double _warpWarnPx = 10.0;
+
+  /// Post-warp reprojection error (canonical px) above which the warp is
+  /// rejected outright (red) — roughly one full marker width: a shift this
+  /// large means the marker isn't where the template says it must be.
+  static const double _warpRejectPx = 20.0;
 
   /// TEMPORARY diagnostic switch for fiducial-marker selection. When true,
   /// [_refineCorners] and [_findMarkerInRegion] print `[OMR FIDUCIAL DEBUG]`
   /// lines describing every candidate blob, the anchors, and the winners.
   /// Purely observational — no threshold, filter, or selection decision
-  /// reads this or the extra metrics it logs. Remove once fiducial
-  /// classification is retuned.
-  static const bool _kFiducialDebug = true;
+  /// reads this or the extra metrics it logs.
+  ///
+  /// Left on through the anchor-mismatch and affine-tolerance
+  /// investigations; now confirmed fixed on a real device (post-warp
+  /// reprojection error 0.3px on a genuinely tilted QTM capture), so this
+  /// is switched off — with the search boxes doubled, a full-quadrant
+  /// Stage-2 fallback can evaluate 1000+ candidate contours, each
+  /// triggering a synchronous `print()`, sitting directly on the capture
+  /// path (this runs on every `locateCorners`/`decode` call, not just the
+  /// live preview). Flip back to `true` only if fiducial detection needs
+  /// this level of diagnosis again.
+  static const bool _kFiducialDebug = false;
 
   /// TEMPORARY. Synchronous stdout (not debugPrint, whose throttle can drop
   /// the tail when the decode isolate tears down) — every line reaches
   /// logcat as `I/flutter`.
   // ignore: avoid_print
   static void _fidLog(String line) => print('[OMR FIDUCIAL DEBUG] $line');
+
+  /// TEMPORARY diagnostic switch for scan-pipeline latency instrumentation
+  /// (investigating a reported post-lock capture/processing slowdown).
+  /// Mirrors [_kFiducialDebug]/[_fidLog] — same isolate-safety reasoning
+  /// (this code runs inside `compute()`-spawned isolates; `print`, not
+  /// `debugPrint`, survives isolate teardown). Purely observational — no
+  /// threshold, filter, or selection decision reads these numbers. Remove
+  /// once real on-device timings have been collected and acted on.
+  static const bool _kPerfDebug = true;
+
+  // ignore: avoid_print
+  static void _perfLog(String line) => print('[OMR PERF] $line');
+
+  /// TEMPORARY diagnostic switch for the ring/whole/center bubble-scoring
+  /// investigation (real shaded bubbles reading as blank/ambiguous despite
+  /// confirmed-accurate registration). Mirrors [_kFiducialDebug]/[_fidLog] —
+  /// same isolate-safety reasoning. Gated additionally to QTM only in
+  /// [_readBubbles] (see [_kBubbleDebugExamCode]), since this logs 4+ lines
+  /// per item and a full sheet is 60+ items. Purely observational — no
+  /// threshold or classification decision reads these numbers. Remove once
+  /// the combined score is confirmed/tuned.
+  static const bool _kBubbleDebug = true;
+  static const String _kBubbleDebugExamCode = 'QTM';
+
+  // ignore: avoid_print
+  static void _bubbleLog(String block) => print('[OMR BUBBLE] $block');
 
   static double _clamp01(double v) => v < 0 ? 0 : (v > 1 ? 1 : v);
 
@@ -590,10 +599,15 @@ class OmrDecoder {
   /// area) free to detect an actual pencil mark.
   static const double _bubbleInnerSampleFrac = 0.6;
 
-  /// Cheap alignment check for right after a photo is captured: does the
-  /// same image load + corner search as [decode], but skips the perspective
-  /// warp and bubble sampling, so it's reasonable to run on every capture
-  /// rather than only at full-decode time.
+  /// Authoritative post-capture gate, run right after a photo is captured
+  /// and before it's ever added to the batch: does the same image load +
+  /// corner search as [decode], and — unlike this method's original
+  /// "cheap" scope — the same perspective warp and post-warp geometric
+  /// verification too (see [_checkAlignment]/[_verifyWarpedCorners]), so a
+  /// photo that would produce a badly-corrected sheet is caught here, not
+  /// discovered later as a bad score. Still skips illumination
+  /// normalization, CLAHE, and bubble sampling — [decode]'s genuinely
+  /// expensive stages — so this remains reasonable to run on every capture.
   AlignmentCheck locateCorners(String imagePath, OmrExamTemplate template) {
     final src = cv.imread(imagePath);
     try {
@@ -629,11 +643,20 @@ class OmrDecoder {
   /// pass/fail. No geometry cross-check runs here (that needs ≥3 confident
   /// corners and is heavier) — the post-capture pass is authoritative.
   ///
+  /// Also returns each found corner's centroid, normalized to `(x/width,
+  /// y/height)` fractions of this frame — device/resolution-independent —
+  /// so callers (the live scanning screen's auto-capture stability check)
+  /// can diff a corner's position between frames without needing raw pixel
+  /// coordinates. Plain `(double, double)` records, not `cv.Point2f`: the
+  /// latter wraps a native FFI struct and isn't safe to return from a
+  /// `compute()`-spawned isolate, unlike a value record.
+  ///
   /// Searches the same way [_refineCorners] does (see [_quadrantsFor],
   /// [_findMarkerInRegion]) — a tight template-expected box first, the full
   /// photo quadrant if that misses — so the live guide and the post-capture
   /// gate can never disagree about whether a mark is findable in a frame.
-  List<CornerConfidence> checkCornersFromLuma(
+  ({List<CornerConfidence> confidence, List<(double, double)?> positions})
+      checkCornersFromLuma(
     Uint8List lumaBytes,
     int width,
     int height,
@@ -647,27 +670,104 @@ class OmrDecoder {
       lumaBytes,
     );
     try {
-      final gray = bytesPerRow == width
+      final cropped = bytesPerRow == width
           ? full
           : full.region(cv.Rect(0, 0, width, height));
       try {
-        final pageQuad = _detectPageQuad(gray);
-        final searches =
-            _quadrantsFor(gray.width, gray.height, pageQuad, template);
-        return [
-          for (final s in searches)
-            _bestOf(
-              _findMarkerInRegion(gray, s.stage1, s.anchorX, s.anchorY),
-              () => _findMarkerInRegion(gray, s.quadrant, s.anchorX, s.anchorY),
-            ).confidence,
-        ];
+        // See [_liveCheckMaxDimension]'s doc comment — this is what
+        // actually keeps a live check fast; everything below is unchanged.
+        final longSide = math.max(cropped.width, cropped.height);
+        final cv.Mat gray;
+        if (longSide > _liveCheckMaxDimension) {
+          final scale = _liveCheckMaxDimension / longSide;
+          gray = cv.resize(
+            cropped,
+            ((cropped.width * scale).round(), (cropped.height * scale).round()),
+            interpolation: cv.INTER_AREA,
+          );
+        } else {
+          gray = cropped;
+        }
+        try {
+          // Raw camera frames can be sideways even in a portrait-locked UI.
+          // Retry every template, but stop as soon as all corners are confident.
+          var best = _searchLiveCorners(gray, template);
+          var bestScore = _liveConfidenceScore(best.confidence);
+          if (best.confidence.every((c) => c == CornerConfidence.confident)) {
+            return best;
+          }
+          for (final code in [
+            cv.ROTATE_90_CLOCKWISE,
+            cv.ROTATE_90_COUNTERCLOCKWISE,
+          ]) {
+            final rotated = cv.rotate(gray, code);
+            try {
+              final candidate = _searchLiveCorners(rotated, template);
+              final score = _liveConfidenceScore(candidate.confidence);
+              if (score > bestScore) {
+                best = candidate;
+                bestScore = score;
+              }
+              if (best.confidence.every((c) => c == CornerConfidence.confident)) {
+                break;
+              }
+            } finally {
+              rotated.dispose();
+            }
+          }
+          return best;
+        } finally {
+          if (!identical(gray, cropped)) gray.dispose();
+        }
       } finally {
-        if (!identical(gray, full)) gray.dispose();
+        if (!identical(cropped, full)) cropped.dispose();
       }
     } finally {
       full.dispose();
     }
   }
+
+  /// One live corner search pass over [gray] at whatever orientation it's
+  /// already in — the body [checkCornersFromLuma] always ran, now shared
+  /// so a landscape template can try it against multiple rotations.
+  ({List<CornerConfidence> confidence, List<(double, double)?> positions})
+      _searchLiveCorners(cv.Mat gray, OmrExamTemplate template) {
+    final pageQuad = _detectPageQuad(gray);
+    final searches = _quadrantsFor(gray.width, gray.height, pageQuad, template);
+    final results = [
+      for (final s in searches)
+        _bestOf(
+          _findMarkerInRegion(
+            gray, s.stage1, s.anchorX, s.anchorY,
+            anchorScaleOverride: s.stage1AnchorScale,
+          ),
+          () => _findMarkerInRegion(gray, s.quadrant, s.anchorX, s.anchorY),
+        ),
+    ];
+    return (
+      confidence: [for (final r in results) r.confidence],
+      positions: [
+        for (final r in results)
+          r.centroid == null
+              ? null
+              : (r.centroid!.x / gray.width, r.centroid!.y / gray.height),
+      ],
+    );
+  }
+
+  /// Total ranking score for a live search's 4 corner tiers — confident
+  /// counts double a low, none counts nothing — used only to pick the best
+  /// of 3 orientation attempts for a landscape template; never read by any
+  /// classification decision.
+  int _liveConfidenceScore(List<CornerConfidence> tiers) => tiers.fold(
+        0,
+        (sum, t) => sum +
+            switch (t) {
+              CornerConfidence.confident => 2,
+              CornerConfidence.low => 1,
+              CornerConfidence.none => 0,
+            },
+      );
 
   /// Stage 1 → Stage 2: if [stage1Result] already found a confident square,
   /// use it (skip the more expensive full-quadrant search entirely). Else
@@ -694,20 +794,110 @@ class OmrDecoder {
         : stage1Result;
   }
 
-  /// Used by [locateCorners] (the post-capture gate). A [_RefineResult]
-  /// with [AlignmentVerdict.green] or [AlignmentVerdict.yellow] both count
-  /// as `aligned` — yellow means a usable quad was still produced (see
-  /// [_refineCorners]'s Stage 4), just with a corner recovered by geometry
-  /// rather than crisply detected.
+  /// Used by [locateCorners] — the post-capture gate, and the only place
+  /// that can reject a bad photo before it ever enters the batch. Doesn't
+  /// stop at finding the four corners: also fits the homography and warps,
+  /// then independently re-detects each marker on the warped image to
+  /// confirm the correction actually landed them where the template says
+  /// they must be (see [_verifyWarpedCorners]) — a "4/4 confidently found"
+  /// read is not, by itself, proof that the resulting perspective
+  /// correction is trustworthy. Skips bubble sampling/illumination
+  /// normalization/CLAHE — the expensive parts of [decode] — so this stays
+  /// reasonable to run on every capture.
+  ///
+  /// A [_RefineResult] with [AlignmentVerdict.green] or
+  /// [AlignmentVerdict.yellow] both count as pre-warp `aligned` — yellow
+  /// means a usable quad was still produced (see [_refineCorners]'s Stage
+  /// 4), just with a corner recovered by geometry rather than crisply
+  /// detected. The post-warp check can still downgrade either to rejected
+  /// or degraded, independent of the pre-warp verdict.
   AlignmentCheck _checkAlignment(cv.Mat gray, OmrExamTemplate template) {
+    final totalSw = _kPerfDebug ? (Stopwatch()..start()) : null;
+    var cornerSearchMs = 0;
+    var warpMs = 0;
+    var warpVerifyMs = 0;
     try {
+      final cornerSw = _kPerfDebug ? (Stopwatch()..start()) : null;
       final (oriented, refine, _) = _orientAndFindCorners(gray, template);
-      if (!identical(oriented, gray)) oriented.dispose();
-      if (refine.verdict == AlignmentVerdict.green) {
-        return const AlignmentCheck.aligned();
+      if (cornerSw != null) cornerSearchMs = cornerSw.elapsedMilliseconds;
+      try {
+        final canonicalWidth =
+            (template.pageWidthPt * _canonicalPxPerPt).round();
+        final canonicalHeight =
+            (template.pageHeightPt * _canonicalPxPerPt).round();
+        final dstCorners = cv.VecPoint2f.fromList([
+          for (final c in template.cornerMarkers)
+            cv.Point2f(
+              c.xFrac * canonicalWidth,
+              c.yFrac * canonicalHeight,
+            ),
+        ]);
+        final srcCorners = cv.VecPoint2f.fromList(refine.corners);
+        final warpSw = _kPerfDebug ? (Stopwatch()..start()) : null;
+        final transform = cv.getPerspectiveTransform2f(srcCorners, dstCorners);
+        try {
+          final warped = cv.warpPerspective(
+            oriented,
+            transform,
+            (canonicalWidth, canonicalHeight),
+          );
+          if (warpSw != null) warpMs = warpSw.elapsedMilliseconds;
+          try {
+            final verifySw = _kPerfDebug ? (Stopwatch()..start()) : null;
+            final verification = _verifyWarpedCorners(
+              warped,
+              template,
+              canonicalWidth,
+              canonicalHeight,
+            );
+            final classified =
+                _classifyWarpVerification(verification, refine.confidence);
+            if (verifySw != null) warpVerifyMs = verifySw.elapsedMilliseconds;
+            void logTotal() {
+              if (totalSw == null) return;
+              _perfLog(
+                'locateCorners cornerSearch=${cornerSearchMs}ms warp=${warpMs}ms '
+                'warpVerify=${warpVerifyMs}ms total=${totalSw.elapsedMilliseconds}ms',
+              );
+            }
+
+            if (!classified.ok) {
+              logTotal();
+              return AlignmentCheck.warpMisaligned(
+                classified.message!,
+                refine.confidence,
+                verification.errorPx,
+              );
+            }
+            if (classified.degraded ||
+                refine.verdict != AlignmentVerdict.green) {
+              logTotal();
+              return AlignmentCheck.degraded(
+                classified.message ?? refine.note,
+                refine.confidence,
+                verification.errorPx,
+              );
+            }
+            logTotal();
+            return const AlignmentCheck.aligned();
+          } finally {
+            warped.dispose();
+          }
+        } finally {
+          transform.dispose();
+          srcCorners.dispose();
+          dstCorners.dispose();
+        }
+      } finally {
+        if (!identical(oriented, gray)) oriented.dispose();
       }
-      return AlignmentCheck.degraded(refine.note, refine.confidence);
     } on StateError catch (e) {
+      if (totalSw != null) {
+        _perfLog(
+          'locateCorners cornerSearch=${cornerSearchMs}ms FAILED '
+          'total=${totalSw.elapsedMilliseconds}ms',
+        );
+      }
       return AlignmentCheck.misaligned(e.message);
     }
   }
@@ -716,6 +906,15 @@ class OmrDecoder {
   /// Throws a [StateError] with a user-facing message if the sheet couldn't
   /// be read or aligned.
   OmrScanResult decode(String imagePath, OmrExamTemplate template) {
+    final decodeTotalSw = _kPerfDebug ? (Stopwatch()..start()) : null;
+    var decodeCornerSearchMs = 0;
+    var decodeWarpMs = 0;
+    var decodeWarpVerifyMs = 0;
+    var decodeIllumMs = 0;
+    var decodeBilateralMs = 0;
+    var decodeClaheMs = 0;
+    var decodeThresholdMs = 0;
+    var decodeBubbleReadMs = 0;
     final src = cv.imread(imagePath);
     try {
       if (src.isEmpty) {
@@ -723,7 +922,11 @@ class OmrDecoder {
       }
       final gray = cv.cvtColor(src, cv.COLOR_BGR2GRAY);
       try {
+        final cornerSw = _kPerfDebug ? (Stopwatch()..start()) : null;
         final (oriented, refine, _) = _orientAndFindCorners(gray, template);
+        if (cornerSw != null) {
+          decodeCornerSearchMs = cornerSw.elapsedMilliseconds;
+        }
         final corners = refine.corners;
         try {
           final canonicalWidth = (template.pageWidthPt * _canonicalPxPerPt)
@@ -750,6 +953,7 @@ class OmrDecoder {
               ),
           ]);
           final srcCorners = cv.VecPoint2f.fromList(corners);
+          final warpSw = _kPerfDebug ? (Stopwatch()..start()) : null;
           final transform = cv.getPerspectiveTransform2f(
             srcCorners,
             dstCorners,
@@ -759,10 +963,40 @@ class OmrDecoder {
               canonicalWidth,
               canonicalHeight,
             ));
+            if (warpSw != null) decodeWarpMs = warpSw.elapsedMilliseconds;
             // Declared out here so the `finally` below can dispose it; it is
             // assigned as the first statement inside the `try`.
             cv.Mat? normalizedGray;
             try {
+              // Post-warp geometric gate: independently re-detect each
+              // fiducial directly on `warped` (already grayscale — `oriented`
+              // is derived from `gray`) and reject the whole photo if any
+              // one lands too far from its known canonical position. This
+              // is what actually catches a photo that passed every pre-warp
+              // check (Stage 4's geometry cross-check, _validateQuad) but
+              // still produced a badly-corrected sheet — see
+              // [_verifyWarpedCorners]'s doc comment for why this can't be
+              // done by re-projecting the same 4 source points instead.
+              // Should already have been caught by [locateCorners] before
+              // this photo ever entered the batch, but decode() never
+              // assumes another method's check transfers to this exact
+              // call — same isolation philosophy as [rectifyForOverlay].
+              final verifySw = _kPerfDebug ? (Stopwatch()..start()) : null;
+              final warpVerification = _verifyWarpedCorners(
+                warped,
+                template,
+                canonicalWidth,
+                canonicalHeight,
+              );
+              final warpVerdict =
+                  _classifyWarpVerification(warpVerification, refine.confidence);
+              if (verifySw != null) {
+                decodeWarpVerifyMs = verifySw.elapsedMilliseconds;
+              }
+              if (!warpVerdict.ok) {
+                throw StateError(warpVerdict.message!);
+              }
+
               // Illumination normalization runs first, on the raw warp:
               // divide out a large-scale estimate of the lighting/shadow
               // field so a strong cast shadow or an uneven LED wash reaches
@@ -772,7 +1006,9 @@ class OmrDecoder {
               // returns `warped` itself on any failure, so `identical`
               // short-circuits every use below and the pipeline is unchanged
               // whenever normalization couldn't help.
+              final illumSw = _kPerfDebug ? (Stopwatch()..start()) : null;
               normalizedGray = _normalizeIllumination(warped);
+              if (illumSw != null) decodeIllumMs = illumSw.elapsedMilliseconds;
 
               // A cast shadow (a hand, phone, or object between the light
               // source and the sheet) doesn't just darken the pixels under
@@ -840,20 +1076,27 @@ class OmrDecoder {
               // (bilateral filtering is meaningfully slower than a plain
               // blur).
               final darkness = _darknessFactor(warpedBrightness);
+              final bilateralSw = _kPerfDebug ? (Stopwatch()..start()) : null;
               final claheInput = darkness > 0
                   ? cv.bilateralFilter(
                       normalizedGray, 5, 50 * darkness, 50 * darkness)
                   : normalizedGray;
+              if (bilateralSw != null) {
+                decodeBilateralMs = bilateralSw.elapsedMilliseconds;
+              }
               try {
+                final claheSw = _kPerfDebug ? (Stopwatch()..start()) : null;
                 final clahe = cv.createCLAHE(
                   clipLimit: _adaptiveClipLimit(_claheClipLimitFor(template.examCode), warpedBrightness),
                   tileGridSize: (8, 8),
                 );
                 try {
                   final normalized = clahe.apply(claheInput);
+                  if (claheSw != null) decodeClaheMs = claheSw.elapsedMilliseconds;
                   try {
                     final blurred = cv.gaussianBlur(normalized, (5, 5), 0);
                     try {
+                      final threshSw = _kPerfDebug ? (Stopwatch()..start()) : null;
                       final inkMap = cv.adaptiveThreshold(
                         blurred,
                         255,
@@ -862,13 +1105,30 @@ class OmrDecoder {
                         _adaptiveThresholdBlockSize,
                         _adaptiveThresholdCFor(_adaptiveThresholdC, warpedBrightness),
                       );
+                      if (threshSw != null) {
+                        decodeThresholdMs = threshSw.elapsedMilliseconds;
+                      }
                       try {
-                        return _readBubbles(
+                        final bubbleSw = _kPerfDebug ? (Stopwatch()..start()) : null;
+                        final result = _readBubbles(
                           inkMap,
                           template,
                           canonicalWidth,
                           canonicalHeight,
                         );
+                        if (bubbleSw != null) {
+                          decodeBubbleReadMs = bubbleSw.elapsedMilliseconds;
+                        }
+                        if (decodeTotalSw != null) {
+                          _perfLog(
+                            'decode cornerSearch=${decodeCornerSearchMs}ms warp=${decodeWarpMs}ms '
+                            'warpVerify=${decodeWarpVerifyMs}ms illum=${decodeIllumMs}ms '
+                            'bilateral=${decodeBilateralMs}ms clahe=${decodeClaheMs}ms '
+                            'threshold=${decodeThresholdMs}ms bubbleRead=${decodeBubbleReadMs}ms '
+                            'total=${decodeTotalSw.elapsedMilliseconds}ms',
+                          );
+                        }
+                        return result;
                       } finally {
                         inkMap.dispose();
                       }
@@ -1153,6 +1413,7 @@ class OmrDecoder {
     String outputDir,
     int pageIndex,
   ) {
+    final debugVizSw = _kPerfDebug ? (Stopwatch()..start()) : null;
     final src = cv.imread(imagePath);
     try {
       if (src.isEmpty) return;
@@ -1175,6 +1436,11 @@ class OmrDecoder {
           File(
             '$outputDir/sheet${pageIndex}_error.txt',
           ).writeAsStringSync(e.message);
+          if (debugVizSw != null) {
+            _perfLog(
+              'debugViz pageIndex=$pageIndex FAILED total=${debugVizSw.elapsedMilliseconds}ms',
+            );
+          }
           return;
         }
         final corners = refine.corners;
@@ -1240,9 +1506,22 @@ class OmrDecoder {
                   cv.Scalar(255, 140, 0),
                   thickness: 2,
                 );
+                // Expected marker position (magenta crosshair) — the exact
+                // point every candidate in this corner's search was scored
+                // against (see [_QuadrantSearch.anchorX]/`anchorY`),
+                // distinct from the Stage-1 box itself (which can get
+                // clamped at the image edge).
+                final (ax, ay) = refine.anchors[i];
+                final axi = ax.round(), ayi = ay.round();
+                cv.line(cornersDebug, cv.Point(axi - 12, ayi), cv.Point(axi + 12, ayi),
+                    cv.Scalar(255, 0, 255), thickness: 2);
+                cv.line(cornersDebug, cv.Point(axi, ayi - 12), cv.Point(axi, ayi + 12),
+                    cv.Scalar(255, 0, 255), thickness: 2);
                 // Every candidate this corner rejected — orange, sized by
                 // how highly it scored, so a near-miss (a bubble that
-                // almost won) stands out from obvious clutter.
+                // almost won) stands out from obvious clutter. Label
+                // carries every metric requested for diagnosing a failed
+                // corner: reason, squareness, area, contrast.
                 for (final r in refine.rejectedPerCorner[i]) {
                   final cx = r.bboxGlobal.x + r.bboxGlobal.width ~/ 2;
                   final cy = r.bboxGlobal.y + r.bboxGlobal.height ~/ 2;
@@ -1255,7 +1534,10 @@ class OmrDecoder {
                   );
                   cv.putText(
                     cornersDebug,
-                    '${r.reason} sq=${r.squareness.toStringAsFixed(2)}',
+                    '${r.reason} sq=${r.squareness.toStringAsFixed(2)} '
+                    'a=${r.area.toStringAsFixed(0)} '
+                    '${r.bboxGlobal.width}x${r.bboxGlobal.height} '
+                    'c=${r.contrast.toStringAsFixed(1)}',
                     cv.Point(cx + 10, cy),
                     cv.FONT_HERSHEY_SIMPLEX,
                     0.4,
@@ -1288,6 +1570,24 @@ class OmrDecoder {
                   cv.FONT_HERSHEY_SIMPLEX,
                   0.6,
                   color,
+                  thickness: 2,
+                );
+              }
+              // The homography quad itself — connecting the 4 accepted
+              // corners in true perimeter order (TL,TR,BR,BL is a
+              // perimeter walk; index order [tl,tr,bl,br] is not), distinct
+              // in color (magenta) from the individual accept/reject
+              // markers above so the actual quad shape fed into
+              // getPerspectiveTransform2f is visible at a glance.
+              const perimeterOrder = [0, 1, 3, 2];
+              for (var i = 0; i < perimeterOrder.length; i++) {
+                final a = corners[perimeterOrder[i]];
+                final b = corners[perimeterOrder[(i + 1) % perimeterOrder.length]];
+                cv.line(
+                  cornersDebug,
+                  cv.Point(a.x.round(), a.y.round()),
+                  cv.Point(b.x.round(), b.y.round()),
+                  cv.Scalar(255, 0, 255),
                   thickness: 2,
                 );
               }
@@ -1327,6 +1627,39 @@ class OmrDecoder {
               dstCorners,
             );
             try {
+              // The actual grayscale pipeline decode() reads bubbles from —
+              // same warp, same CLAHE, same threshold, on the grayscale image
+              // rather than color — saved at each stage so a misread can be
+              // diagnosed against what the decoder actually saw, not a
+              // reconstruction of it. sheetN_warped_gray.jpg is the flattened
+              // page before any contrast correction; sheetN_clahe.jpg is after
+              // (compare the two to see how much correction was needed);
+              // sheetN_inkmap.jpg is the final black/white result
+              // _readBubbles actually samples — white is "ink" everywhere it
+              // matters for scoring.
+              final warpedGray = cv.warpPerspective(oriented, transform, (
+                canonicalWidth,
+                canonicalHeight,
+              ));
+              // Computed from warpedGray (before any of the color drawing
+              // below) so the grid.jpg overlay can show exactly what
+              // decode()/locateCorners() would see: where each fiducial was
+              // expected after correction, where it was actually
+              // re-detected, and the resulting per-corner pixel error. See
+              // [_verifyWarpedCorners]'s doc comment for why re-detection
+              // (not re-projecting the same 4 source points) is the only
+              // meaningful post-warp check.
+              final warpVerification = _verifyWarpedCorners(
+                warpedGray,
+                template,
+                canonicalWidth,
+                canonicalHeight,
+              );
+              final warpClassified = _classifyWarpVerification(
+                warpVerification,
+                refine.confidence,
+              );
+
               final warped = cv.warpPerspective(orientedSrc, transform, (
                 canonicalWidth,
                 canonicalHeight,
@@ -1347,25 +1680,71 @@ class OmrDecoder {
                     }
                   }
                 }
+                const warpCornerLabels = ['TL', 'TR', 'BL', 'BR'];
+                for (var i = 0; i < 4; i++) {
+                  final e = warpVerification.expected[i];
+                  final r = warpVerification.redetected[i];
+                  final err = warpVerification.errorPx[i];
+                  // Expected canonical position — magenta crosshair, always
+                  // drawn even when nothing was re-detected there.
+                  final ex = e.x.round(), ey = e.y.round();
+                  cv.line(warped, cv.Point(ex - 10, ey), cv.Point(ex + 10, ey),
+                      cv.Scalar(255, 0, 255), thickness: 2);
+                  cv.line(warped, cv.Point(ex, ey - 10), cv.Point(ex, ey + 10),
+                      cv.Scalar(255, 0, 255), thickness: 2);
+                  // Error-tier color: green within tolerance, amber past
+                  // _warpWarnPx, red past _warpRejectPx (or not found).
+                  final errColor = err > _warpRejectPx
+                      ? cv.Scalar(0, 0, 255)
+                      : err > _warpWarnPx
+                          ? cv.Scalar(0, 200, 255)
+                          : cv.Scalar(0, 255, 0);
+                  if (r != null) {
+                    final rx = r.x.round(), ry = r.y.round();
+                    cv.circle(warped, cv.Point(rx, ry), 8, errColor,
+                        thickness: 2);
+                    cv.line(warped, cv.Point(ex, ey), cv.Point(rx, ry),
+                        errColor, thickness: 1);
+                  }
+                  final label = err.isInfinite
+                      ? '${warpCornerLabels[i]} not found'
+                      // Plain ASCII — cv.FONT_HERSHEY_SIMPLEX has no glyph
+                      // for "Δ" and silently renders it as "??" (confirmed
+                      // against a real device capture).
+                      : '${warpCornerLabels[i]} err=${err.toStringAsFixed(1)}px';
+                  cv.putText(
+                    warped,
+                    label,
+                    cv.Point(ex + 14, ey + 14),
+                    cv.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    errColor,
+                    thickness: 1,
+                  );
+                }
+                final verdictLabel = warpClassified.ok
+                    ? (warpClassified.degraded
+                        ? 'post-warp: within tolerance but degraded (max ${warpClassified.maxErrorPx.toStringAsFixed(1)}px)'
+                        : 'post-warp: OK (max ${warpClassified.maxErrorPx.toStringAsFixed(1)}px)')
+                    : 'post-warp: REJECTED - ${warpClassified.message}';
+                cv.putText(
+                  warped,
+                  verdictLabel,
+                  cv.Point(20, warped.height - 20),
+                  cv.FONT_HERSHEY_SIMPLEX,
+                  0.5,
+                  warpClassified.ok
+                      ? (warpClassified.degraded
+                          ? cv.Scalar(0, 200, 255)
+                          : cv.Scalar(0, 255, 0))
+                      : cv.Scalar(0, 0, 255),
+                  thickness: 1,
+                );
                 cv.imwrite('$outputDir/sheet${pageIndex}_grid.jpg', warped);
               } finally {
                 warped.dispose();
               }
 
-              // The actual grayscale pipeline decode() reads bubbles from —
-              // same warp, same CLAHE, same threshold, on the grayscale image
-              // rather than color — saved at each stage so a misread can be
-              // diagnosed against what the decoder actually saw, not a
-              // reconstruction of it. sheetN_warped_gray.jpg is the flattened
-              // page before any contrast correction; sheetN_clahe.jpg is after
-              // (compare the two to see how much correction was needed);
-              // sheetN_inkmap.jpg is the final black/white result
-              // _readBubbles actually samples — white is "ink" everywhere it
-              // matters for scoring.
-              final warpedGray = cv.warpPerspective(oriented, transform, (
-                canonicalWidth,
-                canonicalHeight,
-              ));
               // Declared out here so the `finally` can dispose it.
               cv.Mat? normalizedDebugGray;
               try {
@@ -1431,6 +1810,11 @@ class OmrDecoder {
                             '$outputDir/sheet${pageIndex}_inkmap.jpg',
                             inkMap,
                           );
+                          if (debugVizSw != null) {
+                            _perfLog(
+                              'debugViz pageIndex=$pageIndex total=${debugVizSw.elapsedMilliseconds}ms',
+                            );
+                          }
                         } finally {
                           inkMap.dispose();
                         }
@@ -1524,8 +1908,11 @@ class OmrDecoder {
     final results = List<_MarkerSearchResult>.generate(4, (i) {
       final s = searches[i];
       final tag = _kFiducialDebug ? labels[i] : null;
-      final stage1Result =
-          _findMarkerInRegion(gray, s.stage1, s.anchorX, s.anchorY, debugTag: tag);
+      final stage1Result = _findMarkerInRegion(
+        gray, s.stage1, s.anchorX, s.anchorY,
+        debugTag: tag,
+        anchorScaleOverride: s.stage1AnchorScale,
+      );
       return _bestOf(
         stage1Result,
         () => _findMarkerInRegion(gray, s.quadrant, s.anchorX, s.anchorY, debugTag: tag),
@@ -1547,15 +1934,31 @@ class OmrDecoder {
         List<cv.Point2f?>.generate(4, (i) => results[i].centroid);
     String? note;
 
-    // Stage 4: geometric cross-check + dedicated rescue search. Only
-    // meaningful with >=3 confidently-detected corners to fit a transform
-    // through.
-    final confidentIdx = [
+    // Stage 4: geometric cross-check + dedicated rescue search. Needs 3
+    // points to fit a transform through -- prefer confident corners to seed
+    // it, but fall back to `low`-confidence ones when fewer than 3 are
+    // confident, rather than skipping this whole stage.
+    //
+    // A `low` corner already cleared _findMarkerInRegion's own shape/
+    // contrast/position filtering (it's real marker evidence, just not
+    // strong enough for `confident`) -- a shadow or a finger near one
+    // corner shouldn't cost the *other* corners their own cross-check too.
+    // Confirmed on-device: a capture with only 2 confident corners (a
+    // finger near two others) skipped this entire stage under the old
+    // >=3-confident-only gate, so neither of the two `low` corners -- one
+    // of which had actually locked onto the wrong feature -- was ever
+    // cross-checked or rescued, producing an unusable warp with no
+    // indication anything had gone wrong upstream of it.
+    final usableIdx = [
       for (var i = 0; i < 4; i++)
-        if (results[i].confidence == CornerConfidence.confident) i,
-    ];
-    if (confidentIdx.length >= 3) {
-      final threeIdx = confidentIdx.take(3).toList();
+        if (results[i].confidence != CornerConfidence.none) i,
+    ]..sort((a, b) {
+        final rankA = results[a].confidence == CornerConfidence.confident ? 0 : 1;
+        final rankB = results[b].confidence == CornerConfidence.confident ? 0 : 1;
+        return rankA.compareTo(rankB);
+      });
+    if (usableIdx.length >= 3) {
+      final threeIdx = usableIdx.take(3).toList();
       final threePts = [for (final i in threeIdx) points[i]!];
       if (!_nearCollinear(threePts)) {
         final threeFracs = [
@@ -1627,8 +2030,23 @@ class OmrDecoder {
                 gray.height,
               );
               final tag = _kFiducialDebug ? '${labels[i]}-rescue' : null;
-              final rr =
-                  _findMarkerInRegion(gray, rescueBox, px, py, debugTag: tag);
+              // Same fixed-tolerance position scoring as the Stage-1 search
+              // (see [kFiducialAnchorToleranceFrac]) — the rescue box's own
+              // size already scales with [_stage1HalfExtentFrac], but how
+              // strongly a candidate is preferred for being close to the
+              // *predicted* position shouldn't loosen just because that box
+              // grew.
+              final rescueAnchorScale = math.max(
+                1.0,
+                0.25 *
+                    (2 * kFiducialAnchorToleranceFrac * math.min(gray.width, gray.height)) *
+                    math.sqrt2,
+              );
+              final rr = _findMarkerInRegion(
+                gray, rescueBox, px, py,
+                debugTag: tag,
+                anchorScaleOverride: rescueAnchorScale,
+              );
               final rc = rr.centroid;
               if (rc == null ||
                   rr.squareness < _markerMinSquarenessLow ||
@@ -1692,13 +2110,7 @@ class OmrDecoder {
     }
 
     final resolved = points.cast<cv.Point2f>();
-    _validateQuad(
-      resolved,
-      template,
-      gray,
-      [for (final r in results) r.bboxGlobal ?? cv.Rect(0, 0, 1, 1)],
-      [for (final r in results) r.squareness],
-    );
+    _validateQuad(resolved);
 
     final finalConfidentCount = results
         .where((r) => r.confidence == CornerConfidence.confident)
@@ -1719,9 +2131,58 @@ class OmrDecoder {
       confidence: [for (final r in results) r.confidence],
       verdict: verdict,
       stage1Regions: [for (final s in searches) s.stage1],
+      anchors: [for (final s in searches) (s.anchorX, s.anchorY)],
       rejectedPerCorner: [for (final r in results) r.rejected],
       note: note,
     );
+  }
+
+  _RefineResult _findCaptureCorners(cv.Mat gray, OmrExamTemplate template) {
+    final longSide = math.max(gray.width, gray.height);
+    if (template.examCode != 'QTM' || longSide <= _liveCheckMaxDimension) {
+      return _refineCorners(gray, template);
+    }
+
+    // Match QTM's preview scale: fixed blur/threshold kernels otherwise see
+    // different marker shapes in high-resolution captures. Warp the original.
+    final scale = _liveCheckMaxDimension / longSide;
+    final small = cv.resize(
+      gray,
+      ((gray.width * scale).round(), (gray.height * scale).round()),
+      interpolation: cv.INTER_AREA,
+    );
+    try {
+      final result = _refineCorners(small, template);
+      final sx = gray.width / small.width;
+      final sy = gray.height / small.height;
+      // OpenCV resize maps pixel centers, while rectangle edges scale directly.
+      double x(double value) => (value + 0.5) * sx - 0.5;
+      double y(double value) => (value + 0.5) * sy - 0.5;
+      cv.Rect rect(cv.Rect r) => _clampedRect(
+        r.x * sx, r.y * sy, (r.x + r.width) * sx,
+        (r.y + r.height) * sy, gray.width, gray.height,
+      );
+      return _RefineResult(
+        corners: [for (final p in result.corners) cv.Point2f(x(p.x), y(p.y))],
+        confidence: result.confidence,
+        verdict: result.verdict,
+        stage1Regions: [for (final r in result.stage1Regions) rect(r)],
+        anchors: [for (final a in result.anchors) (x(a.$1), y(a.$2))],
+        rejectedPerCorner: [
+          for (final rejected in result.rejectedPerCorner)
+            [
+              for (final r in rejected)
+                _RejectedCandidate(
+                  rect(r.bboxGlobal), r.squareness, r.score, r.reason,
+                  area: r.area * sx * sy, contrast: r.contrast,
+                ),
+            ],
+        ],
+        note: result.note,
+      );
+    } finally {
+      small.dispose();
+    }
   }
 
   /// [_refineCorners], but tolerant of the sheet being rotated 90° in the
@@ -1756,11 +2217,11 @@ class OmrDecoder {
     OmrExamTemplate template,
   ) {
     if (template.pageWidthPt <= template.pageHeightPt) {
-      return (gray, _refineCorners(gray, template), null);
+      return (gray, _findCaptureCorners(gray, template), null);
     }
     StateError lastError;
     try {
-      return (gray, _refineCorners(gray, template), null);
+      return (gray, _findCaptureCorners(gray, template), null);
     } on StateError catch (e) {
       lastError = e;
     }
@@ -1770,7 +2231,7 @@ class OmrDecoder {
     ]) {
       final rotated = cv.rotate(gray, code);
       try {
-        return (rotated, _refineCorners(rotated, template), code);
+        return (rotated, _findCaptureCorners(rotated, template), code);
       } on StateError catch (e) {
         lastError = e;
         rotated.dispose();
@@ -1779,20 +2240,24 @@ class OmrDecoder {
     throw lastError;
   }
 
-  /// Finding *a* plausible small dark blob near each of the 4 expected
-  /// corner spots isn't enough on its own — if the sheet is out of frame or
-  /// badly misaligned, those 4 windows can each still latch onto unrelated
-  /// clutter (shadows, texture, edges) that individually passes the
-  /// size filter, so the corner search silently "succeeds" on nonsense.
-  /// This checks the 4 found points actually form a plausible sheet-shaped
-  /// rectangle together before accepting them.
-  void _validateQuad(
-    List<cv.Point2f> corners,
-    OmrExamTemplate template,
-    cv.Mat gray,
-    List<cv.Rect> markerBoxes,
-    List<double> squarenessPerCorner,
-  ) {
+  /// Deliberately minimal, per explicit product direction: as long as all 4
+  /// fiducial marks were found (see [_refineCorners]/[_findMarkerInRegion]'s
+  /// own shape/contrast filtering, which is what actually decides "is this
+  /// really one of the printed squares"), a real-world capture should be
+  /// allowed through even with a shadow across part of the sheet, a hand
+  /// holding it at an angle, or the sheet not perfectly flat — none of
+  /// which change where the 4 marks actually are.
+  ///
+  /// This used to also reject on aggregate area/aspect/edge-margin, on one
+  /// marker's own size/shape differing from the other three, and on the
+  /// quad's side- and diagonal-length ratios — each individually reasonable
+  /// as a defense against a wrong corner, but collectively strict enough
+  /// that ordinary handheld conditions (shadow, tilt, an off-center grip)
+  /// were being rejected more often than a genuinely bad corner was being
+  /// caught. Only the two checks below remain: both are about whether a
+  /// perspective transform can even be *computed* from these 4 points at
+  /// all, not about how good the capture looks.
+  void _validateQuad(List<cv.Point2f> corners) {
     final tl = corners[0], tr = corners[1], bl = corners[2], br = corners[3];
 
     if (tl.x >= tr.x || bl.x >= br.x || tl.y >= bl.y || tr.y >= br.y) {
@@ -1801,103 +2266,168 @@ class OmrDecoder {
       );
     }
 
-    final width = ((tr.x - tl.x) + (br.x - bl.x)) / 2;
-    final height = ((bl.y - tl.y) + (br.y - tr.y)) / 2;
-    final expectedAspect = template.pageWidthPt / template.pageHeightPt;
-    final actualAspect = width / height;
-    // A real sheet's aspect ratio should match reasonably closely (paper
-    // dimensions are exact), but this is a coarse secondary check — the
-    // anchor-distance scoring in _findMarkerInRegion (prefer whichever
-    // candidate sits closest to this quadrant's own estimated corner) is
-    // the primary defense against picking up background clutter (a second
-    // sheet, wall, furniture) instead of the actual sheet. 0.15 (tightened
-    // from an original 0.35
-    // that let a clutter-quad through) turned out to reject too many
-    // genuine handheld photos too, whose measured aspect ratio shifts more
-    // than that from normal perspective/keystone distortion at a
-    // non-perfectly-perpendicular angle. 0.25 is a middle ground.
-    if ((actualAspect - expectedAspect).abs() > expectedAspect * 0.25) {
-      throw StateError(
-        "The detected corners don't form a sheet-shaped rectangle. Retake the photo with just the one sheet, on a plain background, in frame.",
-      );
-    }
-
-    final imageArea = gray.width * gray.height;
-    final quadArea = width * height;
-    if (quadArea < imageArea * 0.05) {
-      throw StateError(
-        'The sheet appears too small in this photo. Move closer and retake.',
-      );
-    }
-
-    // No upper bound previously existed here — only "too small", never "too
-    // big" or "too close to the frame edge". Confirmed this lets a false
-    // pass through when the camera is zoomed in far enough that the real
-    // corner marks fall partially or fully outside the frame: the
-    // quadrant search (see _findMarkerInRegion's own doc comment — it
-    // searches the *whole* quadrant, not a small window) can still latch
-    // onto some other dark, roughly-square-ish blob near the frame edge —
-    // a bubble row, header text, page clutter — and that false quad can
-    // still happen to pass the aspect-ratio check above by coincidence.
-    // Two checks catch this instead of one, since neither alone covers
-    // every way "zoomed in too far" can present:
-    if (quadArea > imageArea * 0.85) {
-      throw StateError(
-        'The sheet fills too much of the frame. Move back so all 4 corner marks have visible margin around them, then retake.',
-      );
-    }
-    // A genuine corner mark is always printed with real margin around it
-    // (kPageMargin + kMarkerPad in tool/generate_sheets.dart) — a
-    // correctly-framed capture should never have a *found* corner sitting
-    // right at the photo's own boundary. When the camera is zoomed in
-    // past the point where the real mark is still in frame, whatever the
-    // search fell back to accepting instead is disproportionately likely
-    // to be hugging that boundary, unlike a genuine capture with visible
-    // background on every side.
-    const edgeMarginFrac = 0.015;
-    final edgeMarginX = gray.width * edgeMarginFrac;
-    final edgeMarginY = gray.height * edgeMarginFrac;
-    for (final corner in corners) {
-      if (corner.x < edgeMarginX ||
-          corner.x > gray.width - edgeMarginX ||
-          corner.y < edgeMarginY ||
-          corner.y > gray.height - edgeMarginY) {
+    // Convexity: `corners` is [tl, tr, bl, br] (index order), which is NOT
+    // a perimeter walk — feeding it straight into a convexity test would
+    // produce a self-intersecting "bowtie" for every normal quad, not the
+    // true shape. Build the actual clockwise perimeter first. A
+    // self-intersecting quad has no sane perspective transform at all
+    // (getPerspectiveTransform2f would fit *something*, but it wouldn't
+    // mean anything), so this one stays a hard rejection.
+    final perimeter = cv.VecPoint2f.fromList([tl, tr, br, bl]);
+    try {
+      if (!cv.isContourConvex2f(perimeter)) {
         throw StateError(
-          'The sheet appears too close or cropped by the frame edge. Move back so the whole sheet is visible with margin around it, then retake.',
+          "The four corner marks don't form a simple, flat rectangle — one appears crossed over relative to the others. Retake with the sheet flat and all four corners visible.",
         );
       }
+    } finally {
+      perimeter.dispose();
     }
+  }
 
-    // The checks above only ever looked at the 4 points as an aggregate
-    // quad — 3 real squares plus one shaded answer bubble sitting roughly
-    // in the right place passes every one of them. These two checks
-    // compare the 4 *markers themselves*: the printed squares are
-    // identical in size and shape, so one that's a very different size, or
-    // shaped nothing like the other three, is the tell.
-    if (markerBoxes.length == 4 && squarenessPerCorner.length == 4) {
-      final sizes = [
-        for (final b in markerBoxes) math.sqrt(b.width * b.height),
-      ]..sort();
-      final medianSize = (sizes[1] + sizes[2]) / 2;
-      if (medianSize > 0) {
-        for (final b in markerBoxes) {
-          final s = math.sqrt(b.width * b.height);
-          if (s < medianSize * 0.45 || s > medianSize * 2.2) {
-            throw StateError(
-              'One detected corner mark is a very different size from the others. Retake with all four corner squares clearly visible.',
-            );
+  /// Independently re-detects each of the 4 fiducial markers directly on
+  /// [warpedGray] (an already-rectified image), in a small box around each
+  /// one's expected canonical position, and measures how far the fresh
+  /// re-detection landed from that expected position.
+  ///
+  /// This is the only meaningful post-warp check: `getPerspectiveTransform2f`
+  /// on exactly 4 points is an exact solve, so re-projecting the same 4
+  /// source points through the fitted transform back onto their targets is
+  /// trivially perfect and would prove nothing. If the *original* detection
+  /// was actually on the wrong feature (a bubble corner near the true mark,
+  /// or a point subtly displaced by steep-angle perspective distortion),
+  /// warping fixes that wrong point onto its target exactly — but the rest
+  /// of the page (including where the true fiducial actually ends up) does
+  /// not correspondingly land correctly. Re-detecting fresh here can reveal
+  /// that.
+  _WarpVerification _verifyWarpedCorners(
+    cv.Mat warpedGray,
+    OmrExamTemplate template,
+    int canonicalWidth,
+    int canonicalHeight,
+  ) {
+    final expected = [
+      for (final c in template.cornerMarkers)
+        cv.Point2f(c.xFrac * canonicalWidth, c.yFrac * canonicalHeight),
+    ];
+    final redetected = <cv.Point2f?>[];
+    final errors = <double>[];
+    final confidences = <CornerConfidence>[];
+    cv.Mat? normalizedGray;
+    try {
+      for (final e in expected) {
+        final box = _clampedRect(
+          e.x - _postWarpSearchHalfExtentPx,
+          e.y - _postWarpSearchHalfExtentPx,
+          e.x + _postWarpSearchHalfExtentPx,
+          e.y + _postWarpSearchHalfExtentPx,
+          canonicalWidth,
+          canonicalHeight,
+        );
+        var r = _findMarkerInRegion(warpedGray, box, e.x, e.y);
+        // A missing marker can be a lighting failure, not a displaced corner.
+        // Normalize once on demand; keep detected offsets and all acceptance gates.
+        if (r.centroid == null) {
+          normalizedGray ??= _normalizeIllumination(warpedGray);
+          if (!identical(normalizedGray, warpedGray)) {
+            r = _findMarkerInRegion(normalizedGray, box, e.x, e.y);
           }
         }
-      }
-      final sortedSquareness = [...squarenessPerCorner]..sort();
-      final medianSquareness = (sortedSquareness[1] + sortedSquareness[2]) / 2;
-      if (sortedSquareness.first < _markerMinSquarenessLow &&
-          medianSquareness > 0.70) {
-        throw StateError(
-          'One detected corner mark does not look like the others. Retake with all four corner squares clearly visible.',
+        final c = r.centroid;
+        redetected.add(c);
+        confidences.add(r.confidence);
+        errors.add(
+          c == null
+              ? double.infinity
+              : math.sqrt(math.pow(c.x - e.x, 2) + math.pow(c.y - e.y, 2)),
         );
       }
+    } finally {
+      if (normalizedGray != null && !identical(normalizedGray, warpedGray)) {
+        normalizedGray.dispose();
+      }
     }
+    return _WarpVerification(
+      expected: expected,
+      redetected: redetected,
+      errorPx: errors,
+      confidence: confidences,
+    );
+  }
+
+  /// Turns a [_WarpVerification] into a pass/warn/reject verdict, naming
+  /// the worst-offending corner in [message].
+  ///
+  /// [preWarpConfidence] (the same corner's confidence from *before* the
+  /// warp — [_RefineResult.confidence]) is what decides whether a bad
+  /// post-warp reading blocks the capture:
+  ///  * a corner that was [CornerConfidence.confident] pre-warp but merely
+  ///    hard to re-detect post-warp (shadow, glare, a steep angle) never
+  ///    blocks — per explicit product direction, a real mark that was
+  ///    genuinely found shouldn't be second-guessed just because a second,
+  ///    independent look at it came back inconclusive (see
+  ///    [_validateQuad]'s doc comment for the same reasoning pre-warp).
+  ///  * a corner that *wasn't* confidently found pre-warp (low-confidence,
+  ///    or recovered by the geometry-assisted rescue) failing post-warp
+  ///    re-detection too is a genuine double failure, not an occlusion
+  ///    artifact — confirmed on-device: a rescued TAT corner that had
+  ///    actually locked onto a false feature (a cluster of filled bubbles,
+  ///    not the real mark) produced exactly this pattern and warped the
+  ///    whole sheet unusably, with nothing catching it once this check was
+  ///    made unconditionally non-blocking. This is the one case that still
+  ///    rejects.
+  ({bool ok, bool degraded, String? message, double maxErrorPx, int worstIdx})
+      _classifyWarpVerification(
+    _WarpVerification v,
+    List<CornerConfidence> preWarpConfidence,
+  ) {
+    const labels = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
+    var worstIdx = 0;
+    for (var i = 1; i < v.errorPx.length; i++) {
+      if (v.errorPx[i] > v.errorPx[worstIdx]) worstIdx = i;
+    }
+    final maxErr = v.errorPx[worstIdx];
+    if (maxErr > _warpRejectPx) {
+      final worstWasConfidentPreWarp =
+          preWarpConfidence[worstIdx] == CornerConfidence.confident;
+      if (!worstWasConfidentPreWarp) {
+        return (
+          ok: false,
+          degraded: false,
+          maxErrorPx: maxErr,
+          worstIdx: worstIdx,
+          message: !maxErr.isFinite
+              ? 'The ${labels[worstIdx]} corner mark was not confidently found, and straightening the photo could not confirm it either. Retake with that corner clearly visible.'
+              : 'The ${labels[worstIdx]} corner mark was not confidently found, and does not land where it should after straightening the photo. Retake with that corner clearly visible.',
+        );
+      }
+      return (
+        ok: true,
+        degraded: true,
+        maxErrorPx: maxErr,
+        worstIdx: worstIdx,
+        message: !maxErr.isFinite
+            ? 'Perspective correction could not be double-checked at the ${labels[worstIdx]} corner (shadow/glare on the warped image) — proceeding anyway since it was confidently found on the original photo.'
+            : 'Perspective correction is only approximate for this photo (${maxErr.toStringAsFixed(0)}px off at ${labels[worstIdx]}) — retake for best accuracy if possible.',
+      );
+    }
+    if (maxErr > _warpWarnPx) {
+      return (
+        ok: true,
+        degraded: true,
+        maxErrorPx: maxErr,
+        worstIdx: worstIdx,
+        message:
+            'Perspective correction is only approximate for this photo (${maxErr.toStringAsFixed(0)}px off at ${labels[worstIdx]}) — retake for best accuracy if possible.',
+      );
+    }
+    return (
+      ok: true,
+      degraded: false,
+      maxErrorPx: maxErr,
+      worstIdx: worstIdx,
+      message: null,
+    );
   }
 
   /// Finds the largest convex quadrilateral near the center of the photo
@@ -2128,32 +2658,29 @@ class OmrDecoder {
       _clampedRect(0, midY - overlapY, midX + overlapX, h, width, height),
       _clampedRect(midX - overlapX, midY - overlapY, w, h, width, height),
     ];
-    // pageQuad, when present, is already ordered [topLeft, topRight,
-    // bottomLeft, bottomRight] by _detectPageQuad — matching quadrant
-    // order exactly, so each region pairs with its own corner's estimate.
-    // Falls back to that quadrant's literal photo corner when no boundary
-    // was detected (correct precisely when the sheet fills the frame
-    // edge-to-edge, so there was no boundary edge to detect in the first
-    // place).
-    const fracs = [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)];
-    final anchors = [
-      for (final (xFrac, yFrac) in fracs)
-        pageQuad == null
-            ? (xFrac * w, yFrac * h)
-            : _bilinearInterpolate(pageQuad, xFrac, yFrac),
-    ];
-
-    // Stage-1 box per corner: centered on where THIS exam's own marker is
-    // actually printed (template.cornerMarkers), using the same
-    // pageQuad-or-direct-fraction position estimate as the anchors above —
-    // an inset marker (AT's right edge at 0.867, PT's bottom at 0.761)
-    // lands the box on the real mark instead of empty page-corner margin.
+    // Expected marker anchor per corner — the single point used both to
+    // center the Stage-1 search box AND, via [_QuadrantSearch.anchorX]/
+    // `anchorY`, to score every candidate's `positionScore` in
+    // [_findMarkerInRegion]. These used to be computed independently: the
+    // anchor passed for scoring was the literal page-quad VERTEX (fractions
+    // (0,0)/(1,0)/(0,1)/(1,1)), not the actual expected fiducial position —
+    // for any template with an inset marker (every real one; a printed
+    // corner square is never at the literal page edge), that measured
+    // `positionScore` against the wrong point, penalizing even a
+    // perfectly-found real marker by however far it sits from the bare
+    // page corner. Confirmed by direct code review, not assumed. Now both
+    // derive from `template.cornerMarkers` in one place, pageQuad-or-
+    // direct-fraction exactly as before — an inset marker (AT's right edge
+    // at 0.867, PT's bottom at 0.761) lands the box AND the scoring anchor
+    // on the real mark, not generic page-corner margin.
     final halfExtent = _stage1HalfExtentFrac * math.min(w, h);
     final stage1s = <cv.Rect>[];
+    final anchors = <(double, double)>[];
     for (final marker in template.cornerMarkers) {
       final (cx, cy) = pageQuad == null
           ? (marker.xFrac * w, marker.yFrac * h)
           : _bilinearInterpolate(pageQuad, marker.xFrac, marker.yFrac);
+      anchors.add((cx, cy));
       stage1s.add(_clampedRect(
         cx - halfExtent,
         cy - halfExtent,
@@ -2163,6 +2690,13 @@ class OmrDecoder {
         height,
       ));
     }
+    // Fixed regardless of `halfExtent` above — see
+    // [kFiducialAnchorToleranceFrac]'s doc comment.
+    final anchorToleranceSide = 2 * kFiducialAnchorToleranceFrac * math.min(w, h);
+    final stage1AnchorScale = math.max(
+      1.0,
+      0.25 * anchorToleranceSide * math.sqrt2,
+    );
 
     return [
       for (var i = 0; i < 4; i++)
@@ -2171,6 +2705,7 @@ class OmrDecoder {
           quadrant: regions[i],
           anchorX: anchors[i].$1,
           anchorY: anchors[i].$2,
+          stage1AnchorScale: stage1AnchorScale,
         ),
     ];
   }
@@ -2194,12 +2729,20 @@ class OmrDecoder {
   /// mark actually looks like and where it genuinely is, not by whether an
   /// earlier guess was close enough — so a Stage-2 (full-quadrant) find is
   /// still eligible for [CornerConfidence.confident].
+  ///
+  /// [anchorScaleOverride], when given, replaces the default
+  /// region-size-derived position-scoring tolerance — see
+  /// [kFiducialAnchorToleranceFrac]'s doc comment for why the Stage-1
+  /// caller always passes one: without it, a search region enlarged for
+  /// user positioning freedom would also silently loosen how strongly
+  /// position scoring prefers a candidate near the true expected spot.
   _MarkerSearchResult _findMarkerInRegion(
     cv.Mat gray,
     cv.Rect region,
     double anchorX,
     double anchorY, {
     String? debugTag,
+    double? anchorScaleOverride,
   }) {
     final roi = gray.region(region);
     try {
@@ -2260,28 +2803,39 @@ class OmrDecoder {
                     final imageArea = gray.width * gray.height;
 
                     final imageAreaCap = imageArea * 0.02;
-                    final anchorScale = math.max(
-                      1.0,
-                      0.25 *
-                          math.sqrt(region.width * region.width +
-                              region.height * region.height),
-                    );
+                    final anchorScale = anchorScaleOverride ??
+                        math.max(
+                          1.0,
+                          0.25 *
+                              math.sqrt(region.width * region.width +
+                                  region.height * region.height),
+                        );
 
                     // Winner tracked by COMBINED score — higher is better now
                     // (squareness-led), not the old "closest wins".
                     double bestScore = -1;
                     double bestSquareness = 0;
                     double bestContrast = 0;
+                    double bestArea = 0;
                     double bestDistance = double.infinity;
                     cv.Rect? bestRect;
                     var bestContourIndex = -1;
                     final rejected = <_RejectedCandidate>[];
-                    void reject(cv.Rect r, double sq, double sc, String why) {
+                    void reject(
+                      cv.Rect r,
+                      double sq,
+                      double sc,
+                      String why, {
+                      double area = 0,
+                      double contrast = 0,
+                    }) {
                       rejected.add(_RejectedCandidate(
                         cv.Rect(region.x + r.x, region.y + r.y, r.width, r.height),
                         sq,
                         sc,
                         why,
+                        area: area,
+                        contrast: contrast,
                       ));
                     }
 
@@ -2296,27 +2850,83 @@ class OmrDecoder {
                       final aspect = longSide / shortSide;
                       final extent = boxArea > 0 ? area / boxArea : 0.0;
 
+                      // Local contrast against this blob's own neighborhood.
+                      // Computed up front — before any of the cheap gates
+                      // below — so every rejection reason (including `area`
+                      // and `fill_ratio`) carries a real contrast/area
+                      // reading for the debug overlay/log, not just the
+                      // survivors that reach full shape scoring. A real
+                      // fiducial candidate rejected this early is otherwise
+                      // invisible in the debug output — exactly the gap that
+                      // made an earlier real-square-vs-bubble mixup hard to
+                      // diagnose from the overlay alone.
+                      final localPad = math.max(rect.width, rect.height) * 2;
+                      final localRegion = _clampedRect(
+                        (rect.x - localPad).toDouble(),
+                        (rect.y - localPad).toDouble(),
+                        (rect.x + rect.width + localPad).toDouble(),
+                        (rect.y + rect.height + localPad).toDouble(),
+                        roi.width,
+                        roi.height,
+                      );
+                      final blobRoi = roi.region(rect);
+                      final localRoi = roi.region(localRegion);
+                      double contrast;
+                      try {
+                        final blobMean = blobRoi.mean();
+                        try {
+                          final localMean = localRoi.mean();
+                          try {
+                            contrast = localMean.val1 - blobMean.val1;
+                          } finally {
+                            localMean.dispose();
+                          }
+                        } finally {
+                          blobMean.dispose();
+                        }
+                      } finally {
+                        blobRoi.dispose();
+                        localRoi.dispose();
+                      }
+
                       void log(String s) {
                         if (_kFiducialDebug && debugTag != null) {
                           _fidLog('q=$debugTag c#$ci '
                               'bbox=(${rect.x},${rect.y},${rect.width},${rect.height}) '
-                              'area=${area.toStringAsFixed(0)} $s');
+                              'area=${area.toStringAsFixed(0)} contrast=${contrast.toStringAsFixed(1)} $s');
                         }
                       }
 
                       // ---- cheap early rejects (bound cost before the
                       // heavier shape metrics) ----
                       if (area < 8 || area > imageAreaCap) {
+                        reject(rect, 0, 0, 'area', area: area, contrast: contrast);
                         log('REJECT area (need 8..${imageAreaCap.toStringAsFixed(0)})');
                         continue;
                       }
+                      // Deliberately loose: a genuinely rotated square fills
+                      // its *axis-aligned* box only ~0.5 at 45° in-plane
+                      // rotation, and a handheld photo's *projective* (not
+                      // just in-plane) perspective distortion can push a
+                      // real printed square's bbox-fill ratio well below
+                      // that — confirmed against a real handheld QTM capture
+                      // where the true bottom-right square was rejected here
+                      // before its shape metrics were even computed. Real
+                      // discrimination is the rotation-invariant
+                      // `rectangularity`/`solidity`/ink-density inside the
+                      // squareness score below, not this cheap pre-filter —
+                      // this only needs to reject genuine noise/slivers, and
+                      // an answer bubble's own extent (~0.785 for a filled
+                      // circle) sits comfortably above even this lowered
+                      // floor, so lowering it doesn't reopen the
+                      // bubble-as-fiducial problem.
                       if (boxArea <= 0 || extent < _markerMinFillRatio) {
-                        reject(rect, 0, 0, 'fill_ratio');
+                        reject(rect, 0, 0, 'fill_ratio', area: area, contrast: contrast);
                         log('REJECT fill_ratio (extent=${extent.toStringAsFixed(3)}<$_markerMinFillRatio)');
                         continue;
                       }
                       if (aspect > _markerMaxAspect) {
-                        reject(rect, 0, 0, 'aspect');
+                        reject(rect, 0, 0, 'aspect', area: area, contrast: contrast);
                         log('REJECT aspect (${aspect.toStringAsFixed(2)}>$_markerMaxAspect)');
                         continue;
                       }
@@ -2413,37 +3023,6 @@ class OmrDecoder {
                             math.pow(globalCy - anchorY, 2),
                       );
 
-                      // Local contrast against this blob's own neighborhood
-                      // (unchanged measurement).
-                      final localPad = math.max(rect.width, rect.height) * 2;
-                      final localRegion = _clampedRect(
-                        (rect.x - localPad).toDouble(),
-                        (rect.y - localPad).toDouble(),
-                        (rect.x + rect.width + localPad).toDouble(),
-                        (rect.y + rect.height + localPad).toDouble(),
-                        roi.width,
-                        roi.height,
-                      );
-                      final blobRoi = roi.region(rect);
-                      final localRoi = roi.region(localRegion);
-                      double contrast;
-                      try {
-                        final blobMean = blobRoi.mean();
-                        try {
-                          final localMean = localRoi.mean();
-                          try {
-                            contrast = localMean.val1 - blobMean.val1;
-                          } finally {
-                            localMean.dispose();
-                          }
-                        } finally {
-                          blobMean.dispose();
-                        }
-                      } finally {
-                        blobRoi.dispose();
-                        localRoi.dispose();
-                      }
-
                       final positionScore = math.exp(-distance / anchorScale);
                       final contrastScore = _clamp01(
                           (contrast - _markerMinContrast) /
@@ -2456,29 +3035,31 @@ class OmrDecoder {
                           'circ=${circularity.toStringAsFixed(3)} rect=${rectangularity.toStringAsFixed(3)} '
                           'ink=${inkDensity.toStringAsFixed(3)} solid=${solidity.toStringAsFixed(3)} '
                           'verts=$approxVerts sq=${squareness.toStringAsFixed(3)} '
-                          'contrast=${contrast.toStringAsFixed(1)} dist=${distance.toStringAsFixed(1)} '
+                          'dist=${distance.toStringAsFixed(1)} '
                           'pos=${positionScore.toStringAsFixed(3)} score=${candScore.toStringAsFixed(3)}');
 
                       if (contrast < _markerMinContrast) {
-                        reject(rect, squareness, candScore, 'contrast');
+                        reject(rect, squareness, candScore, 'contrast', area: area, contrast: contrast);
                         continue;
                       }
                       if (squareness < _markerMinSquarenessLow) {
-                        reject(rect, squareness, candScore, 'low_squareness');
+                        reject(rect, squareness, candScore, 'low_squareness', area: area, contrast: contrast);
                         continue;
                       }
                       if (candScore > bestScore) {
                         if (bestRect != null) {
-                          reject(bestRect, bestSquareness, bestScore, 'outscored');
+                          reject(bestRect, bestSquareness, bestScore, 'outscored',
+                              area: bestArea, contrast: bestContrast);
                         }
                         bestScore = candScore;
                         bestSquareness = squareness;
                         bestContrast = contrast;
+                        bestArea = area;
                         bestDistance = distance;
                         bestRect = rect;
                         bestContourIndex = ci;
                       } else {
-                        reject(rect, squareness, candScore, 'outscored');
+                        reject(rect, squareness, candScore, 'outscored', area: area, contrast: contrast);
                       }
                     }
 
@@ -2543,10 +3124,16 @@ class OmrDecoder {
                         ? CornerConfidence.confident
                         : CornerConfidence.low;
                     if (_kFiducialDebug && debugTag != null) {
-                      _fidLog('q=$debugTag WINNER c#$bestContourIndex '
-                          'sq=${bestSquareness.toStringAsFixed(3)} '
-                          'contrast=${bestContrast.toStringAsFixed(1)} '
-                          'dist=${bestDistance.toStringAsFixed(1)} tier=${tier.name}');
+                      // Temporary diagnostics comparing the detected marker with its anchor.
+                      _fidLog(
+                        'q=$debugTag winner=(${centroid.x.toStringAsFixed(1)},${centroid.y.toStringAsFixed(1)}) '
+                        'expected=(${anchorX.toStringAsFixed(1)},${anchorY.toStringAsFixed(1)}) '
+                        'distance=${bestDistance.toStringAsFixed(1)} '
+                        'positionScore=${posScoreBest.toStringAsFixed(3)} '
+                        'squareness=${bestSquareness.toStringAsFixed(3)} '
+                        'contrast=${bestContrast.toStringAsFixed(1)} '
+                        'tier=${tier.name}',
+                      );
                     }
 
                     return _MarkerSearchResult(
@@ -2585,157 +3172,198 @@ class OmrDecoder {
     }
   }
 
-  /// Reads every item's fill fractions and decides blank/marked/ambiguous
-  /// primarily by comparing bubbles *within the same item* against each
-  /// other, not against a single fixed constant.
-  ///
-  /// The earlier design compared every bubble on the sheet against one
-  /// global floor and margin. That's fragile to exactly the kind of thing
-  /// a real photo actually has: uneven or dim lighting across the page
-  /// (confirmed against real scans, not assumed) shifts every bubble's
-  /// fill reading together, so a global floor either lets a whole
-  /// lighting-dim sheet's blank bubbles cross it, or a global margin
-  /// shrinks below its threshold for a genuinely marked bubble sitting
-  /// next to a blank one whose reading got pushed up by the same shift.
-  /// Two bubbles printed on the same row of the same photo were captured
-  /// under essentially identical local lighting, so comparing a bubble
-  /// against its own row's other bubbles cancels that shift out instead
-  /// of being fooled by it — a real mark still has to look darker than
-  /// its neighbors, but "darker than its neighbors" no longer depends on
-  /// matching one fixed brightness assumed to hold for every photo.
-  ///
-  /// Works down to 2 choices (e.g. True/False) too: the "floor reference"
-  /// is just the single runner-up in that case, which is exactly what
-  /// [_ambiguousMargin] already compares against below — a 2-choice item
-  /// can't tell a genuine blank apart from a genuine double-mark any more
-  /// than a fully-marked-every-choice item can for 3+ choices (both read
-  /// as blank instead of ambiguous), but that's an existing, accepted
-  /// trade-off, not a new one. Confirmed against a real blank TAT scan
-  /// that the alternative — a fixed absolute floor for 2-choice items,
-  /// the original design — actively breaks blank detection: T/F bubbles'
-  /// printed oval outline plus the "T"/"F" glyph itself put every blank
-  /// item's fill around 0.43-0.57 (comfortably over any reasonable fixed
-  /// floor) with the two choices reading almost identically, so every
-  /// single blank 2-choice item was flagged ambiguous rather than blank.
-  /// 3+-choice items never exposed this because [_blankFillFloor] was
-  /// already doing basically no work there — [_markPresenceGap] was
-  /// always the real gate — but a 2-choice item has no third bubble to
-  /// build that same-row reference from without this change.
+  /// Classify marks by comparing bubble scores within each item to reduce lighting bias.
+  /// The lowest score provides a blank reference, including for two-choice items.
+  /// Equally filled choices (including all-marked rows) can read as blank.
   OmrScanResult _readBubbles(
     cv.Mat inkMap,
     OmrExamTemplate template,
     int canonicalWidth,
     int canonicalHeight,
   ) {
-    // Sample the full printed bubble (its radii, converted to canonical
-    // pixels), not a size guessed independently of what's actually on the
-    // page — otherwise enlarging bubbles in the sheet generator without a
-    // matching decoder change just keeps sampling the same small patch in
-    // the middle, which is where the printed choice letter lives. X and Y
-    // are sampled independently since QTM/TAT's bubbles print flattened
-    // (see _bubbleFillFraction's doc comment) — using the same radius for
-    // both, as an earlier version did, systematically diluted a genuinely
-    // marked oval bubble's measured fill.
+    // Sample the printed X/Y radii independently to match oval bubbles.
     final bubbleSampleHalfPxX = template.bubbleRadiusPt * _canonicalPxPerPt;
     final bubbleSampleHalfPxY = template.bubbleRadiusYPt * _canonicalPxPerPt;
     final ambiguousMargin = _ambiguousMarginFor(template.examCode);
+    // Temporarily widened from QTM-only to every exam code for the current
+    // accuracy investigation across AT/QTM/TAT -- see _kBubbleDebug's doc
+    // comment. Revert to `template.examCode == _kBubbleDebugExamCode` once
+    // this pass is done; a full 72-100 item sheet is a lot of log lines.
+    final bubbleDebug = _kBubbleDebug;
     final items = <OmrItemResult>[];
     for (final section in template.sections) {
       for (final itemNumber in section.items.keys.toList()..sort()) {
         final choices = section.items[itemNumber]!;
-        final fills = [
-          for (final bubble in choices)
-            (
-              bubble.choice,
-              _bubbleFillFraction(
+
+        var measured = _measureItemAt(
+          inkMap,
+          choices,
+          bubbleSampleHalfPxX,
+          bubbleSampleHalfPxY,
+          canonicalWidth,
+          canonicalHeight,
+          0,
+          0,
+        );
+        var hasSomething = measured.bestFill >= _blankFillFloor &&
+            (measured.bestFill - measured.floorReference) >= _markPresenceGap;
+        var isAmbiguous = hasSomething &&
+            _isAmbiguousMargin(measured, ambiguousMargin);
+        var recentered = false;
+
+        // Only spend the extra search on items the flat/relative checks
+        // above still can't confidently place -- a confidently blank or
+        // confidently marked item is left untouched, so this can only
+        // rescue an uncertain result, never destabilize a good one.
+        if (!hasSomething || isAmbiguous) {
+          for (final dxFrac in _itemRecenterShiftFracs) {
+            for (final dyFrac in _itemRecenterShiftFracs) {
+              if (dxFrac == 0 && dyFrac == 0) continue;
+              final candidate = _measureItemAt(
                 inkMap,
-                bubble,
+                choices,
                 bubbleSampleHalfPxX,
                 bubbleSampleHalfPxY,
                 canonicalWidth,
                 canonicalHeight,
-              ),
-            ),
-        ]..sort((a, b) => b.$2.compareTo(a.$2)); // descending by fill
+                dxFrac * bubbleSampleHalfPxX,
+                dyFrac * bubbleSampleHalfPxY,
+              );
+              final candidateMargin = candidate.bestFill - candidate.runnerUpFill;
+              final currentMargin = measured.bestFill - measured.runnerUpFill;
+              if (candidateMargin > currentMargin) {
+                measured = candidate;
+                recentered = true;
+              }
+            }
+          }
+          if (recentered) {
+            hasSomething = measured.bestFill >= _blankFillFloor &&
+                (measured.bestFill - measured.floorReference) >= _markPresenceGap;
+            isAmbiguous = hasSomething &&
+                _isAmbiguousMargin(measured, ambiguousMargin);
+          }
+        }
 
-        final bestChoice = fills[0].$1;
-        final bestFill = fills[0].$2;
-        final runnerUpFill = fills[1].$2; // every item has >=2 choices
-
-        // The lowest-filled *other* bubble in this item — a robust,
-        // same-row "what does blank ink look like right here" reference
-        // that stays reliable even if the single runner-up happens to
-        // be a noisy outlier (still safely blank, just not the
-        // clearest example of it). For a 2-choice item this is just the
-        // one runner-up.
-        final floorReference = fills
-            .sublist(1)
-            .map((e) => e.$2)
-            .reduce(math.min);
-        final hasSomething =
-            bestFill >= _blankFillFloor &&
-            (bestFill - floorReference) >= _markPresenceGap;
-
-        if (!hasSomething) {
-          items.add(
-            OmrItemResult(
-              sectionName: section.name,
-              itemNumber: itemNumber,
-              markedChoice: null,
-            ),
+        final bestChoice = measured.bestChoice;
+        final bestFill = measured.bestFill;
+        final runnerUpFill = measured.runnerUpFill;
+        final floorReference = measured.floorReference;
+        final measurements = measured.measurements;
+        final markedChoice = hasSomething && !isAmbiguous ? bestChoice : null;
+        items.add(
+          OmrItemResult(
+            sectionName: section.name,
+            itemNumber: itemNumber,
+            markedChoice: markedChoice,
+            isAmbiguous: isAmbiguous,
+          ),
+        );
+        if (bubbleDebug) {
+          final debugResult = markedChoice ?? (isAmbiguous ? 'AMBIGUOUS' : 'BLANK');
+          final buf = StringBuffer('Q$itemNumber\n');
+          for (final (choice, m) in measurements) {
+            buf.writeln(
+              '$choice: ring=${m.ringFill.toStringAsFixed(3)} '
+              'whole=${m.wholeFill.toStringAsFixed(3)} '
+              'center=${m.centerFill.toStringAsFixed(3)} '
+              'score=${m.score.toStringAsFixed(3)}',
+            );
+          }
+          buf.writeln('best=$bestChoice');
+          buf.writeln('runner=${runnerUpFill.toStringAsFixed(3)}');
+          buf.writeln('floor=${floorReference.toStringAsFixed(3)}');
+          buf.writeln(
+            'presenceGap=${(bestFill - floorReference).toStringAsFixed(3)}',
           );
-        } else if (bestFill - runnerUpFill < ambiguousMargin) {
-          // Unchanged regardless of choice count: best and runner-up are
-          // too close to call, whether that's a genuine double-mark or a
-          // single mark with an unusually dark neighbor — either way it
-          // shouldn't be silently guessed.
-          items.add(
-            OmrItemResult(
-              sectionName: section.name,
-              itemNumber: itemNumber,
-              markedChoice: null,
-              isAmbiguous: true,
-            ),
-          );
-        } else {
-          items.add(
-            OmrItemResult(
-              sectionName: section.name,
-              itemNumber: itemNumber,
-              markedChoice: bestChoice,
-            ),
-          );
+          buf.writeln('margin=${(bestFill - runnerUpFill).toStringAsFixed(3)}');
+          if (recentered) buf.writeln('recentered=true');
+          buf.write('result=$debugResult');
+          _bubbleLog(buf.toString());
         }
       }
     }
     return OmrScanResult(examCode: template.examCode, items: items);
   }
 
-  /// Fraction (0-1) of the bubble's ring-shaped sample ROI that is "ink" on
-  /// the binarized [inkMap] (255 = ink, after THRESH_BINARY_INV). Samples
-  /// the outer bubble area minus a central zone where the printed choice
-  /// letter lives, so blank sheets aren't misread as ambiguous marks.
-  ///
-  /// The sample rectangle's half-width/half-height are taken from
-  /// [template]'s bubbleRadiusPt/bubbleRadiusYPt independently rather than
-  /// assuming a single radius for both — QTM/TAT's bubbles print as
-  /// flattened ovals (see generate_sheets.dart's bubbleRadiusYFor), and
-  /// sampling a square sized to the horizontal radius in both directions
-  /// pulls in a band of blank paper above/below the actual printed oval.
-  /// Confirmed against a real scan: that diluted a fully, densely marked
-  /// oval bubble's measured fill from ~0.9 down to ~0.4 — on its own
-  /// enough for ordinary threshold noise on a neighboring blank bubble to
-  /// push a genuine mark into reading as ambiguous.
-  double _bubbleFillFraction(
+  /// True when [measured]'s best-to-runner-up gap is too small to call the
+  /// item decisively marked -- either by the flat per-exam [ambiguousMargin],
+  /// or (see [_ambiguousRelativeMarginFloor]) by falling well short of the
+  /// item's own presence gap despite a comfortably strong signal.
+  bool _isAmbiguousMargin(_ItemMeasurement measured, double ambiguousMargin) {
+    final margin = measured.bestFill - measured.runnerUpFill;
+    if (margin >= ambiguousMargin) return false;
+    final presenceGap = measured.bestFill - measured.floorReference;
+    final strongPresence =
+        presenceGap >= _markPresenceGap * _strongPresenceGapMultiplier;
+    final decisiveRelativeToOwnSignal =
+        strongPresence && (margin / presenceGap) >= _ambiguousRelativeMarginFloor;
+    return !decisiveRelativeToOwnSignal;
+  }
+
+  /// Measures every choice in one item with the same (shiftXPx, shiftYPx)
+  /// applied to each -- modeling a local row-level registration drift
+  /// rather than a per-bubble one -- and reduces the result to the ranked
+  /// fields [_readBubbles] and its recenter search need.
+  _ItemMeasurement _measureItemAt(
+    cv.Mat inkMap,
+    List<BubblePos> choices,
+    double halfPxX,
+    double halfPxY,
+    int canonicalWidth,
+    int canonicalHeight,
+    double shiftXPx,
+    double shiftYPx,
+  ) {
+    final measurements = [
+      for (final bubble in choices)
+        (
+          bubble.choice,
+          _measureBubble(
+            inkMap,
+            bubble,
+            halfPxX,
+            halfPxY,
+            canonicalWidth,
+            canonicalHeight,
+            shiftXPx: shiftXPx,
+            shiftYPx: shiftYPx,
+          ),
+        ),
+    ];
+    final fills = [
+      for (final m in measurements) (m.$1, m.$2.score),
+    ]..sort((a, b) => b.$2.compareTo(a.$2)); // descending by score
+
+    // Use the lowest other score as the local blank reference.
+    final floorReference = fills.sublist(1).map((e) => e.$2).reduce(math.min);
+
+    return (
+      measurements: measurements,
+      bestChoice: fills[0].$1,
+      bestFill: fills[0].$2,
+      runnerUpFill: fills[1].$2, // every item has >=2 choices
+      floorReference: floorReference,
+    );
+  }
+
+  /// Measure ring, whole, and center ink fractions (255 = ink), then blend scores.
+  /// The ring excludes the printed choice letter; center ink retains pencil evidence.
+  /// These signals overlap, so the blend reweights center ink rather than adding
+  /// independent votes. Separate X/Y radii match flattened printed bubbles.
+  ({double ringFill, double wholeFill, double centerFill, double score})
+      _measureBubble(
     cv.Mat inkMap,
     BubblePos bubble,
     double halfPxX,
     double halfPxY,
     int canonicalWidth,
-    int canonicalHeight,
-  ) {
-    final cx = bubble.xFrac * canonicalWidth;
-    final cy = bubble.yFrac * canonicalHeight;
+    int canonicalHeight, {
+    double shiftXPx = 0,
+    double shiftYPx = 0,
+  }) {
+    final cx = bubble.xFrac * canonicalWidth + shiftXPx;
+    final cy = bubble.yFrac * canonicalHeight + shiftYPx;
     final outerFill = _squareFillFraction(
       inkMap,
       cx,
@@ -2760,9 +3388,21 @@ class OmrDecoder {
     final outerArea = halfPxX * halfPxY * 4;
     final innerArea = innerHalfPxX * innerHalfPxY * 4;
     final ringArea = outerArea - innerArea;
-    if (ringArea <= 0) return outerFill;
+    final ringFill = ringArea > 0
+        ? ((outerFill * outerArea) - (innerFill * innerArea)) / ringArea
+        : outerFill;
 
-    return ((outerFill * outerArea) - (innerFill * innerArea)) / ringArea;
+    // Ring-dominant weights; validate against real captures before retuning.
+    final score = _clamp01(
+      0.55 * ringFill + 0.30 * outerFill + 0.15 * innerFill,
+    );
+
+    return (
+      ringFill: ringFill,
+      wholeFill: outerFill,
+      centerFill: innerFill,
+      score: score,
+    );
   }
 
   double _squareFillFraction(

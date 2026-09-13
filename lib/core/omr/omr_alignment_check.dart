@@ -20,8 +20,11 @@ enum CornerConfidence { none, low, confident }
 enum AlignmentVerdict { green, yellow, red }
 
 /// Result of `OmrDecoder.locateCorners` — whether the four fiducial marks
-/// were found for a given photo + template, without doing the (much more
-/// expensive) perspective warp and bubble sampling.
+/// were found for a given photo + template, AND (since the post-capture
+/// pass is the only place that can reject a bad photo before it enters the
+/// batch) whether the resulting perspective warp actually lands them back
+/// at their known canonical positions. Does not do bubble sampling — that
+/// stays exclusive to the much more expensive `decode()`.
 ///
 /// Plain data, no native/Web-specific dependency, so both the native
 /// (opencv_dart-backed) and Web (stub) `OmrDecoder` implementations share
@@ -43,6 +46,21 @@ class AlignmentCheck {
   /// search threw before four corners could be assessed.
   final List<CornerConfidence> corners;
 
+  /// Per-corner canonical-pixel distance between each fiducial's post-warp
+  /// re-detected position and its expected template position (TL, TR, BL,
+  /// BR) — populated once a homography was actually fit and re-verified.
+  /// Null when the post-warp check never ran (e.g. corners weren't even
+  /// found pre-warp).
+  final List<double>? reprojectionErrorPx;
+
+  /// True only when [aligned] is false specifically because the post-warp
+  /// reprojection check failed — a homography was fit from four otherwise
+  /// plausible corners, but re-detecting them on the corrected image didn't
+  /// land close enough to where the template says they must be. Distinct
+  /// from a pre-warp corner-search/geometry failure, which uses
+  /// [AlignmentCheck.misaligned] with this false.
+  final bool warpRejected;
+
   const AlignmentCheck.aligned()
       : aligned = true,
         message = null,
@@ -52,16 +70,39 @@ class AlignmentCheck {
           CornerConfidence.confident,
           CornerConfidence.confident,
           CornerConfidence.confident,
-        ];
+        ],
+        reprojectionErrorPx = null,
+        warpRejected = false;
 
-  /// A usable quad, but at least one corner is only [CornerConfidence.low].
+  /// A usable quad, but at least one corner is only [CornerConfidence.low]
+  /// (or the post-warp reprojection error is nonzero but within tolerance).
   /// Still counts as [aligned] — the post-capture pass is authoritative.
-  const AlignmentCheck.degraded(this.message, this.corners)
-      : aligned = true,
-        verdict = AlignmentVerdict.yellow;
+  const AlignmentCheck.degraded(
+    this.message,
+    this.corners, [
+    this.reprojectionErrorPx,
+  ])  : aligned = true,
+        verdict = AlignmentVerdict.yellow,
+        warpRejected = false;
 
   const AlignmentCheck.misaligned(this.message)
       : aligned = false,
         verdict = AlignmentVerdict.red,
-        corners = const [];
+        corners = const [],
+        reprojectionErrorPx = null,
+        warpRejected = false;
+
+  /// Four corners were found and a homography was fit, but re-detecting the
+  /// markers on the warped image didn't land close enough to their expected
+  /// canonical positions — the perspective correction for this photo isn't
+  /// trustworthy. Unlike [misaligned], keeps the real per-corner confidence
+  /// tiers and the measured errors, since the pre-warp search itself did
+  /// succeed; only the warp's own result is being rejected.
+  const AlignmentCheck.warpMisaligned(
+    this.message,
+    this.corners,
+    this.reprojectionErrorPx,
+  )   : aligned = false,
+        verdict = AlignmentVerdict.red,
+        warpRejected = true;
 }

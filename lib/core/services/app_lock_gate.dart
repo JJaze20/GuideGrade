@@ -59,6 +59,20 @@ class _AppLockGateState extends State<AppLockGate> with WidgetsBindingObserver {
   /// to false.
   bool _suppressNextResume = false;
 
+  /// When the *last* successful unlock completed, or null. On at least one
+  /// real device (confirmed via on-device logs), the prompt closing causes
+  /// TWO `resumed` events in quick succession, not one -- [_suppressNextResume]
+  /// only ever consumes the first, so the second was landing as a "genuine"
+  /// resume and re-locking immediately after a successful unlock, which
+  /// re-showed the prompt, which produced its own resume(s), forever: a
+  /// biometric-prompt loop with no way out short of leaving the app. Every
+  /// resume within [_postUnlockGraceWindow] of a successful unlock is
+  /// ignored, however many of them there turn out to be, instead of trying
+  /// to predict exactly how many spurious resumes one unlock produces.
+  DateTime? _lastUnlockAt;
+
+  static const Duration _postUnlockGraceWindow = Duration(seconds: 2);
+
   @override
   void initState() {
     super.initState();
@@ -98,6 +112,19 @@ class _AppLockGateState extends State<AppLockGate> with WidgetsBindingObserver {
     // event (a system dialog or the notification shade briefly firing
     // `inactive` shouldn't force a fresh prompt on its own).
     if (state != AppLifecycleState.resumed) return;
+    // A screen can be the source of its own spurious resumes -- e.g. the
+    // TAT scanner's landscape-sensor rotation (see ExamScanningScreen),
+    // where the device flipping between landscapeLeft/landscapeRight while
+    // physically held in landscape can cycle the Activity through
+    // pause/resume repeatedly, with no actual backgrounding involved. Every
+    // one of those resumes previously re-locked and re-prompted, producing
+    // an infinite biometric-prompt loop for exactly as long as the phone
+    // stayed in that orientation. Trust the screen that knows it's causing
+    // this over guessing from the lifecycle event alone.
+    if (widget.appState.suppressAppLock) {
+      debugPrint('AppLockGate: resume suppressed by suppressAppLock');
+      return;
+    }
     // The system biometric/PIN prompt shown from _authenticate() below is
     // itself what causes the *next* `resumed` event(s), once the user
     // finishes with it and this Activity regains focus -- without both of
@@ -110,6 +137,11 @@ class _AppLockGateState extends State<AppLockGate> with WidgetsBindingObserver {
     if (_suppressNextResume) {
       _suppressNextResume = false;
       debugPrint('AppLockGate: suppressed a resume caused by the prompt itself closing');
+      return;
+    }
+    final lastUnlock = _lastUnlockAt;
+    if (lastUnlock != null && DateTime.now().difference(lastUnlock) < _postUnlockGraceWindow) {
+      debugPrint('AppLockGate: resume within the post-unlock grace window, ignoring');
       return;
     }
     if (widget.appState.currentUser == null) return;
@@ -152,6 +184,10 @@ class _AppLockGateState extends State<AppLockGate> with WidgetsBindingObserver {
     // event when this Activity regains focus -- consume exactly that one
     // (see didChangeAppLifecycleState).
     _suppressNextResume = true;
+    // Only on a genuine successful unlock -- a failed/cancelled attempt
+    // (ok=false) should still re-lock and re-prompt on the next resume as
+    // normal, not get a free pass for the next 2 seconds.
+    if (ok) _lastUnlockAt = DateTime.now();
   }
 
   @override
