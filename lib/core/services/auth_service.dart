@@ -101,6 +101,25 @@ class AuthService {
     return _authorize(credential.user, requiredRole: requiredRole);
   }
 
+  /// Signs in with email/password for the WEB platform, where a single
+  /// login screen now serves BOTH known roles ([_knownRoles]) — the
+  /// account's own Firestore role decides which console it lands on
+  /// afterward (see `AppRoutes._landingScreen`/`AdminLoginScreen.
+  /// _navigateAfterLogin`), never a value the person signing in selects or
+  /// claims. Unlike [signInWithEmail], there is no [WrongPortalException]
+  /// here — there is no "wrong portal" once both roles share one Web login.
+  ///
+  /// Still fails closed exactly like [signInWithEmail]/[_authorize]: an
+  /// unconfigured, deactivated, or unrecognized-role account is denied and
+  /// signed back out, never silently let through.
+  Future<UserModel> signInForWeb({
+    required String email,
+    required String password,
+  }) async {
+    final credential = await _auth.signInWithEmailAndPassword(email: email, password: password);
+    return _authorize(credential.user, requiredRole: null);
+  }
+
   Future<UserModel> signInWithGoogle({required String requiredRole}) async {
     final googleSignIn = _googleSignIn;
     if (googleSignIn == null) {
@@ -194,7 +213,10 @@ class AuthService {
   }
 
   /// Authorizes an already-Firebase-authenticated [user] against Firestore,
-  /// for the login portal that requires [requiredRole].
+  /// for the login portal that requires [requiredRole] — or, when
+  /// [requiredRole] is null (see [signInForWeb]), for a shared portal that
+  /// accepts any known role and lets the caller route by the account's
+  /// actual role afterward.
   /// Fails closed on every path:
   ///
   /// - No Firestore user record -> deny. Accounts are provisioned by an
@@ -203,15 +225,16 @@ class AuthService {
   /// - Record exists but `isActive == false` -> deny.
   /// - Record exists, active, but `role` isn't one this app recognizes ->
   ///   deny (never falls back to a default role).
-  /// - Record exists, active, known role, but that role isn't
-  ///   [requiredRole] -> deny with [WrongPortalException] (the account is
-  ///   valid, it's just using the wrong portal — e.g. a `guidance_council`
-  ///   account on the Web Admin login).
+  /// - [requiredRole] is non-null, record exists, active, known role, but
+  ///   that role isn't [requiredRole] -> deny with [WrongPortalException]
+  ///   (the account is valid, it's just using the wrong portal — e.g. a
+  ///   `guidance_council` account on the mobile-only login). Skipped
+  ///   entirely when [requiredRole] is null.
   /// - The Firestore lookup itself fails (network, rules, etc.) -> deny;
   ///   never treated as "not found" and never silently let through.
   ///
   /// Every deny path signs the user back out before throwing.
-  Future<UserModel> _authorize(User? user, {required String requiredRole}) async {
+  Future<UserModel> _authorize(User? user, {required String? requiredRole}) async {
     if (user == null) {
       throw UserVerificationException('Sign-in succeeded but no user profile was returned.');
     }
@@ -247,7 +270,7 @@ class AuthService {
       );
     }
 
-    if (firestoreUser.role != requiredRole) {
+    if (requiredRole != null && firestoreUser.role != requiredRole) {
       await signOut();
       throw WrongPortalException(
         requiredRole == 'system_admin'
