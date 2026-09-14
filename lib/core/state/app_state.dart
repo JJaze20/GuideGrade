@@ -223,6 +223,98 @@ LocalScanResult buildLocalScanResult(
   );
 }
 
+/// Monotonic counter backing [generateExamineeId] — mirrors the same
+/// millis+counter pattern [SyncJob.newId] already uses elsewhere in this
+/// codebase as its "sufficiently unique ID" convention (no UUID package is
+/// a dependency of this project).
+int _examineeIdCounter = 0;
+
+/// A fresh, sufficiently-unique generated Examinee ID for one scan record.
+///
+/// This is **Option A**: an identifier for this one scan/examination
+/// record, never a permanent cross-exam applicant identity, and never the
+/// scan's own database primary key (a caller must not treat it as such).
+/// [now] is injectable for deterministic tests; production callers always
+/// omit it.
+@visibleForTesting
+String generateExamineeId([DateTime? now]) {
+  final millis = (now ?? DateTime.now()).millisecondsSinceEpoch;
+  final n = _examineeIdCounter++;
+  return 'EX-$millis-$n';
+}
+
+/// Builds the automatic [ExamineeInfo] for a freshly-captured scan —
+/// always non-null, always carrying a freshly [generateId]d Examinee ID,
+/// with each OCR-guessed name field independently present or blank (never
+/// a placeholder like `"UNKNOWN"`). Used by
+/// [AppState.persistCapturedSessionToBatch] for every new scan, regardless
+/// of whether OCR read any name field at all — the generated ID no longer
+/// depends on OCR succeeding.
+@visibleForTesting
+ExamineeInfo buildAutoExaminee({
+  String? ocrLastNameGuess,
+  String? ocrFirstNameGuess,
+  String? ocrMiddleNameGuess,
+  required String Function() generateId,
+}) {
+  return ExamineeInfo(
+    lastName: ocrLastNameGuess ?? '',
+    firstName: ocrFirstNameGuess ?? '',
+    middleName: ocrMiddleNameGuess ?? '',
+    examineeNumber: generateId(),
+  );
+}
+
+/// Resolves what [AppState.finishRescan] should pass as the rescanned
+/// sheet's `examinee` (contract: `null` means "keep the existing tag
+/// exactly as-is" — see [BatchRepository.replaceScan]).
+///
+///  * No generated ID yet on [existingExaminee] (a legacy scan predating
+///    this feature, or `existingExaminee == null`): always returns a fresh
+///    [ExamineeInfo] carrying a newly [generateId]d Examinee ID — a rescan
+///    must never leave a record permanently id-less — refreshing names
+///    from this pass's OCR where available and otherwise falling back to
+///    whatever [existingExaminee] already had.
+///  * An existing generated ID is already present and the tag is not yet
+///    fully complete (see [ExamineeInfo.isComplete]) and this pass's OCR
+///    produced at least one fresh guess: returns a refreshed name using
+///    the SAME existing Examinee ID (never a new one merely because of a
+///    rescan).
+///  * Otherwise (a fully-tagged existing record, or no fresh OCR to
+///    refresh with): returns `null` — the existing tag is left untouched.
+@visibleForTesting
+ExamineeInfo? resolveRescanExaminee({
+  required ExamineeInfo? existingExaminee,
+  String? ocrLastNameGuess,
+  String? ocrFirstNameGuess,
+  String? ocrMiddleNameGuess,
+  required String Function() generateId,
+}) {
+  final hasId = existingExaminee != null && existingExaminee.examineeNumber.trim().isNotEmpty;
+  final hasFreshOcr =
+      ocrLastNameGuess != null || ocrFirstNameGuess != null || ocrMiddleNameGuess != null;
+
+  if (!hasId) {
+    return ExamineeInfo(
+      lastName: ocrLastNameGuess ?? existingExaminee?.lastName ?? '',
+      firstName: ocrFirstNameGuess ?? existingExaminee?.firstName ?? '',
+      middleName: ocrMiddleNameGuess ?? existingExaminee?.middleName ?? '',
+      examineeNumber: generateId(),
+    );
+  }
+
+  if (!existingExaminee.isComplete && hasFreshOcr) {
+    return ExamineeInfo(
+      lastName: ocrLastNameGuess ?? '',
+      firstName: ocrFirstNameGuess ?? '',
+      middleName: ocrMiddleNameGuess ?? '',
+      examineeNumber: existingExaminee.examineeNumber,
+    );
+  }
+
+  return null;
+}
+
 /// A lightweight in-memory app state shared across screens via
 /// [AppStateScope] (an InheritedNotifier, so no third-party state package).
 class AppState extends ChangeNotifier {
@@ -539,6 +631,11 @@ class AppState extends ChangeNotifier {
       //    *different* physical sheet was just rescanned into this slot —
       //    abort before saving anything and surface [rescanSaveError]
       //    (already wired to a SnackBar in exam_scanning_screen.dart).
+      // See [resolveRescanExaminee] for the exact resolution logic,
+      // including the Examinee ID rule: an existing generated ID is always
+      // preserved across a rescan, and one is generated fresh only for a
+      // record that never had one (e.g. a legacy scan predating this
+      // feature) — never merely because a rescan happened.
       LocalScan? existingScan;
       for (final s in batch.scans) {
         if (s.id == scanId) {
@@ -584,15 +681,13 @@ class AppState extends ChangeNotifier {
           return false;
         }
       }
-      final refreshedExaminee = (existingExaminee == null || !existingExaminee.isComplete) &&
-              (ocrLastNameGuess != null || ocrFirstNameGuess != null || ocrMiddleNameGuess != null)
-          ? ExamineeInfo(
-              lastName: ocrLastNameGuess ?? '',
-              firstName: ocrFirstNameGuess ?? '',
-              middleName: ocrMiddleNameGuess ?? '',
-              examineeNumber: existingExaminee?.examineeNumber ?? '',
-            )
-          : null;
+      final refreshedExaminee = resolveRescanExaminee(
+        existingExaminee: existingExaminee,
+        ocrLastNameGuess: ocrLastNameGuess,
+        ocrFirstNameGuess: ocrFirstNameGuess,
+        ocrMiddleNameGuess: ocrMiddleNameGuess,
+        generateId: generateExamineeId,
+      );
 
       final updated = await batchRepository.replaceScan(
         batchId: batch.id,
@@ -1023,18 +1118,14 @@ class AppState extends ChangeNotifier {
         );
         final rectifiedPath = i < rectifiedImagePaths.length ? rectifiedImagePaths[i] : null;
 
-        // Best-effort on-device OCR suggestion for the tag-student dialog —
-        // never blocks saving. See NameOcrService's doc comment on why a
-        // guess can come back null. Whatever comes back (even just a last
-        // name) is used to pre-label the sheet immediately, rather than
-        // waiting for staff to open Tag Student — see [autoExaminee] below.
-        // A name never comes from OCR alone with confidence higher than
-        // "probably right", so this deliberately never fills
-        // [ExamineeInfo.examineeNumber]: staff must still open Tag Student
-        // to add that number (and fix the name if OCR got it wrong), so a
-        // batch's untagged/duplicate-number checks (which key off
-        // [ExamineeInfo.isComplete]/[examineeNumber]) are unaffected by an
-        // auto-filled name alone.
+        // Best-effort on-device OCR suggestion, used to pre-fill the name —
+        // never blocks saving, and never invents a placeholder when OCR
+        // fails or only partially reads. See NameOcrService's doc comment
+        // on why a guess can come back null. The scan is auto-saved with a
+        // freshly generated Examinee ID regardless of what OCR returns —
+        // see [autoExaminee] below and [buildAutoExaminee]/
+        // [generateExamineeId]. Manual Tag Student remains available purely
+        // as a correction mechanism for the name (and, if needed, the ID).
         String? ocrLastNameGuess;
         String? ocrFirstNameGuess;
         String? ocrMiddleNameGuess;
@@ -1065,14 +1156,12 @@ class AppState extends ChangeNotifier {
           }
         }
         final ocrCropMs = ocrCropSw?.elapsedMilliseconds ?? 0;
-        final autoExaminee = (ocrLastNameGuess != null || ocrFirstNameGuess != null || ocrMiddleNameGuess != null)
-            ? ExamineeInfo(
-                lastName: ocrLastNameGuess ?? '',
-                firstName: ocrFirstNameGuess ?? '',
-                middleName: ocrMiddleNameGuess ?? '',
-                examineeNumber: '',
-              )
-            : null;
+        final autoExaminee = buildAutoExaminee(
+          ocrLastNameGuess: ocrLastNameGuess,
+          ocrFirstNameGuess: ocrFirstNameGuess,
+          ocrMiddleNameGuess: ocrMiddleNameGuess,
+          generateId: generateExamineeId,
+        );
 
         final addScanSw = kOmrPerfDebug ? (Stopwatch()..start()) : null;
         try {

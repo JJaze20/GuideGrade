@@ -118,19 +118,46 @@ void main() {
       expect(scan.examinee!.examineeNumber, '12345');
     });
 
-    test('a middle name on an incomplete trio is still not invented into an examinee', () {
+    test('a blank examinee_number means no cloud identity at all -> null examinee,'
+        ' even if names are present', () {
       final scan = mapCloudScan(_scanRow(
         firstName: 'Juan',
         lastName: 'Dela Cruz',
         middleName: 'Santos',
-        examineeNumber: '', // incomplete -> whole trio (and thus examinee) is null
+        examineeNumber: '', // blank number -> no examinee record was ever saved
       ));
       expect(scan.examinee, isNull);
     });
 
-    test('examinee trio is all-or-nothing: a partial trio maps to null, never invented', () {
+    test('AUTOMATIC ID FEATURE — a generated examinee_number alone (no OCR name at'
+        ' all) reconstructs an examinee with independently blank names, never null', () {
+      final scan = mapCloudScan(_scanRow(examineeNumber: 'EX-1700000000000-0'));
+      expect(scan.examinee, isNotNull);
+      expect(scan.examinee!.examineeNumber, 'EX-1700000000000-0');
+      expect(scan.examinee!.firstName, '');
+      expect(scan.examinee!.lastName, '');
+      expect(scan.examinee!.middleName, '');
+    });
+
+    test('AUTOMATIC ID FEATURE — a generated number with only a partial OCR read'
+        ' (last name only): last name restored, first/middle independently blank', () {
+      final scan = mapCloudScan(_scanRow(
+        lastName: 'Dela Cruz',
+        examineeNumber: 'EX-1700000000000-1',
+      ));
+      expect(scan.examinee, isNotNull);
+      expect(scan.examinee!.lastName, 'Dela Cruz');
+      expect(scan.examinee!.firstName, '');
+      expect(scan.examinee!.examineeNumber, 'EX-1700000000000-1');
+    });
+
+    test('a number with only a first name (no last name) still reconstructs the'
+        ' examinee -- number alone is now the identity signal, not the trio', () {
       final scan = mapCloudScan(_scanRow(firstName: 'Juan', lastName: null, examineeNumber: 'X-1'));
-      expect(scan.examinee, isNull);
+      expect(scan.examinee, isNotNull);
+      expect(scan.examinee!.firstName, 'Juan');
+      expect(scan.examinee!.lastName, '');
+      expect(scan.examinee!.examineeNumber, 'X-1');
     });
 
     test('an ungraded row (no resultStatus) has no result', () {

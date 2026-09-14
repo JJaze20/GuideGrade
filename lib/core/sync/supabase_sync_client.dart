@@ -343,34 +343,54 @@ class SupabaseSyncClient implements SyncClient {
   static bool examineeTagged(ExamineeInfo? examinee) =>
       examinee != null && examinee.isComplete;
 
-  /// The `scans` identity columns (`first_name` / `last_name` /
-  /// `examinee_number`, plus `middle_name`) for [examinee].
+  /// The `scans` identity columns (`first_name` / `middle_name` /
+  /// `last_name` / `examinee_number`) for [examinee].
   ///
-  /// The cloud `scans` table enforces `examinee_all_or_nothing` on the
-  /// first/last/number TRIO ONLY: that trio must be either all NULL or all
-  /// NOT NULL. So a complete tag sends all three (blank-after-trim still
-  /// normalised to null by [_blankToNull] as a belt-and-braces guard);
-  /// anything else — untagged, or a partial / OCR-only tag — sends all
-  /// three as null. The name is not lost: it stays in the local scan and is
-  /// pushed by a later `PUSH_SCAN` once staff complete the tag. Sending a
-  /// partial trio is SQLSTATE 23514 and would permanently fail the scan's
-  /// push.
+  /// Each field is sent INDEPENDENTLY -- an available value, or SQL NULL
+  /// when unavailable -- never a fake placeholder like `"UNKNOWN"`. This
+  /// supports the automatic-identity feature: [examinee] is expected to
+  /// always carry a generated `examineeNumber` for any scan created after
+  /// that feature shipped (see `AppState.buildAutoExaminee` /
+  /// `resolveRescanExaminee`), with `firstName`/`middleName`/`lastName`
+  /// independently blank whenever on-device OCR couldn't read that field.
+  /// [examinee] itself can still be null (a scan pushed before this
+  /// feature existed, or one whose tag was explicitly cleared), in which
+  /// case all four columns are null.
   ///
-  /// `middle_name` is NOT part of that CHECK constraint (it's always been
-  /// optional — see [ExamineeInfo.middleName]'s own doc comment: "never
-  /// required for isComplete"), so it follows the SAME tagged/untagged gate
-  /// as the trio (never sent for an incomplete tag, so an OCR-only scan's
-  /// suggested middle name is never pushed either) but is blank-to-null
-  /// normalised independently of the trio's all-or-nothing rule -- a
-  /// complete tag with a genuinely blank middle name still sends
-  /// `middle_name: null`, which is valid on its own (no CHECK references it).
+  /// ============================================================
+  /// DEPLOYMENT DEPENDENCY -- READ BEFORE RELYING ON THIS IN PRODUCTION
+  /// ============================================================
+  /// The cloud `scans` table has historically enforced an
+  /// `examinee_all_or_nothing` CHECK constraint requiring `first_name`,
+  /// `last_name`, and `examinee_number` to be either ALL NULL or ALL NOT
+  /// NULL (see this function's git history / the accompanying
+  /// investigation report). Sending a generated, always-non-null
+  /// `examinee_number` alongside a null `first_name`/`last_name` --
+  /// which now happens ROUTINELY BY DESIGN whenever OCR only partially
+  /// reads a name, or fails to read one at all -- violates that
+  /// constraint (SQLSTATE `23514`) and PERMANENTLY FAILS THE ENTIRE
+  /// SCAN'S PUSH (the whole row -- score included, since it's one
+  /// `.upsert()` -- not just the identity columns). This constraint MUST
+  /// be relaxed on the Supabase side (to no longer require the trio
+  /// together -- `examinee_number` should be independently always-valid
+  /// on its own) before this code path is exercised against production
+  /// data. No schema change has been made from this codebase -- that is
+  /// a deliberate, separate, out-of-band decision for whoever administers
+  /// the Supabase project.
   static Map<String, dynamic> scanIdentityColumns(ExamineeInfo? examinee) {
-    final tagged = examineeTagged(examinee);
+    if (examinee == null) {
+      return const {
+        'first_name': null,
+        'middle_name': null,
+        'last_name': null,
+        'examinee_number': null,
+      };
+    }
     return {
-      'first_name': tagged ? _blankToNull(examinee!.firstName) : null,
-      'last_name': tagged ? _blankToNull(examinee!.lastName) : null,
-      'examinee_number': tagged ? _blankToNull(examinee!.examineeNumber) : null,
-      'middle_name': tagged ? _blankToNull(examinee!.middleName) : null,
+      'first_name': _blankToNull(examinee.firstName),
+      'middle_name': _blankToNull(examinee.middleName),
+      'last_name': _blankToNull(examinee.lastName),
+      'examinee_number': _blankToNull(examinee.examineeNumber),
     };
   }
 
@@ -603,12 +623,11 @@ class SupabaseSyncClient implements SyncClient {
       'processed_by_uid': result?.processedByUid,
       'processed_by_name': result?.processedByName,
 
-      // examinee identity (first/last/number all-or-nothing per the cloud
-      // `examinee_all_or_nothing` CHECK, middle_name alongside them under
-      // the same tagged/untagged gate -- see [scanIdentityColumns]). A
-      // partial / OCR-only tag goes up as all-null and is pushed in full by
-      // a later PUSH_SCAN once staff complete it. The tag-audit columns are
-      // added below, ONLY for a tag/clear-triggered push.
+      // examinee identity -- each of first/middle/last/examinee_number sent
+      // independently (available value or null), never all-or-nothing. See
+      // [scanIdentityColumns]'s doc comment for the DB constraint this
+      // depends on. The tag-audit columns are added below, ONLY for a
+      // tag/clear-triggered push.
       ...scanIdentityColumns(examinee),
 
       // duplicate-number override — not tracked by the app

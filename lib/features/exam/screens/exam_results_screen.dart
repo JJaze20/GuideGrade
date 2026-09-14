@@ -400,16 +400,17 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
     }
 
     if (tagged) {
-      // A name alone (no examinee number) means OCR auto-filled it at scan
-      // time (see AppState.persistCapturedSessionToBatch) — not yet staff-
-      // confirmed, so this gets a distinct "needs number" treatment rather
-      // than the same checkmark a fully-tagged sheet gets.
+      // Every scan now carries an auto-generated Examinee ID from the
+      // moment it's saved (see AppState.persistCapturedSessionToBatch), so
+      // an incomplete tag here means a missing/partial NAME (OCR couldn't
+      // read it, or only read part of it) — not a missing number — hence
+      // "needs name" rather than the old "needs examinee #".
       final complete = examinee!.isComplete;
       final icon = complete ? FontAwesomeIcons.userCheck : FontAwesomeIcons.userPen;
       final color = complete ? AppColors.primaryGreen : AppColors.amber800;
       final label = complete
           ? '${examinee.displayName} · #${examinee.examineeNumber}'
-          : '${examinee.displayName} — needs examinee #';
+          : '${examinee.displayName} — needs name';
       return Row(
         children: [
           FaIcon(icon, size: 11, color: color),

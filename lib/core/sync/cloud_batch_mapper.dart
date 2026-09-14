@@ -73,24 +73,23 @@ LocalScan mapCloudScan(CloudScanRow row, {AnswerKey? answerKey}) {
   );
 }
 
-/// The examinee trio, all-or-nothing (mirrors the cloud's own
-/// `examinee_all_or_nothing` CHECK) -- `null` unless all three of
-/// first/last/number are present and non-blank. `middleName` is restored
-/// alongside the trio when available, but is NOT part of the
-/// completeness check -- mirrors [ExamineeInfo.middleName]'s own "never
-/// required" rule, and [CloudScanRow.middleName] is never sent by the
-/// cloud on its own without the trio anyway (see `scanIdentityColumns`).
+/// Reconstructs [ExamineeInfo] whenever the cloud row carries a generated
+/// `examinee_number` -- the one field every scan is expected to always
+/// have (see `AppState.buildAutoExaminee`/`resolveRescanExaminee`), used
+/// here as the sole signal that "this scan has cloud identity data worth
+/// restoring". `firstName`/`middleName`/`lastName` are independently
+/// restored as-is (blank when the cloud column is null, e.g. OCR never
+/// read that field) -- never invented, and no longer required together
+/// with the number (see `scanIdentityColumns`'s doc comment for why the
+/// old all-or-nothing trio check no longer applies). A row with no
+/// `examinee_number` at all (pushed before this feature existed, or
+/// explicitly cleared) maps to `null`, same as before.
 ExamineeInfo? _mapExaminee(CloudScanRow row) {
-  final first = row.firstName;
-  final last = row.lastName;
   final number = row.examineeNumber;
-  if (first == null || last == null || number == null) return null;
-  if (first.trim().isEmpty || last.trim().isEmpty || number.trim().isEmpty) {
-    return null;
-  }
+  if (number == null || number.trim().isEmpty) return null;
   return ExamineeInfo(
-    firstName: first,
-    lastName: last,
+    firstName: row.firstName ?? '',
+    lastName: row.lastName ?? '',
     middleName: row.middleName ?? '',
     examineeNumber: number,
   );
