@@ -24,6 +24,7 @@ import '../sync/cloud_restore_service.dart';
 import '../sync/sync_client.dart';
 import '../sync/sync_job.dart';
 import '../sync/sync_manager.dart';
+import '../utils/omr_perf_log.dart';
 
 class _OmrDecodeRequest {
   final String imagePath;
@@ -652,6 +653,15 @@ class AppState extends ChangeNotifier {
   bool isProcessingScans = false;
   String? scanProcessingError;
 
+  /// Tells [AppLockGate] to ignore an `AppLifecycleState.resumed` event
+  /// instead of re-locking, for as long as this is true. Set by a screen
+  /// that knowingly causes spurious resumes of its own doing (see
+  /// ExamScanningScreen's landscape/TAT handling) so that isn't mistaken
+  /// for the user actually returning from the background. Not a
+  /// notifyListeners()-driven flag — [AppLockGate] reads it directly inside
+  /// its own lifecycle callback, so no rebuild is needed either way.
+  bool suppressAppLock = false;
+
   /// Outcome of the last [persistCapturedSessionToBatch] run.
   bool isSavingToBatch = false;
   int savedScanCount = 0;
@@ -919,12 +929,16 @@ class AppState extends ChangeNotifier {
     var pageIndex = 0;
     for (final page in capturedPages) {
       pageIndex++;
+      final pageSw = kOmrPerfDebug ? (Stopwatch()..start()) : null;
+      final decodeSw = kOmrPerfDebug ? (Stopwatch()..start()) : null;
       try {
         final result = await compute(_decodeOmrPage, _OmrDecodeRequest(page.path, template));
         scannedResults.add(result);
       } catch (e) {
         errors.add('Sheet $pageIndex: $e');
       }
+      final decodeMs = decodeSw?.elapsedMilliseconds ?? 0;
+      final debugSw = kOmrPerfDebug ? (Stopwatch()..start()) : null;
       if (debugDir != null) {
         try {
           await compute(_saveDebugVisualization, _DebugVizRequest(page.path, template, debugDir, pageIndex));
@@ -932,10 +946,12 @@ class AppState extends ChangeNotifier {
           // Diagnostic-only; never let a debug-image failure block real results.
         }
       }
+      final debugMs = debugSw?.elapsedMilliseconds ?? 0;
       // Display-only, and computed by a call that never shares any state
       // with the real decode above (see rectifyForOverlay's doc comment) —
       // a failure here must never affect scannedResults or block scanning.
       String? rectifiedPath;
+      final rectifySw = kOmrPerfDebug ? (Stopwatch()..start()) : null;
       if (rectifiedDir != null) {
         try {
           rectifiedPath = await compute(
@@ -946,7 +962,14 @@ class AppState extends ChangeNotifier {
           rectifiedPath = null;
         }
       }
+      final rectifyMs = rectifySw?.elapsedMilliseconds ?? 0;
       rectifiedImagePaths.add(rectifiedPath);
+      if (pageSw != null) {
+        omrPerfLog(
+          'page pageIndex=$pageIndex decode=${decodeMs}ms debugViz=${debugMs}ms '
+          'rectify=${rectifyMs}ms total=${pageSw.elapsedMilliseconds}ms',
+        );
+      }
     }
 
     scanProcessingError = errors.isEmpty ? null : errors.join('\n');
@@ -983,10 +1006,12 @@ class AppState extends ChangeNotifier {
 
     var savedScans = 0;
     var savedGraded = 0;
+    final persistBatchSw = kOmrPerfDebug ? (Stopwatch()..start()) : null;
     try {
       final pairCount =
           capturedPages.length < scannedResults.length ? capturedPages.length : scannedResults.length;
       for (var i = 0; i < pairCount; i++) {
+        final persistPageSw = kOmrPerfDebug ? (Stopwatch()..start()) : null;
         final decoded = scannedResults[i];
         final scored = scoreOmrResult(decoded, answerKey);
         final graded = scored.totalGraded > 0;
@@ -1013,6 +1038,8 @@ class AppState extends ChangeNotifier {
         String? ocrLastNameGuess;
         String? ocrFirstNameGuess;
         String? ocrMiddleNameGuess;
+        final ocrCropSw = kOmrPerfDebug ? (Stopwatch()..start()) : null;
+        var ocrRecognizeMs = 0;
         if (template != null && nameCropDir != null) {
           try {
             final crops = await compute(
@@ -1026,15 +1053,18 @@ class AppState extends ChangeNotifier {
               ),
             );
             if (crops != null) {
+              final ocrRecognizeSw = kOmrPerfDebug ? (Stopwatch()..start()) : null;
               ocrLastNameGuess = await nameOcr.recognizeName(crops.lastName, fieldLabel: 'Last Name');
               ocrFirstNameGuess = await nameOcr.recognizeName(crops.firstName, fieldLabel: 'First Name');
               ocrMiddleNameGuess = await nameOcr.recognizeName(crops.middleInitial, fieldLabel: 'MI');
+              if (ocrRecognizeSw != null) ocrRecognizeMs = ocrRecognizeSw.elapsedMilliseconds;
             }
           } catch (_) {
             // Leave all three guesses null — a bad crop/OCR call must
             // never block saving the scan itself.
           }
         }
+        final ocrCropMs = ocrCropSw?.elapsedMilliseconds ?? 0;
         final autoExaminee = (ocrLastNameGuess != null || ocrFirstNameGuess != null || ocrMiddleNameGuess != null)
             ? ExamineeInfo(
                 lastName: ocrLastNameGuess ?? '',
@@ -1044,6 +1074,7 @@ class AppState extends ChangeNotifier {
               )
             : null;
 
+        final addScanSw = kOmrPerfDebug ? (Stopwatch()..start()) : null;
         try {
           await batchRepository.addScan(
             batchId: batch.id,
@@ -1068,6 +1099,14 @@ class AppState extends ChangeNotifier {
               ? e.message
               : 'Saved $savedScans of $pairCount scans to ${batch.batchCode} — $e';
           break;
+        } finally {
+          if (persistPageSw != null) {
+            omrPerfLog(
+              'persist pageIndex=${i + 1} ocrCrop=${ocrCropMs}ms '
+              'ocrRecognize=${ocrRecognizeMs}ms addScan=${addScanSw?.elapsedMilliseconds ?? 0}ms '
+              'total=${persistPageSw.elapsedMilliseconds}ms',
+            );
+          }
         }
       }
       // Refresh the bound batch so callers see the new counts/status.
@@ -1084,6 +1123,11 @@ class AppState extends ChangeNotifier {
       batchSaveError = 'Could not save the scans to the batch: $e';
     } finally {
       isSavingToBatch = false;
+      if (persistBatchSw != null) {
+        omrPerfLog(
+          'persistBatch pages=$savedScans total=${persistBatchSw.elapsedMilliseconds}ms',
+        );
+      }
       notifyListeners();
     }
   }

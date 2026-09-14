@@ -31,12 +31,20 @@ class OmrDecoder {
 
   AlignmentCheck locateCorners(String imagePath, OmrExamTemplate template) => _unsupported();
 
-  List<bool> checkCornersFromLuma(
+  ({
+    List<CornerConfidence> confidence,
+    List<(double, double)?> positions,
+    List<CornerDiagnostic>? diagnostics,
+    FrameRotation rotation,
+  })
+      checkCornersFromLuma(
     Uint8List lumaBytes,
     int width,
     int height,
     int bytesPerRow,
-  ) =>
+    OmrExamTemplate template, {
+    bool includeDiagnostics = false,
+  }) =>
       _unsupported();
 
   OmrScanResult decode(String imagePath, OmrExamTemplate template) => _unsupported();

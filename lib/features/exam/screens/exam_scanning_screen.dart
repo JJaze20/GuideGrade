@@ -8,10 +8,13 @@ import 'package:flutter/services.dart' show DeviceOrientation, SystemChrome;
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/omr/duplicate_scan_detector.dart';
+import '../../../core/omr/fiducial_coordinate_mapping.dart';
+import '../../../core/omr/fiducial_search_tuning.dart';
 import '../../../core/omr/omr_decoder.dart';
 import '../../../core/omr/omr_templates.dart';
 import '../../../core/routes/app_routes.dart';
 import '../../../core/state/app_state.dart';
+import '../../../core/utils/omr_perf_log.dart';
 
 class _AlignmentCheckRequest {
   final String imagePath;
@@ -28,27 +31,59 @@ class _LiveCornersRequest {
   final int width;
   final int height;
   final int bytesPerRow;
+  final OmrExamTemplate template;
+
+  /// Whether to also build the (otherwise-skipped) per-corner diagnostic
+  /// detail for the temporary opt-in overlay — see
+  /// [_ExamScanningScreenState._diagnosticsEnabled]. False on every normal
+  /// frame check, so enabling diagnostics never changes what a regular
+  /// (non-debugging) session actually does.
+  final bool includeDiagnostics;
   const _LiveCornersRequest(
     this.lumaBytes,
     this.width,
     this.height,
     this.bytesPerRow,
-  );
+    this.template, {
+    this.includeDiagnostics = false,
+  });
 }
 
 /// Corner-detection result plus a coarse mean-brightness read of the same
-/// frame — piggybacked onto this exact call (same luma bytes, same 600ms
+/// frame — piggybacked onto this exact call (same luma bytes, same throttled
 /// throttle, same isolate hop as the corner check) so the live low-light
 /// hint costs nothing extra. Strided sampling (every 8th pixel in both
 /// directions, ~1/64th of the frame) keeps this cheap enough for that
 /// cadence; a live hint only needs a stable exposure estimate, not every
 /// pixel.
-({List<bool> cornersFound, double meanLuma}) _checkLiveCorners(_LiveCornersRequest request) {
-  final found = const OmrDecoder().checkCornersFromLuma(
+///
+/// Each corner's [CornerConfidence] tier comes straight from the decoder's
+/// squareness-scored search (see omr_decoder_native.dart) — none/low/
+/// confident, per corner, independently — so the four on-screen viewfinders
+/// can each show their own state instead of only an aggregate "X/4" count.
+///
+/// [cornerPositions] carries each found corner's centroid as a (x/width,
+/// y/height) fraction of this frame (null where nothing was found) — the
+/// per-frame position data the auto-capture stability check diffs between
+/// consecutive frames (see [_ExamScanningScreenState._onCameraFrame]).
+///
+/// [diagnostics] and [rotation] are null/[FrameRotation.none] whenever
+/// [_LiveCornersRequest.includeDiagnostics] was false — the normal case;
+/// see [_ExamScanningScreenState._diagnosticsEnabled].
+({
+  List<CornerConfidence> cornersFound,
+  List<(double, double)?> cornerPositions,
+  List<CornerDiagnostic>? diagnostics,
+  FrameRotation rotation,
+  double meanLuma,
+}) _checkLiveCorners(_LiveCornersRequest request) {
+  final result = const OmrDecoder().checkCornersFromLuma(
     request.lumaBytes,
     request.width,
     request.height,
     request.bytesPerRow,
+    request.template,
+    includeDiagnostics: request.includeDiagnostics,
   );
   const stride = 8;
   var sum = 0;
@@ -60,7 +95,13 @@ class _LiveCornersRequest {
       count++;
     }
   }
-  return (cornersFound: found, meanLuma: count == 0 ? 255.0 : sum / count);
+  return (
+    cornersFound: result.confidence,
+    cornerPositions: result.positions,
+    diagnostics: result.diagnostics,
+    rotation: result.rotation,
+    meanLuma: count == 0 ? 255.0 : sum / count,
+  );
 }
 
 /// OMR Scanner Loop — mirrors SCREENS.EXAM_SCANNING.
@@ -82,6 +123,25 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
   String? _cameraError;
   bool _isCapturing = false;
 
+  /// Bumped at the start of every camera setup or teardown ([_setUpCamera],
+  /// [_tearDownCamera]) — each of those captures its own generation number
+  /// before its first `await` and re-checks it after every subsequent
+  /// `await` before mutating any shared field. This is what prevents a
+  /// stale operation's late-arriving continuation from corrupting state
+  /// set up by a *newer* one — the concrete failure this guards against: a
+  /// quick inactive→resumed blip (confirmed reproducible by taking a
+  /// screenshot while scanning) can fire [didChangeAppLifecycleState] twice
+  /// in close succession, so the old (inactive) call's `await
+  /// controller.dispose()` can still be pending when the new (resumed)
+  /// call's [_setUpCamera] has already created and assigned a working
+  /// replacement controller. Without this guard, the stale call's
+  /// continuation would go on to unconditionally null out (and thereby
+  /// leak, since nothing else holds a reference to it any more) that
+  /// brand-new working controller — permanently occupying the camera
+  /// hardware with an orphaned, never-disposed session that even a fresh
+  /// "Retry" tap can't recover from, since the OS never released it.
+  int _cameraGeneration = 0;
+
   /// Whether the active exam's sheet is a landscape page (currently just
   /// TAT — see OmrExamTemplate.pageWidthPt/pageHeightPt). Set once in
   /// [didChangeDependencies] from the exam active when this screen opened,
@@ -97,18 +157,54 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
   /// gets.
   bool _isLandscapeExam = false;
 
+  /// Captured once in [didChangeDependencies] (guarded by [_didSetUp], same
+  /// as [_isLandscapeExam]) so [dispose] has a safe reference — looking up
+  /// an InheritedWidget via `AppStateScope.of(context)` from within
+  /// `dispose()` is not something to rely on.
+  late final AppState _appState;
+
   /// Live, per-corner feedback: null until the first frame check completes,
-  /// then whether each of the 4 corner marks (in
-  /// [OmrExamTemplate.cornerMarkers] order) was found in the most recently
-  /// checked frame. This now also gates capture (see [_readyToCapture]) —
-  /// it isn't purely advisory any more — but the post-capture check in
-  /// [_capture] remains the authoritative gate, since it runs against the
-  /// actual full-resolution captured photo rather than these lower-effort
-  /// preview frames, and a page can still fail it even after this live
-  /// signal read all 4 as found.
-  List<bool>? _liveCornersFound;
+  /// then each of the 4 corner marks' (in [OmrExamTemplate.cornerMarkers]
+  /// order) [CornerConfidence] in the most recently checked frame — this is
+  /// what the four on-screen viewfinders each color themselves from, and
+  /// what [_autoCaptureStableSince]/[_autoCaptureArmed] key off for the
+  /// auto-capture trigger. Purely advisory for MANUAL capture: it operates
+  /// on a downscaled preview frame ([_liveCheckMaxDimension]), so a corner
+  /// reading [CornerConfidence.none] here is not proof the real,
+  /// full-resolution photo will fail — that question is answered only by
+  /// the authoritative [_checkAlignment]/`locateCorners` call inside
+  /// [_capture], against the actual captured file, regardless of what this
+  /// live signal showed.
+  List<CornerConfidence>? _liveCornersFound;
   DateTime? _lastFrameCheckAt;
   bool _frameCheckInFlight = false;
+
+  /// TEMPORARY, opt-in, off by default: shows a diagnostic overlay of the
+  /// actual per-corner search boxes/detected positions/rejection reasons
+  /// the decoder is working with, distinct from the four always-visible
+  /// fixed aiming guides drawn by [_PageGuidePainter] (see
+  /// [_DiagnosticOverlayPainter]) — for investigating cases where the
+  /// fixed guides look aligned but the live indicator never reaches green.
+  /// Only reachable in a debug build (see the top bar's bug-icon toggle in
+  /// [_buildTopBar]) — this is a developer tool, not a user-facing
+  /// feature, and defaults to false even there.
+  bool _diagnosticsEnabled = false;
+
+  /// Populated only while [_diagnosticsEnabled] is true (see
+  /// [_LiveCornersRequest.includeDiagnostics]); null otherwise, same as
+  /// before diagnostics existed.
+  List<CornerDiagnostic>? _liveDiagnostics;
+
+  /// Which orientation the most recent live check's winning attempt used —
+  /// see [FrameRotation]'s doc comment and
+  /// `fiducial_coordinate_mapping.dart`'s own doc comment for the
+  /// (on-device-unverified) assumption this feeds into the overlay's
+  /// coordinate mapping.
+  FrameRotation _liveRotation = FrameRotation.none;
+
+  /// TEMPORARY. Counts live-frame checks so [_onCameraFrame] can log timing
+  /// only every 10th one (see [omrPerfLog]) instead of on every tick.
+  int _liveFrameLogCounter = 0;
 
   /// Most recent live mean-luma read (0-255, coarse), from the same throttled
   /// frame check as [_liveCornersFound] — see [_checkLiveCorners]. Null until
@@ -132,32 +228,71 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
   /// single throttled frame check — only on entering/leaving low light.
   bool _exposureNudged = false;
 
-  /// When all 4 corners most recently read as found, continuously — set the
-  /// moment they first do, cleared the instant any check comes back with
-  /// fewer than 4. [_readyToCapture] requires this to have held for
-  /// [_requiredStableDuration] before allowing a capture, so a single
-  /// flickery "4/4" frame (a brief glare, a shaky hand) can't by itself
-  /// trigger a scan.
-  DateTime? _all4FoundSince;
+  /// When the live read most recently became "recoverable" (every corner at
+  /// least [CornerConfidence.low] — no corner missing outright), set the
+  /// moment that first held and cleared the instant any corner drops back
+  /// to [CornerConfidence.none]. Feeds only [_readyToCapture]/the "Ready to
+  /// scan" caption text (display, see [_viewfinderCaption]) — it does NOT
+  /// gate the manual capture button or [_capture] any more. Manual capture
+  /// is gated solely on the camera being initialized, no capture already in
+  /// flight, and the batch's scan limit; the live detector operates on a
+  /// downscaled preview frame and one corner briefly reading `none` there
+  /// was found to make real, valid captures on an actual full-resolution
+  /// photo impossible to ever attempt. Auto-capture uses its own separate,
+  /// stricter state ([_autoCaptureStableSince]/[_autoCaptureArmed]) and
+  /// never reads this field.
+  DateTime? _captureReadySince;
 
-  /// How long all 4 corners must read as continuously found before capture
-  /// is allowed. Live checks land roughly every 600ms
-  /// ([_onCameraFrame]'s throttle), so this requires at least one
-  /// corroborating re-check beyond the frame that first read 4/4, not just
-  /// that single frame.
+  /// How long the live read must stay recoverable before the "Ready to
+  /// scan" caption (see [_viewfinderCaption]) reports it — display timing
+  /// only, matching [_captureReadySince]'s scope.
   static const Duration _requiredStableDuration = Duration(milliseconds: 500);
 
-  /// Hard gate on capture: every corner must currently read as found *and*
-  /// have done so continuously for [_requiredStableDuration]. The "Scan
-  /// Next" button is disabled whenever this is false (see [build]), and
-  /// [_capture] re-checks it defensively before ever calling
-  /// `takePicture()` — there should be no path to a capture attempt while
-  /// this is false, let alone to a scan result.
+  /// Display-only: whether the live read currently looks stably good enough
+  /// to report "Ready to scan" in the caption (see [_viewfinderCaption]).
+  /// Not a capture gate — see [_captureReadySince]'s doc comment for why
+  /// manual capture never depends on this, and see the auto-capture trigger
+  /// in [_onCameraFrame] for the separate, stricter gate that actually
+  /// governs automatic capture.
   bool get _readyToCapture {
-    final since = _all4FoundSince;
+    final since = _captureReadySince;
     return since != null &&
         DateTime.now().difference(since) >= _requiredStableDuration;
   }
+
+  /// Most recently processed frame's per-corner positions (see
+  /// [_checkLiveCorners]'s [cornerPositions]) — diffed against each new
+  /// frame's positions to detect real motion, independent of confidence.
+  List<(double, double)?>? _liveCornerPositions;
+
+  /// When the current motionless streak of all-4-[CornerConfidence.confident]
+  /// began, or null while not currently all-confident or while still
+  /// settling from movement. Distinct from [_captureReadySince], which only
+  /// tracks how long the read has stayed *recoverable* (GREEN-or-YELLOW) —
+  /// auto-capture is stricter: full GREEN, and the four marker positions
+  /// themselves must have stopped moving, not just stayed found.
+  DateTime? _autoCaptureStableSince;
+
+  /// False immediately after an auto-capture fires; only flips back true
+  /// once the live verdict actually leaves GREEN (the sheet was pulled
+  /// away, repositioned, or occluded) — so a still-in-frame sheet that
+  /// remains steady right after being captured can't immediately trigger a
+  /// second, duplicate auto-capture the instant [_isCapturing] clears.
+  bool _autoCaptureArmed = true;
+
+  /// Per-corner movement threshold between consecutive live checks, as a
+  /// fraction of the frame's own dimension (device/resolution-independent —
+  /// see [_checkLiveCorners]'s normalized positions). Any single corner
+  /// moving more than this resets the stability clock; a real, sustained
+  /// drift can never silently accumulate into "stable".
+  static const double _autoCaptureMovementThresholdFrac = 0.008;
+
+  /// Minimum interval between preview checks; in-flight checks never overlap.
+  static const Duration _liveCheckInterval = Duration(milliseconds: 250);
+
+  /// Require a second steady, all-green frame before automatic capture.
+  static const Duration _autoCaptureStableDuration =
+      Duration(milliseconds: 250);
 
   /// Whether the live-checked scene currently reads as low light and the
   /// torch isn't already on — the one condition where the caption below
@@ -167,27 +302,62 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
   bool get _isLowLight =>
       _meanLuma != null && _meanLuma! < _lowLightLumaThreshold && !_torchOn;
 
+  /// Overall live traffic-light read, from the four independent per-corner
+  /// tiers: RED if any corner is missing outright, GREEN only once all four
+  /// are confidently locked, YELLOW for anything recoverable in between
+  /// (matches the four viewfinders' own coloring — see [_PageGuidePainter]).
+  /// Null until the first live check completes.
+  AlignmentVerdict? get _liveVerdict {
+    final found = _liveCornersFound;
+    if (found == null) return null;
+    if (found.any((c) => c == CornerConfidence.none)) return AlignmentVerdict.red;
+    if (found.every((c) => c == CornerConfidence.confident)) {
+      return AlignmentVerdict.green;
+    }
+    return AlignmentVerdict.yellow;
+  }
+
+  static const _cornerNames = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
+
   /// Viewfinder caption text — the low-light hint takes priority over the
   /// usual corner-alignment status when active (see [_isLowLight]).
   String _viewfinderCaption() {
     if (_isLowLight) return 'Low light — tap the flash icon';
-    if (_liveCornersFound == null) return 'Position sheet within the frame';
-    if (_readyToCapture) return 'Ready to scan';
-    if (_liveCornersFound!.every((f) => f)) return 'Hold steady…';
-    if (_liveCornersFound!.any((f) => f)) {
-      return '${_liveCornersFound!.where((f) => f).length}/4 corner marks locked';
+    final found = _liveCornersFound;
+    if (found == null) return 'Align the 4 black corner squares inside the guides';
+    switch (_liveVerdict!) {
+      case AlignmentVerdict.green:
+        return _readyToCapture ? 'Ready to scan' : 'Hold steady…';
+      case AlignmentVerdict.yellow:
+        final worst = found.indexWhere((c) => c != CornerConfidence.confident);
+        final name = worst >= 0 ? _cornerNames[worst] : 'one corner';
+        return 'Corner $name uncertain — adjust if possible, or capture to continue';
+      case AlignmentVerdict.red:
+        final missing = [
+          for (var i = 0; i < found.length; i++)
+            if (found[i] == CornerConfidence.none) _cornerNames[i],
+        ];
+        if (missing.length == 4) {
+          return 'Align the 4 black corner squares inside the guides';
+        }
+        return 'Missing: ${missing.join(', ')}';
     }
-    return 'Align all 4 corners inside the frame';
   }
 
-  /// Neutral until the first live check completes, green once all 4
-  /// anchors are currently found, red otherwise (some or none found).
+  /// Neutral until the first live check completes; otherwise mirrors
+  /// [_liveVerdict] (green/amber/red) — the same tri-state the four
+  /// viewfinders each show individually, given as one at-a-glance cue too.
   Color get _scanWindowBorderColor {
-    final found = _liveCornersFound;
-    if (found == null) return AppColors.accentYellowGreen;
-    return found.every((f) => f)
-        ? AppColors.primaryGreen
-        : AppColors.warmRedOrange;
+    switch (_liveVerdict) {
+      case null:
+        return AppColors.accentYellowGreen;
+      case AlignmentVerdict.green:
+        return AppColors.primaryGreen;
+      case AlignmentVerdict.yellow:
+        return const Color(0xFFF59E0B);
+      case AlignmentVerdict.red:
+        return AppColors.warmRedOrange;
+    }
   }
 
   /// Guards the [didChangeDependencies] setup below to run exactly once —
@@ -213,7 +383,8 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
     // build()/didChangeDependencies() onward — calling it in initState()
     // itself throws, since the widget isn't fully attached to the tree
     // yet at that point.
-    final template = omrTemplates[AppStateScope.of(context).activeExamCode];
+    _appState = AppStateScope.of(context);
+    final template = omrTemplates[_appState.activeExamCode];
     _isLandscapeExam =
         template != null && template.pageWidthPt > template.pageHeightPt;
     // A landscape-page exam (TAT) unlocks landscape device rotation for
@@ -228,14 +399,57 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
         DeviceOrientation.landscapeLeft,
         DeviceOrientation.landscapeRight,
       ]);
+      // Allowing the sensor to pick between landscapeLeft/landscapeRight
+      // means holding the phone near the boundary between the two can flip
+      // the device's actual orientation back and forth, and each flip can
+      // cycle this Activity through pause/resume with no real backgrounding
+      // involved (confirmed: AppLockGate's own resumed handler was
+      // re-locking and re-prompting on every one of those flips, producing
+      // an infinite biometric/PIN prompt loop for exactly as long as the
+      // phone stayed in landscape). Suppressed for this screen's whole
+      // lifetime, not just around the orientation call, since a flip can
+      // happen at any point while scanning; restored in dispose().
+      _appState.suppressAppLock = true;
     }
     _initializeFuture = _setUpCamera();
   }
 
+  /// Disposes a controller that [_setUpCamera] created but that turned out
+  /// to be superseded (a newer generation took over, or the widget was
+  /// unmounted) before it could be adopted as [_cameraController]. Logging
+  /// + swallowing here, never rethrowing: this is best-effort release of a
+  /// resource nobody references any more, not something a caller needs to
+  /// react to. Never skip this — an un-disposed, unreferenced controller
+  /// permanently occupies the camera hardware (see [_cameraGeneration]'s
+  /// doc comment for the exact failure this prevents).
+  Future<void> _disposeOrphanedController(CameraController controller) async {
+    try {
+      if (controller.value.isStreamingImages) {
+        await controller.stopImageStream();
+      }
+    } on CameraException catch (e) {
+      debugPrint(
+        '[ExamScanning] stopImageStream (orphaned controller) failed: ${e.code} ${e.description}',
+      );
+    } catch (_) {}
+    try {
+      await controller.dispose();
+    } on CameraException catch (e) {
+      debugPrint(
+        '[ExamScanning] dispose (orphaned controller) failed: ${e.code} ${e.description}',
+      );
+    } catch (_) {}
+  }
+
   Future<void> _setUpCamera() async {
-    setState(() => _cameraError = null);
+    // Captured once, checked after every subsequent `await` below — see
+    // [_cameraGeneration]'s doc comment for why this matters.
+    final myGen = _cameraGeneration;
+    if (mounted) setState(() => _cameraError = null);
+    CameraController? controller;
     try {
       final cameras = await availableCameras();
+      if (!mounted || myGen != _cameraGeneration) return;
       if (cameras.isEmpty) {
         setState(() => _cameraError = 'No camera was found on this device.');
         return;
@@ -244,17 +458,53 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
         (c) => c.lensDirection == CameraLensDirection.back,
         orElse: () => cameras.first,
       );
-      final controller = CameraController(
-        backCamera,
-        // veryHigh (1080p, ~2MP) over the previous `high` (720p, ~0.92MP) —
-        // a page with 72 small bubble rows needs real resolution to read
-        // reliably; 720p was giving the decoder noticeably fewer pixels
-        // per bubble than the phone's actual camera is capable of.
+      // veryHigh (1080p, ~2MP) over the previous `high` (720p, ~0.92MP) —
+      // a page with 72 small bubble rows needs real resolution to read
+      // reliably; 720p was giving the decoder noticeably fewer pixels
+      // per bubble than the phone's actual camera is capable of. Some
+      // devices' camera2 hardware level can't bind a preview+capture
+      // surface combination at that size though (CameraX throws
+      // "IllegalArgumentException: No supported surface combination" —
+      // confirmed on a real device), so step down through lower presets
+      // rather than failing the whole scan screen outright.
+      const presets = [
         ResolutionPreset.veryHigh,
-        enableAudio: false,
-      );
-      await controller.initialize();
-      if (!mounted) return;
+        ResolutionPreset.high,
+        ResolutionPreset.medium,
+      ];
+      Object? initError;
+      for (final preset in presets) {
+        final candidate = CameraController(
+          backCamera,
+          preset,
+          enableAudio: false,
+        );
+        try {
+          await candidate.initialize();
+          controller = candidate;
+          initError = null;
+          break;
+        } catch (e) {
+          initError = e;
+          await _disposeOrphanedController(candidate);
+        }
+        if (!mounted || myGen != _cameraGeneration) return;
+      }
+      if (controller == null) {
+        // Every preset failed — rethrow the last (most representative)
+        // error so the existing CameraException/catch-all handlers below
+        // format and surface it the same way as before this fallback loop.
+        throw initError!;
+      }
+      if (!mounted || myGen != _cameraGeneration) {
+        // Superseded (a newer generation's setup or a teardown started)
+        // while this controller was mid-initialize — never adopt it, and
+        // never leave it undisposed. This exact interleaving, previously
+        // unguarded, is what let a screenshot's quick inactive→resumed
+        // blip permanently occupy the camera.
+        await _disposeOrphanedController(controller);
+        return;
+      }
       // No capture-orientation lock — the device stays portrait the whole
       // time (see didChangeDependencies), so there's no landscapeLeft-vs-
       // landscapeRight ambiguity to resolve here in the first place.
@@ -269,68 +519,180 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
         // happened to lock onto during initialization.
         await controller.setFocusMode(FocusMode.auto);
         await controller.setExposureMode(ExposureMode.auto);
+      } on CameraException catch (e) {
+        debugPrint(
+          '[ExamScanning] focus/exposure mode setup failed: ${e.code} ${e.description}',
+        );
       } catch (_) {
         // Not all devices/lenses support explicit focus/exposure mode
         // control; capture still works with whatever the platform default is.
       }
+      if (!mounted || myGen != _cameraGeneration) {
+        // Superseded while configuring focus/exposure. Already adopted as
+        // _cameraController above, but only ours to dispose here if a
+        // later generation hasn't already moved it aside/torn it down.
+        if (identical(_cameraController, controller)) {
+          await _disposeOrphanedController(controller);
+        }
+        return;
+      }
       try {
         await controller.startImageStream(_onCameraFrame);
+      } on CameraException catch (e) {
+        debugPrint(
+          '[ExamScanning] startImageStream failed: ${e.code} ${e.description}',
+        );
       } catch (_) {
         // Live guide feedback is advisory only; if streaming isn't
         // supported on this device, capture + the post-capture check
         // still work fine without it.
       }
     } on CameraException catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _cameraError =
-            e.code == 'CameraAccessDenied' ||
-                e.code == 'CameraAccessDeniedWithoutPrompt'
-            ? 'Camera permission was denied. Enable it in your device settings to scan sheets.'
-            : 'Could not start the camera (${e.description ?? e.code}).';
-      });
+      debugPrint(
+        '[ExamScanning] camera setup failed: ${e.code} ${e.description}',
+      );
+      if (mounted && myGen == _cameraGeneration) {
+        setState(() {
+          _cameraError =
+              e.code == 'CameraAccessDenied' ||
+                  e.code == 'CameraAccessDeniedWithoutPrompt'
+              ? 'Camera permission was denied. Enable it in your device settings to scan sheets.'
+              : 'Could not start the camera (${e.description ?? e.code}).';
+        });
+      }
+      if (controller != null && !identical(_cameraController, controller)) {
+        await _disposeOrphanedController(controller);
+      }
     } catch (e) {
-      if (!mounted) return;
-      setState(() => _cameraError = 'Could not start the camera ($e).');
+      debugPrint('[ExamScanning] camera setup failed: $e');
+      if (mounted && myGen == _cameraGeneration) {
+        setState(() => _cameraError = 'Could not start the camera ($e).');
+      }
+      if (controller != null && !identical(_cameraController, controller)) {
+        await _disposeOrphanedController(controller);
+      }
     }
   }
 
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) async {
+  /// Stops the image stream and disposes [_cameraController] (shared by
+  /// [didChangeAppLifecycleState]'s inactive/paused branch and [dispose]),
+  /// then resets every piece of state a fresh session needs to start
+  /// clean: the live corner guide, auto-capture's stability timer and
+  /// arming, the frame-check throttle, torch/exposure state, and — as
+  /// defensive cleanup, since an in-flight capture's own `try/finally` may
+  /// never get a clean chance to run against a controller being torn down
+  /// out from under it — the capture-in-progress flag.
+  ///
+  /// Bumps [_cameraGeneration] first (see its doc comment): a [_setUpCamera]
+  /// call still in flight when this runs detects the change and disposes
+  /// whatever controller it was building instead of adopting it, and this
+  /// method's own dispose of [_cameraController] can never race a
+  /// still-adopting [_setUpCamera] call for the same reason.
+  Future<void> _tearDownCamera() async {
+    _cameraGeneration++;
     final controller = _cameraController;
-    if (controller == null || !controller.value.isInitialized) return;
+    _cameraController = null;
+    if (controller != null) {
+      try {
+        if (controller.value.isStreamingImages) {
+          await controller.stopImageStream();
+        }
+      } on CameraException catch (e) {
+        debugPrint(
+          '[ExamScanning] stopImageStream failed: ${e.code} ${e.description}',
+        );
+      } catch (_) {}
+      try {
+        await controller.dispose();
+      } on CameraException catch (e) {
+        debugPrint(
+          '[ExamScanning] controller dispose failed: ${e.code} ${e.description}',
+        );
+      } catch (_) {}
+    }
+    _liveCornersFound = null;
+    _liveCornerPositions = null;
+    _liveDiagnostics = null;
+    _liveRotation = FrameRotation.none;
+    _captureReadySince = null;
+    _autoCaptureStableSince = null;
+    _autoCaptureArmed = true;
+    _meanLuma = null;
+    _lastFrameCheckAt = null;
+    _frameCheckInFlight = false;
+    _isCapturing = false;
+    // Torch/exposure state doesn't survive disposing the controller
+    // (hardware-level, tied to the camera session) -- reset so the UI
+    // (torch icon) matches the fresh controller the next _setUpCamera()
+    // call will create, which always starts with flash off.
+    _torchOn = false;
+    _exposureNudged = false;
+    if (mounted) setState(() {});
+  }
 
+  /// Full interruption-recovery cycle for [AppLifecycleState.resumed]:
+  /// tears down whatever camera session exists (there may still be one if
+  /// the OS never actually paused this app — a very brief interruption can
+  /// resume before [AppLifecycleState.inactive]'s own teardown finishes, in
+  /// which case [_tearDownCamera]'s generation bump makes that in-flight
+  /// call a no-op for adoption purposes) and always initializes a
+  /// completely fresh [CameraController] rather than trying to reuse or
+  /// patch up whatever existed before.
+  Future<void> _resumeCamera() async {
+    if (_cameraController != null) {
+      await _tearDownCamera();
+    }
+    if (!mounted) return;
+    if (_isLandscapeExam) {
+      SystemChrome.setPreferredOrientations([
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ]);
+    }
+    // A block body, not `setState(() => _initializeFuture = future)` --
+    // even split into two statements like this, an arrow-function
+    // *assignment* still evaluates to (and so returns) the assigned value,
+    // i.e. `future` itself, which Flutter's setState rejects at runtime
+    // ("setState() ... was called with a closure ... that returned a
+    // Future") exactly as if `_setUpCamera()` had been called directly
+    // inside the closure. Confirmed on-device: this crashed every resume
+    // while a scanner screen was open, which is what "camera won't start"
+    // actually was -- the exception aborted _resumeCamera partway through,
+    // after _tearDownCamera had already nulled out _cameraController, so
+    // no replacement controller ever got hooked up. A block body's last
+    // statement is not a return value, so this actually returns void.
+    final future = _setUpCamera();
+    setState(() {
+      _initializeFuture = future;
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused) {
-      if (controller.value.isStreamingImages) {
-        await controller.stopImageStream();
-      }
-      await controller.dispose();
-      _cameraController = null;
-      _liveCornersFound = null;
-      _all4FoundSince = null;
-      _meanLuma = null;
-      // Torch/exposure state doesn't survive disposing the controller
-      // (hardware-level, tied to the camera session) -- reset so the UI
-      // (torch icon) matches the fresh controller _setUpCamera() below is
-      // about to create, which always starts with flash off.
-      _torchOn = false;
-      _exposureNudged = false;
+      // Covers a screenshot gesture, an incoming call/notification shade, a
+      // brief app-switcher glance, or the app actually backgrounding — all
+      // of these can interrupt an active camera session, and on at least
+      // one confirmed case (taking a screenshot mid-scan) the OS-level
+      // camera resource itself can become unusable if the controller isn't
+      // released here. Unconditional (not gated on whether a controller
+      // currently exists) and safe to call redundantly — [_tearDownCamera]
+      // no-ops past the null-controller check either way.
+      unawaited(_tearDownCamera());
     } else if (state == AppLifecycleState.resumed) {
-      if (_isLandscapeExam) {
-        SystemChrome.setPreferredOrientations([
-          DeviceOrientation.landscapeLeft,
-          DeviceOrientation.landscapeRight,
-        ]);
-      }
-      _initializeFuture = _setUpCamera();
-      setState(() {});
+      unawaited(_resumeCamera());
     }
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    // Marks any _setUpCamera call still in flight as stale — see
+    // [_cameraGeneration]'s doc comment — so it disposes whatever
+    // controller it was building instead of trying to call setState (or
+    // worse, adopt a controller) on an unmounted State.
+    _cameraGeneration++;
     // Restore the app-wide portrait lock (see main.dart) that
     // didChangeDependencies loosened for this one landscape-page exam --
     // every other screen is still built for a tall portrait frame, so
@@ -340,8 +702,23 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
         DeviceOrientation.portraitUp,
         DeviceOrientation.portraitDown,
       ]);
+      // The AppLockGate suppression set up alongside the orientation
+      // unlock stays on for a little longer than this method call --
+      // restoring portrait here is itself an orientation change, and on
+      // this device that alone can trigger the same kind of spurious
+      // resume the suppression exists to guard against. Confirmed
+      // on-device: clearing it synchronously, right here, left that exact
+      // resume unprotected and showed a lock prompt immediately after
+      // leaving the TAT scanner -- clearing it a couple seconds later
+      // instead (well after any such resume would have already landed)
+      // covers the exit the same way entry already was, while still
+      // letting a genuine, later return from background re-lock normally.
+      Future.delayed(const Duration(seconds: 2), () {
+        _appState.suppressAppLock = false;
+      });
     }
     final controller = _cameraController;
+    _cameraController = null;
     if (controller != null && controller.value.isStreamingImages) {
       controller.stopImageStream();
     }
@@ -349,24 +726,36 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
     super.dispose();
   }
 
-  /// Throttled live check: at most once every 600ms, and never overlapping
+  /// Throttled live check: at most once every 250ms, and never overlapping
   /// a check already in flight, so this stays cheap enough to run
-  /// continuously while framing. Feeds both the on-screen indicator and
-  /// [_readyToCapture]'s stabilization tracking.
+  /// continuously while framing. Feeds the on-screen indicator, the
+  /// display-only "Ready to scan" caption ([_captureReadySince]), and the
+  /// auto-capture stability trigger below — never the manual capture gate,
+  /// which no longer depends on the live detector at all.
+  ///
+  /// A frame can still be in flight through [compute] when a lifecycle
+  /// interruption tears down (or replaces) the camera controller — [myGen]
+  /// snapshots [_cameraGeneration] at dispatch time so the result can be
+  /// discarded rather than applied to a session it no longer belongs to,
+  /// instead of blindly mutating state on however things look by the time
+  /// the isolate call resolves.
   void _onCameraFrame(CameraImage image) {
     if (!mounted || _frameCheckInFlight) return;
     final now = DateTime.now();
     if (_lastFrameCheckAt != null &&
         now.difference(_lastFrameCheckAt!) <
-            const Duration(milliseconds: 600)) {
+            _liveCheckInterval) {
       return;
     }
-    final template = omrTemplates[AppStateScope.of(context).activeExamCode];
+    final appState = AppStateScope.of(context);
+    final template = omrTemplates[appState.activeExamCode];
     if (template == null) return;
 
+    final myGen = _cameraGeneration;
     _lastFrameCheckAt = now;
     _frameCheckInFlight = true;
     final plane = image.planes.first;
+    final liveFrameSw = kOmrPerfDebug ? (Stopwatch()..start()) : null;
     compute(
           _checkLiveCorners,
           _LiveCornersRequest(
@@ -374,24 +763,115 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
             image.width,
             image.height,
             plane.bytesPerRow,
+            template,
+            includeDiagnostics: _diagnosticsEnabled,
           ),
         )
         .then((result) {
-          _frameCheckInFlight = false;
-          if (!mounted) return;
+          if (myGen == _cameraGeneration) _frameCheckInFlight = false;
+          // Logged only every 10th tick — a live-check timing line on every
+          // preview tick would flood logcat and risk
+          // perturbing the very timing being measured.
+          if (liveFrameSw != null && (++_liveFrameLogCounter % 10 == 0)) {
+            omrPerfLog('liveFrame check=${liveFrameSw.elapsedMilliseconds}ms');
+          }
+          if (!mounted || myGen != _cameraGeneration) return;
           setState(() {
             _liveCornersFound = result.cornersFound;
+            _liveDiagnostics = result.diagnostics;
+            _liveRotation = result.rotation;
             _meanLuma = result.meanLuma;
-            if (result.cornersFound.every((f) => f)) {
-              _all4FoundSince ??= now;
+            final recoverable =
+                !result.cornersFound.any((c) => c == CornerConfidence.none);
+            if (recoverable) {
+              _captureReadySince ??= now;
             } else {
-              _all4FoundSince = null;
+              _captureReadySince = null;
             }
+
+            // Auto-capture stability tracking: stricter than
+            // [_captureReadySince] above — requires all 4 corners fully
+            // CONFIDENT (not just recoverable) AND their positions to have
+            // stopped moving between checks, not merely stayed found.
+            final allConfident = result.cornersFound
+                .every((c) => c == CornerConfidence.confident);
+            if (!allConfident) {
+              _autoCaptureStableSince = null;
+              // Leaving GREEN re-arms auto-capture — the sheet was moved,
+              // replaced, or occluded, so the next full-stability streak is
+              // allowed to trigger a fresh capture.
+              if (!_autoCaptureArmed) _autoCaptureArmed = true;
+            } else {
+              final prev = _liveCornerPositions;
+              // No prior all-confident frame to compare against counts as
+              // "just arrived" — start the clock fresh rather than assuming
+              // stability from a single frame.
+              var moved = prev == null;
+              if (prev != null) {
+                for (var i = 0; i < result.cornerPositions.length; i++) {
+                  final p = prev[i];
+                  final c = result.cornerPositions[i];
+                  if (p == null || c == null) {
+                    moved = true;
+                    break;
+                  }
+                  final dx = c.$1 - p.$1;
+                  final dy = c.$2 - p.$2;
+                  if (math.sqrt(dx * dx + dy * dy) >
+                      _autoCaptureMovementThresholdFrac) {
+                    moved = true;
+                    break;
+                  }
+                }
+              }
+              if (moved || _autoCaptureStableSince == null) {
+                _autoCaptureStableSince = now;
+              }
+            }
+            _liveCornerPositions = result.cornerPositions;
           });
           unawaited(_maybeNudgeExposure(result.meanLuma));
+
+          // Auto-capture trigger: armed, not already mid-capture, currently
+          // GREEN, held motionlessly stable for the required duration, and
+          // the batch isn't already at its scan limit. Disarm immediately
+          // (before the capture's own async gap) so a second frame landing
+          // before [_capture] sets [_isCapturing] can't double-fire.
+          final stableSince = _autoCaptureStableSince;
+          if (_autoCaptureArmed &&
+              !_isCapturing &&
+              _liveVerdict == AlignmentVerdict.green &&
+              stableSince != null &&
+              now.difference(stableSince) >= _autoCaptureStableDuration &&
+              appState.scanLimitBlockMessage == null) {
+            _autoCaptureArmed = false;
+            if (kOmrPerfDebug) {
+              omrPerfLog(
+                'stabilityWait=${now.difference(stableSince).inMilliseconds}ms',
+              );
+            }
+            unawaited(_capture(appState, manual: false));
+          }
         })
-        .catchError((_) {
-          _frameCheckInFlight = false;
+        .catchError((Object error, StackTrace stackTrace) {
+          if (myGen == _cameraGeneration) _frameCheckInFlight = false;
+          debugPrint('[ExamScanning] live corner check failed: $error');
+          if (!mounted || myGen != _cameraGeneration) return;
+          // A failed check gives no information about this frame — leaving
+          // the previous check's colors/verdict on screen would misrepresent
+          // a frame that was never actually evaluated as still found (or
+          // still not found). Clear back to the same neutral "unknown"
+          // state shown before the very first check ever completes, rather
+          // than freezing on whatever the last successful check happened to
+          // read.
+          setState(() {
+            _liveCornersFound = null;
+            _liveCornerPositions = null;
+            _liveDiagnostics = null;
+            _captureReadySince = null;
+            _autoCaptureStableSince = null;
+            _meanLuma = null;
+          });
         });
   }
 
@@ -450,15 +930,31 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
     }
   }
 
-  Future<void> _capture(AppState appState) async {
+  /// [manual] distinguishes the two ways this can be triggered, since they
+  /// have deliberately different gates:
+  ///  * `manual: true` — the "Scan Next"/"Capture" button. The low-resolution
+  ///    live detector is advisory only here: it never blocks a manual
+  ///    capture, because it operates on a downscaled preview frame
+  ///    ([_liveCheckMaxDimension]) and a single corner reading `none` there
+  ///    is not proof the real, full-resolution photo will fail — that
+  ///    question is answered by the authoritative [_checkAlignment]/
+  ///    `locateCorners` call below, on the actual captured file, same as
+  ///    always. Gated only on the camera being ready, no capture already
+  ///    in flight, and the batch's own scan-count cap.
+  ///  * `manual: false` — the auto-capture path. Its own strict gate (all 4
+  ///    [CornerConfidence.confident], motion-stability held for
+  ///    [_autoCaptureStableDuration]) is already verified atomically at the
+  ///    trigger site in [_onCameraFrame], immediately before this call —
+  ///    nothing further to re-derive here.
+  ///
+  /// Neither path skips or loosens the full-resolution alignment/warp check
+  /// below, and there is no "use anyway" bypass on a failure — a photo that
+  /// fails it is always discarded, exactly as before.
+  Future<void> _capture(AppState appState, {required bool manual}) async {
     final controller = _cameraController;
-    if (controller == null || !controller.value.isInitialized || _isCapturing)
+    if (controller == null || !controller.value.isInitialized || _isCapturing) {
       return;
-    // Defensive re-check: the "Scan Next" button is already disabled unless
-    // this holds (see build()), but re-checking here means there's no path
-    // to takePicture() while corners aren't confidently, stably found —
-    // not just a button-state assumption.
-    if (!_readyToCapture) return;
+    }
     // Same defensive re-check for the batch's scan-count cap: the button is
     // already disabled once this is non-null (see build()), but this is
     // what actually stops a capture from happening — not just its visual
@@ -472,15 +968,29 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
     }
 
     setState(() => _isCapturing = true);
+    final captureSw = kOmrPerfDebug ? (Stopwatch()..start()) : null;
+    var takePictureMs = 0;
+    var alignmentMs = 0;
     try {
+      final takePictureSw = kOmrPerfDebug ? (Stopwatch()..start()) : null;
       final file = await controller.takePicture();
+      if (takePictureSw != null) takePictureMs = takePictureSw.elapsedMilliseconds;
       final template = omrTemplates[appState.activeExamCode];
       if (template != null) {
+        final alignmentSw = kOmrPerfDebug ? (Stopwatch()..start()) : null;
         final check = await compute(
           _checkAlignment,
           _AlignmentCheckRequest(file.path, template),
         );
+        if (alignmentSw != null) alignmentMs = alignmentSw.elapsedMilliseconds;
         if (!check.aligned) {
+          if (kOmrPerfDebug) {
+            omrPerfLog(
+              'capture rejected exam=${template.examCode} '
+              'warpRejected=${check.warpRejected} '
+              'errors=${check.reprojectionErrorPx} reason=${check.message}',
+            );
+          }
           // The live check above is advisory-strength (a lower-effort
           // preview frame); this one runs the real decoder's corner search
           // against the actual captured photo and is authoritative. No
@@ -494,18 +1004,43 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
       }
       if (!mounted) return;
       appState.addCapturedPage(file);
+      if (captureSw != null) {
+        omrPerfLog(
+          'capture pageIndex=${appState.currentScannedPage} takePicture=${takePictureMs}ms '
+          'alignment=${alignmentMs}ms total=${captureSw.elapsedMilliseconds}ms',
+        );
+      }
+      // A rescan replaces exactly one sheet — there's nothing to wait for
+      // after a successful capture (no "add more pages, then compile" step
+      // like a normal multi-sheet session), so go straight to processing
+      // and saving instead of leaving the user to find and tap a second
+      // "Save Rescan" button. _compileData already handles the full
+      // decode → finishRescan → pop-back-to-archive sequence and all its
+      // own error/mounted handling.
+      if (appState.rescanScanId != null) {
+        await _compileData(appState);
+      }
     } on CameraException catch (e) {
+      debugPrint('[ExamScanning] capture failed: ${e.code} ${e.description}');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Capture failed: ${e.description ?? e.code}')),
       );
     } catch (e) {
+      debugPrint('[ExamScanning] capture failed: $e');
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('Capture failed: $e')));
     } finally {
-      if (mounted) setState(() => _isCapturing = false);
+      // Unconditional, not gated on `mounted`: this flag also guards
+      // re-entry at the very top of this method (before any `await`), so
+      // it must always be cleared even if the widget was disposed mid-
+      // capture — otherwise a lingering `true` here serves no purpose (the
+      // State object is gone) but the `setState` guard below still needs
+      // the `mounted` check to avoid calling setState on a disposed State.
+      _isCapturing = false;
+      if (mounted) setState(() {});
     }
   }
 
@@ -815,24 +1350,55 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
               ),
             ],
           ),
-          InkWell(
-            onTap: _cameraController?.value.isInitialized == true ? _toggleTorch : null,
-            child: Container(
-              width: 32,
-              height: 32,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: _torchOn
-                    ? AppColors.accentYellowGreen
-                    : Colors.black.withOpacity(0.4),
-                shape: BoxShape.circle,
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // TEMPORARY developer tool, debug-build-only and off by
+              // default (see [_diagnosticsEnabled]) — never shown in a
+              // release build, so this can't reach end users.
+              if (kDebugMode)
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: InkWell(
+                    onTap: () => setState(() => _diagnosticsEnabled = !_diagnosticsEnabled),
+                    child: Container(
+                      width: 32,
+                      height: 32,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: _diagnosticsEnabled
+                            ? AppColors.accentYellowGreen
+                            : Colors.black.withOpacity(0.4),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        Icons.bug_report_outlined,
+                        color: _diagnosticsEnabled ? Colors.black : Colors.white,
+                        size: 16,
+                      ),
+                    ),
+                  ),
+                ),
+              InkWell(
+                onTap: _cameraController?.value.isInitialized == true ? _toggleTorch : null,
+                child: Container(
+                  width: 32,
+                  height: 32,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: _torchOn
+                        ? AppColors.accentYellowGreen
+                        : Colors.black.withOpacity(0.4),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    _torchOn ? Icons.flash_on : Icons.flash_off,
+                    color: _torchOn ? Colors.black : Colors.white,
+                    size: 16,
+                  ),
+                ),
               ),
-              child: Icon(
-                _torchOn ? Icons.flash_on : Icons.flash_off,
-                color: _torchOn ? Colors.black : Colors.white,
-                size: 16,
-              ),
-            ),
+            ],
           ),
         ],
       ),
@@ -871,6 +1437,22 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
                 ),
               ),
             ),
+            if (_diagnosticsEnabled &&
+                _liveDiagnostics != null &&
+                _cameraController!.value.previewSize != null)
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: CustomPaint(
+                    painter: _DiagnosticOverlayPainter(
+                      _liveDiagnostics!,
+                      searchedFrameSize(
+                        _cameraController!.value.previewSize!,
+                        rotated90: _liveRotation != FrameRotation.none,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             Positioned(
               top: 14,
               left: 0,
@@ -946,9 +1528,8 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
                     onPressed:
                         _cameraController?.value.isInitialized == true &&
                             !_isCapturing &&
-                            _readyToCapture &&
                             appState.scanLimitBlockMessage == null
-                        ? () => _capture(appState)
+                        ? () => _capture(appState, manual: true)
                         : null,
                     style: OutlinedButton.styleFrom(
                       backgroundColor: AppColors.slate800,
@@ -971,9 +1552,12 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
                               color: Colors.white,
                             ),
                           )
-                        : const Text(
-                            'Scan Next',
-                            style: TextStyle(
+                        : Text(
+                            // A rescan replaces one specific sheet — there is
+                            // no "next" sheet to scan, so the button says
+                            // what it actually does here instead.
+                            appState.rescanScanId != null ? 'Capture' : 'Scan Next',
+                            style: const TextStyle(
                               fontSize: 12,
                               fontWeight: FontWeight.w700,
                             ),
@@ -1058,9 +1642,8 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
                   onPressed:
                       _cameraController?.value.isInitialized == true &&
                           !_isCapturing &&
-                          _readyToCapture &&
                           appState.scanLimitBlockMessage == null
-                      ? () => _capture(appState)
+                      ? () => _capture(appState, manual: true)
                       : null,
                   style: OutlinedButton.styleFrom(
                     backgroundColor: AppColors.slate800,
@@ -1083,9 +1666,9 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
                             color: Colors.white,
                           ),
                         )
-                      : const Text(
-                          'Scan Next',
-                          style: TextStyle(
+                      : Text(
+                          appState.rescanScanId != null ? 'Capture' : 'Scan Next',
+                          style: const TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w700,
                           ),
@@ -1253,15 +1836,23 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
   }
 }
 
-/// Draws a dimmed spotlight sized to match the real proportions of the
-/// rectangle spanned by the sheet's 4 fiducial marks (not the full page —
-/// see [markerAspectRatio]), a visible outline on that rectangle so it
-/// reads as a target even against a busy background, and one L-shaped
-/// bracket per corner — colored individually from [cornersFound] — so the
-/// user can see exactly *which* corner still needs adjusting instead of
-/// only an aggregate "X/4" count. The scan window's own overall border
-/// color (see [_ExamScanningScreenState._scanWindowBorderColor]) still
-/// gives an at-a-glance all-4 cue; this adds the specific, per-corner one.
+/// Draws the overall sheet-alignment frame (a dimmed spotlight sized to the
+/// real proportions of the rectangle spanned by the sheet's 4 fiducial
+/// marks — see [markerAspectRatio] — plus a visible outline on it, for
+/// general "the sheet goes here" positioning) **and**, separately, four
+/// ZipGrade-style fiducial viewfinder boxes, one per printed black corner
+/// square. The four boxes are the primary guide for *precise* fiducial
+/// placement — always visible, before any detection happens, each colored
+/// independently from its own [cornersFound] tier (gray/red/amber/green) —
+/// so a "3/4 corner marks locked" status is immediately traceable to
+/// exactly which corner is the problem, not just a count.
+///
+/// The boxes are a visual guide and a live-search prior only — see
+/// omr_decoder_native.dart's Stage-1/Stage-2 search — never a hard crop:
+/// the full-resolution post-capture pass (and, on a Stage-1 miss, the live
+/// search itself) always falls through to searching the whole photo
+/// quadrant, so a sheet photographed at an angle with a marker outside its
+/// box still gets found and still validates.
 class _PageGuidePainter extends CustomPainter {
   const _PageGuidePainter(
     this.cornerFractions,
@@ -1280,12 +1871,25 @@ class _PageGuidePainter extends CustomPainter {
 
   /// Live per-corner detection state, same order as [cornerFractions].
   /// Null until the first live check completes, in which case every
-  /// bracket draws neutral.
-  final List<bool>? cornersFound;
+  /// viewfinder draws neutral (still visible — it's the placement guide).
+  final List<CornerConfidence>? cornersFound;
 
   static const double _insetFraction = 0.06;
-  static const double _bracketArmLength = 26;
-  static const double _bracketStrokeWidth = 4;
+
+  /// Viewfinder box size, as a fraction of the overall guide rectangle's
+  /// shorter side, clamped to a sensible on-screen pixel range so it reads
+  /// clearly on both a small phone and a tablet. Shared with the
+  /// detector's Stage-1 search-box sizing (`fiducial_search_tuning.dart`)
+  /// so the box a user aims for and the actual search prior it represents
+  /// can never drift apart — tune there, not here.
+  static const double _boxSizeFraction = kFiducialViewfinderBoxSizeFraction;
+  static const double _boxMinSize = kFiducialViewfinderBoxMinSize;
+  static const double _boxMaxSize = kFiducialViewfinderBoxMaxSize;
+  static const double _boxStrokeWidth = 3;
+  static const double _boxCornerRadius = 12;
+
+  static const Color _neutralColor = Colors.white;
+  static const Color _lowColor = Color(0xFFF59E0B); // amber
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -1310,10 +1914,9 @@ class _PageGuidePainter extends CustomPainter {
     );
     canvas.drawPath(dimPath, Paint()..color = Colors.black.withOpacity(0.55));
 
-    // A visible outline on the target rectangle itself — dimming alone
-    // reads as ambiguous against a busy background, this is what makes
-    // "the sheet goes exactly here" legible on its own, before any frame
-    // has even been checked.
+    // A visible outline on the overall target rectangle — general "the
+    // sheet goes here" positioning. Not a replacement for the four
+    // fiducial viewfinders below; both are shown together.
     canvas.drawRect(
       guideRect,
       Paint()
@@ -1322,16 +1925,20 @@ class _PageGuidePainter extends CustomPainter {
         ..strokeWidth = 1.5,
     );
 
-    // One bracket per corner, positioned by normalizing each marker's page
-    // fraction against the 4 markers' own bounding box — the same
+    // Four fiducial viewfinders, positioned by normalizing each marker's
+    // page fraction against the 4 markers' own bounding box — the same
     // normalization that gives markerAspectRatio its value (see the
-    // caller in build()) — so a bracket lands exactly on that marker's
-    // real position within guideRect for any exam's layout, not just a
-    // generic corner of the box.
+    // caller in build()) — so a box lands exactly on that marker's real
+    // expected position within guideRect for any exam's layout, tolerant
+    // of the sheet being rotated/keystoned since this is only ever a
+    // *prior*, not a crop (see the class doc comment).
     final minX = cornerFractions.map((c) => c.$1).reduce(math.min);
     final maxX = cornerFractions.map((c) => c.$1).reduce(math.max);
     final minY = cornerFractions.map((c) => c.$2).reduce(math.min);
     final maxY = cornerFractions.map((c) => c.$2).reduce(math.max);
+    final boxSize = (guideRect.shortestSide * _boxSizeFraction)
+        .clamp(_boxMinSize, _boxMaxSize)
+        .toDouble();
 
     for (var i = 0; i < cornerFractions.length; i++) {
       final (xFrac, yFrac) = cornerFractions[i];
@@ -1340,44 +1947,102 @@ class _PageGuidePainter extends CustomPainter {
       final point =
           guideRect.topLeft +
           Offset(localX * guideRect.width, localY * guideRect.height);
-      final found = cornersFound != null && i < cornersFound!.length
+      final tier = cornersFound != null && i < cornersFound!.length
           ? cornersFound![i]
           : null;
-      final color = found == null
-          ? Colors.white.withOpacity(0.85)
-          : found
-          ? AppColors.primaryGreen
-          : AppColors.warmRedOrange;
-      _drawBracket(
-        canvas,
-        point,
-        towardRight: localX < 0.5,
-        towardBottom: localY < 0.5,
-        color: color,
-      );
+      final color = switch (tier) {
+        null => _neutralColor,
+        CornerConfidence.none => AppColors.warmRedOrange,
+        CornerConfidence.low => _lowColor,
+        CornerConfidence.confident => AppColors.primaryGreen,
+      };
+      _drawViewfinderBox(canvas, point, boxSize, color, tier, _cornerLabels[i]);
     }
   }
 
-  /// Draws one L-shaped bracket at [point], arms extending toward the
-  /// guide rectangle's interior — [towardRight]/[towardBottom] say which
-  /// direction that is for this particular corner (e.g. the top-left
-  /// corner's arms extend right and down).
-  void _drawBracket(
+  // Bottom-right intentionally left unlabeled (per user request) -- it
+  // still gets its own viewfinder box/color/crosshair, just no text.
+  static const _cornerLabels = ['TL', 'TR', 'BL', ''];
+
+  /// Draws one rounded-square fiducial viewfinder centered on [point] —
+  /// a light fill "zone" wash plus a stroked border in [color], always
+  /// visible so it can guide placement before any marker has been found.
+  /// Visual only — none of this reads or affects detection/capture timing:
+  ///  * a center crosshair, for a precise aim point rather than just a
+  ///    region to land somewhere inside;
+  ///  * a [label] (TL/TR/BL/BR) so it's obvious at a glance which physical
+  ///    corner a box refers to;
+  ///  * once [tier] is [CornerConfidence.confident], a soft static glow
+  ///    (blurred duplicate stroke) plus a bolder main stroke and a denser
+  ///    fill wash, so a locked corner visibly "pops" rather than only
+  ///    differing by color.
+  void _drawViewfinderBox(
     Canvas canvas,
-    Offset point, {
-    required bool towardRight,
-    required bool towardBottom,
-    required Color color,
-  }) {
-    final dx = towardRight ? _bracketArmLength : -_bracketArmLength;
-    final dy = towardBottom ? _bracketArmLength : -_bracketArmLength;
-    final paint = Paint()
-      ..color = color
-      ..strokeWidth = _bracketStrokeWidth
-      ..strokeCap = StrokeCap.round
-      ..style = PaintingStyle.stroke;
-    canvas.drawLine(point, point + Offset(dx, 0), paint);
-    canvas.drawLine(point, point + Offset(0, dy), paint);
+    Offset point,
+    double boxSize,
+    Color color,
+    CornerConfidence? tier,
+    String label,
+  ) {
+    final confident = tier == CornerConfidence.confident;
+    final rect = Rect.fromCenter(center: point, width: boxSize, height: boxSize);
+    final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(_boxCornerRadius));
+
+    if (confident) {
+      canvas.drawRRect(
+        rrect,
+        Paint()
+          ..color = color.withOpacity(0.55)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = _boxStrokeWidth + 4
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6),
+      );
+    }
+
+    canvas.drawRRect(
+      rrect,
+      Paint()..color = color.withOpacity(confident ? 0.20 : 0.12),
+    );
+    canvas.drawRRect(
+      rrect,
+      Paint()
+        ..color = color.withOpacity(0.95)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = confident ? _boxStrokeWidth + 1 : _boxStrokeWidth,
+    );
+
+    const crosshairArm = 7.0;
+    final crosshairPaint = Paint()
+      ..color = color.withOpacity(0.95)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2;
+    canvas.drawLine(
+      point - const Offset(crosshairArm, 0),
+      point + const Offset(crosshairArm, 0),
+      crosshairPaint,
+    );
+    canvas.drawLine(
+      point - const Offset(0, crosshairArm),
+      point + const Offset(0, crosshairArm),
+      crosshairPaint,
+    );
+
+    if (label.isEmpty) return;
+    final textPainter = TextPainter(
+      text: TextSpan(
+        text: label,
+        style: TextStyle(
+          color: color.withOpacity(0.95),
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    textPainter.paint(
+      canvas,
+      Offset(rect.left, rect.top - textPainter.height - 2),
+    );
   }
 
   @override
@@ -1385,4 +2050,174 @@ class _PageGuidePainter extends CustomPainter {
       !listEquals(cornerFractions, oldDelegate.cornerFractions) ||
       markerAspectRatio != oldDelegate.markerAspectRatio ||
       !listEquals(cornersFound, oldDelegate.cornersFound);
+}
+
+/// TEMPORARY, opt-in diagnostic overlay (see
+/// [_ExamScanningScreenState._diagnosticsEnabled]) — draws what the decoder
+/// actually searched and found for each corner in the most recent live
+/// frame, deliberately distinct from [_PageGuidePainter]'s four
+/// always-visible fixed aiming guides:
+///
+///  * a dashed box for each corner's actual Stage-1 search region (as
+///    opposed to [_PageGuidePainter]'s fixed box, which is sized/placed
+///    from the template alone and never moves even if the search region
+///    itself shifts with a re-estimated page boundary — see
+///    `_quadrantsFor`'s doc comment);
+///  * a small dot at the actual detected centroid, when one was found —
+///    this can land away from the fixed guide box, which is exactly the
+///    "fixed guide vs. real search region" mismatch this overlay exists to
+///    surface;
+///  * an "x" at the expected anchor point the search was scored against;
+///  * a short rejection-category label (shape/position/contrast/no
+///    candidate) for any corner not already [CornerConfidence.confident].
+///
+/// Coordinate mapping: every [CornerDiagnostic] field is a fraction of the
+/// live search's own winning-orientation frame. This paints them by
+/// treating that fraction directly as a fraction of [sourceSize] (the
+/// camera's logical preview size, oriented to match — see
+/// `fiducial_coordinate_mapping.dart`'s own doc comment for the
+/// on-device-unverified assumption this rests on) displayed with
+/// `BoxFit.cover` inside this painter's own [size] — the same fit
+/// `ExamScanningScreen._buildCameraLayer` uses for the live preview itself
+/// (see [coverFit]/[fractionToWidgetOffset]).
+class _DiagnosticOverlayPainter extends CustomPainter {
+  const _DiagnosticOverlayPainter(this.diagnostics, this.sourceSize);
+
+  final List<CornerDiagnostic> diagnostics;
+  final Size sourceSize;
+
+  static const _cornerNames = ['TL', 'TR', 'BL', 'BR'];
+
+  Offset _map(double fx, double fy, Size destSize) => fractionToWidgetOffset(
+        fx: fx,
+        fy: fy,
+        sourceSize: sourceSize,
+        destSize: destSize,
+      );
+
+  String _categoryLabel(CornerRejectionCategory c) => switch (c) {
+        CornerRejectionCategory.confident => 'ok',
+        CornerRejectionCategory.shape => 'shape',
+        CornerRejectionCategory.position => 'position',
+        CornerRejectionCategory.contrast => 'contrast',
+        CornerRejectionCategory.noCandidate => 'no candidate',
+      };
+
+  Color _categoryColor(CornerRejectionCategory c) => switch (c) {
+        CornerRejectionCategory.confident => Colors.greenAccent,
+        CornerRejectionCategory.noCandidate => Colors.redAccent,
+        _ => Colors.amberAccent,
+      };
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // A small always-on-top caption naming the assumption this overlay's
+    // mapping rests on (see this class's own doc comment) — the first
+    // thing to question if the dots below look rotated/mirrored relative
+    // to the fixed aim guides they're drawn alongside.
+    final caption = TextPainter(
+      text: const TextSpan(
+        text: 'DIAGNOSTICS — search regions & actual detections '
+            '(unverified rotation mapping)',
+        style: TextStyle(
+          color: Colors.cyanAccent,
+          fontSize: 9,
+          fontWeight: FontWeight.w700,
+          backgroundColor: Colors.black54,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout(maxWidth: size.width - 16);
+    caption.paint(canvas, Offset(8, size.height - caption.height - 8));
+
+    for (var i = 0; i < diagnostics.length; i++) {
+      final d = diagnostics[i];
+      final color = _categoryColor(d.rejection);
+
+      // Actual search box (dashed), distinct from the fixed aim guide.
+      final topLeft = _map(d.searchBoxFrac.x0, d.searchBoxFrac.y0, size);
+      final bottomRight = _map(d.searchBoxFrac.x1, d.searchBoxFrac.y1, size);
+      _drawDashedRect(
+        canvas,
+        Rect.fromPoints(topLeft, bottomRight),
+        Paint()
+          ..color = color.withOpacity(0.9)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.5,
+      );
+
+      // Expected anchor ("x").
+      final anchor = _map(d.anchorFrac.$1, d.anchorFrac.$2, size);
+      const arm = 5.0;
+      final anchorPaint = Paint()
+        ..color = Colors.white70
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5;
+      canvas.drawLine(anchor - const Offset(arm, arm), anchor + const Offset(arm, arm), anchorPaint);
+      canvas.drawLine(anchor - const Offset(arm, -arm), anchor + const Offset(arm, -arm), anchorPaint);
+
+      // Actual detected centroid, when there is one.
+      final centroidFrac = d.centroidFrac;
+      Offset labelAnchor = anchor;
+      if (centroidFrac != null) {
+        final centroid = _map(centroidFrac.$1, centroidFrac.$2, size);
+        canvas.drawCircle(centroid, 5, Paint()..color = color);
+        canvas.drawCircle(
+          centroid,
+          5,
+          Paint()
+            ..color = Colors.black87
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1,
+        );
+        labelAnchor = centroid;
+      }
+
+      final label = '${_cornerNames[i]} ${_categoryLabel(d.rejection)} '
+          'sq=${d.squareness.toStringAsFixed(2)} pos=${d.positionScore.toStringAsFixed(2)}';
+      final tp = TextPainter(
+        text: TextSpan(
+          text: label,
+          style: TextStyle(
+            color: color,
+            fontSize: 9,
+            fontWeight: FontWeight.w700,
+            backgroundColor: Colors.black54,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      tp.paint(canvas, labelAnchor + const Offset(8, 8));
+    }
+  }
+
+  void _drawDashedRect(Canvas canvas, Rect rect, Paint paint) {
+    const dashLength = 5.0;
+    const gapLength = 4.0;
+    void dashedLine(Offset from, Offset to) {
+      final total = (to - from).distance;
+      if (total == 0) return;
+      final direction = (to - from) / total;
+      var drawn = 0.0;
+      while (drawn < total) {
+        final segmentEnd = math.min(drawn + dashLength, total);
+        canvas.drawLine(
+          from + direction * drawn,
+          from + direction * segmentEnd,
+          paint,
+        );
+        drawn = segmentEnd + gapLength;
+      }
+    }
+
+    dashedLine(rect.topLeft, rect.topRight);
+    dashedLine(rect.topRight, rect.bottomRight);
+    dashedLine(rect.bottomRight, rect.bottomLeft);
+    dashedLine(rect.bottomLeft, rect.topLeft);
+  }
+
+  @override
+  bool shouldRepaint(covariant _DiagnosticOverlayPainter oldDelegate) =>
+      !identical(diagnostics, oldDelegate.diagnostics) ||
+      sourceSize != oldDelegate.sourceSize;
 }

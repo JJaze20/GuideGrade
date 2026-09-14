@@ -327,14 +327,10 @@ class ExamSpec {
 
 final List<String> _atOdd = const ['A', 'B', 'C', 'D', 'E'];
 final List<String> _atEven = const ['F', 'G', 'H', 'J', 'K'];
-final List<String> _ptChoices = const ['a', 'b', 'c'];
 final List<String> _abcd = const ['A', 'B', 'C', 'D'];
 final List<String> _tf = const ['T', 'F'];
 
 final List<ExamSpec> kExams = [
-  ExamSpec('PT', 'Personality Profile (PT)', [
-    SectionSpec('Personality Profile', 185, (n) => _ptChoices),
-  ]),
   ExamSpec(
     'TAT',
     'Teaching Aptitude Test (TAT)',
@@ -1387,6 +1383,32 @@ String _emitTemplate(ExamLayout layout) {
   String fieldRectDart(_FieldBox box) =>
       'OmrFieldRect(${_formatFrac(box.x / exam.pageWidthPt)}, ${_formatFrac(box.y / exam.pageHeightPt)}, '
       '${_formatFrac(box.width / exam.pageWidthPt)}, ${_formatFrac(box.height / exam.pageHeightPt)})';
+  // Keep the full width: handwriting can start below the printed caption.
+  // Captions are removed by name_ocr_cleanup.dart after recognition.
+  //
+  // AT is the one exception: _paintSimpleHeader draws its Last Name/First
+  // Name/MI captions on their own line at the TOP of the box (baseline
+  // `y + 10`, 8pt Helvetica -- see the `drawString(regular, 8, label, colX
+  // + 3, flip(y + 10))` call above), with the handwriting filling the rest
+  // of the box beneath it, rather than continuing on the same line right
+  // after the caption (that inline style is what QTM/TAT's _paintNdmuHeader
+  // draws, and cleanNameOcrText's post-recognition stripping already
+  // handles fine -- confirmed on real AT scans that OCR was instead
+  // recognizing the caption itself as part of the name). Clip only the top
+  // atCaptionInsetPt off AT's three name fields -- 14pt covers the 10pt
+  // baseline plus a small margin for descender/antialiasing, deliberately
+  // not more, so a tall handwritten ascender starting right under the
+  // caption doesn't get cut off by the crop itself. Left edge, width, and
+  // bottom edge are untouched.
+  const atCaptionInsetPt = 14.0;
+  _FieldBox clipCaptionTop(_FieldBox box) => exam.code != 'AT'
+      ? box
+      : (
+          x: box.x,
+          y: box.y + atCaptionInsetPt,
+          width: box.width,
+          height: box.height - atCaptionInsetPt,
+        );
 
   // Merge all pages belonging to the same section back into one
   // OmrSection (its items map spans every page it was laid out across).
@@ -1398,9 +1420,9 @@ String _emitTemplate(ExamLayout layout) {
   buffer.writeln('  bubbleRadiusPt: ${exam.bubbleRadius},');
   buffer.writeln('  bubbleRadiusYPt: ${bubbleRadiusYFor(exam)},');
   buffer.writeln('  cornerMarkers: const [$cornersDart],');
-  buffer.writeln('  lastNameFieldRect: const ${fieldRectDart(nameBoxes.lastName)},');
-  buffer.writeln('  firstNameFieldRect: const ${fieldRectDart(nameBoxes.firstName)},');
-  buffer.writeln('  middleInitialFieldRect: const ${fieldRectDart(nameBoxes.middleInitial)},');
+  buffer.writeln('  lastNameFieldRect: const ${fieldRectDart(clipCaptionTop(nameBoxes.lastName))},');
+  buffer.writeln('  firstNameFieldRect: const ${fieldRectDart(clipCaptionTop(nameBoxes.firstName))},');
+  buffer.writeln('  middleInitialFieldRect: const ${fieldRectDart(clipCaptionTop(nameBoxes.middleInitial))},');
   buffer.writeln('  sections: const [');
   for (final section in exam.sections) {
     buffer.writeln('    OmrSection(');
