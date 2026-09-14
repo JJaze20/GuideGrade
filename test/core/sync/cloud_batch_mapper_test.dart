@@ -33,6 +33,7 @@ CloudScanRow _scanRow({
   String? resultStatus,
   String? firstName,
   String? lastName,
+  String? middleName,
   String? examineeNumber,
   String? rectifiedImagePath,
 }) =>
@@ -51,6 +52,7 @@ CloudScanRow _scanRow({
       processedByName: resultStatus == null ? null : 'Officer',
       firstName: firstName,
       lastName: lastName,
+      middleName: middleName,
       examineeNumber: examineeNumber,
       rectifiedImagePath: rectifiedImagePath,
     );
@@ -89,7 +91,7 @@ void main() {
       expect(scan.rectifiedImageFileName, isNull);
     });
 
-    test('OCR guesses are always null; middleName is always blank', () {
+    test('OCR guesses are always null; middleName defaults to blank when the cloud row has none', () {
       final scan = mapCloudScan(_scanRow(
         firstName: 'Juan',
         lastName: 'Dela Cruz',
@@ -99,6 +101,31 @@ void main() {
       expect(scan.ocrFirstNameGuess, isNull);
       expect(scan.ocrMiddleNameGuess, isNull);
       expect(scan.examinee!.middleName, '');
+    });
+
+    test('APPROVED FIX — TEST 3 (cloud read): a complete tag restores middleName from '
+        'the cloud row, not just the trio', () {
+      final scan = mapCloudScan(_scanRow(
+        firstName: 'John',
+        middleName: 'Michael',
+        lastName: 'Doe',
+        examineeNumber: '12345',
+      ));
+      expect(scan.examinee, isNotNull);
+      expect(scan.examinee!.firstName, 'John');
+      expect(scan.examinee!.middleName, 'Michael');
+      expect(scan.examinee!.lastName, 'Doe');
+      expect(scan.examinee!.examineeNumber, '12345');
+    });
+
+    test('a middle name on an incomplete trio is still not invented into an examinee', () {
+      final scan = mapCloudScan(_scanRow(
+        firstName: 'Juan',
+        lastName: 'Dela Cruz',
+        middleName: 'Santos',
+        examineeNumber: '', // incomplete -> whole trio (and thus examinee) is null
+      ));
+      expect(scan.examinee, isNull);
     });
 
     test('examinee trio is all-or-nothing: a partial trio maps to null, never invented', () {

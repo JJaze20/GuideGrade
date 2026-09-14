@@ -52,10 +52,11 @@ LocalBatch mapCloudBatch(CloudBatchRow row) => LocalBatch(
 /// changed since the scan was originally graded.
 ///
 /// `ocrLastNameGuess` / `ocrFirstNameGuess` / `ocrMiddleNameGuess` are
-/// always null (never pushed to the cloud, so never recoverable) and
-/// `ExamineeInfo.middleName` is always `''` (the cloud never carries it,
-/// per `SupabaseSyncClient.pushScan`'s `'middle_name': null`) -- neither is
-/// invented here.
+/// always null (never pushed to the cloud, so never recoverable). A
+/// restored `ExamineeInfo.middleName` reflects the cloud's own
+/// `middle_name` column for a completed tag (see [_mapExaminee]), or `''`
+/// when the scan was untagged/OCR-only (no examinee at all) or the
+/// original tag genuinely had no middle name -- never invented here.
 LocalScan mapCloudScan(CloudScanRow row, {AnswerKey? answerKey}) {
   final decoded = OmrScanResult.fromJson(row.decoded);
   return LocalScan(
@@ -74,7 +75,11 @@ LocalScan mapCloudScan(CloudScanRow row, {AnswerKey? answerKey}) {
 
 /// The examinee trio, all-or-nothing (mirrors the cloud's own
 /// `examinee_all_or_nothing` CHECK) -- `null` unless all three of
-/// first/last/number are present and non-blank.
+/// first/last/number are present and non-blank. `middleName` is restored
+/// alongside the trio when available, but is NOT part of the
+/// completeness check -- mirrors [ExamineeInfo.middleName]'s own "never
+/// required" rule, and [CloudScanRow.middleName] is never sent by the
+/// cloud on its own without the trio anyway (see `scanIdentityColumns`).
 ExamineeInfo? _mapExaminee(CloudScanRow row) {
   final first = row.firstName;
   final last = row.lastName;
@@ -83,7 +88,12 @@ ExamineeInfo? _mapExaminee(CloudScanRow row) {
   if (first.trim().isEmpty || last.trim().isEmpty || number.trim().isEmpty) {
     return null;
   }
-  return ExamineeInfo(firstName: first, lastName: last, examineeNumber: number);
+  return ExamineeInfo(
+    firstName: first,
+    lastName: last,
+    middleName: row.middleName ?? '',
+    examineeNumber: number,
+  );
 }
 
 /// `rawScore` / `totalGraded` / `totalItems` / `status` / `scannedAt` /

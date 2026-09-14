@@ -5,6 +5,7 @@ import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
 import '../../../core/state/app_state.dart';
 import '../../../shared/utils/logout_helper.dart';
+import 'guidance_web_results_view.dart';
 
 /// The Guidance Council Web Console's persistent shell: header, sidebar,
 /// and a body that swaps per sidebar selection.
@@ -23,8 +24,11 @@ import '../../../shared/utils/logout_helper.dart';
 /// is expected to call `SupabaseSyncClient`'s existing read methods
 /// directly, not the mobile encrypted local storage layer.
 ///
-/// Phase 1 scope: navigation shell + clearly-labeled placeholders only.
-/// No batch/results/analytics data is fetched or displayed yet.
+/// Phase 1 built the shell with clearly-labeled placeholders for every
+/// destination. Phase 2 wires up Results ([GuidanceWebResultsView]) —
+/// still read-only, still no local write, no `CloudRestoreService`, no
+/// image download (see that class's own doc comment). Examinee Records,
+/// Archive, Analytics, and Export remain placeholders.
 class GuidanceWebHomeScreen extends StatefulWidget {
   const GuidanceWebHomeScreen({super.key});
 
@@ -88,11 +92,7 @@ class _GuidanceWebHomeScreenState extends State<GuidanceWebHomeScreen> {
       case _GuidanceWebDestination.dashboard:
         return const _DashboardBody();
       case _GuidanceWebDestination.results:
-        return const _PlaceholderBody(
-          icon: FontAwesomeIcons.fileLines,
-          title: 'Results',
-          message: 'Viewing and retrieving examination results will be available in a later phase.',
-        );
+        return const GuidanceWebResultsView();
       case _GuidanceWebDestination.examineeRecords:
         return const _PlaceholderBody(
           icon: FontAwesomeIcons.userGraduate,

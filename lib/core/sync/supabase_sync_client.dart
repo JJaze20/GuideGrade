@@ -343,23 +343,34 @@ class SupabaseSyncClient implements SyncClient {
   static bool examineeTagged(ExamineeInfo? examinee) =>
       examinee != null && examinee.isComplete;
 
-  /// The `scans` identity trio (`first_name` / `last_name` /
-  /// `examinee_number`) for [examinee].
+  /// The `scans` identity columns (`first_name` / `last_name` /
+  /// `examinee_number`, plus `middle_name`) for [examinee].
   ///
-  /// The cloud `scans` table enforces `examinee_all_or_nothing`: the trio
-  /// must be either all NULL or all NOT NULL. So a complete tag sends all
-  /// three (blank-after-trim still normalised to null by [_blankToNull] as
-  /// a belt-and-braces guard); anything else — untagged, or a partial /
-  /// OCR-only tag — sends all three as null. The name is not lost: it stays
-  /// in the local scan and is pushed by a later `PUSH_SCAN` once staff
-  /// complete the tag. Sending a partial trio is SQLSTATE 23514 and would
-  /// permanently fail the scan's push.
+  /// The cloud `scans` table enforces `examinee_all_or_nothing` on the
+  /// first/last/number TRIO ONLY: that trio must be either all NULL or all
+  /// NOT NULL. So a complete tag sends all three (blank-after-trim still
+  /// normalised to null by [_blankToNull] as a belt-and-braces guard);
+  /// anything else — untagged, or a partial / OCR-only tag — sends all
+  /// three as null. The name is not lost: it stays in the local scan and is
+  /// pushed by a later `PUSH_SCAN` once staff complete the tag. Sending a
+  /// partial trio is SQLSTATE 23514 and would permanently fail the scan's
+  /// push.
+  ///
+  /// `middle_name` is NOT part of that CHECK constraint (it's always been
+  /// optional — see [ExamineeInfo.middleName]'s own doc comment: "never
+  /// required for isComplete"), so it follows the SAME tagged/untagged gate
+  /// as the trio (never sent for an incomplete tag, so an OCR-only scan's
+  /// suggested middle name is never pushed either) but is blank-to-null
+  /// normalised independently of the trio's all-or-nothing rule -- a
+  /// complete tag with a genuinely blank middle name still sends
+  /// `middle_name: null`, which is valid on its own (no CHECK references it).
   static Map<String, dynamic> scanIdentityColumns(ExamineeInfo? examinee) {
     final tagged = examineeTagged(examinee);
     return {
       'first_name': tagged ? _blankToNull(examinee!.firstName) : null,
       'last_name': tagged ? _blankToNull(examinee!.lastName) : null,
       'examinee_number': tagged ? _blankToNull(examinee!.examineeNumber) : null,
+      'middle_name': tagged ? _blankToNull(examinee!.middleName) : null,
     };
   }
 
@@ -592,13 +603,13 @@ class SupabaseSyncClient implements SyncClient {
       'processed_by_uid': result?.processedByUid,
       'processed_by_name': result?.processedByName,
 
-      // examinee identity trio -- all-or-nothing per the cloud
-      // `examinee_all_or_nothing` CHECK (see [scanIdentityColumns]). A
+      // examinee identity (first/last/number all-or-nothing per the cloud
+      // `examinee_all_or_nothing` CHECK, middle_name alongside them under
+      // the same tagged/untagged gate -- see [scanIdentityColumns]). A
       // partial / OCR-only tag goes up as all-null and is pushed in full by
       // a later PUSH_SCAN once staff complete it. The tag-audit columns are
       // added below, ONLY for a tag/clear-triggered push.
       ...scanIdentityColumns(examinee),
-      'middle_name': null, // not modelled by the app
 
       // duplicate-number override — not tracked by the app
       'dup_override': false,
@@ -903,6 +914,7 @@ class SupabaseSyncClient implements SyncClient {
         processedByName: row['processed_by_name'] as String?,
         firstName: row['first_name'] as String?,
         lastName: row['last_name'] as String?,
+        middleName: row['middle_name'] as String?,
         examineeNumber: row['examinee_number'] as String?,
         imagePath: row['image_path'] as String?,
         rectifiedImagePath: row['rectified_image_path'] as String?,
@@ -958,7 +970,7 @@ class SupabaseSyncClient implements SyncClient {
               'id, batch_id, exam_code, captured_at, decoded, raw_score, '
               'total_graded, total_items, result_status, scanned_at, '
               'processed_by_uid, processed_by_name, first_name, last_name, '
-              'examinee_number, image_path, image_uploaded, '
+              'middle_name, examinee_number, image_path, image_uploaded, '
               'rectified_image_path, rectified_image_uploaded',
             )
             .eq('batch_id', batchId);

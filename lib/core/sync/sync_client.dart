@@ -115,6 +115,7 @@ class CloudScanRow {
     this.processedByName,
     this.firstName,
     this.lastName,
+    this.middleName,
     this.examineeNumber,
     this.imagePath,
     this.rectifiedImagePath,
@@ -146,6 +147,11 @@ class CloudScanRow {
   final String? firstName;
   final String? lastName;
   final String? examineeNumber;
+
+  /// Optional middle name -- NOT part of the trio's all-or-nothing
+  /// constraint (mirrors [ExamineeInfo.middleName], never required for
+  /// completeness); may be null/blank even when the trio above is set.
+  final String? middleName;
 
   /// Storage object keys, or null when no image was ever uploaded for this
   /// scan/variant.
