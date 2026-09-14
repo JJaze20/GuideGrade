@@ -33,6 +33,17 @@ class _NeverSyncClient implements SyncClient {
   @override
   Future<CloudAnswerKeyRead> readAnswerKey(String examCode) => _no();
   @override
+  Future<CloudBatchesRead> readCloudBatches() => _no();
+  @override
+  Future<CloudScansRead> readCloudScans(String batchId) => _no();
+  @override
+  Future<CloudImageRead> downloadScanImage({
+    required String batchId,
+    required String scanId,
+    required bool rectified,
+  }) =>
+      _no();
+  @override
   Future<SyncOutcome> deleteBatch(String batchId) => _no();
   @override
   Future<SyncOutcome> deleteStoragePrefix(String batchId) => _no();

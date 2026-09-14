@@ -94,6 +94,19 @@ class _ThrowingSyncClient implements SyncClient {
   Future<CloudAnswerKeyRead> readAnswerKey(String examCode) async =>
       throw StateError('no network in AppState sync-wiring tests');
   @override
+  Future<CloudBatchesRead> readCloudBatches() async =>
+      throw StateError('no network in AppState sync-wiring tests');
+  @override
+  Future<CloudScansRead> readCloudScans(String batchId) async =>
+      throw StateError('no network in AppState sync-wiring tests');
+  @override
+  Future<CloudImageRead> downloadScanImage({
+    required String batchId,
+    required String scanId,
+    required bool rectified,
+  }) async =>
+      throw StateError('no network in AppState sync-wiring tests');
+  @override
   Future<SyncOutcome> deleteBatch(String batchId) => _no();
   @override
   Future<SyncOutcome> deleteStoragePrefix(String batchId) => _no();

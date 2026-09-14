@@ -10,6 +10,7 @@ import '../../../core/omr/omr_templates.dart';
 import '../../../core/routes/app_routes.dart';
 import '../../../core/services/batch_repository.dart';
 import '../../../core/state/app_state.dart';
+import '../../../core/sync/cloud_restore_service.dart';
 import '../../../core/sync/sync_job.dart';
 import '../../../core/sync/sync_manager.dart';
 import '../../../models/local_batch.dart';
@@ -555,6 +556,7 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
             batchId: batch.id,
             scan: scan,
             repository: appState.batchRepository,
+            cloudRestoreService: appState.cloudRestoreService,
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -652,8 +654,22 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
     bool tagged,
     ExamineeInfo? examinee,
   ) async {
-    final repo = AppStateScope.of(context).batchRepository;
-    final bytes = await repo.resolveScanImage(batch.id, scan);
+    final appState = AppStateScope.of(context);
+    final repo = appState.batchRepository;
+    var bytes = await repo.resolveScanImage(batch.id, scan);
+    if (bytes == null) {
+      // Not on disk yet -- if this scan came from a cloud restore (Supabase
+      // → GuideGrade retrieval), its image may simply not have been
+      // downloaded yet. Try once, lazily, right here; resolveScanImage
+      // itself is never modified -- this is purely a caller-side fallback.
+      await appState.cloudRestoreService?.restoreImageIfMissing(
+        batchId: batch.id,
+        scan: scan,
+        rectified: false,
+      );
+      if (!mounted) return;
+      bytes = await repo.resolveScanImage(batch.id, scan);
+    }
     if (!mounted) return;
     if (bytes == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -661,7 +677,16 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
       );
       return;
     }
-    final rectifiedBytes = await repo.resolveScanRectifiedImage(batch.id, scan);
+    var rectifiedBytes = await repo.resolveScanRectifiedImage(batch.id, scan);
+    if (rectifiedBytes == null && scan.rectifiedImageFileName != null) {
+      await appState.cloudRestoreService?.restoreImageIfMissing(
+        batchId: batch.id,
+        scan: scan,
+        rectified: true,
+      );
+      if (!mounted) return;
+      rectifiedBytes = await repo.resolveScanRectifiedImage(batch.id, scan);
+    }
     if (!mounted) return;
     Navigator.of(context).push(
       MaterialPageRoute(
@@ -701,11 +726,19 @@ class _ScanThumbnail extends StatefulWidget {
   final LocalScan scan;
   final BatchRepository repository;
 
+  /// Null when the cloud data plane isn't configured for this run. When
+  /// present, used as a caller-side fallback (see [_ScanThumbnailState.
+  /// _resolveImage]) to lazily restore a cloud-sourced scan's image the
+  /// first time its thumbnail is actually built — [repository.
+  /// resolveScanImage] itself is never modified.
+  final CloudRestoreService? cloudRestoreService;
+
   const _ScanThumbnail({
     super.key,
     required this.batchId,
     required this.scan,
     required this.repository,
+    this.cloudRestoreService,
   });
 
   @override
@@ -713,7 +746,23 @@ class _ScanThumbnail extends StatefulWidget {
 }
 
 class _ScanThumbnailState extends State<_ScanThumbnail> {
-  late final Future<Uint8List?> _future = widget.repository.resolveScanImage(widget.batchId, widget.scan);
+  late final Future<Uint8List?> _future = _resolveImage();
+
+  /// Resolves the original image, falling back to a single lazy
+  /// [CloudRestoreService.restoreImageIfMissing] attempt (then re-resolving)
+  /// when it's absent locally — the scan may have arrived via cloud
+  /// restoration with its image not yet downloaded.
+  Future<Uint8List?> _resolveImage() async {
+    final bytes = await widget.repository.resolveScanImage(widget.batchId, widget.scan);
+    if (bytes != null) return bytes;
+    final restored = await widget.cloudRestoreService?.restoreImageIfMissing(
+      batchId: widget.batchId,
+      scan: widget.scan,
+      rectified: false,
+    );
+    if (restored != true) return null;
+    return widget.repository.resolveScanImage(widget.batchId, widget.scan);
+  }
 
   static Widget _placeholder() => Container(
         width: 64,

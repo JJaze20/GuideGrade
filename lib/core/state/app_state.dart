@@ -20,6 +20,7 @@ import '../omr/omr_templates.dart';
 import '../services/batch_repository.dart';
 import '../services/local_batch_repository.dart';
 import '../services/local_storage_service.dart';
+import '../sync/cloud_restore_service.dart';
 import '../sync/sync_client.dart';
 import '../sync/sync_job.dart';
 import '../sync/sync_manager.dart';
@@ -233,6 +234,7 @@ class AppState extends ChangeNotifier {
   AppState({
     BatchRepository? batchRepository,
     this.syncManager,
+    this.cloudRestoreService,
     LocalStorageService? localStorage,
     Stream<List<ConnectivityResult>>? connectivityStream,
     this.reconnectSyncDebounce = const Duration(seconds: 2),
@@ -246,6 +248,16 @@ class AppState extends ChangeNotifier {
   /// push, login/lifecycle control); no code in this phase starts, pauses,
   /// or drains it.
   final SyncManager? syncManager;
+
+  /// The Supabase → GuideGrade cloud-retrieval orchestrator, or null when
+  /// the cloud data plane is not configured for this run (mirrors
+  /// [syncManager]). v1 is manually triggered only: nothing in [AppState]
+  /// calls [CloudRestoreService.restoreAll] automatically — see
+  /// CloudArchiveScreen's "Restore from Cloud" action, the only caller of
+  /// [CloudRestoreService.restoreAll]. [CloudRestoreService.
+  /// restoreImageIfMissing] is additionally called lazily by any screen
+  /// that resolves a scan's image and gets `null` back.
+  final CloudRestoreService? cloudRestoreService;
 
   /// The signed-in, Firestore-approved user for this session — null until a
   /// login screen successfully authorizes a sign-in (see

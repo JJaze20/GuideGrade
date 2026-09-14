@@ -5,6 +5,7 @@ import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
 import '../../../core/routes/app_routes.dart';
 import '../../../core/state/app_state.dart';
+import '../../../core/sync/cloud_restore_service.dart';
 import '../../../models/local_batch.dart';
 import '../../../shared/widgets/app_bottom_nav.dart';
 import '../../../shared/widgets/app_header_bar.dart';
@@ -23,6 +24,7 @@ class CloudArchiveScreen extends StatefulWidget {
 class _CloudArchiveScreenState extends State<CloudArchiveScreen> {
   bool _didInit = false;
   bool _loading = true;
+  bool _restoring = false;
   List<LocalBatch> _batches = [];
 
   @override
@@ -43,11 +45,88 @@ class _CloudArchiveScreenState extends State<CloudArchiveScreen> {
     });
   }
 
+  /// Manual "Restore from Cloud" (v1: manual only — see
+  /// [CloudRestoreService]'s doc comment for why this isn't automatic yet).
+  /// Confirms first, runs the restore, then re-runs [_load] so anything
+  /// restored appears immediately — the same pattern [_buildBatchCard]'s
+  /// pull-to-refresh already uses.
+  Future<void> _restoreFromCloud() async {
+    final service = AppStateScope.of(context).cloudRestoreService;
+    if (service == null) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Restore from Cloud?'),
+        content: const Text(
+          'This checks Supabase for batches created by any authorized '
+          'Guidance Council account and adds anything missing to this '
+          'device. Existing local data is never changed or removed.\n\n'
+          'TAT scores are recalculated using the current answer key and '
+          'may differ if it has since changed.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Restore'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _restoring = true);
+    final summary = await service.restoreAll();
+    if (!mounted) return;
+    setState(() => _restoring = false);
+
+    await _load();
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(_summaryMessage(summary))),
+    );
+  }
+
+  String _summaryMessage(RestoreSummary summary) {
+    if (!summary.isSuccess) {
+      return 'Could not reach Supabase. Check your connection and try again.';
+    }
+    if (summary.cloudBatchesFound == 0) {
+      return 'No cloud batches found for this account.';
+    }
+    return '${summary.cloudBatchesFound} cloud batch'
+        '${summary.cloudBatchesFound == 1 ? '' : 'es'} found — '
+        '${summary.batchesRestored} new, ${summary.batchesUpdated} updated, '
+        '${summary.scansRestored} scan${summary.scansRestored == 1 ? '' : 's'} restored. '
+        'Images download automatically when you open a scan.';
+  }
+
   @override
   Widget build(BuildContext context) {
+    final cloudRestoreService = AppStateScope.of(context).cloudRestoreService;
     return Scaffold(
       backgroundColor: AppColors.lightBg,
-      appBar: const AppHeaderBar(title: 'ARCHIVE'),
+      appBar: AppHeaderBar(
+        title: 'ARCHIVE',
+        trailing: cloudRestoreService == null
+            ? null
+            : IconButton(
+                tooltip: 'Restore from Cloud',
+                onPressed: _restoring ? null : _restoreFromCloud,
+                icon: _restoring
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                      )
+                    : const FaIcon(FontAwesomeIcons.cloudArrowDown, size: 16, color: Colors.white),
+              ),
+      ),
       body: SafeArea(
         top: false,
         child: RefreshIndicator(

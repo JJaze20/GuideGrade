@@ -405,6 +405,112 @@ class LocalBatchRepository implements BatchRepository {
     return name.endsWith('.enc') ? _crypto.decrypt(bytes) : bytes;
   }
 
+  // ---------------------------------------------------------------------------
+  // Cloud restore -- id-aware upserts sourced FROM the cloud (additive to
+  // the existing push-sync design; see CloudRestoreService). Reuse the same
+  // _root()/_batchDir()/_readManifest()/_writeManifest() primitives every
+  // other method above already uses -- no new storage format.
+  // ---------------------------------------------------------------------------
+
+  @override
+  Future<LocalBatch> upsertBatchFromCloud(LocalBatch batch) async {
+    final root = await _root();
+    final existing = await _readManifest(_batchDir(root, batch.id));
+    if (existing == null) {
+      // New to this device: write it as given, with no scans yet -- scans
+      // are reconciled one at a time via upsertScanFromCloud.
+      final fresh = LocalBatch(
+        id: batch.id,
+        batchCode: batch.batchCode,
+        examCode: batch.examCode,
+        examTitle: batch.examTitle,
+        description: batch.description,
+        expectedCount: batch.expectedCount,
+        status: batch.status,
+        createdByUid: batch.createdByUid,
+        createdByName: batch.createdByName,
+        createdAt: batch.createdAt,
+        updatedAt: batch.updatedAt,
+        scans: const [],
+      );
+      await _writeManifest(fresh);
+      return fresh;
+    }
+    if (!batch.updatedAt.isAfter(existing.updatedAt)) {
+      // Local is at least as new -- leave it exactly as it is (ties favor
+      // the existing local copy).
+      return existing;
+    }
+    // Cloud is strictly newer: merge only the mutable metadata fields.
+    // Audit fields and scans are never touched by this merge.
+    final merged = existing.copyWith(
+      batchCode: batch.batchCode,
+      examTitle: batch.examTitle,
+      description: batch.description,
+      expectedCount: batch.expectedCount,
+      status: batch.status,
+      updatedAt: batch.updatedAt,
+    );
+    await _writeManifest(merged);
+    return merged;
+  }
+
+  @override
+  Future<LocalBatch> upsertScanFromCloud({
+    required String batchId,
+    required LocalScan scan,
+  }) async {
+    final root = await _root();
+    final batch = await _readManifest(_batchDir(root, batchId));
+    if (batch == null) {
+      throw StateError('Batch $batchId does not exist.');
+    }
+    final alreadyExists = batch.scans.any((s) => s.id == scan.id);
+    if (alreadyExists) {
+      // v1 rule: an existing local scan is never overwritten or merged,
+      // regardless of which is newer -- left completely untouched.
+      return batch;
+    }
+    final updated = batch.copyWith(scans: [...batch.scans, scan]);
+    await _writeManifest(updated);
+    return updated;
+  }
+
+  @override
+  Future<void> writeRestoredScanImage({
+    required String batchId,
+    required String scanId,
+    required Uint8List bytes,
+  }) =>
+      _writeRestoredImage(batchId, '$scanId.enc', bytes);
+
+  @override
+  Future<void> writeRestoredScanRectifiedImage({
+    required String batchId,
+    required String scanId,
+    required Uint8List bytes,
+  }) =>
+      _writeRestoredImage(batchId, '${scanId}_rectified.enc', bytes);
+
+  /// Shared write path for both cloud-restored image variants: encrypt via
+  /// the same [_crypto] every captured photo already goes through, then
+  /// write to the batch's `images/` directory under [fileName]. Does not
+  /// read or touch the manifest -- image bytes live outside `batch.enc`,
+  /// same as a normal capture.
+  Future<void> _writeRestoredImage(
+    String batchId,
+    String fileName,
+    Uint8List bytes,
+  ) async {
+    final root = await _root();
+    final batchDirPath = _batchDir(root, batchId).path;
+    final imagesDir = Directory('$batchDirPath/$_imagesDirName');
+    if (!imagesDir.existsSync()) imagesDir.createSync(recursive: true);
+    final encrypted = await _crypto.encrypt(bytes);
+    await File('$batchDirPath/$_imagesDirName/$fileName')
+        .writeAsBytes(encrypted, flush: true);
+  }
+
   void _deleteIfExists(File file) {
     if (file.existsSync()) {
       try {

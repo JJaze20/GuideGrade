@@ -860,6 +860,171 @@ class SupabaseSyncClient implements SyncClient {
   }
 
   // ---------------------------------------------------------------------------
+  // F2. readCloudBatches / readCloudScans -- additive cloud retrieval reads.
+  // Never called by SyncManager; used only by CloudRestoreService. Mirror
+  // readAnswerKey's guard/retry shape exactly.
+  // ---------------------------------------------------------------------------
+
+  /// Parses one raw `batches` row (as returned by `.select()`) into a
+  /// [CloudBatchRow].
+  static CloudBatchRow parseCloudBatchRow(Map<String, dynamic> row) =>
+      CloudBatchRow(
+        id: row['id'] as String,
+        batchCode: row['batch_code'] as String? ?? '',
+        examCode: row['exam_code'] as String? ?? '',
+        examTitle: row['exam_title'] as String? ?? '',
+        description: row['description'] as String? ?? '',
+        expectedCount: (row['expected_count'] as num?)?.toInt() ?? 0,
+        status: row['status'] as String? ?? 'Draft',
+        createdByUid: row['created_by_uid'] as String? ?? '',
+        createdByName: row['created_by_name'] as String? ?? 'Unknown',
+        createdAt: _dateOrNull(row['created_at']) ?? DateTime.now().toUtc(),
+        updatedAt: _dateOrNull(row['updated_at']) ?? DateTime.now().toUtc(),
+      );
+
+  /// Parses one raw `scans` row (as returned by `.select()`) into a
+  /// [CloudScanRow]. Deliberately never reads `score_percentage` (see
+  /// [CloudScanRow]'s doc comment).
+  static CloudScanRow parseCloudScanRow(Map<String, dynamic> row) =>
+      CloudScanRow(
+        id: row['id'] as String,
+        batchId: row['batch_id'] as String? ?? '',
+        examCode: row['exam_code'] as String? ?? '',
+        capturedAt: _dateOrNull(row['captured_at']) ?? DateTime.now().toUtc(),
+        decoded: row['decoded'] is Map
+            ? Map<String, dynamic>.from(row['decoded'] as Map)
+            : const {},
+        rawScore: (row['raw_score'] as num?)?.toInt(),
+        totalGraded: (row['total_graded'] as num?)?.toInt(),
+        totalItems: (row['total_items'] as num?)?.toInt(),
+        resultStatus: row['result_status'] as String?,
+        scannedAt: _dateOrNull(row['scanned_at']),
+        processedByUid: row['processed_by_uid'] as String?,
+        processedByName: row['processed_by_name'] as String?,
+        firstName: row['first_name'] as String?,
+        lastName: row['last_name'] as String?,
+        examineeNumber: row['examinee_number'] as String?,
+        imagePath: row['image_path'] as String?,
+        rectifiedImagePath: row['rectified_image_path'] as String?,
+        imageUploaded: row['image_uploaded'] == true,
+        rectifiedImageUploaded: row['rectified_image_uploaded'] == true,
+      );
+
+  /// Read-only, metadata-only fetch of every cloud `batches` row visible
+  /// under the current RLS policy. Mirrors [readAnswerKey]'s single
+  /// token-refresh-then-retry guard. Never mutates [syncState] or the
+  /// job queue -- this is a pure read.
+  @override
+  Future<CloudBatchesRead> readCloudBatches() async {
+    var refreshed = false;
+    while (true) {
+      try {
+        final rows = await _client.from('batches').select(
+              'id, batch_code, exam_code, exam_title, description, '
+              'expected_count, status, created_by_uid, created_by_name, '
+              'created_at, updated_at',
+            );
+        return CloudBatchesRead.found(
+          rows.map((r) => parseCloudBatchRow(r)).toList(),
+        );
+      } on PostgrestException catch (e) {
+        final code = _sanitizeCode(e.code);
+        if ((code == '401' || code == 'PGRST301') && !refreshed) {
+          refreshed = true;
+          if (await _safeRefresh()) continue;
+        }
+        return CloudBatchesRead.failed(classifyPostgrestCode(code));
+      } on TimeoutException {
+        return const CloudBatchesRead.failed(SyncOutcome.transient('network'));
+      } on SocketException {
+        return const CloudBatchesRead.failed(SyncOutcome.transient('network'));
+      } catch (e) {
+        _logUnclassified(e);
+        return CloudBatchesRead.failed(classifyUnexpectedError(e));
+      }
+    }
+  }
+
+  /// Read-only fetch of the cloud `scans` rows for [batchId]. Mirrors
+  /// [readAnswerKey]'s guard. Never mutates [syncState] or the job queue.
+  @override
+  Future<CloudScansRead> readCloudScans(String batchId) async {
+    var refreshed = false;
+    while (true) {
+      try {
+        final rows = await _client
+            .from('scans')
+            .select(
+              'id, batch_id, exam_code, captured_at, decoded, raw_score, '
+              'total_graded, total_items, result_status, scanned_at, '
+              'processed_by_uid, processed_by_name, first_name, last_name, '
+              'examinee_number, image_path, image_uploaded, '
+              'rectified_image_path, rectified_image_uploaded',
+            )
+            .eq('batch_id', batchId);
+        return CloudScansRead.found(
+          rows.map((r) => parseCloudScanRow(r)).toList(),
+        );
+      } on PostgrestException catch (e) {
+        final code = _sanitizeCode(e.code);
+        if ((code == '401' || code == 'PGRST301') && !refreshed) {
+          refreshed = true;
+          if (await _safeRefresh()) continue;
+        }
+        return CloudScansRead.failed(classifyPostgrestCode(code));
+      } on TimeoutException {
+        return const CloudScansRead.failed(SyncOutcome.transient('network'));
+      } on SocketException {
+        return const CloudScansRead.failed(SyncOutcome.transient('network'));
+      } catch (e) {
+        _logUnclassified(e);
+        return CloudScansRead.failed(classifyUnexpectedError(e));
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // F3. downloadScanImage -- additive cloud image retrieval. Never called by
+  // SyncManager; used only by CloudRestoreService.restoreImageIfMissing,
+  // which is solely responsible for encrypting the returned bytes before
+  // any disk write -- this method never touches local storage.
+  // ---------------------------------------------------------------------------
+
+  @override
+  Future<CloudImageRead> downloadScanImage({
+    required String batchId,
+    required String scanId,
+    required bool rectified,
+  }) async {
+    final key = rectified
+        ? rectifiedImageKey(batchId, scanId)
+        : originalImageKey(batchId, scanId);
+    var refreshed = false;
+    while (true) {
+      try {
+        final bytes = await _client.storage.from(storageBucket).download(key);
+        return CloudImageRead.found(bytes);
+      } on StorageException catch (e) {
+        final status = _sanitizeCode(e.statusCode);
+        if (status == '404') return const CloudImageRead.absent();
+        if ((status == '401' || status == 'PGRST301') && !refreshed) {
+          refreshed = true;
+          if (await _safeRefresh()) continue;
+        }
+        _logGuard('storage error status=$status op=read (${e.runtimeType})');
+        return CloudImageRead.failed(classifyStorageStatus(status, StorageOp.read));
+      } on TimeoutException {
+        return const CloudImageRead.failed(SyncOutcome.transient('network'));
+      } on SocketException {
+        return const CloudImageRead.failed(SyncOutcome.transient('network'));
+      } catch (e) {
+        _logUnclassified(e);
+        return CloudImageRead.failed(classifyUnexpectedError(e));
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // G. deleteBatch
   // ---------------------------------------------------------------------------
 
