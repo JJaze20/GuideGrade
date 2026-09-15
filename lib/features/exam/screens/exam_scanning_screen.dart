@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:camera/camera.dart';
@@ -25,6 +26,71 @@ class _AlignmentCheckRequest {
 AlignmentCheck _checkAlignment(_AlignmentCheckRequest request) {
   return const OmrDecoder().locateCorners(request.imagePath, request.template);
 }
+
+class _RejectedCaptureDebugVizRequest {
+  final String imagePath;
+  final OmrExamTemplate template;
+  final String debugDir;
+  const _RejectedCaptureDebugVizRequest(this.imagePath, this.template, this.debugDir);
+}
+
+/// Dumps the same kind of annotated debug images
+/// [AppState.processCapturedPages] writes for a SUCCESSFUL capture (see
+/// `OmrDecoder.saveDebugVisualization`'s doc comment, including its own
+/// `sheet{n}_FAILED.jpg` fallback when corner detection itself throws), but
+/// for a capture the post-capture gate just REJECTED — which otherwise
+/// leaves no trace anywhere, since a rejected photo never reaches
+/// [AppState.processCapturedPages] at all. Written to a `rejected/`
+/// subfolder of the same "omr_debug" directory so these can never collide
+/// with (or be overwritten by) a later successful capture's own debug
+/// files at the same page slot. Best-effort only: any failure here is
+/// swallowed by the caller, since this exists purely for diagnosis and
+/// must never affect the actual scanning flow.
+void _saveRejectedCaptureDebugViz(_RejectedCaptureDebugVizRequest request) {
+  final dir = Directory('${request.debugDir}/rejected');
+  if (!dir.existsSync()) dir.createSync(recursive: true);
+  // A fresh, distinguishable slot per rejection (not tied to a page index,
+  // since a rejected photo was never assigned one) -- old ones are left in
+  // place rather than overwritten, so a string of retries during one
+  // session can all still be inspected afterward.
+  final pageIndex = DateTime.now().millisecondsSinceEpoch;
+  const OmrDecoder().saveDebugVisualization(
+    request.imagePath,
+    request.template,
+    dir.path,
+    pageIndex,
+  );
+}
+
+class _NormalizeOrientationRequest {
+  final String imagePath;
+  final int quarterTurnsClockwise;
+  const _NormalizeOrientationRequest(this.imagePath, this.quarterTurnsClockwise);
+}
+
+void _normalizeCaptureOrientation(_NormalizeOrientationRequest request) {
+  const OmrDecoder().normalizeCaptureOrientation(
+    request.imagePath,
+    request.quarterTurnsClockwise,
+  );
+}
+
+/// How many 90°-clockwise turns the `camera` plugin's own preview widget
+/// applies to the raw sensor texture to display it upright for a given
+/// [DeviceOrientation] — copied verbatim from `CameraPreview`'s own
+/// private `_getQuarterTurns` (package:camera/src/camera_preview.dart) so
+/// [_ExamScanningScreenState._capture] can apply the exact same correction
+/// to the captured JPEG's raw pixels (see
+/// `OmrDecoder.normalizeCaptureOrientation`'s doc comment for why this
+/// must come from real device orientation, not guessed from image
+/// content). Keep in sync if the `camera` package ever changes this
+/// mapping.
+const _deviceOrientationQuarterTurns = {
+  DeviceOrientation.portraitUp: 0,
+  DeviceOrientation.landscapeRight: 1,
+  DeviceOrientation.portraitDown: 2,
+  DeviceOrientation.landscapeLeft: 3,
+};
 
 class _LiveCornersRequest {
   final Uint8List lumaBytes;
@@ -519,6 +585,17 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
         // happened to lock onto during initialization.
         await controller.setFocusMode(FocusMode.auto);
         await controller.setExposureMode(ExposureMode.auto);
+        // Some camera HALs only actually (re)start continuous AF/AE once a
+        // region is explicitly set — `setFocusMode(auto)` alone can leave
+        // them locked onto whatever they focused on during initialization
+        // (often the background behind where the sheet will be placed,
+        // since nothing is in frame yet at that point). Centering this
+        // targets wherever the on-screen guide already tells the user to
+        // place the sheet, for both portrait and landscape (TAT) layouts —
+        // this needs on-device confirmation, not assumed to fix focus by
+        // itself; see [_focusOnPoint]'s doc comment for the follow-up
+        // tap-to-focus this shares with.
+        await _focusOnPoint(controller, const Offset(0.5, 0.5));
       } on CameraException catch (e) {
         debugPrint(
           '[ExamScanning] focus/exposure mode setup failed: ${e.code} ${e.description}',
@@ -930,6 +1007,59 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
     }
   }
 
+  /// Sets both the focus AND exposure point to the same [point] (a
+  /// (0,0)-(1,1) fraction of the *displayed preview*, matching
+  /// `CameraController.setFocusPoint`/`setExposurePoint`'s own contract) —
+  /// paired because a re-exposed image can shift what looks sharp, and
+  /// because a device that supports one but not the other should still get
+  /// whichever it can (each call is independently guarded, never let one
+  /// throwing skip the other). Silently a no-op on a device/lens that
+  /// supports neither; capture still works, just without this hint.
+  ///
+  /// Called once with the frame center at camera setup (see
+  /// [_setUpCamera]) so continuous AF/AE actually has a region to start
+  /// from instead of whatever it happened to lock onto before the sheet
+  /// was in frame, and again on every tap-to-focus (see
+  /// [_buildCameraLayer]'s `GestureDetector`) so staff can redirect it
+  /// onto the actual sheet if it's hunting on the background/hand instead
+  /// — this needs on-device confirmation either helps; digital sharpening
+  /// cannot substitute for the camera actually focusing correctly, and
+  /// this is not assumed to fully resolve TAT's reported focus struggles
+  /// without that confirmation.
+  Future<void> _focusOnPoint(CameraController controller, Offset point) async {
+    try {
+      await controller.setFocusPoint(point);
+    } catch (_) {
+      // Not all devices/lenses support an explicit focus point.
+    }
+    try {
+      await controller.setExposurePoint(point);
+    } catch (_) {
+      // Not all devices/lenses support an explicit exposure point.
+    }
+  }
+
+  /// Handles a tap-to-focus gesture on the live viewfinder — maps the
+  /// tap's widget-local position through the exact same `BoxFit.cover` fit
+  /// [_buildCameraLayer] displays the preview with (see
+  /// `fiducial_coordinate_mapping.dart`'s `widgetOffsetToFraction`) so the
+  /// resulting focus point lands on whatever the user actually tapped,
+  /// not a widget-pixel position naively treated as already being that
+  /// fraction. [previewSize] is the same logical (already
+  /// orientation-swapped for portrait vs. landscape/TAT) size
+  /// [_buildCameraLayer] itself computes as the preview's displayed
+  /// source size for its own `BoxFit.cover`.
+  void _onViewfinderTap(TapUpDetails details, Size boxSize, Size previewSize) {
+    final controller = _cameraController;
+    if (controller == null || !controller.value.isInitialized) return;
+    final fraction = widgetOffsetToFraction(
+      position: details.localPosition,
+      sourceSize: previewSize,
+      destSize: boxSize,
+    );
+    unawaited(_focusOnPoint(controller, fraction));
+  }
+
   /// [manual] distinguishes the two ways this can be triggered, since they
   /// have deliberately different gates:
   ///  * `manual: true` — the "Scan Next"/"Capture" button. The low-resolution
@@ -975,6 +1105,36 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
       final takePictureSw = kOmrPerfDebug ? (Stopwatch()..start()) : null;
       final file = await controller.takePicture();
       if (takePictureSw != null) takePictureMs = takePictureSw.elapsedMilliseconds;
+      // Landscape-page templates (TAT) only: physically rotate the raw
+      // capture to upright using the device's ACTUAL orientation at the
+      // moment of capture, before anything else ever reads this file --
+      // see [OmrDecoder.normalizeCaptureOrientation]'s doc comment for why
+      // this can't be left to the decoder's own content-based rotation
+      // search (a printed corner square looks identical under any 90°
+      // rotation, so that search can "succeed" on the wrong one).
+      if (_isLandscapeExam) {
+        final quarterTurns =
+            _deviceOrientationQuarterTurns[controller.value.deviceOrientation] ?? 0;
+        // TEMPORARY diagnostic (2026-09-14): testing the hypothesis that
+        // CameraController.value.deviceOrientation never updates from its
+        // hardcoded portraitUp default for this screen -- the underlying
+        // platform stream (onDeviceOrientationChanged) only fires on an
+        // actual ORIENTATION CHANGE, but TAT locks the device to landscape
+        // (see didChangeDependencies) BEFORE the camera controller is even
+        // created, so there may be no "change" left for it to ever report,
+        // silently leaving quarterTurns at 0 (skipping normalization
+        // entirely) even though the phone is physically landscape.
+        debugPrint(
+          '[ExamScanning] TAT capture orientation: '
+          'deviceOrientation=${controller.value.deviceOrientation} quarterTurns=$quarterTurns',
+        );
+        if (quarterTurns != 0) {
+          await compute(
+            _normalizeCaptureOrientation,
+            _NormalizeOrientationRequest(file.path, quarterTurns),
+          );
+        }
+      }
       final template = omrTemplates[appState.activeExamCode];
       if (template != null) {
         final alignmentSw = kOmrPerfDebug ? (Stopwatch()..start()) : null;
@@ -991,6 +1151,21 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
               'errors=${check.reprojectionErrorPx} reason=${check.message}',
             );
           }
+          // Best-effort diagnostic dump so a rejection actually leaves
+          // something to inspect afterward -- a rejected photo is never
+          // added to the batch, so without this it vanishes with nothing
+          // but the dialog's own message. Fire-and-forget: must never
+          // delay the dialog or affect the scanning flow on failure.
+          unawaited(() async {
+            final debugDir = await appState.prepareDebugImagesDir();
+            if (debugDir == null) return;
+            try {
+              await compute(
+                _saveRejectedCaptureDebugViz,
+                _RejectedCaptureDebugVizRequest(file.path, template, debugDir),
+              );
+            } catch (_) {}
+          }());
           // The live check above is advisory-strength (a lower-effort
           // preview frame); this one runs the real decoder's corner search
           // against the actual captured photo and is authoritative. No
@@ -1821,15 +1996,26 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
         final previewHeight = _isLandscapeExam
             ? controller.value.previewSize!.height
             : controller.value.previewSize!.width;
-        return SizedBox.expand(
-          child: FittedBox(
-            fit: BoxFit.cover,
-            child: SizedBox(
-              width: previewWidth,
-              height: previewHeight,
-              child: CameraPreview(controller),
-            ),
-          ),
+        final previewSize = Size(previewWidth, previewHeight);
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            final boxSize = Size(constraints.maxWidth, constraints.maxHeight);
+            return GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTapUp: (details) =>
+                  _onViewfinderTap(details, boxSize, previewSize),
+              child: SizedBox.expand(
+                child: FittedBox(
+                  fit: BoxFit.cover,
+                  child: SizedBox(
+                    width: previewWidth,
+                    height: previewHeight,
+                    child: CameraPreview(controller),
+                  ),
+                ),
+              ),
+            );
+          },
         );
       },
     );

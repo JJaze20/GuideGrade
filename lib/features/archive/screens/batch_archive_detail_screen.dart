@@ -696,6 +696,8 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
           scoredItems: scored.items,
           rectifiedImageBytes: rectifiedBytes,
           template: omrTemplates[scored.examCode],
+          scanTemplateVersion: scored.templateVersion,
+          meshInteriorMeasuredFrac: scored.meshInteriorMeasuredFrac,
         ),
       ),
     );

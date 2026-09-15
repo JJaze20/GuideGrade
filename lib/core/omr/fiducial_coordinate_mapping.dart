@@ -71,6 +71,28 @@ Offset fractionToWidgetOffset({
   );
 }
 
+/// Inverse of [fractionToWidgetOffset]: maps a widget-local pixel
+/// [position] (e.g. a tap on the viewfinder) back to a normalized (0-1)
+/// fraction of [sourceSize], for the identical `BoxFit.cover` fit (see
+/// [coverFit]). Used for tap-to-focus — the `camera` plugin's
+/// `setFocusPoint`/`setExposurePoint` both take a (0,0)-(1,1) fraction of
+/// the *displayed preview*, not raw widget pixels. Clamps to [0,1] since a
+/// tap can land in the letterboxed/cropped-out margin `BoxFit.cover`
+/// leaves outside the actual image on one axis.
+Offset widgetOffsetToFraction({
+  required Offset position,
+  required Size sourceSize,
+  required Size destSize,
+}) {
+  final fit = coverFit(sourceSize, destSize);
+  if (fit.scale <= 0 || sourceSize.width <= 0 || sourceSize.height <= 0) {
+    return const Offset(0.5, 0.5);
+  }
+  final fx = (position.dx - fit.topLeft.dx) / (sourceSize.width * fit.scale);
+  final fy = (position.dy - fit.topLeft.dy) / (sourceSize.height * fit.scale);
+  return Offset(fx.clamp(0.0, 1.0), fy.clamp(0.0, 1.0));
+}
+
 /// The logical (already display-oriented) size of the frame a live corner
 /// search actually ran against, derived from the camera's own reported
 /// preview size plus which rotation the search applied.

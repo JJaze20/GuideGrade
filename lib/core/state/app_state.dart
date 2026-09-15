@@ -1153,7 +1153,14 @@ class AppState extends ChangeNotifier {
   }
 
   /// App-external "omr_debug" folder for [processCapturedPages]'s debug
-  /// visualization images. Returns null (silently) if unavailable.
+  /// visualization images. Returns null (silently) if unavailable. Public
+  /// so [ExamScanningScreen] can reuse the same folder to dump a debug
+  /// snapshot of a REJECTED capture too (see its own `_capture`'s
+  /// misalignment branch) — otherwise a "Page not fully detected" photo
+  /// leaves no trace anywhere to diagnose after the fact, since it never
+  /// reaches [processCapturedPages] at all.
+  Future<String?> prepareDebugImagesDir() => _prepareDebugImagesDir();
+
   Future<String?> _prepareDebugImagesDir() async {
     try {
       final base = await getExternalStorageDirectory();

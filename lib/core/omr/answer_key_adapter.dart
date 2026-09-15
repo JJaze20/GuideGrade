@@ -151,18 +151,19 @@ class LegacyMigrationResult {
 /// Pre-fills the answer key editor from a legacy (pre-section-support)
 /// [AnswerKeyModel], per exam type:
 ///
-///   - QTM: structurally safe to reinterpret -- QTM was always a single
-///     continuous 1..60 section, so the old flat map already matches it.
+///   - QTM/Admission: structurally safe to reinterpret. Both are now
+///     printed as 6 sections (10 items each for QTM, 12 for AT), but their
+///     item numbers are still one continuous 1-60/1-72 sequence across all
+///     6 (see generate_sheets.dart's _offsetItemNumbers) -- the exact same
+///     numbering the old flat map used from back when each was a single
+///     section, so every section's items map 1:1 onto it regardless.
 ///     Values are still checked against the template's real per-item
-///     choices before being trusted.
+///     choices before being trusted (e.g. old AT entries limited to A-D
+///     when even-numbered items actually use F-K) -- each item is
+///     validated individually and only matching ones are prefilled.
 ///   - TAT: never safe. A flat "1".."N" map can't be split back into
 ///     Test I/II/III without guessing where each boundary falls, so
 ///     [blocked] is true and staff must re-enter everything.
-///   - Everything else (Admission): structurally positional (one section)
-///     but the stored *values* may not match the sheet's real per-item
-///     choices (e.g. old entries limited to A-D when even-numbered AT
-///     items actually use F-K) -- each item is validated individually and
-///     only matching ones are prefilled.
 LegacyMigrationResult migrateLegacyAnswerKeyForEditing(
   AnswerKeyModel legacy,
   OmrExamTemplate template,
@@ -179,24 +180,29 @@ LegacyMigrationResult migrateLegacyAnswerKeyForEditing(
     );
   }
 
-  // QTM and Admission are both currently single-section templates, so the
-  // same positional-plus-validation logic applies to either.
-  final section = template.sections.single;
-  final converted = <String, String>{};
+  // QTM and Admission both map every section's item numbers 1:1 onto the
+  // old flat map (see the doc comment above), so the same positional-plus-
+  // validation logic applies across every section, not just a single one.
   final flagged = <int>[];
-  for (final itemNumber in section.items.keys) {
-    final stored = legacy.legacyFlatAnswers[itemNumber.toString()];
-    if (stored == null || stored.isEmpty) continue;
-    final validChoices = section.items[itemNumber]!.map((b) => b.choice).toSet();
-    if (validChoices.contains(stored)) {
-      converted[itemNumber.toString()] = stored;
-    } else {
-      flagged.add(itemNumber);
+  var convertedCount = 0;
+  for (final section in template.sections) {
+    final converted = <String, String>{};
+    for (final itemNumber in section.items.keys) {
+      final stored = legacy.legacyFlatAnswers[itemNumber.toString()];
+      if (stored == null || stored.isEmpty) continue;
+      final validChoices = section.items[itemNumber]!.map((b) => b.choice).toSet();
+      if (validChoices.contains(stored)) {
+        converted[itemNumber.toString()] = stored;
+      } else {
+        flagged.add(itemNumber);
+      }
     }
+    prefill[section.name] = converted;
+    convertedCount += converted.length;
   }
-  prefill[section.name] = converted;
 
-  final missingCount = section.itemCount - converted.length;
+  final totalItems = template.sections.fold<int>(0, (sum, s) => sum + s.itemCount);
+  final missingCount = totalItems - convertedCount - flagged.length;
   final String note;
   if (flagged.isEmpty && missingCount == 0) {
     note = 'Loaded from a pre-section-support answer key -- please review before finalizing.';

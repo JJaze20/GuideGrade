@@ -340,6 +340,8 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
                           ? appState.rectifiedImagePaths[sheetIndex]
                           : null,
                       template: omrTemplates[scored.examCode],
+                      scanTemplateVersion: scored.templateVersion,
+                      meshInteriorMeasuredFrac: scored.meshInteriorMeasuredFrac,
                     ),
                   ),
                 ),

@@ -28,7 +28,19 @@ class ScoredResult {
   final String examCode;
   final List<ScoredItem> items;
 
-  const ScoredResult({required this.examCode, required this.items});
+  /// Carried straight through from the decoded [OmrScanResult] so a
+  /// viewer (ScannedImageViewerScreen's graded overlay) can reconstruct
+  /// the exact mesh correction used to decode [items] — see
+  /// [OmrScanResult.templateVersion]/[OmrScanResult.meshInteriorMeasuredFrac].
+  final String? templateVersion;
+  final Map<String, (double, double)>? meshInteriorMeasuredFrac;
+
+  const ScoredResult({
+    required this.examCode,
+    required this.items,
+    this.templateVersion,
+    this.meshInteriorMeasuredFrac,
+  });
 
   int get rawScore => items.where((i) => i.isCorrect == true).length;
 
@@ -53,5 +65,10 @@ ScoredResult scoreOmrResult(OmrScanResult result, AnswerKey? answerKey) {
         ),
       )
       .toList();
-  return ScoredResult(examCode: result.examCode, items: items);
+  return ScoredResult(
+    examCode: result.examCode,
+    items: items,
+    templateVersion: result.templateVersion,
+    meshInteriorMeasuredFrac: result.meshInteriorMeasuredFrac,
+  );
 }
