@@ -5,6 +5,7 @@ import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
 import '../../../models/local_batch.dart';
 import '../services/guidance_web_results_service.dart';
+import 'guidance_web_result_detail_view.dart';
 
 /// The Guidance Council Web Console's Results page — a READ-ONLY viewer
 /// over the Supabase examination archive.
@@ -77,6 +78,14 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
 
   String _statusFilter = 'All';
 
+  /// The scan currently open in the Detailed Result view (Phase 3), or null
+  /// while the Results table itself is showing. Set only by a row's View
+  /// button ([_buildResultRow]) and cleared only by the detail view's own
+  /// "Back to Results" action — never touched by batch selection/search/
+  /// filter changes, so returning from a detail view always lands back on
+  /// the same batch and scan list, never a reload.
+  LocalScan? _viewingScan;
+
   @override
   void initState() {
     super.initState();
@@ -134,6 +143,7 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
       _loadingScans = true;
       _statusFilter = 'All';
       _searchController.clear();
+      _viewingScan = null;
     });
     try {
       final scans = await _service.loadScansForBatch(batch);
@@ -178,16 +188,25 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
 
   @override
   Widget build(BuildContext context) {
+    final viewing = _viewingScan;
+    final batch = _activeBatch;
     return Padding(
       padding: const EdgeInsets.all(24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          _buildControls(),
-          const SizedBox(height: 16),
-          Expanded(child: _buildBody()),
-        ],
-      ),
+      child: (viewing != null && batch != null)
+          ? GuidanceWebResultDetailView(
+              scan: viewing,
+              batch: batch,
+              service: _service,
+              onBack: () => setState(() => _viewingScan = null),
+            )
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _buildControls(),
+                const SizedBox(height: 16),
+                Expanded(child: _buildBody()),
+              ],
+            ),
     );
   }
 
@@ -434,7 +453,7 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
           SizedBox(
             width: 72,
             child: TextButton(
-              onPressed: () => _showViewComingSoon(context),
+              onPressed: () => setState(() => _viewingScan = scan),
               style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: const Size(60, 30)),
               child: Text('View', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w700, color: AppColors.primaryGreen)),
             ),
@@ -452,14 +471,6 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
   /// count, which for a real batch already equals 72/60.
   int _denominatorFor(LocalBatch batch, LocalScanResult result) {
     return batch.examCode == 'TAT' ? 160 : result.totalItems;
-  }
-
-  void _showViewComingSoon(BuildContext context) {
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        const SnackBar(content: Text('Detailed result view will be available in a later phase.')),
-      );
   }
 
   Widget _statusChip(String status, bool isGraded) {

@@ -10,6 +10,8 @@ import 'package:guidegrade/features/guidance_web/services/guidance_web_results_s
 class _FakeSyncClient implements SyncClient {
   CloudBatchesRead batchesToReturn = CloudBatchesRead.found(const []);
   final Map<String, CloudScansRead> scansByBatchId = {};
+  CloudAnswerKeyRead answerKeyToReturn = const CloudAnswerKeyRead.absent();
+  CloudImageRead imageToReturn = const CloudImageRead.absent();
   final List<String> calls = [];
 
   Never _no(String label) {
@@ -42,14 +44,19 @@ class _FakeSyncClient implements SyncClient {
   Future<SyncOutcome> pushAnswerKey(String examCode, {Map<String, String> meta = const {}}) =>
       _no('pushAnswerKey');
   @override
-  Future<CloudAnswerKeyRead> readAnswerKey(String examCode) => _no('readAnswerKey');
+  Future<CloudAnswerKeyRead> readAnswerKey(String examCode) async {
+    calls.add('readAnswerKey:$examCode');
+    return answerKeyToReturn;
+  }
   @override
   Future<CloudImageRead> downloadScanImage({
     required String batchId,
     required String scanId,
     required bool rectified,
-  }) =>
-      _no('downloadScanImage');
+  }) async {
+    calls.add('downloadScanImage:$batchId:$scanId:${rectified ? 'rectified' : 'original'}');
+    return imageToReturn;
+  }
   @override
   Future<SyncOutcome> deleteBatch(String batchId) => _no('deleteBatch');
   @override
@@ -180,6 +187,94 @@ void main() {
         () => service.loadScansForBatch(batch),
         throwsA(isA<GuidanceWebResultsException>()),
       );
+    });
+  });
+
+  group('loadAnswerKey (Phase 3)', () {
+    test('1. a found cloud row is converted into the existing AnswerKey model', () async {
+      client.answerKeyToReturn = CloudAnswerKeyRead.found(
+        version: 3,
+        answers: {'Answer Document|1': 'A', 'Answer Document|2': 'B'},
+        updatedByName: 'Officer',
+        updatedAt: '2026-01-01T00:00:00Z',
+      );
+
+      final key = await service.loadAnswerKey('AT');
+
+      expect(key, isNotNull);
+      expect(key!.examCode, 'AT');
+      expect(key.correctChoices, {'Answer Document|1': 'A', 'Answer Document|2': 'B'});
+      expect(client.calls, ['readAnswerKey:AT']);
+    });
+
+    test('2. a missing (absent) cloud row returns null, never an exception', () async {
+      client.answerKeyToReturn = const CloudAnswerKeyRead.absent();
+
+      final key = await service.loadAnswerKey('QTM');
+
+      expect(key, isNull);
+    });
+
+    test('an actual read failure throws a sanitized GuidanceWebResultsException, never a raw one', () async {
+      client.answerKeyToReturn = const CloudAnswerKeyRead.failed(SyncOutcome.transient('network'));
+
+      expect(
+        () => service.loadAnswerKey('TAT'),
+        throwsA(isA<GuidanceWebResultsException>().having(
+          (e) => e.message,
+          'message',
+          isNot(contains('network')),
+        )),
+      );
+    });
+
+    test('never calls a push/write method', () async {
+      client.answerKeyToReturn = const CloudAnswerKeyRead.absent();
+
+      await service.loadAnswerKey('AT');
+
+      expect(client.calls, ['readAnswerKey:AT']);
+    });
+  });
+
+  group('loadScanImage (Phase 3 scanned-sheet viewing)', () {
+    test('1. returns the downloaded bytes when the read succeeds', () async {
+      client.imageToReturn = CloudImageRead.found([1, 2, 3]);
+
+      final bytes = await service.loadScanImage('b1', 's1', rectified: false);
+
+      expect(bytes, [1, 2, 3]);
+      expect(client.calls, ['downloadScanImage:b1:s1:original']);
+    });
+
+    test('2. returns null (never throws) when the image is absent', () async {
+      client.imageToReturn = const CloudImageRead.absent();
+
+      final bytes = await service.loadScanImage('b1', 's1', rectified: true);
+
+      expect(bytes, isNull);
+      expect(client.calls, ['downloadScanImage:b1:s1:rectified']);
+    });
+
+    test('3. sanitizes a genuine download failure into GuidanceWebResultsException', () async {
+      client.imageToReturn = const CloudImageRead.failed(SyncOutcome.transient('network'));
+
+      expect(
+        () => service.loadScanImage('b1', 's1', rectified: false),
+        throwsA(isA<GuidanceWebResultsException>().having(
+          (e) => e.message,
+          'message',
+          isNot(contains('network')),
+        )),
+      );
+    });
+
+    test('4. performs no write operation', () async {
+      client.imageToReturn = CloudImageRead.found([9]);
+
+      await service.loadScanImage('b1', 's1', rectified: false);
+
+      expect(client.calls, ['downloadScanImage:b1:s1:original']);
     });
   });
 

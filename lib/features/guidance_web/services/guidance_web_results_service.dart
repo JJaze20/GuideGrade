@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../../../core/services/local_batch_repository.dart';
@@ -7,6 +9,7 @@ import '../../../core/sync/supabase_sync_client.dart';
 import '../../../core/sync/sync_client.dart';
 import '../../../core/sync/sync_outcome.dart';
 import '../../../core/sync/sync_queue.dart' show SyncState;
+import '../../../models/answer_key.dart';
 import '../../../models/local_batch.dart';
 
 /// Thrown by [GuidanceWebResultsService] on any read failure. Carries only
@@ -26,11 +29,14 @@ class GuidanceWebResultsException implements Exception {
 /// `BatchRepository.upsertBatchFromCloud`/`upsertScanFromCloud`, never
 /// seeds `SyncState`, and never writes anything to the mobile encrypted
 /// local store ([LocalBatchRepository]). It only calls [SyncClient]'s
-/// existing `readCloudBatches`/`readCloudScans` — the exact same methods
-/// [CloudRestoreService] itself uses — and returns plain, unpersisted,
-/// in-memory [LocalBatch]/[LocalScan] objects for this browser session to
-/// hold in widget state. Nothing here downloads a scan image; that stays
-/// deferred to a later phase.
+/// existing `readCloudBatches`/`readCloudScans`/`readAnswerKey`/
+/// `downloadScanImage` — the same read-only methods [CloudRestoreService]/
+/// the answer-key conflict flow already use — and returns plain,
+/// unpersisted, in-memory [LocalBatch]/[LocalScan]/[AnswerKey]/image-bytes
+/// objects for this browser session to hold in widget state. A downloaded
+/// scan image is never written anywhere — not encrypted to disk (no
+/// [BatchCryptoService]), not upserted into any repository — it exists only
+/// as bytes in memory for as long as the Detailed Result view holds them.
 ///
 /// Percentages are never recomputed here — [mapCloudScan] (the same pure
 /// function `CloudRestoreService` already uses) already reconstructs the
@@ -45,13 +51,16 @@ class GuidanceWebResultsService {
   /// Builds the real [SupabaseSyncClient]. [LocalBatchRepository] and
   /// [LocalStorageService] are constructed here ONLY because
   /// [SupabaseSyncClient]'s constructor requires them as fields — by
-  /// inspection, neither `readCloudBatches` nor `readCloudScans` (the only
-  /// two methods this service calls) ever reads them. Both constructors do
-  /// no I/O (confirmed against their own source: no `dart:io` /
-  /// `path_provider` / `flutter_secure_storage` call happens merely by
-  /// constructing them), and no method is ever invoked on either instance,
-  /// so this is safe on Web — it never touches a file, never mints/reads an
-  /// encryption key, and never creates a second local copy of cloud data.
+  /// inspection, none of the four methods this service calls
+  /// (`readCloudBatches`/`readCloudScans`/`readAnswerKey`/
+  /// `downloadScanImage`) ever reads them; `downloadScanImage` in
+  /// particular only touches `_client.storage`, never the injected
+  /// repository. Both constructors do no I/O (confirmed against their own
+  /// source: no `dart:io` / `path_provider` / `flutter_secure_storage` call
+  /// happens merely by constructing them), and no method is ever invoked on
+  /// either instance, so this is safe on Web — it never touches a file,
+  /// never mints/reads an encryption key, and never creates a second local
+  /// copy of cloud data.
   static SyncClient _buildDefaultClient() {
     return SupabaseSyncClient(
       batches: LocalBatchRepository(),
@@ -84,6 +93,57 @@ class GuidanceWebResultsService {
       throw GuidanceWebResultsException(_messageFor(read.error));
     }
     return read.scans.map(mapCloudScan).toList();
+  }
+
+  /// The current cloud answer key for [examCode] (Phase 3's Detailed Result
+  /// view), or `null` when none has been entered yet — a normal, expected
+  /// state ([CloudAnswerKeyRead.absent], not an error). Read-only: never
+  /// writes, never touches [SyncState] or the answer-key push/conflict
+  /// machinery. Throws [GuidanceWebResultsException] only on an actual read
+  /// failure, matching [loadBatches]/[loadScansForBatch].
+  Future<AnswerKey?> loadAnswerKey(String examCode) async {
+    final read = await _client.readAnswerKey(examCode);
+    if (read.error != null) {
+      throw GuidanceWebResultsException(_messageFor(read.error));
+    }
+    if (!read.exists) return null;
+    return AnswerKey(examCode: examCode, correctChoices: read.answers ?? const {});
+  }
+
+  /// One scan's image bytes straight from the private `scanned-sheets`
+  /// Storage bucket (Phase 3's Scanned Answer Sheet card), via the existing
+  /// [SyncClient.downloadScanImage] — the same platform-agnostic method
+  /// [CloudRestoreService] already uses, called here with no local write of
+  /// any kind: no [BatchRepository], no [BatchCryptoService], no encrypted
+  /// disk copy, no [SyncState]. Bytes are held only in the caller's memory.
+  ///
+  /// `null` means the image simply isn't there yet ([CloudImageRead.absent],
+  /// e.g. a rectified copy that was never produced, or an old scan with no
+  /// upload at all) — a normal, expected state, not an error. Throws
+  /// [GuidanceWebResultsException] only for a genuine retrieval failure
+  /// (network/permission/storage), sanitized the same way
+  /// [loadAnswerKey]/[loadBatches] already are.
+  ///
+  /// [batchId]/[scanId] are used to reconstruct the Storage key via the
+  /// existing [SupabaseSyncClient.originalImageKey]/`rectifiedImageKey`
+  /// (done inside [SyncClient.downloadScanImage] itself) — never
+  /// `LocalScan.imageFileName`/`rectifiedImageFileName`, which are a local
+  /// encrypted-file naming convention with no meaning in Supabase Storage.
+  Future<Uint8List?> loadScanImage(
+    String batchId,
+    String scanId, {
+    required bool rectified,
+  }) async {
+    final read = await _client.downloadScanImage(
+      batchId: batchId,
+      scanId: scanId,
+      rectified: rectified,
+    );
+    if (read.error != null) {
+      throw GuidanceWebResultsException(_messageFor(read.error));
+    }
+    final bytes = read.bytes;
+    return bytes == null ? null : Uint8List.fromList(bytes);
   }
 
   String _messageFor(SyncOutcome? outcome) {
