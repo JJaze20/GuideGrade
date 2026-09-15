@@ -64,6 +64,51 @@ void main() {
     });
   });
 
+  group('widgetOffsetToFraction', () {
+    test('is the exact inverse of fractionToWidgetOffset for an interior point', () {
+      const sourceSize = Size(2, 4);
+      const destSize = Size(8, 4);
+      const originalFraction = (fx: 0.3, fy: 0.7);
+      final widgetOffset = fractionToWidgetOffset(
+        fx: originalFraction.fx,
+        fy: originalFraction.fy,
+        sourceSize: sourceSize,
+        destSize: destSize,
+      );
+      final recovered = widgetOffsetToFraction(
+        position: widgetOffset,
+        sourceSize: sourceSize,
+        destSize: destSize,
+      );
+      expect(recovered.dx, closeTo(originalFraction.fx, 1e-9));
+      expect(recovered.dy, closeTo(originalFraction.fy, 1e-9));
+    });
+
+    test('clamps a tap position reported slightly outside the destination box', () {
+      // BoxFit.cover always fully covers the destination box, so an
+      // in-bounds tap can never itself land in a cropped-away margin --
+      // but a gesture position a pixel or two outside the box (edge
+      // rounding, or a drag that ends just past the boundary) must still
+      // clamp to a valid [0,1] fraction instead of going negative or >1.
+      final fraction = widgetOffsetToFraction(
+        position: const Offset(-5, -10),
+        sourceSize: const Size(2, 4),
+        destSize: const Size(8, 4),
+      );
+      expect(fraction.dx, 0.0);
+      expect(fraction.dy, 0.0);
+    });
+
+    test('degenerate zero-area source falls back to center instead of dividing by zero', () {
+      final fraction = widgetOffsetToFraction(
+        position: const Offset(4, 4),
+        sourceSize: Size.zero,
+        destSize: const Size(8, 4),
+      );
+      expect(fraction, const Offset(0.5, 0.5));
+    });
+  });
+
   group('searchedFrameSize', () {
     test('an unrotated search keeps the sensor-native (landscape) size as-is', () {
       const previewSize = Size(1920, 1080);

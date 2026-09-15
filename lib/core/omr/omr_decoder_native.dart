@@ -7,6 +7,7 @@ import 'package:opencv_dart/opencv_dart.dart' as cv;
 import '../../models/omr_scan_result.dart';
 import 'fiducial_search_tuning.dart';
 import 'omr_alignment_check.dart';
+import 'omr_mesh_correction.dart';
 import 'omr_templates.dart';
 
 /// Template-centered search box, fallback quadrant, and scoring anchor.
@@ -431,7 +432,7 @@ class OmrDecoder {
   /// path (this runs on every `locateCorners`/`decode` call, not just the
   /// live preview). Flip back to `true` only if fiducial detection needs
   /// this level of diagnosis again.
-  static const bool _kFiducialDebug = false;
+  static const bool _kFiducialDebug = true;
 
   /// TEMPORARY. Synchronous stdout (not debugPrint, whose throttle can drop
   /// the tail when the decode isolate tears down) — every line reaches
@@ -642,6 +643,65 @@ class OmrDecoder {
           ? cv.IMREAD_COLOR | cv.IMREAD_IGNORE_ORIENTATION
           : cv.IMREAD_COLOR,
     );
+  }
+
+  /// Physically rotates a freshly captured photo to upright, in place on
+  /// disk, using the device's ACTUAL orientation at the moment the shutter
+  /// fired (`quarterTurnsClockwise` — see `ExamScanningScreen._capture`'s
+  /// call site, which derives this from `CameraController.value.
+  /// deviceOrientation`, the exact same signal the `camera` plugin itself
+  /// uses to keep the live preview upright) rather than guessing the
+  /// rotation from pixel content.
+  ///
+  /// Exists specifically for landscape-page templates (TAT), where
+  /// [_orientAndFindCorners]'s own content-based rotation search
+  /// (identity/90°CW/90°CCW/180°, picking whichever lets it find 4
+  /// corners) is fundamentally unable to always pick correctly: a printed
+  /// corner square looks identical under any 90° rotation, so more than
+  /// one candidate rotation can "succeed" at finding 4 square-shaped
+  /// blobs — it's the same 4 physical squares either way, just mislabeled.
+  /// Confirmed on a real device (2026-09-14): a capture whose rectified
+  /// output came out with the sheet's content rotated 90° despite the
+  /// file itself being correctly landscape-shaped (the output size is
+  /// always [OmrExamTemplate.pageWidthPt]/[pageHeightPt]-derived,
+  /// independent of which rotation was used internally — so a
+  /// correctly-sized-but-wrongly-rotated result is possible and is
+  /// exactly what this fixes).
+  ///
+  /// Called once, immediately after `takePicture()`, before anything else
+  /// (the post-capture alignment check, `decode`, `rectifyForOverlay`,
+  /// etc.) ever reads the file — so every later stage just sees an
+  /// already-upright photo and needs no special handling. Loads ignoring
+  /// EXIF (see [_imreadForTemplate]'s doc comment for why that matters for
+  /// a landscape template specifically) so this is the one and only
+  /// rotation ever applied. A no-op when [quarterTurnsClockwise] is a
+  /// multiple of 4 (already upright) — including when it's 0, the common
+  /// case for every non-landscape template, which never calls this at all.
+  void normalizeCaptureOrientation(String imagePath, int quarterTurnsClockwise) {
+    final turns = quarterTurnsClockwise % 4;
+    if (turns == 0) return;
+    final src = cv.imread(
+      imagePath,
+      flags: cv.IMREAD_COLOR | cv.IMREAD_IGNORE_ORIENTATION,
+    );
+    try {
+      if (src.isEmpty) return;
+      final rotated = cv.rotate(
+        src,
+        switch (turns) {
+          1 => cv.ROTATE_90_CLOCKWISE,
+          2 => cv.ROTATE_180,
+          _ => cv.ROTATE_90_COUNTERCLOCKWISE,
+        },
+      );
+      try {
+        cv.imwrite(imagePath, rotated);
+      } finally {
+        rotated.dispose();
+      }
+    } finally {
+      src.dispose();
+    }
   }
 
   /// Authoritative post-capture gate, run right after a photo is captured
@@ -1006,6 +1066,79 @@ class OmrDecoder {
         : stage1Result;
   }
 
+  /// Sanity-checks that 3 candidate corner points ([pts], in the same
+  /// order as their template marker indices [idx]) form a triangle whose
+  /// own proportions are at least roughly consistent with what the
+  /// template says the real, physical spacing between those same 3
+  /// markers should be.
+  ///
+  /// Confirmed on a real device (2026-09-14) that this was a real,
+  /// unguarded gap: [_crossCheckCornersByGeometry] validates a 4th,
+  /// separately-missing corner against whichever 3 corners were already
+  /// "usable", but never validated those 3 against EACH OTHER — a stray
+  /// dark blob deep inside the answer grid (roughly 2/3 of the way down
+  /// an AT sheet, mistaken for the bottom-left corner, whose real mark
+  /// sits at the very bottom edge) sailed straight through as a trusted
+  /// seed point purely because it was one of only 3 corners with any
+  /// detection at all, and produced a nonsensical warp that still
+  /// scored.
+  ///
+  /// Compares PAIRWISE DISTANCE RATIOS (not absolute distances, which a
+  /// photo's own scale/distance makes meaningless) between the 3 points,
+  /// in pixel space, against the same ratios computed from the template's
+  /// own page-fraction positions converted to real page-point distances.
+  /// Ratios stay roughly stable under the moderate perspective distortion
+  /// a realistic, roughly fronto-parallel handheld photo introduces, so a
+  /// wildly inconsistent ratio is real evidence one of the 3 points is
+  /// wrong — not merely photo distortion. The tolerance (any ratio within
+  /// half to double of its expected value) is deliberately generous:
+  /// this only needs to catch a GROSS mislocation like the one confirmed
+  /// above, never to fine-tune precision — that remains the job of the
+  /// stricter post-warp reprojection check ([_classifyWarpVerification])
+  /// once a homography actually exists to measure.
+  bool _cornerTriplePlausible(
+    List<int> idx,
+    List<cv.Point2f> pts,
+    OmrExamTemplate template,
+  ) {
+    double templateDist(int a, int b) {
+      final ma = template.cornerMarkers[a];
+      final mb = template.cornerMarkers[b];
+      final dx = (ma.xFrac - mb.xFrac) * template.pageWidthPt;
+      final dy = (ma.yFrac - mb.yFrac) * template.pageHeightPt;
+      return math.sqrt(dx * dx + dy * dy);
+    }
+
+    double pixelDist(cv.Point2f a, cv.Point2f b) {
+      final dx = a.x - b.x;
+      final dy = a.y - b.y;
+      return math.sqrt(dx * dx + dy * dy);
+    }
+
+    final tDist = [
+      templateDist(idx[0], idx[1]),
+      templateDist(idx[1], idx[2]),
+      templateDist(idx[0], idx[2]),
+    ];
+    final pDist = [
+      pixelDist(pts[0], pts[1]),
+      pixelDist(pts[1], pts[2]),
+      pixelDist(pts[0], pts[2]),
+    ];
+    for (var i = 0; i < 3; i++) {
+      for (var j = i + 1; j < 3; j++) {
+        if (tDist[i] <= 0 || tDist[j] <= 0 || pDist[i] <= 0 || pDist[j] <= 0) {
+          continue;
+        }
+        final expectedRatio = tDist[i] / tDist[j];
+        final actualRatio = pDist[i] / pDist[j];
+        final relError = (actualRatio / expectedRatio - 1).abs();
+        if (relError > 1.0) return false;
+      }
+    }
+    return true;
+  }
+
   /// Cross-checks each corner's position against the affine geometry
   /// implied by (up to) 3 of the OTHER corners already found, then, where
   /// possible, downgrades, promotes, or rescues using that same geometry:
@@ -1040,6 +1173,10 @@ class OmrDecoder {
   /// extracted. Mutates [points]/[results] in place. Returns a short
   /// user-facing note when a corner was rescued or promoted this way (or
   /// null).
+  ///
+  /// [_cornerTriplePlausible] is the mutual-consistency gate this method
+  /// applies to its own 3-point seed before trusting it — see that
+  /// method's doc comment for the concrete failure it was built to catch.
   String? _crossCheckCornersByGeometry(
     List<cv.Point2f?> points,
     List<_MarkerSearchResult> results,
@@ -1066,6 +1203,21 @@ class OmrDecoder {
     final threeIdx = usableIdx.take(3).toList();
     final threePts = [for (final i in threeIdx) points[i]!];
     if (_nearCollinear(threePts)) return null;
+    // Confirmed on a real device (2026-09-14): with exactly 3 corners
+    // "usable" (not 4 confidently found), the 3 were blindly trusted as
+    // ground truth for seeding the affine below -- nothing ever
+    // cross-checked them against EACH OTHER, only a 4th, separately
+    // missing corner ever got checked against them (see 4a below). A
+    // stray dark blob deep inside the answer grid (mistaken for the
+    // bottom-left corner, ~2/3 of the way down the page instead of at the
+    // bottom edge) sailed straight through as a trusted seed point this
+    // way and produced a nonsensical warp that still got accepted. Reject
+    // the whole triple up front if its own proportions are wildly
+    // inconsistent with what the template says these 3 markers' real
+    // spacing should be -- this can only make the 4th corner (if missing)
+    // stay missing (an honest "not fully detected" retake) instead of
+    // silently building a homography from a corner that was never real.
+    if (!_cornerTriplePlausible(threeIdx, threePts, template)) return null;
 
     final threeFracs = [
       for (final i in threeIdx)
@@ -1410,6 +1562,59 @@ class OmrDecoder {
                 throw StateError(warpVerdict.message!);
               }
 
+              // Local mesh correction: only meaningful for a template that
+              // prints the extra interior fiducials (see
+              // [OmrExamTemplate.interiorFiducials]) — a no-op (empty map,
+              // [OmrMeshCorrection.build] returns
+              // [OmrMeshVerdict.notApplicable]) for every legacy sheet and
+              // TAT, so this changes nothing for them. The 4 corners are
+              // passed as their own canonical position (not
+              // `refine.corners`, which are pre-warp/original-photo
+              // coordinates) — they're exactly where the homography just
+              // put them by construction; see [OmrMeshCorrection]'s doc
+              // comment for why only the 5 interior points can show a real
+              // measured residual.
+              final meshSw = _kPerfDebug ? (Stopwatch()..start()) : null;
+              final interiorMeasured = _detectInteriorFiducials(
+                warped,
+                template,
+                canonicalWidth,
+                canonicalHeight,
+              );
+              final mesh = OmrMeshCorrection.build(
+                template: template,
+                canonicalWidth: canonicalWidth,
+                canonicalHeight: canonicalHeight,
+                cornersMeasuredPx: [
+                  for (final c in template.cornerMarkers)
+                    (c.xFrac * canonicalWidth, c.yFrac * canonicalHeight),
+                ],
+                interiorMeasuredPx: interiorMeasured,
+              );
+              final decodeMeshMs = meshSw?.elapsedMilliseconds ?? 0;
+              if (_kFiducialDebug) {
+                for (final d in mesh.diagnostics) {
+                  _fidLog('mesh $d');
+                }
+              }
+              // Positive, measured evidence of a problem (either the
+              // interior marks agree with each other on being far from
+              // where they should be, or they disagree with each other in
+              // a way consistent with a mismatched outer corner) rejects
+              // the capture outright, with a reason naming which failure
+              // it is — distinct from [OmrMeshVerdict.inconclusive] (marks
+              // simply weren't visible), which never rejects by itself; see
+              // [OmrMeshCorrection.shouldRejectCapture]'s doc comment. This
+              // is independent of [warpVerdict] above: a capture can pass
+              // the 4-corner reprojection check (the corners *individually*
+              // land close enough to their targets) while the interior
+              // marks still reveal the chosen correspondence itself is
+              // wrong — that's exactly the failure mode this second,
+              // independent check exists to catch.
+              if (mesh.shouldRejectCapture) {
+                throw StateError(mesh.rejectionReason!);
+              }
+
               // Illumination normalization runs first, on the raw warp:
               // divide out a large-scale estimate of the lighting/shadow
               // field so a strong cast shadow or an uneven LED wash reaches
@@ -1528,6 +1733,7 @@ class OmrDecoder {
                           template,
                           canonicalWidth,
                           canonicalHeight,
+                          mesh,
                         );
                         if (bubbleSw != null) {
                           decodeBubbleReadMs = bubbleSw.elapsedMilliseconds;
@@ -1535,13 +1741,21 @@ class OmrDecoder {
                         if (decodeTotalSw != null) {
                           _perfLog(
                             'decode cornerSearch=${decodeCornerSearchMs}ms warp=${decodeWarpMs}ms '
-                            'warpVerify=${decodeWarpVerifyMs}ms illum=${decodeIllumMs}ms '
+                            'warpVerify=${decodeWarpVerifyMs}ms mesh=${decodeMeshMs}ms(${mesh.verdict.name}) '
+                            'illum=${decodeIllumMs}ms '
                             'bilateral=${decodeBilateralMs}ms clahe=${decodeClaheMs}ms '
                             'threshold=${decodeThresholdMs}ms bubbleRead=${decodeBubbleReadMs}ms '
                             'total=${decodeTotalSw.elapsedMilliseconds}ms',
                           );
                         }
-                        return result;
+                        return OmrScanResult(
+                          examCode: result.examCode,
+                          items: result.items,
+                          templateVersion: template.templateVersion,
+                          meshInteriorMeasuredFrac: mesh.verdict == OmrMeshVerdict.notApplicable
+                              ? null
+                              : mesh.toMeasuredFractions(canonicalWidth, canonicalHeight),
+                        );
                       } finally {
                         inkMap.dispose();
                       }
@@ -1731,12 +1945,57 @@ class OmrDecoder {
             try {
               final warped = cv.warpPerspective(orientedSrc, transform, (canonicalWidth, canonicalHeight));
               try {
+                // Independent re-detection at THIS method's own (much
+                // higher, [_ocrCanonicalPxPerPt]) resolution — same
+                // isolation reasoning as the rest of this method (see its
+                // own doc comment): never reuses decode()'s mesh, only the
+                // fractional template geometry both are built from. A no-op
+                // for a template with no interior fiducials.
+                final warpedGrayForMesh = cv.cvtColor(warped, cv.COLOR_BGR2GRAY);
+                final OmrMeshCorrection mesh;
+                try {
+                  final interiorMeasured = _detectInteriorFiducials(
+                    warpedGrayForMesh,
+                    template,
+                    canonicalWidth,
+                    canonicalHeight,
+                  );
+                  mesh = OmrMeshCorrection.build(
+                    template: template,
+                    canonicalWidth: canonicalWidth,
+                    canonicalHeight: canonicalHeight,
+                    cornersMeasuredPx: [
+                      for (final c in template.cornerMarkers)
+                        (c.xFrac * canonicalWidth, c.yFrac * canonicalHeight),
+                    ],
+                    interiorMeasuredPx: interiorMeasured,
+                  );
+                } finally {
+                  warpedGrayForMesh.dispose();
+                }
                 void writeField(OmrFieldRect field, String outPath) {
+                  // Mesh-correct all 4 corners of the field rect (not just
+                  // its center) and take their bounding box — a locally
+                  // bent capture can skew the rect into a non-axis-aligned
+                  // quad, and the crop must stay a rectangle; the bounding
+                  // box only ever grows the crop slightly, never loses
+                  // handwriting at an edge. A no-op whenever
+                  // `mesh.isActive` is false.
+                  final x0 = field.xFrac * canonicalWidth;
+                  final y0 = field.yFrac * canonicalHeight;
+                  final x1 = (field.xFrac + field.widthFrac) * canonicalWidth;
+                  final y1 = (field.yFrac + field.heightFrac) * canonicalHeight;
+                  final corrected = [
+                    mesh.correct(x0, y0),
+                    mesh.correct(x1, y0),
+                    mesh.correct(x0, y1),
+                    mesh.correct(x1, y1),
+                  ];
                   final rect = _clampedRect(
-                    field.xFrac * canonicalWidth,
-                    field.yFrac * canonicalHeight,
-                    (field.xFrac + field.widthFrac) * canonicalWidth,
-                    (field.yFrac + field.heightFrac) * canonicalHeight,
+                    corrected.map((p) => p.$1).reduce(math.min),
+                    corrected.map((p) => p.$2).reduce(math.min),
+                    corrected.map((p) => p.$1).reduce(math.max),
+                    corrected.map((p) => p.$2).reduce(math.max),
                     canonicalWidth,
                     canonicalHeight,
                   );
@@ -2416,14 +2675,42 @@ class OmrDecoder {
     );
   }
 
+  /// Finds the sheet's 4 corners for a real captured photo, at whatever
+  /// resolution the camera produced.
+  ///
+  /// For any capture whose long side exceeds [_liveCheckMaxDimension],
+  /// this searches a downscaled copy FIRST — matching the exact scale the
+  /// live preview already judged the sheet at — then refines each found
+  /// corner's position with one small, full-resolution search around it.
+  /// This split matters because [_findMarkerInRegion]'s blur/dilate
+  /// kernels are fixed *absolute* pixel sizes (3x3): the same printed
+  /// marker can score meaningfully differently at full capture resolution
+  /// than it did in a downscaled live preview that just approved it as
+  /// confident, since the kernel's smoothing effect relative to the
+  /// marker's own on-screen size changes with resolution. Searching at
+  /// the live preview's own scale keeps classification (which tier a
+  /// corner gets) consistent with what the user already saw go green;
+  /// the full-resolution refinement afterward keeps the actual centroid
+  /// sharp enough for an accurate warp, rather than trading all precision
+  /// away for that consistency.
+  ///
+  /// Previously this downscale-then-match-scale step only ran for QTM
+  /// (`template.examCode == 'QTM'`) — confirmed by direct code review, not
+  /// assumed, and confirmed on a real device (2026-09-14) that AT hit the
+  /// identical mismatch this was built to prevent: all 4 live corners
+  /// green, the saved capture still rejected as "Page not fully
+  /// detected", because the full-resolution search the capture-time gate
+  /// ran was judging the same marks by different shape metrics than the
+  /// downscaled live search that had just approved them. There was
+  /// nothing QTM-specific about the underlying cause, so this now applies
+  /// uniformly to every exam whose capture resolution exceeds the live
+  /// preview's own scale.
   _RefineResult _findCaptureCorners(cv.Mat gray, OmrExamTemplate template) {
     final longSide = math.max(gray.width, gray.height);
-    if (template.examCode != 'QTM' || longSide <= _liveCheckMaxDimension) {
+    if (longSide <= _liveCheckMaxDimension) {
       return _refineCorners(gray, template);
     }
 
-    // Match QTM's preview scale: fixed blur/threshold kernels otherwise see
-    // different marker shapes in high-resolution captures. Warp the original.
     final scale = _liveCheckMaxDimension / longSide;
     final small = cv.resize(
       gray,
@@ -2441,8 +2728,34 @@ class OmrDecoder {
         r.x * sx, r.y * sy, (r.x + r.width) * sx,
         (r.y + r.height) * sy, gray.width, gray.height,
       );
+
+      // Full-resolution refinement: re-search a small box around each
+      // rescaled centroid using the ORIGINAL pixels, for a sharper final
+      // position. Only adopted when it's clearly the same blob (within
+      // half the search box) and still real marker evidence -- this can
+      // only sharpen WHERE a corner sits, never change WHICH tier
+      // [_refineCorners] already decided for it at the consistent,
+      // downscaled resolution.
+      final refinedCorners = <cv.Point2f>[];
+      for (var i = 0; i < result.corners.length; i++) {
+        final p = result.corners[i];
+        final rx = x(p.x.toDouble());
+        final ry = y(p.y.toDouble());
+        final pad = math.max(16.0, math.min(sx, sy) * 6);
+        final box = _clampedRect(
+          rx - pad, ry - pad, rx + pad, ry + pad, gray.width, gray.height,
+        );
+        final refined = _findMarkerInRegion(gray, box, rx, ry);
+        final rc = refined.centroid;
+        final sameBlob = rc != null &&
+            refined.confidence != CornerConfidence.none &&
+            (rc.x - rx).abs() <= pad / 2 &&
+            (rc.y - ry).abs() <= pad / 2;
+        refinedCorners.add(sameBlob ? rc : cv.Point2f(rx, ry));
+      }
+
       return _RefineResult(
-        corners: [for (final p in result.corners) cv.Point2f(x(p.x), y(p.y))],
+        corners: refinedCorners,
         confidence: result.confidence,
         verdict: result.verdict,
         stage1Regions: [for (final r in result.stage1Regions) rect(r)],
@@ -2645,27 +2958,110 @@ class OmrDecoder {
     );
   }
 
-  /// Turns a [_WarpVerification] into a pass/warn/reject verdict, naming
-  /// the worst-offending corner in [message].
+  /// Search half-extent (canonical px) for one interior fiducial, scaled
+  /// off its own printed half-size rather than reusing the 4 main
+  /// corners' fixed [_postWarpSearchHalfExtentPx] — a redesigned sheet's
+  /// interior marks are noticeably smaller (see
+  /// [OmrFiducial.halfSizePt]/`kAtCenterMarkerHalf`) and sit inside dense
+  /// bubble-grid content, so a search box sized off the *corner* marker
+  /// would both waste search area and raise the odds of latching onto a
+  /// nearby bubble/text glyph instead of the intended smaller square.
+  /// Still comfortably larger than the mark itself, matching the same
+  /// generous-relative-to-marker-size margin [_postWarpSearchHalfExtentPx]
+  /// already gives the (larger) corner markers.
+  static double _interiorSearchHalfExtentPx(double halfSizePt) =>
+      math.max(14.0, halfSizePt * _canonicalPxPerPt * 2.5);
+
+  /// Independently re-detects every one of [template]'s
+  /// [OmrExamTemplate.interiorFiducials] directly on the already
+  /// (4-corner-)warped [warpedGray] — the exact same "search a box around
+  /// the known canonical position" technique [_verifyWarpedCorners] uses
+  /// for the 4 main corners, just against each interior mark's own
+  /// (smaller) expected size. A mark that isn't confidently found here
+  /// simply has no entry in the result map — [OmrMeshCorrection.build]
+  /// treats a missing entry as "no local evidence at that point," never as
+  /// a hard failure (see its own doc comment on [OmrMeshVerdict]).
+  /// No-op (returns an empty map immediately) for a template with no
+  /// interior fiducials, so this costs nothing for legacy sheets/TAT.
+  Map<OmrFiducialRole, (double, double)> _detectInteriorFiducials(
+    cv.Mat warpedGray,
+    OmrExamTemplate template,
+    int canonicalWidth,
+    int canonicalHeight,
+  ) {
+    if (template.interiorFiducials.isEmpty) return const {};
+    final found = <OmrFiducialRole, (double, double)>{};
+    cv.Mat? normalizedGray;
+    try {
+      for (final fiducial in template.interiorFiducials) {
+        final ex = fiducial.xFrac * canonicalWidth;
+        final ey = fiducial.yFrac * canonicalHeight;
+        final halfExtent = _interiorSearchHalfExtentPx(fiducial.halfSizePt);
+        final box = _clampedRect(
+          ex - halfExtent,
+          ey - halfExtent,
+          ex + halfExtent,
+          ey + halfExtent,
+          canonicalWidth,
+          canonicalHeight,
+        );
+        var r = _findMarkerInRegion(warpedGray, box, ex, ey);
+        if (r.centroid == null) {
+          normalizedGray ??= _normalizeIllumination(warpedGray);
+          if (!identical(normalizedGray, warpedGray)) {
+            r = _findMarkerInRegion(normalizedGray, box, ex, ey);
+          }
+        }
+        final c = r.centroid;
+        if (c != null && r.confidence != CornerConfidence.none) {
+          found[fiducial.role] = (c.x, c.y);
+        }
+      }
+    } finally {
+      if (normalizedGray != null && !identical(normalizedGray, warpedGray)) {
+        normalizedGray.dispose();
+      }
+    }
+    return found;
+  }
+
+  /// Turns a [_WarpVerification] into a pass/warn/reject verdict, checking
+  /// every corner independently rather than only the single worst one —
+  /// confirmed by direct code review that the previous version could let
+  /// one corner's real, measured misalignment slide through unexamined
+  /// whenever a DIFFERENT corner happened to have the single largest
+  /// error and was confident pre-warp: the whole check only ever looked
+  /// at `errorPx.reduce(max)`, so a second corner sitting just under that
+  /// max but still well past [_warpRejectPx] was never even considered.
   ///
-  /// [preWarpConfidence] (the same corner's confidence from *before* the
-  /// warp — [_RefineResult.confidence]) is what decides whether a bad
-  /// post-warp reading blocks the capture:
-  ///  * a corner that was [CornerConfidence.confident] pre-warp but merely
-  ///    hard to re-detect post-warp (shadow, glare, a steep angle) never
-  ///    blocks — per explicit product direction, a real mark that was
-  ///    genuinely found shouldn't be second-guessed just because a second,
-  ///    independent look at it came back inconclusive (see
-  ///    [_validateQuad]'s doc comment for the same reasoning pre-warp).
-  ///  * a corner that *wasn't* confidently found pre-warp (low-confidence,
-  ///    or recovered by the geometry-assisted rescue) failing post-warp
-  ///    re-detection too is a genuine double failure, not an occlusion
-  ///    artifact — confirmed on-device: a rescued TAT corner that had
-  ///    actually locked onto a false feature (a cluster of filled bubbles,
-  ///    not the real mark) produced exactly this pattern and warped the
-  ///    whole sheet unusably, with nothing catching it once this check was
-  ///    made unconditionally non-blocking. This is the one case that still
-  ///    rejects.
+  /// Also distinguishes two different kinds of "bad" post-warp reading,
+  /// which are not the same evidence:
+  ///  * **inconclusive** — nothing was found at all in the post-warp
+  ///    search box ([_WarpVerification.redetected] is null there;
+  ///    `errorPx` is infinite). This proves nothing by itself (shadow,
+  ///    glare, a steep angle can all hide a real mark that's still
+  ///    exactly where it should be) — [preWarpConfidence] (the same
+  ///    corner's confidence from *before* the warp) is what decides
+  ///    whether this blocks: a corner that was [CornerConfidence.confident]
+  ///    pre-warp but merely hard to re-detect post-warp never blocks, per
+  ///    explicit product direction (see [_validateQuad]'s doc comment for
+  ///    the same reasoning pre-warp) — a real mark that was genuinely
+  ///    found shouldn't be second-guessed just because a second,
+  ///    independent look came back inconclusive. A corner that *wasn't*
+  ///    confidently found pre-warp too is a genuine double failure, not
+  ///    an occlusion artifact — confirmed on-device: a rescued TAT corner
+  ///    that had actually locked onto a false feature (a cluster of
+  ///    filled bubbles, not the real mark) produced exactly this pattern
+  ///    and warped the whole sheet unusably, with nothing catching it
+  ///    once this check was made unconditionally non-blocking.
+  ///  * **measured** — a real candidate WAS found post-warp, just too far
+  ///    (>[_warpRejectPx]) from where the homography says it must land.
+  ///    This is positive, direct evidence the correction is wrong, not an
+  ///    absence of evidence — it blocks regardless of how confidently
+  ///    that same corner was found pre-warp, since pre-warp confidence
+  ///    only ever spoke to whether a real square was *there*, never to
+  ///    whether the *homography derived from all 4 corners together*
+  ///    actually maps it correctly.
   ({bool ok, bool degraded, String? message, double maxErrorPx, int worstIdx})
       _classifyWarpVerification(
     _WarpVerification v,
@@ -2676,39 +3072,51 @@ class OmrDecoder {
     for (var i = 1; i < v.errorPx.length; i++) {
       if (v.errorPx[i] > v.errorPx[worstIdx]) worstIdx = i;
     }
-    final maxErr = v.errorPx[worstIdx];
-    if (maxErr > _warpRejectPx) {
-      final worstWasConfidentPreWarp =
-          preWarpConfidence[worstIdx] == CornerConfidence.confident;
-      if (!worstWasConfidentPreWarp) {
-        return (
-          ok: false,
-          degraded: false,
-          maxErrorPx: maxErr,
-          worstIdx: worstIdx,
-          message: !maxErr.isFinite
-              ? 'The ${labels[worstIdx]} corner mark was not confidently found, and straightening the photo could not confirm it either. Retake with that corner clearly visible.'
-              : 'The ${labels[worstIdx]} corner mark was not confidently found, and does not land where it should after straightening the photo. Retake with that corner clearly visible.',
-        );
+
+    int? rejectIdx;
+    var rejectIsMeasured = false;
+    var anyDegraded = false;
+    for (var i = 0; i < v.errorPx.length; i++) {
+      final err = v.errorPx[i];
+      if (err <= _warpWarnPx) continue;
+      anyDegraded = true;
+      if (err <= _warpRejectPx) continue;
+      final measured = v.redetected[i] != null;
+      final confidentPreWarp = preWarpConfidence[i] == CornerConfidence.confident;
+      // A measured mismatch blocks outright; an inconclusive one only
+      // blocks when this corner wasn't already confidently found pre-warp
+      // (see this method's own doc comment for why those are different).
+      final blocks = measured || !confidentPreWarp;
+      if (blocks && (rejectIdx == null || err > v.errorPx[rejectIdx])) {
+        rejectIdx = i;
+        rejectIsMeasured = measured;
       }
+    }
+
+    if (rejectIdx != null) {
+      final i = rejectIdx;
+      final err = v.errorPx[i];
       return (
-        ok: true,
-        degraded: true,
-        maxErrorPx: maxErr,
-        worstIdx: worstIdx,
-        message: !maxErr.isFinite
-            ? 'Perspective correction could not be double-checked at the ${labels[worstIdx]} corner (shadow/glare on the warped image) — proceeding anyway since it was confidently found on the original photo.'
-            : 'Perspective correction is only approximate for this photo (${maxErr.toStringAsFixed(0)}px off at ${labels[worstIdx]}) — retake for best accuracy if possible.',
+        ok: false,
+        degraded: false,
+        maxErrorPx: err,
+        worstIdx: i,
+        message: rejectIsMeasured
+            ? 'The ${labels[i]} corner does not land where it should after straightening the photo (${err.toStringAsFixed(0)}px off) — the perspective correction for this photo is not trustworthy. Retake with the sheet flatter and the camera steadier.'
+            : 'The ${labels[i]} corner mark was not confidently found, and straightening the photo could not confirm it either. Retake with that corner clearly visible.',
       );
     }
-    if (maxErr > _warpWarnPx) {
+
+    final maxErr = v.errorPx[worstIdx];
+    if (anyDegraded) {
       return (
         ok: true,
         degraded: true,
         maxErrorPx: maxErr,
         worstIdx: worstIdx,
-        message:
-            'Perspective correction is only approximate for this photo (${maxErr.toStringAsFixed(0)}px off at ${labels[worstIdx]}) — retake for best accuracy if possible.',
+        message: maxErr.isFinite
+            ? 'Perspective correction is only approximate for this photo (${maxErr.toStringAsFixed(0)}px off at ${labels[worstIdx]}) — retake for best accuracy if possible.'
+            : 'Perspective correction could not be double-checked at the ${labels[worstIdx]} corner (shadow/glare on the warped image) — proceeding anyway since it was confidently found on the original photo.',
       );
     }
     return (
@@ -3471,6 +3879,7 @@ class OmrDecoder {
     OmrExamTemplate template,
     int canonicalWidth,
     int canonicalHeight,
+    OmrMeshCorrection mesh,
   ) {
     // Sample the printed X/Y radii independently to match oval bubbles.
     final bubbleSampleHalfPxX = template.bubbleRadiusPt * _canonicalPxPerPt;
@@ -3495,6 +3904,7 @@ class OmrDecoder {
           canonicalHeight,
           0,
           0,
+          mesh,
         );
         var hasSomething = measured.bestFill >= _blankFillFloor &&
             (measured.bestFill - measured.floorReference) >= _markPresenceGap;
@@ -3519,6 +3929,7 @@ class OmrDecoder {
                 canonicalHeight,
                 dxFrac * bubbleSampleHalfPxX,
                 dyFrac * bubbleSampleHalfPxY,
+                mesh,
               );
               final candidateMargin = candidate.bestFill - candidate.runnerUpFill;
               final currentMargin = measured.bestFill - measured.runnerUpFill;
@@ -3605,6 +4016,7 @@ class OmrDecoder {
     int canonicalHeight,
     double shiftXPx,
     double shiftYPx,
+    OmrMeshCorrection mesh,
   ) {
     final measurements = [
       for (final bubble in choices)
@@ -3617,6 +4029,7 @@ class OmrDecoder {
             halfPxY,
             canonicalWidth,
             canonicalHeight,
+            mesh,
             shiftXPx: shiftXPx,
             shiftYPx: shiftYPx,
           ),
@@ -3649,12 +4062,20 @@ class OmrDecoder {
     double halfPxX,
     double halfPxY,
     int canonicalWidth,
-    int canonicalHeight, {
+    int canonicalHeight,
+    OmrMeshCorrection mesh, {
     double shiftXPx = 0,
     double shiftYPx = 0,
   }) {
-    final cx = bubble.xFrac * canonicalWidth + shiftXPx;
-    final cy = bubble.yFrac * canonicalHeight + shiftYPx;
+    // Mesh-correct the bubble's own canonical position first (a no-op
+    // whenever `mesh.isActive` is false — see [OmrMeshCorrection.correct])
+    // — the ambiguous-item recenter search's shift is then applied
+    // relative to that corrected point, not the naive one, so a locally
+    // bent bubble's recenter search still starts from where the bubble
+    // actually is.
+    final (correctedX, correctedY) = mesh.correct(bubble.xFrac * canonicalWidth, bubble.yFrac * canonicalHeight);
+    final cx = correctedX + shiftXPx;
+    final cy = correctedY + shiftYPx;
     final outerFill = _squareFillFraction(
       inkMap,
       cx,

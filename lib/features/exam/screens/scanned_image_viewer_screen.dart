@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
+import '../../../core/omr/omr_mesh_correction.dart';
 import '../../../core/omr/omr_scorer.dart';
 import '../../../core/omr/omr_templates.dart';
 
@@ -41,6 +42,18 @@ class ScannedImageViewerScreen extends StatelessWidget {
   final Uint8List? rectifiedImageBytes;
   final OmrExamTemplate? template;
 
+  /// Which [OmrExamTemplate.templateVersion] this scan was actually
+  /// decoded against, and the interior-fiducial mesh-correction readings
+  /// from that same decode — see [ScoredResult.templateVersion]/
+  /// [ScoredResult.meshInteriorMeasuredFrac]. When [scanTemplateVersion]
+  /// doesn't match [template]'s own current version, the overlay skips
+  /// the mesh correction rather than applying stale-geometry readings
+  /// against a sheet layout that has since changed (see [_hasOverlay]'s
+  /// doc comment) — the plain rectified image with no overlay is shown
+  /// instead of a possibly-misplaced one.
+  final String? scanTemplateVersion;
+  final Map<String, (double, double)>? meshInteriorMeasuredFrac;
+
   const ScannedImageViewerScreen({
     super.key,
     this.imagePath,
@@ -50,14 +63,27 @@ class ScannedImageViewerScreen extends StatelessWidget {
     this.rectifiedImagePath,
     this.rectifiedImageBytes,
     this.template,
+    this.scanTemplateVersion,
+    this.meshInteriorMeasuredFrac,
   }) : assert(
           imagePath != null || imageBytes != null,
           'ScannedImageViewerScreen needs either imagePath or imageBytes.',
         );
 
+  /// True only when the scan's own recorded template version still
+  /// matches [template]'s current one (or the scan predates version
+  /// tracking, in which case there's nothing to compare against) — see
+  /// [scanTemplateVersion]'s doc comment. A stale scan still gets its
+  /// plain rectified image; it just skips the overlay/mesh correction
+  /// rather than risk drawing it with coordinates from a sheet layout
+  /// that has since changed underneath it.
+  bool get _templateStillMatches =>
+      scanTemplateVersion == null || template == null || scanTemplateVersion == template!.templateVersion;
+
   bool get _hasOverlay =>
       (rectifiedImagePath != null || rectifiedImageBytes != null) &&
       template != null &&
+      _templateStillMatches &&
       scoredItems.any((i) => i.correctChoice != null);
 
   Widget _mainImage() => imageBytes != null ? Image.memory(imageBytes!) : Image.file(File(imagePath!));
@@ -110,6 +136,7 @@ class ScannedImageViewerScreen extends StatelessWidget {
                                 painter: _GradedOverlayPainter(
                                   items: scoredItems,
                                   template: template!,
+                                  meshInteriorMeasuredFrac: meshInteriorMeasuredFrac,
                                 ),
                               ),
                             ),
@@ -187,7 +214,21 @@ class _GradedOverlayPainter extends CustomPainter {
   final List<ScoredItem> items;
   final OmrExamTemplate template;
 
-  const _GradedOverlayPainter({required this.items, required this.template});
+  /// See [ScannedImageViewerScreen.meshInteriorMeasuredFrac] — the exact
+  /// same interior-fiducial readings [OmrDecoder.decode] used to sample
+  /// bubbles for [items], so this overlay places its rings using the
+  /// identical geometric mapping scoring did, rather than assuming the
+  /// displayed rectified image is an undistorted 1:1 map of template
+  /// fractions (see [OmrMeshCorrection]'s doc comment on why a bent
+  /// capture's rectified image can still show real residual bend even
+  /// after the primary 4-corner homography).
+  final Map<String, (double, double)>? meshInteriorMeasuredFrac;
+
+  const _GradedOverlayPainter({
+    required this.items,
+    required this.template,
+    this.meshInteriorMeasuredFrac,
+  });
 
   static const _correctColor = Color(0xFF16A34A);
   static const _wrongColor = Color(0xFFDC2626);
@@ -208,7 +249,24 @@ class _GradedOverlayPainter extends CustomPainter {
       for (final section in template.sections) section.name: section.items,
     };
 
-    Offset centerOf(BubblePos b) => Offset(b.xFrac * size.width, b.yFrac * size.height);
+    // Mesh built at page-point scale (1 canonical unit = 1 pt) — the
+    // triangulation/barycentric math is scale-invariant, so this is exactly
+    // as accurate as decode()'s own canonical-px scale, just avoiding the
+    // need to know what pixel resolution originally produced
+    // [meshInteriorMeasuredFrac] (it's stored as page fractions already).
+    final canonicalW = template.pageWidthPt.round();
+    final canonicalH = template.pageHeightPt.round();
+    final mesh = OmrMeshCorrection.fromMeasuredFractions(
+      template: template,
+      canonicalWidth: canonicalW,
+      canonicalHeight: canonicalH,
+      measuredFrac: meshInteriorMeasuredFrac,
+    );
+
+    Offset centerOf(BubblePos b) {
+      final (cx, cy) = mesh.correct(b.xFrac * canonicalW, b.yFrac * canonicalH);
+      return Offset(cx / canonicalW * size.width, cy / canonicalH * size.height);
+    }
 
     void ring(BubblePos b, Color color) {
       canvas.drawOval(
@@ -221,9 +279,10 @@ class _GradedOverlayPainter extends CustomPainter {
     }
 
     void badge(BubblePos leftmost, bool correct, Color color) {
+      final anchor = centerOf(leftmost);
       final center = Offset(
-        leftmost.xFrac * size.width - (template.bubbleRadiusPt + 9) * pxPerPtX,
-        leftmost.yFrac * size.height,
+        anchor.dx - (template.bubbleRadiusPt + 9) * pxPerPtX,
+        anchor.dy,
       );
       canvas.drawCircle(center, badgeRadius, Paint()..color = color);
       final tp = TextPainter(
@@ -280,7 +339,9 @@ class _GradedOverlayPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _GradedOverlayPainter oldDelegate) =>
-      oldDelegate.items != items || oldDelegate.template != template;
+      oldDelegate.items != items ||
+      oldDelegate.template != template ||
+      oldDelegate.meshInteriorMeasuredFrac != meshInteriorMeasuredFrac;
 }
 
 /// Scrollable answer-key list, grouped by section, one row per item.

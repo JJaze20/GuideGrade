@@ -31,6 +31,8 @@ class OmrDecoder {
 
   AlignmentCheck locateCorners(String imagePath, OmrExamTemplate template) => _unsupported();
 
+  void normalizeCaptureOrientation(String imagePath, int quarterTurnsClockwise) => _unsupported();
+
   ({
     List<CornerConfidence> confidence,
     List<(double, double)?> positions,

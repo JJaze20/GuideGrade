@@ -41,11 +41,40 @@ class OmrScanResult {
   final String examCode;
   final List<OmrItemResult> items;
 
-  const OmrScanResult({required this.examCode, required this.items});
+  /// Which [OmrExamTemplate.templateVersion] produced [items]' coordinates
+  /// — null for a result decoded before this field existed. Lets a later
+  /// screen (e.g. ScannedImageViewerScreen's overlay) detect that the live
+  /// template's geometry has since changed and avoid silently redrawing
+  /// this scan with coordinates it was never actually decoded against.
+  final String? templateVersion;
+
+  /// Interior-fiducial mesh-correction readings used to decode [items],
+  /// keyed by [OmrFiducialRole] name (`dividerLeft`, `dividerRight`,
+  /// `centerAboveAnswers`, `centerAtDivider`, `centerBelowAnswers`) —
+  /// fractional (0-1) page positions, resolution-independent. Null/empty
+  /// for a template with no interior fiducials (legacy sheets, TAT) or a
+  /// result decoded before this field existed. Persisted so
+  /// ScannedImageViewerScreen's graded overlay can reconstruct the exact
+  /// same [OmrMeshCorrection] used for scoring instead of assuming the
+  /// displayed rectified image is an undistorted 1:1 map of template
+  /// fractions — see that screen's `centerOf`.
+  final Map<String, (double, double)>? meshInteriorMeasuredFrac;
+
+  const OmrScanResult({
+    required this.examCode,
+    required this.items,
+    this.templateVersion,
+    this.meshInteriorMeasuredFrac,
+  });
 
   Map<String, dynamic> toJson() => {
         'examCode': examCode,
         'items': items.map((i) => i.toJson()).toList(),
+        if (templateVersion != null) 'templateVersion': templateVersion,
+        if (meshInteriorMeasuredFrac != null)
+          'meshInteriorMeasuredFrac': meshInteriorMeasuredFrac!.map(
+            (role, pt) => MapEntry(role, [pt.$1, pt.$2]),
+          ),
       };
 
   factory OmrScanResult.fromJson(Map<String, dynamic> json) => OmrScanResult(
@@ -53,5 +82,13 @@ class OmrScanResult {
         items: (json['items'] as List<dynamic>? ?? [])
             .map((e) => OmrItemResult.fromJson(e as Map<String, dynamic>))
             .toList(),
+        templateVersion: json['templateVersion'] as String?,
+        meshInteriorMeasuredFrac:
+            (json['meshInteriorMeasuredFrac'] as Map<String, dynamic>?)?.map(
+          (role, pt) {
+            final list = pt as List<dynamic>;
+            return MapEntry(role, ((list[0] as num).toDouble(), (list[1] as num).toDouble()));
+          },
+        ),
       );
 }
