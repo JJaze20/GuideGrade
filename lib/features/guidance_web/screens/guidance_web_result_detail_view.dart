@@ -38,7 +38,9 @@ enum AnswerOutcome { correct, incorrect, ambiguous, notGraded }
 AnswerOutcome answerOutcomeFor(ScoredItem item) {
   if (item.correctChoice == null) return AnswerOutcome.notGraded;
   if (item.isAmbiguous) return AnswerOutcome.ambiguous;
-  return item.isCorrect == true ? AnswerOutcome.correct : AnswerOutcome.incorrect;
+  return item.isCorrect == true
+      ? AnswerOutcome.correct
+      : AnswerOutcome.incorrect;
 }
 
 /// Groups [items] by [ScoredItem.sectionName], preserving first-seen order
@@ -47,7 +49,9 @@ AnswerOutcome answerOutcomeFor(ScoredItem item) {
 /// `scanned_image_viewer_screen.dart`'s `_AnswerKeyPanel` already uses.
 /// Pure, no I/O, no assumption about how many sections an exam has.
 @visibleForTesting
-Map<String, List<ScoredItem>> groupScoredItemsBySection(List<ScoredItem> items) {
+Map<String, List<ScoredItem>> groupScoredItemsBySection(
+  List<ScoredItem> items,
+) {
   final bySection = <String, List<ScoredItem>>{};
   for (final item in items) {
     bySection.putIfAbsent(item.sectionName, () => []).add(item);
@@ -166,12 +170,17 @@ ItemOverlayPlan? planOverlayForItem(ScoredItem item, List<BubblePos>? bubbles) {
   for (final b in bubbles) {
     if (b.xFrac < leftmost.xFrac) leftmost = b;
   }
-  final badgeColor =
-      isRight ? WebOverlayColors.correct : (item.isAmbiguous ? WebOverlayColors.ambiguous : WebOverlayColors.wrong);
+  final badgeColor = isRight
+      ? WebOverlayColors.correct
+      : (item.isAmbiguous
+            ? WebOverlayColors.ambiguous
+            : WebOverlayColors.wrong);
 
   return ItemOverlayPlan(
     markedBubble: marked,
-    markedColor: marked == null ? null : (isRight ? WebOverlayColors.correct : WebOverlayColors.wrong),
+    markedColor: marked == null
+        ? null
+        : (isRight ? WebOverlayColors.correct : WebOverlayColors.wrong),
     keyBubble: keyBubble,
     badgeBubble: leftmost,
     badgeColor: badgeColor,
@@ -214,7 +223,10 @@ Offset correctedBubbleCenter({
     canonicalHeight: canonicalH,
     measuredFrac: meshInteriorMeasuredFrac,
   );
-  final (cx, cy) = mesh.correct(bubble.xFrac * canonicalW, bubble.yFrac * canonicalH);
+  final (cx, cy) = mesh.correct(
+    bubble.xFrac * canonicalW,
+    bubble.yFrac * canonicalH,
+  );
   return Offset(cx / canonicalW * size.width, cy / canonicalH * size.height);
 }
 
@@ -268,10 +280,12 @@ class GuidanceWebResultDetailView extends StatefulWidget {
   final VoidCallback onBack;
 
   @override
-  State<GuidanceWebResultDetailView> createState() => _GuidanceWebResultDetailViewState();
+  State<GuidanceWebResultDetailView> createState() =>
+      _GuidanceWebResultDetailViewState();
 }
 
-class _GuidanceWebResultDetailViewState extends State<GuidanceWebResultDetailView> {
+class _GuidanceWebResultDetailViewState
+    extends State<GuidanceWebResultDetailView> {
   bool _loading = true;
   String? _error;
   AnswerKey? _answerKey;
@@ -376,7 +390,8 @@ class _GuidanceWebResultDetailViewState extends State<GuidanceWebResultDetailVie
     } catch (_) {
       if (!mounted) return;
       setState(() {
-        _imageError = 'Could not load the scanned answer sheet. Please try again.';
+        _imageError =
+            'Could not load the scanned answer sheet. Please try again.';
         _imageLoading = false;
       });
     }
@@ -393,8 +408,18 @@ class _GuidanceWebResultDetailViewState extends State<GuidanceWebResultDetailVie
   /// loaded image isn't the rectified variant (see [ScanImageVariant]'s doc
   /// comment) or because this exam code has no registered template
   /// (`omrTemplates[examCode]` is imported verbatim, never redefined).
-  OmrExamTemplate? get _overlayTemplate =>
-      _imageVariant == ScanImageVariant.rectified ? omrTemplates[widget.batch.examCode] : null;
+  OmrExamTemplate? get _overlayTemplate {
+    if (_imageVariant != ScanImageVariant.rectified) return null;
+    final currentTemplate = omrTemplates[widget.batch.examCode];
+    if (currentTemplate == null) return null;
+    return overlayTemplateForScan(
+      currentTemplate,
+      scanTemplateVersion: widget.scan.decoded.templateVersion,
+      sectionName: _scored.items.isNotEmpty
+          ? _scored.items.first.sectionName
+          : null,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -413,12 +438,22 @@ class _GuidanceWebResultDetailViewState extends State<GuidanceWebResultDetailVie
       children: [
         TextButton.icon(
           onPressed: widget.onBack,
-          icon: const FaIcon(FontAwesomeIcons.arrowLeft, size: 12, color: AppColors.primaryGreen),
+          icon: const FaIcon(
+            FontAwesomeIcons.arrowLeft,
+            size: 12,
+            color: AppColors.primaryGreen,
+          ),
           label: Text(
             'Back to Results',
-            style: AppTextStyles.body(size: 11.5, weight: FontWeight.w700, color: AppColors.primaryGreen),
+            style: AppTextStyles.body(
+              size: 11.5,
+              weight: FontWeight.w700,
+              color: AppColors.primaryGreen,
+            ),
           ),
-          style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 4)),
+          style: TextButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+          ),
         ),
         const SizedBox(width: 8),
         Container(width: 1, height: 18, color: AppColors.cardBorder),
@@ -429,8 +464,12 @@ class _GuidanceWebResultDetailViewState extends State<GuidanceWebResultDetailVie
   }
 
   Widget _buildBody() {
-    if (_loading) return _message(FontAwesomeIcons.spinner, 'Loading detailed result...');
-    if (_error != null) return _errorState();
+    if (_loading) {
+      return _message(FontAwesomeIcons.spinner, 'Loading detailed result...');
+    }
+    if (_error != null) {
+      return _errorState();
+    }
     return SingleChildScrollView(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -454,7 +493,10 @@ class _GuidanceWebResultDetailViewState extends State<GuidanceWebResultDetailVie
         children: [
           FaIcon(icon, size: 36, color: AppColors.textGray),
           const SizedBox(height: 14),
-          Text(text, style: AppTextStyles.body(size: 11.5, color: AppColors.textGray)),
+          Text(
+            text,
+            style: AppTextStyles.body(size: 11.5, color: AppColors.textGray),
+          ),
         ],
       ),
     );
@@ -465,14 +507,21 @@ class _GuidanceWebResultDetailViewState extends State<GuidanceWebResultDetailVie
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const FaIcon(FontAwesomeIcons.triangleExclamation, size: 36, color: AppColors.warmRedOrange),
+          const FaIcon(
+            FontAwesomeIcons.triangleExclamation,
+            size: 36,
+            color: AppColors.warmRedOrange,
+          ),
           const SizedBox(height: 14),
           ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 360),
             child: Text(
               _error!,
               textAlign: TextAlign.center,
-              style: AppTextStyles.body(size: 11.5, color: AppColors.warmRedOrange),
+              style: AppTextStyles.body(
+                size: 11.5,
+                color: AppColors.warmRedOrange,
+              ),
             ),
           ),
           const SizedBox(height: 16),
@@ -480,7 +529,11 @@ class _GuidanceWebResultDetailViewState extends State<GuidanceWebResultDetailVie
             onPressed: widget.onBack,
             child: Text(
               'Back to Results',
-              style: AppTextStyles.body(size: 11.5, weight: FontWeight.w700, color: AppColors.primaryGreen),
+              style: AppTextStyles.body(
+                size: 11.5,
+                weight: FontWeight.w700,
+                color: AppColors.primaryGreen,
+              ),
             ),
           ),
         ],
@@ -503,7 +556,9 @@ class _GuidanceWebResultDetailViewState extends State<GuidanceWebResultDetailVie
     ]);
   }
 
-  String _examTitle() => widget.batch.examTitle.isNotEmpty ? widget.batch.examTitle : widget.batch.examCode;
+  String _examTitle() => widget.batch.examTitle.isNotEmpty
+      ? widget.batch.examTitle
+      : widget.batch.examCode;
 
   // --- Result Summary ---------------------------------------------------
 
@@ -524,7 +579,8 @@ class _GuidanceWebResultDetailViewState extends State<GuidanceWebResultDetailVie
   /// `LocalScanResult.totalItems` — matches the exact convention already
   /// used by the Results table ([GuidanceWebResultsView._denominatorFor])
   /// and the mobile app's own TAT display.
-  int _denominatorFor(LocalScanResult result) => widget.batch.examCode == 'TAT' ? 160 : result.totalItems;
+  int _denominatorFor(LocalScanResult result) =>
+      widget.batch.examCode == 'TAT' ? 160 : result.totalItems;
 
   /// AT category / QTM eligibility / TAT per-test breakdown — every value
   /// here comes from an EXISTING helper ([admissionCategory], [qtmEligibility],
@@ -550,19 +606,21 @@ class _GuidanceWebResultDetailViewState extends State<GuidanceWebResultDetailVie
   }
 
   static String _categoryLabel(AdmissionCategory? c) => switch (c) {
-        AdmissionCategory.a => 'A',
-        AdmissionCategory.b => 'B',
-        AdmissionCategory.c => 'C',
-        AdmissionCategory.d => 'D',
-        null => 'Not classified',
-      };
+    AdmissionCategory.a => 'A',
+    AdmissionCategory.b => 'B',
+    AdmissionCategory.c => 'C',
+    AdmissionCategory.d => 'D',
+    null => 'Not classified',
+  };
 
   static String _eligibilityLabel(QtmEligibility? e) => switch (e) {
-        QtmEligibility.allCoursesIncludingBscs => 'All QTM-required courses, incl. BSCS',
-        QtmEligibility.allCoursesExceptBscs => 'All QTM-required courses, except BSCS',
-        QtmEligibility.notEligible => 'Does not meet the QTM requirement',
-        null => '—',
-      };
+    QtmEligibility.allCoursesIncludingBscs =>
+      'All QTM-required courses, incl. BSCS',
+    QtmEligibility.allCoursesExceptBscs =>
+      'All QTM-required courses, except BSCS',
+    QtmEligibility.notEligible => 'Does not meet the QTM requirement',
+    null => '—',
+  };
 
   /// TAT breakdown, recomputed via the existing [computeExamScoreForCode]
   /// against the currently-fetched answer key when [result] itself doesn't
@@ -577,7 +635,10 @@ class _GuidanceWebResultDetailViewState extends State<GuidanceWebResultDetailVie
       return [_infoRow('Breakdown', 'Unavailable for this result')];
     }
     return [
-      _infoRow('Test 1', '${breakdown.tatTest1Correct ?? 0} correct × 2 = ${breakdown.tatTest1Score ?? 0} / 60'),
+      _infoRow(
+        'Test 1',
+        '${breakdown.tatTest1Correct ?? 0} correct × 2 = ${breakdown.tatTest1Score ?? 0} / 60',
+      ),
       _infoRow(
         'Test 2',
         '${breakdown.tatTest2Correct ?? 0} correct − ${breakdown.tatTest2Wrong ?? 0} wrong = ${breakdown.tatTest2Score ?? 0} / 80',
@@ -629,9 +690,16 @@ class _GuidanceWebResultDetailViewState extends State<GuidanceWebResultDetailVie
       if (_imageLoading)
         _imageMessage(FontAwesomeIcons.spinner, 'Loading scanned sheet...')
       else if (_imageError != null)
-        _imageMessage(FontAwesomeIcons.triangleExclamation, _imageError!, isError: true)
+        _imageMessage(
+          FontAwesomeIcons.triangleExclamation,
+          _imageError!,
+          isError: true,
+        )
       else if (_imageBytes == null)
-        _imageMessage(FontAwesomeIcons.image, 'No scanned image available for this sheet.')
+        _imageMessage(
+          FontAwesomeIcons.image,
+          'No scanned image available for this sheet.',
+        )
       else
         _buildImagePreview(_imageBytes!),
     ]);
@@ -645,12 +713,19 @@ class _GuidanceWebResultDetailViewState extends State<GuidanceWebResultDetailVie
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          FaIcon(icon, size: 26, color: isError ? AppColors.warmRedOrange : AppColors.textGray),
+          FaIcon(
+            icon,
+            size: 26,
+            color: isError ? AppColors.warmRedOrange : AppColors.textGray,
+          ),
           const SizedBox(height: 10),
           Text(
             text,
             textAlign: TextAlign.center,
-            style: AppTextStyles.body(size: 11, color: isError ? AppColors.warmRedOrange : AppColors.textGray),
+            style: AppTextStyles.body(
+              size: 11,
+              color: isError ? AppColors.warmRedOrange : AppColors.textGray,
+            ),
           ),
         ],
       ),
@@ -686,7 +761,8 @@ class _GuidanceWebResultDetailViewState extends State<GuidanceWebResultDetailVie
                     bytes: bytes,
                     template: template,
                     items: items,
-                    meshInteriorMeasuredFrac: widget.scan.decoded.meshInteriorMeasuredFrac,
+                    meshInteriorMeasuredFrac:
+                        widget.scan.decoded.meshInteriorMeasuredFrac,
                     maxWidth: constraints.maxWidth,
                     maxHeight: constraints.maxHeight,
                     errorBuilder: (context, error, stackTrace) => _imageMessage(
@@ -717,7 +793,8 @@ class _GuidanceWebResultDetailViewState extends State<GuidanceWebResultDetailVie
           bytes: bytes,
           overlayTemplate: template,
           overlayItems: template != null ? _scored.items : null,
-          meshInteriorMeasuredFrac: widget.scan.decoded.meshInteriorMeasuredFrac,
+          meshInteriorMeasuredFrac:
+              widget.scan.decoded.meshInteriorMeasuredFrac,
         ),
       ),
     );
@@ -732,7 +809,10 @@ class _GuidanceWebResultDetailViewState extends State<GuidanceWebResultDetailVie
       _answerKeyNotice(),
       const SizedBox(height: 12),
       if (bySection.isEmpty)
-        Text('No decoded items available for this scan.', style: AppTextStyles.body(size: 11, color: AppColors.textGray))
+        Text(
+          'No decoded items available for this scan.',
+          style: AppTextStyles.body(size: 11, color: AppColors.textGray),
+        )
       else if (groupBySection)
         ...bySection.entries.map((e) => _buildSectionBlock(e.key, e.value))
       else
@@ -754,9 +834,18 @@ class _GuidanceWebResultDetailViewState extends State<GuidanceWebResultDetailVie
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const FaIcon(FontAwesomeIcons.circleInfo, size: 12, color: AppColors.textGray),
+          const FaIcon(
+            FontAwesomeIcons.circleInfo,
+            size: 12,
+            color: AppColors.textGray,
+          ),
           const SizedBox(width: 8),
-          Expanded(child: Text(text, style: AppTextStyles.body(size: 10.5, color: AppColors.textGray))),
+          Expanded(
+            child: Text(
+              text,
+              style: AppTextStyles.body(size: 10.5, color: AppColors.textGray),
+            ),
+          ),
         ],
       ),
     );
@@ -768,7 +857,10 @@ class _GuidanceWebResultDetailViewState extends State<GuidanceWebResultDetailVie
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(sectionName, style: AppTextStyles.body(size: 11.5, weight: FontWeight.w700)),
+          Text(
+            sectionName,
+            style: AppTextStyles.body(size: 11.5, weight: FontWeight.w700),
+          ),
           const SizedBox(height: 8),
           _buildAnswerTable(items),
         ],
@@ -777,7 +869,11 @@ class _GuidanceWebResultDetailViewState extends State<GuidanceWebResultDetailVie
   }
 
   Widget _buildAnswerTable(List<ScoredItem> items) {
-    final headerStyle = AppTextStyles.body(size: 9.5, weight: FontWeight.w800, color: AppColors.textGray);
+    final headerStyle = AppTextStyles.body(
+      size: 9.5,
+      weight: FontWeight.w800,
+      color: AppColors.textGray,
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -786,8 +882,14 @@ class _GuidanceWebResultDetailViewState extends State<GuidanceWebResultDetailVie
           child: Row(
             children: [
               SizedBox(width: 44, child: Text('ITEM', style: headerStyle)),
-              Expanded(flex: 2, child: Text('CORRECT ANSWER', style: headerStyle)),
-              Expanded(flex: 2, child: Text('EXAMINEE ANSWER', style: headerStyle)),
+              Expanded(
+                flex: 2,
+                child: Text('CORRECT ANSWER', style: headerStyle),
+              ),
+              Expanded(
+                flex: 2,
+                child: Text('EXAMINEE ANSWER', style: headerStyle),
+              ),
               Expanded(flex: 2, child: Text('RESULT', style: headerStyle)),
             ],
           ),
@@ -803,9 +905,27 @@ class _GuidanceWebResultDetailViewState extends State<GuidanceWebResultDetailVie
       padding: const EdgeInsets.symmetric(vertical: 7),
       child: Row(
         children: [
-          SizedBox(width: 44, child: Text('${item.itemNumber}', style: AppTextStyles.body(size: 11))),
-          Expanded(flex: 2, child: Text(item.correctChoice ?? '—', style: AppTextStyles.body(size: 11))),
-          Expanded(flex: 2, child: Text(item.markedChoice ?? '—', style: AppTextStyles.body(size: 11))),
+          SizedBox(
+            width: 44,
+            child: Text(
+              '${item.itemNumber}',
+              style: AppTextStyles.body(size: 11),
+            ),
+          ),
+          Expanded(
+            flex: 2,
+            child: Text(
+              item.correctChoice ?? '—',
+              style: AppTextStyles.body(size: 11),
+            ),
+          ),
+          Expanded(
+            flex: 2,
+            child: Text(
+              item.markedChoice ?? '—',
+              style: AppTextStyles.body(size: 11),
+            ),
+          ),
           Expanded(flex: 2, child: _outcomeChip(answerOutcomeFor(item))),
         ],
       ),
@@ -814,17 +934,43 @@ class _GuidanceWebResultDetailViewState extends State<GuidanceWebResultDetailVie
 
   Widget _outcomeChip(AnswerOutcome outcome) {
     final (label, background, foreground) = switch (outcome) {
-      AnswerOutcome.correct => ('Correct', AppColors.emerald100, const Color(0xFF065F46)),
-      AnswerOutcome.incorrect => ('Incorrect', const Color(0xFFFEE2E2), const Color(0xFF991B1B)),
-      AnswerOutcome.ambiguous => ('Ambiguous mark', const Color(0xFFFEF3C7), const Color(0xFF92400E)),
-      AnswerOutcome.notGraded => ('Not graded', AppColors.lightBg, AppColors.textGray),
+      AnswerOutcome.correct => (
+        'Correct',
+        AppColors.emerald100,
+        const Color(0xFF065F46),
+      ),
+      AnswerOutcome.incorrect => (
+        'Incorrect',
+        const Color(0xFFFEE2E2),
+        const Color(0xFF991B1B),
+      ),
+      AnswerOutcome.ambiguous => (
+        'Ambiguous mark',
+        const Color(0xFFFEF3C7),
+        const Color(0xFF92400E),
+      ),
+      AnswerOutcome.notGraded => (
+        'Not graded',
+        AppColors.lightBg,
+        AppColors.textGray,
+      ),
     };
     return Align(
       alignment: Alignment.centerLeft,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-        decoration: BoxDecoration(color: background, borderRadius: BorderRadius.circular(10)),
-        child: Text(label, style: AppTextStyles.body(size: 9.5, weight: FontWeight.w700, color: foreground)),
+        decoration: BoxDecoration(
+          color: background,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Text(
+          label,
+          style: AppTextStyles.body(
+            size: 9.5,
+            weight: FontWeight.w700,
+            color: foreground,
+          ),
+        ),
       ),
     );
   }
@@ -842,7 +988,14 @@ class _GuidanceWebResultDetailViewState extends State<GuidanceWebResultDetailVie
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(title, style: AppTextStyles.body(size: 10.5, weight: FontWeight.w800, color: AppColors.textGray)),
+          Text(
+            title,
+            style: AppTextStyles.body(
+              size: 10.5,
+              weight: FontWeight.w800,
+              color: AppColors.textGray,
+            ),
+          ),
           const SizedBox(height: 12),
           ...children,
         ],
@@ -858,9 +1011,21 @@ class _GuidanceWebResultDetailViewState extends State<GuidanceWebResultDetailVie
         children: [
           SizedBox(
             width: 140,
-            child: Text(label, style: AppTextStyles.body(size: 10.5, weight: FontWeight.w700, color: AppColors.textGray)),
+            child: Text(
+              label,
+              style: AppTextStyles.body(
+                size: 10.5,
+                weight: FontWeight.w700,
+                color: AppColors.textGray,
+              ),
+            ),
           ),
-          Expanded(child: Text(value, style: AppTextStyles.body(size: 11.5, weight: FontWeight.w600))),
+          Expanded(
+            child: Text(
+              value,
+              style: AppTextStyles.body(size: 11.5, weight: FontWeight.w600),
+            ),
+          ),
         ],
       ),
     );
@@ -869,11 +1034,22 @@ class _GuidanceWebResultDetailViewState extends State<GuidanceWebResultDetailVie
   /// A blank/missing individual field displays as a plain dash — never a
   /// placeholder like "UNKNOWN"/"N/A"/"No Name Found" (matches the
   /// automatic-Examinee-ID feature's own "no fake values" rule).
-  String _dash(String? value) => (value == null || value.trim().isEmpty) ? '—' : value;
+  String _dash(String? value) =>
+      (value == null || value.trim().isEmpty) ? '—' : value;
 
   static const _months = [
-    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
   ];
 
   String _fmtDateTime(DateTime d) {
@@ -934,7 +1110,10 @@ class _FullScreenScanImageViewer extends StatelessWidget {
                     errorBuilder: (context, error, stackTrace) => Center(
                       child: Text(
                         'Unable to display this scanned sheet.',
-                        style: AppTextStyles.body(size: 12, color: Colors.white70),
+                        style: AppTextStyles.body(
+                          size: 12,
+                          color: Colors.white70,
+                        ),
                       ),
                     ),
                   ),
@@ -989,11 +1168,18 @@ Widget _buildScanImageBox({
   required double maxHeight,
   required Widget Function(BuildContext, Object, StackTrace?) errorBuilder,
 }) {
-  if (template == null || items == null || template.pageWidthPt <= 0 || template.pageHeightPt <= 0) {
+  if (template == null ||
+      items == null ||
+      template.pageWidthPt <= 0 ||
+      template.pageHeightPt <= 0) {
     return SizedBox(
       width: maxWidth,
       height: maxHeight,
-      child: Image.memory(bytes, fit: BoxFit.contain, errorBuilder: errorBuilder),
+      child: Image.memory(
+        bytes,
+        fit: BoxFit.contain,
+        errorBuilder: errorBuilder,
+      ),
     );
   }
 
@@ -1059,20 +1245,20 @@ class _WebGradedOverlayPainter extends CustomPainter {
     final strokeWidth = (ringRx < ringRy ? ringRx : ringRy) * 0.3;
     final badgeRadius = (ringRx < ringRy ? ringRx : ringRy) * 0.6;
 
-    final byNumber = <String, Map<int, List<BubblePos>>>{
-      for (final section in template.sections) section.name: section.items,
-    };
-
     Offset centerOf(BubblePos b) => correctedBubbleCenter(
-          bubble: b,
-          template: template,
-          meshInteriorMeasuredFrac: meshInteriorMeasuredFrac,
-          size: size,
-        );
+      bubble: b,
+      template: template,
+      meshInteriorMeasuredFrac: meshInteriorMeasuredFrac,
+      size: size,
+    );
 
     void ring(BubblePos b, Color color) {
       canvas.drawOval(
-        Rect.fromCenter(center: centerOf(b), width: ringRx * 2, height: ringRy * 2),
+        Rect.fromCenter(
+          center: centerOf(b),
+          width: ringRx * 2,
+          height: ringRy * 2,
+        ),
         Paint()
           ..color = color
           ..style = PaintingStyle.stroke
@@ -1082,7 +1268,10 @@ class _WebGradedOverlayPainter extends CustomPainter {
 
     void badge(BubblePos leftmost, Color color, bool correct) {
       final anchor = centerOf(leftmost);
-      final center = Offset(anchor.dx - (template.bubbleRadiusPt + 9) * pxPerPtX, anchor.dy);
+      final center = Offset(
+        anchor.dx - (template.bubbleRadiusPt + 9) * pxPerPtX,
+        anchor.dy,
+      );
       canvas.drawCircle(center, badgeRadius, Paint()..color = color);
       final tp = TextPainter(
         text: TextSpan(
@@ -1100,12 +1289,22 @@ class _WebGradedOverlayPainter extends CustomPainter {
     }
 
     for (final item in scoredItems) {
-      final bubbles = byNumber[item.sectionName]?[item.itemNumber];
+      final bubbles = bubblesForOverlayItem(
+        template,
+        item.sectionName,
+        item.itemNumber,
+      );
       final plan = planOverlayForItem(item, bubbles);
-      if (plan == null) continue;
+      if (plan == null) {
+        continue;
+      }
 
-      if (plan.markedBubble != null) ring(plan.markedBubble!, plan.markedColor!);
-      if (plan.keyBubble != null) ring(plan.keyBubble!, WebOverlayColors.key);
+      if (plan.markedBubble != null) {
+        ring(plan.markedBubble!, plan.markedColor!);
+      }
+      if (plan.keyBubble != null) {
+        ring(plan.keyBubble!, WebOverlayColors.key);
+      }
       badge(plan.badgeBubble, plan.badgeColor, plan.badgeIsCorrect);
     }
   }

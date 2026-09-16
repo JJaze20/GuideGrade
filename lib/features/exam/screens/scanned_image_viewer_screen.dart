@@ -66,30 +66,36 @@ class ScannedImageViewerScreen extends StatelessWidget {
     this.scanTemplateVersion,
     this.meshInteriorMeasuredFrac,
   }) : assert(
-          imagePath != null || imageBytes != null,
-          'ScannedImageViewerScreen needs either imagePath or imageBytes.',
-        );
+         imagePath != null || imageBytes != null,
+         'ScannedImageViewerScreen needs either imagePath or imageBytes.',
+       );
 
-  /// True only when the scan's own recorded template version still
-  /// matches [template]'s current one (or the scan predates version
-  /// tracking, in which case there's nothing to compare against) — see
-  /// [scanTemplateVersion]'s doc comment. A stale scan still gets its
-  /// plain rectified image; it just skips the overlay/mesh correction
-  /// rather than risk drawing it with coordinates from a sheet layout
-  /// that has since changed underneath it.
-  bool get _templateStillMatches =>
-      scanTemplateVersion == null || template == null || scanTemplateVersion == template!.templateVersion;
+  /// The geometry the scan was actually decoded against, resolved via the
+  /// legacy/current compatibility selector. A legacy AT/QTM scan decoded
+  /// before the 9-fiducial redesign still resolves to the historical
+  /// template so its overlay is painted against the same geometry that
+  /// produced the mark locations.
+  OmrExamTemplate? get _overlayTemplate {
+    if (template == null || scoredItems.isEmpty) return null;
+    return overlayTemplateForScan(
+      template!,
+      scanTemplateVersion: scanTemplateVersion,
+      sectionName: scoredItems.first.sectionName,
+    );
+  }
 
   bool get _hasOverlay =>
       (rectifiedImagePath != null || rectifiedImageBytes != null) &&
-      template != null &&
-      _templateStillMatches &&
+      _overlayTemplate != null &&
       scoredItems.any((i) => i.correctChoice != null);
 
-  Widget _mainImage() => imageBytes != null ? Image.memory(imageBytes!) : Image.file(File(imagePath!));
+  Widget _mainImage() => imageBytes != null
+      ? Image.memory(imageBytes!)
+      : Image.file(File(imagePath!));
 
-  Widget _rectifiedImage() =>
-      rectifiedImageBytes != null ? Image.memory(rectifiedImageBytes!) : Image.file(File(rectifiedImagePath!));
+  Widget _rectifiedImage() => rectifiedImageBytes != null
+      ? Image.memory(rectifiedImageBytes!)
+      : Image.file(File(rectifiedImagePath!));
 
   @override
   Widget build(BuildContext context) {
@@ -135,8 +141,9 @@ class ScannedImageViewerScreen extends StatelessWidget {
                               child: CustomPaint(
                                 painter: _GradedOverlayPainter(
                                   items: scoredItems,
-                                  template: template!,
-                                  meshInteriorMeasuredFrac: meshInteriorMeasuredFrac,
+                                  template: _overlayTemplate!,
+                                  meshInteriorMeasuredFrac:
+                                      meshInteriorMeasuredFrac,
                                 ),
                               ),
                             ),
@@ -193,7 +200,14 @@ class _LegendDot extends StatelessWidget {
           decoration: BoxDecoration(color: color, shape: BoxShape.circle),
         ),
         const SizedBox(width: 5),
-        Text(label, style: const TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.w600)),
+        Text(
+          label,
+          style: const TextStyle(
+            color: Colors.white70,
+            fontSize: 10,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
       ],
     );
   }
@@ -245,10 +259,6 @@ class _GradedOverlayPainter extends CustomPainter {
     final strokeWidth = (ringRx < ringRy ? ringRx : ringRy) * 0.3;
     final badgeRadius = (ringRx < ringRy ? ringRx : ringRy) * 0.6;
 
-    final byNumber = <String, Map<int, List<BubblePos>>>{
-      for (final section in template.sections) section.name: section.items,
-    };
-
     // Mesh built at page-point scale (1 canonical unit = 1 pt) — the
     // triangulation/barycentric math is scale-invariant, so this is exactly
     // as accurate as decode()'s own canonical-px scale, just avoiding the
@@ -265,12 +275,19 @@ class _GradedOverlayPainter extends CustomPainter {
 
     Offset centerOf(BubblePos b) {
       final (cx, cy) = mesh.correct(b.xFrac * canonicalW, b.yFrac * canonicalH);
-      return Offset(cx / canonicalW * size.width, cy / canonicalH * size.height);
+      return Offset(
+        cx / canonicalW * size.width,
+        cy / canonicalH * size.height,
+      );
     }
 
     void ring(BubblePos b, Color color) {
       canvas.drawOval(
-        Rect.fromCenter(center: centerOf(b), width: ringRx * 2, height: ringRy * 2),
+        Rect.fromCenter(
+          center: centerOf(b),
+          width: ringRx * 2,
+          height: ringRy * 2,
+        ),
         Paint()
           ..color = color
           ..style = PaintingStyle.stroke
@@ -301,9 +318,17 @@ class _GradedOverlayPainter extends CustomPainter {
     }
 
     for (final item in items) {
-      if (item.correctChoice == null) continue; // ungraded -- nothing to compare against
-      final bubbles = byNumber[item.sectionName]?[item.itemNumber];
-      if (bubbles == null || bubbles.isEmpty) continue;
+      if (item.correctChoice == null) {
+        continue; // ungraded -- nothing to compare against
+      }
+      final bubbles = bubblesForOverlayItem(
+        template,
+        item.sectionName,
+        item.itemNumber,
+      );
+      if (bubbles == null || bubbles.isEmpty) {
+        continue;
+      }
 
       BubblePos? find(String? choice) {
         if (choice == null) return null;
@@ -332,7 +357,9 @@ class _GradedOverlayPainter extends CustomPainter {
       for (final b in bubbles) {
         if (b.xFrac < leftmost.xFrac) leftmost = b;
       }
-      final badgeColor = isRight ? _correctColor : (item.isAmbiguous ? _ambiguousColor : _wrongColor);
+      final badgeColor = isRight
+          ? _correctColor
+          : (item.isAmbiguous ? _ambiguousColor : _wrongColor);
       badge(leftmost, isRight, badgeColor);
     }
   }
@@ -362,7 +389,12 @@ class _AnswerKeyPanel extends StatelessWidget {
       children: [
         const Text(
           'ANSWER KEY',
-          style: TextStyle(color: Colors.white70, fontSize: 10.5, fontWeight: FontWeight.w800, letterSpacing: 0.6),
+          style: TextStyle(
+            color: Colors.white70,
+            fontSize: 10.5,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 0.6,
+          ),
         ),
         const SizedBox(height: 12),
         ...bySection.entries.map(
@@ -373,7 +405,11 @@ class _AnswerKeyPanel extends StatelessWidget {
               children: [
                 Text(
                   entry.key,
-                  style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w700),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
                 const SizedBox(height: 6),
                 ...entry.value.map(_buildRow),
@@ -405,26 +441,45 @@ class _AnswerKeyPanel extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.only(bottom: 3),
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-      decoration: BoxDecoration(color: background, borderRadius: BorderRadius.circular(6)),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(6),
+      ),
       child: Row(
         children: [
           SizedBox(
             width: 20,
             child: Text(
               '${item.itemNumber}',
-              style: TextStyle(color: foreground, fontSize: 10, fontWeight: FontWeight.w600),
+              style: TextStyle(
+                color: foreground,
+                fontSize: 10,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
           Expanded(
             child: Text(
               item.correctChoice ?? '—',
-              style: TextStyle(color: foreground, fontSize: 10, fontWeight: FontWeight.w800),
+              style: TextStyle(
+                color: foreground,
+                fontSize: 10,
+                fontWeight: FontWeight.w800,
+              ),
             ),
           ),
           if (item.isAmbiguous)
-            const Icon(Icons.warning_amber_rounded, size: 12, color: Color(0xFF92400E))
+            const Icon(
+              Icons.warning_amber_rounded,
+              size: 12,
+              color: Color(0xFF92400E),
+            )
           else if (item.isBlank)
-            const Icon(Icons.remove_circle_outline, size: 12, color: Colors.white70),
+            const Icon(
+              Icons.remove_circle_outline,
+              size: 12,
+              color: Colors.white70,
+            ),
         ],
       ),
     );

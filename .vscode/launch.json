@@ -1,0 +1,15 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "GuideGrade Web (Supabase)",
+      "type": "dart",
+      "request": "launch",
+      "templateFor": "lib/main.dart",
+      "program": "lib/main.dart",
+      "toolArgs": [
+        "--dart-define-from-file=dart_defines/prod.json"
+      ]
+    }
+  ]
+}

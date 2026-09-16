@@ -35,7 +35,7 @@ import 'guidance_web_result_detail_view.dart';
 /// memory.
 class GuidanceWebResultsView extends StatefulWidget {
   const GuidanceWebResultsView({super.key, GuidanceWebResultsService? service})
-      : _service = service;
+    : _service = service;
 
   final GuidanceWebResultsService? _service;
 
@@ -57,7 +57,8 @@ const List<(String examCode, String label)> _examGroups = [
 ];
 
 class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
-  late final GuidanceWebResultsService _service = widget._service ?? GuidanceWebResultsService();
+  late final GuidanceWebResultsService _service =
+      widget._service ?? GuidanceWebResultsService();
   final TextEditingController _searchController = TextEditingController();
 
   bool _loadingBatches = true;
@@ -161,7 +162,8 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
     } catch (_) {
       if (!mounted) return;
       setState(() {
-        _scansError = 'Could not load results for this batch. Please try again.';
+        _scansError =
+            'Could not load results for this batch. Please try again.';
         _loadingScans = false;
       });
     }
@@ -175,7 +177,8 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
   List<LocalScan> get _filteredScans {
     final term = _searchController.text.trim().toLowerCase();
     return _scans.where((scan) {
-      if (_statusFilter != 'All' && _effectiveStatus(scan) != _statusFilter) return false;
+      if (_statusFilter != 'All' && _effectiveStatus(scan) != _statusFilter)
+        return false;
       if (term.isEmpty) return true;
       final examinee = scan.examinee;
       if (examinee == null) return false;
@@ -226,7 +229,12 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
             children: [
               for (var i = 0; i < _examGroups.length; i++) ...[
                 if (i > 0) const SizedBox(width: 16),
-                Expanded(child: _buildExamDropdown(_examGroups[i].$1, _examGroups[i].$2)),
+                Expanded(
+                  child: _buildExamDropdown(
+                    _examGroups[i].$1,
+                    _examGroups[i].$2,
+                  ),
+                ),
               ],
             ],
           ),
@@ -254,7 +262,10 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label, style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600)),
+        Text(
+          label,
+          style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600),
+        ),
         const SizedBox(height: 6),
         if (!_loadingBatches && options.isEmpty)
           Container(
@@ -276,17 +287,21 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
             isExpanded: true,
             decoration: _fieldDecoration(hint: 'Select a $examCode batch'),
             items: options
-                .map((b) => DropdownMenuItem(
-                      value: b,
-                      child: Text(
-                        '${b.batchCode} — ${b.examTitle.isNotEmpty ? b.examTitle : b.examCode}'
-                        ' (${_fmtDate(b.createdAt)})',
-                        style: AppTextStyles.body(size: 11),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ))
+                .map(
+                  (b) => DropdownMenuItem(
+                    value: b,
+                    child: Text(
+                      '${b.batchCode} — ${b.examTitle.isNotEmpty ? b.examTitle : b.examCode}'
+                      ' (${_fmtDate(b.createdAt)})',
+                      style: AppTextStyles.body(size: 11),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                )
                 .toList(),
-            onChanged: _loadingBatches ? null : (batch) => _selectExamBatch(examCode, batch),
+            onChanged: _loadingBatches
+                ? null
+                : (batch) => _selectExamBatch(examCode, batch),
           ),
       ],
     );
@@ -296,16 +311,25 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Search', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600)),
+        Text(
+          'Search',
+          style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600),
+        ),
         const SizedBox(height: 6),
         TextField(
           controller: _searchController,
-          decoration: _fieldDecoration(hint: 'Search examinee name or number...').copyWith(
-            prefixIcon: const Icon(Icons.search, size: 18),
-            suffixIcon: _searchController.text.isNotEmpty
-                ? IconButton(icon: const Icon(Icons.clear, size: 18), onPressed: _searchController.clear)
-                : null,
-          ),
+          decoration:
+              _fieldDecoration(
+                hint: 'Search examinee name or number...',
+              ).copyWith(
+                prefixIcon: const Icon(Icons.search, size: 18),
+                suffixIcon: _searchController.text.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(Icons.clear, size: 18),
+                        onPressed: _searchController.clear,
+                      )
+                    : null,
+              ),
         ),
       ],
     );
@@ -315,13 +339,21 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Status', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600)),
+        Text(
+          'Status',
+          style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600),
+        ),
         const SizedBox(height: 6),
         DropdownButtonFormField<String>(
           value: _statusFilter,
           decoration: _fieldDecoration(),
           items: _statusFilterOptions
-              .map((s) => DropdownMenuItem(value: s, child: Text(s, style: AppTextStyles.body(size: 11))))
+              .map(
+                (s) => DropdownMenuItem(
+                  value: s,
+                  child: Text(s, style: AppTextStyles.body(size: 11)),
+                ),
+              )
               .toList(),
           onChanged: (v) => setState(() => _statusFilter = v ?? 'All'),
         ),
@@ -333,42 +365,89 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
     return InputDecoration(
       hintText: hint,
       isDense: true,
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: AppColors.cardBorder)),
-      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: AppColors.cardBorder)),
-      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: AppColors.primaryGreen)),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+        borderSide: const BorderSide(color: AppColors.cardBorder),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+        borderSide: const BorderSide(color: AppColors.cardBorder),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+        borderSide: const BorderSide(color: AppColors.primaryGreen),
+      ),
       contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
     );
   }
 
   Widget _buildBody() {
-    if (_loadingBatches) return _buildMessage(FontAwesomeIcons.spinner, 'Loading batches...');
-    if (_batchesError != null) return _buildMessage(FontAwesomeIcons.triangleExclamation, _batchesError!, isError: true);
-    if (_batches.isEmpty) return _buildMessage(FontAwesomeIcons.boxOpen, 'No examination batches found.');
-    if (_activeBatch == null) return _buildMessage(FontAwesomeIcons.fileLines, 'Select a batch to view its results.');
-    if (_loadingScans) return _buildMessage(FontAwesomeIcons.spinner, 'Loading results...');
-    if (_scansError != null) return _buildMessage(FontAwesomeIcons.triangleExclamation, _scansError!, isError: true);
-    if (_scans.isEmpty) return _buildMessage(FontAwesomeIcons.fileLines, 'No results found for this batch.');
+    if (_loadingBatches)
+      return _buildMessage(FontAwesomeIcons.spinner, 'Loading batches...');
+    if (_batchesError != null)
+      return _buildMessage(
+        FontAwesomeIcons.triangleExclamation,
+        _batchesError!,
+        isError: true,
+      );
+    if (_batches.isEmpty)
+      return _buildMessage(
+        FontAwesomeIcons.boxOpen,
+        'No examination batches found.',
+      );
+    if (_activeBatch == null)
+      return _buildMessage(
+        FontAwesomeIcons.fileLines,
+        'Select a batch to view its results.',
+      );
+    if (_loadingScans)
+      return _buildMessage(FontAwesomeIcons.spinner, 'Loading results...');
+    if (_scansError != null)
+      return _buildMessage(
+        FontAwesomeIcons.triangleExclamation,
+        _scansError!,
+        isError: true,
+      );
+    if (_scans.isEmpty)
+      return _buildMessage(
+        FontAwesomeIcons.fileLines,
+        'No results found for this batch.',
+      );
 
     final filtered = _filteredScans;
     if (filtered.isEmpty) {
-      return _buildMessage(FontAwesomeIcons.magnifyingGlass, 'No results match your search or filter.');
+      return _buildMessage(
+        FontAwesomeIcons.magnifyingGlass,
+        'No results match your search or filter.',
+      );
     }
     return _buildTable(filtered);
   }
 
-  Widget _buildMessage(FaIconData icon, String message, {bool isError = false}) {
+  Widget _buildMessage(
+    FaIconData icon,
+    String message, {
+    bool isError = false,
+  }) {
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          FaIcon(icon, size: 36, color: isError ? AppColors.warmRedOrange : AppColors.textGray),
+          FaIcon(
+            icon,
+            size: 36,
+            color: isError ? AppColors.warmRedOrange : AppColors.textGray,
+          ),
           const SizedBox(height: 14),
           ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 360),
             child: Text(
               message,
               textAlign: TextAlign.center,
-              style: AppTextStyles.body(size: 11.5, color: isError ? AppColors.warmRedOrange : AppColors.textGray),
+              style: AppTextStyles.body(
+                size: 11.5,
+                color: isError ? AppColors.warmRedOrange : AppColors.textGray,
+              ),
             ),
           ),
         ],
@@ -392,8 +471,10 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
           Expanded(
             child: ListView.separated(
               itemCount: scans.length,
-              separatorBuilder: (_, _) => const Divider(height: 1, color: AppColors.cardBorder),
-              itemBuilder: (context, index) => _buildResultRow(index + 1, scans[index], batch),
+              separatorBuilder: (_, _) =>
+                  const Divider(height: 1, color: AppColors.cardBorder),
+              itemBuilder: (context, index) =>
+                  _buildResultRow(index + 1, scans[index], batch),
             ),
           ),
         ],
@@ -402,7 +483,11 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
   }
 
   Widget _buildTableHeader() {
-    TextStyle style = AppTextStyles.body(size: 9.5, weight: FontWeight.w800, color: AppColors.textGray);
+    TextStyle style = AppTextStyles.body(
+      size: 9.5,
+      weight: FontWeight.w800,
+      color: AppColors.textGray,
+    );
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Row(
@@ -423,9 +508,15 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
     final examinee = scan.examinee;
     final result = scan.result;
     final name = examinee?.displayName ?? 'Untagged';
-    final number = examinee?.examineeNumber.isNotEmpty == true ? examinee!.examineeNumber : '—';
-    final score = result == null ? '—' : '${result.rawScore} / ${_denominatorFor(batch, result)}';
-    final percentage = result == null ? '—' : '${result.percentage.toStringAsFixed(1)}%';
+    final number = examinee?.examineeNumber.isNotEmpty == true
+        ? examinee!.examineeNumber
+        : '—';
+    final score = result == null
+        ? '—'
+        : '${result.rawScore} / ${_denominatorFor(batch, result)}';
+    final percentage = result == null
+        ? '—'
+        : '${result.percentage.toStringAsFixed(1)}%';
     final status = _effectiveStatus(scan);
     final isGraded = status == 'Graded';
 
@@ -433,7 +524,10 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       child: Row(
         children: [
-          SizedBox(width: 28, child: Text('$index', style: AppTextStyles.body(size: 11))),
+          SizedBox(
+            width: 28,
+            child: Text('$index', style: AppTextStyles.body(size: 11)),
+          ),
           Expanded(
             flex: 3,
             child: Text(
@@ -441,21 +535,42 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
               style: AppTextStyles.body(
                 size: 11,
                 weight: FontWeight.w600,
-                color: examinee == null ? AppColors.textGray : AppColors.textDark,
+                color: examinee == null
+                    ? AppColors.textGray
+                    : AppColors.textDark,
               ),
               overflow: TextOverflow.ellipsis,
             ),
           ),
-          Expanded(flex: 2, child: Text(number, style: AppTextStyles.body(size: 11))),
-          Expanded(flex: 2, child: Text(score, style: AppTextStyles.body(size: 11))),
-          Expanded(flex: 1, child: Text(percentage, style: AppTextStyles.body(size: 11))),
+          Expanded(
+            flex: 2,
+            child: Text(number, style: AppTextStyles.body(size: 11)),
+          ),
+          Expanded(
+            flex: 2,
+            child: Text(score, style: AppTextStyles.body(size: 11)),
+          ),
+          Expanded(
+            flex: 1,
+            child: Text(percentage, style: AppTextStyles.body(size: 11)),
+          ),
           Expanded(flex: 2, child: _statusChip(status, isGraded)),
           SizedBox(
             width: 72,
             child: TextButton(
               onPressed: () => setState(() => _viewingScan = scan),
-              style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: const Size(60, 30)),
-              child: Text('View', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w700, color: AppColors.primaryGreen)),
+              style: TextButton.styleFrom(
+                padding: EdgeInsets.zero,
+                minimumSize: const Size(60, 30),
+              ),
+              child: Text(
+                'View',
+                style: AppTextStyles.body(
+                  size: 10.5,
+                  weight: FontWeight.w700,
+                  color: AppColors.primaryGreen,
+                ),
+              ),
             ),
           ),
         ],
@@ -495,8 +610,18 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
   }
 
   static const _months = [
-    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
   ];
 
   String _fmtDate(DateTime d) => '${_months[d.month - 1]} ${d.day}, ${d.year}';
