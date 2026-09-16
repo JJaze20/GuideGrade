@@ -123,7 +123,7 @@ class AtRankedScorer {
   final AdmissionCategory? category;
 
   /// [ExamineeInfo.examineeNumber] when a non-blank tag exists, else `null`
-  /// (untagged, or an OCR-suggested name with no number yet).
+  /// (untagged, or a name entered with no number yet).
   final String? examineeNumber;
 
   /// [ExamineeInfo.displayName] when the scan carries an examinee, else

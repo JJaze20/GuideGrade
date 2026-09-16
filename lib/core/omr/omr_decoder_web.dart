@@ -49,7 +49,7 @@ class OmrDecoder {
   }) =>
       _unsupported();
 
-  OmrScanResult decode(String imagePath, OmrExamTemplate template) => _unsupported();
+  OmrScanResult decode(String imagePath, OmrExamTemplate template, {String? rectifiedOutputPath}) => _unsupported();
 
   void saveDebugVisualization(String imagePath, OmrExamTemplate template, String outputDir, int pageIndex) =>
       _unsupported();

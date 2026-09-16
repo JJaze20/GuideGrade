@@ -393,7 +393,11 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
     if (found == null) return 'Align the 4 black corner squares inside the guides';
     switch (_liveVerdict!) {
       case AlignmentVerdict.green:
-        return _readyToCapture ? 'Ready to scan' : 'Hold steady…';
+        return _readyToCapture
+            ? (_appState.activeExamCode == 'TAT'
+                ? 'Corners found — full alignment checked after capture'
+                : 'Ready to scan')
+            : 'Hold steady…';
       case AlignmentVerdict.yellow:
         final worst = found.indexWhere((c) => c != CornerConfidence.confident);
         final name = worst >= 0 ? _cornerNames[worst] : 'one corner';

@@ -1,11 +1,11 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:guidegrade/core/omr/omr_templates.dart';
 
-/// Regression checks for the AT/QTM "clip the caption strip off the top"
-/// fix (see generate_sheets.dart's clipCaptionTop/kNameCaptionHeight and
-/// omr_templates.dart's generated note). These assert the crop-box
-/// geometry itself, not OCR behavior -- cleanNameOcrText's own tests cover
-/// the text-cleanup fallback.
+/// Regression checks for the AT/QTM/TAT "clip the caption strip off the
+/// top" fix (see generate_sheets.dart's clipCaptionTop/kNameCaptionHeight/
+/// kTatNameCaptionHeight and omr_templates.dart's generated note). These
+/// assert the crop-box geometry itself, not OCR behavior --
+/// cleanNameOcrText's own tests cover the text-cleanup fallback.
 typedef _OriginalBox = ({double x, double y, double w, double h});
 
 void _expectTopClippedOnly(
@@ -40,9 +40,12 @@ void _expectTopClippedOnly(
   );
 }
 
-/// Shared by AT and QTM (both now use the same two-row boxed Last Name/
-/// (First Name+MI) header design, each with its own dedicated caption/box
-/// split -- see generate_sheets.dart's _paintSimpleHeader/_paintQtmHeader).
+/// Shared by AT, QTM, and TAT -- each draws its Last Name/First Name/MI
+/// captions on their own line at the top of the field, with the
+/// handwriting/entry space below, though the exact row layout differs
+/// (AT/QTM: two boxed rows; TAT: one open row -- see
+/// generate_sheets.dart's _paintSimpleHeader/_paintQtmHeader/
+/// _paintTatHeader).
 void _testRedesignedNameCrop(
   String examCode,
   _OriginalBox originalLastName,
@@ -84,10 +87,10 @@ void _testRedesignedNameCrop(
 void main() {
   // Original (pre-fix, full-box) rects, recorded as fixed goldens rather
   // than re-derived from layout constants -- this should only fail if the
-  // actual shipped AT/QTM fractions regress, not because of an unrelated
-  // layout change elsewhere. Last Name has its own full-width row; First
-  // Name/MI share the row below it, so their original y differs from Last
-  // Name's.
+  // actual shipped AT/QTM/TAT fractions regress, not because of an
+  // unrelated layout change elsewhere. Last Name has its own full-width
+  // row; First Name/MI share the row below it, so their original y
+  // differs from Last Name's.
   _testRedesignedNameCrop(
     'AT',
     (x: 0.07391, y: 0.10690, w: 0.75931, h: 0.04039),
@@ -100,16 +103,12 @@ void main() {
     (x: 0.07190, y: 0.14102, w: 0.64444, h: 0.03633),
     (x: 0.71634, y: 0.14102, w: 0.11373, h: 0.03633),
   );
-
-  group('TAT name-field crop is untouched (AT/QTM-only fix)', () {
-    test('TAT keeps its original full-box crop', () {
-      final tat = omrTemplates['TAT']!;
-      expect(tat.lastNameFieldRect.xFrac, closeTo(0.04701, 1e-5));
-      expect(tat.lastNameFieldRect.yFrac, closeTo(0.13889, 1e-5));
-      expect(tat.lastNameFieldRect.widthFrac, closeTo(0.29808, 1e-5));
-      expect(tat.lastNameFieldRect.heightFrac, closeTo(0.02451, 1e-5));
-      expect(tat.firstNameFieldRect.yFrac, closeTo(0.13889, 1e-5));
-      expect(tat.middleInitialFieldRect.yFrac, closeTo(0.13889, 1e-5));
-    });
-  });
+  // TAT: unlike AT/QTM, all three fields share ONE row (no separate First
+  // Name/MI row below), so their original y is identical.
+  _testRedesignedNameCrop(
+    'TAT',
+    (x: 0.04701, y: 0.13889, w: 0.12756, h: 0.03922),
+    (x: 0.17457, y: 0.13889, w: 0.11056, h: 0.03922),
+    (x: 0.28513, y: 0.13889, w: 0.03402, h: 0.03922),
+  );
 }

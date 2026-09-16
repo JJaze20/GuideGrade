@@ -9,6 +9,7 @@ import 'fiducial_search_tuning.dart';
 import 'omr_alignment_check.dart';
 import 'omr_mesh_correction.dart';
 import 'omr_templates.dart';
+import 'tat_marker_validation.dart';
 
 /// Template-centered search box, fallback quadrant, and scoring anchor.
 typedef _QuadrantSearch = ({
@@ -308,6 +309,21 @@ class OmrDecoder {
   /// routed to ambiguous review as originally intended, rather than being
   /// waved through just because they happen to dominate a razor-thin signal.
   static const double _strongPresenceGapMultiplier = 1.5;
+
+  /// Below this gap between the runner-up and the item's own blank floor,
+  /// the "runner-up" isn't a real second choice -- it's indistinguishable
+  /// from the other genuinely-blank bubbles in the same item. Rescues a
+  /// faint-but-uncontested mark that [_strongPresenceGapMultiplier] alone
+  /// would still flag ambiguous: that check asks "is the *winning* mark's
+  /// own ink strong enough to trust its ratio," which a light mark can fail
+  /// even with zero real competition (confirmed against a real AT capture,
+  /// 2026-09-15, where a faint but singly-marked item read
+  /// bestFill=0.10/runnerUp=0.02/floorReference=0.015 -- comfortably
+  /// uncontested, but presenceGap 0.085 fell under the 0.12 bar). This is a
+  /// second, independent path to the same "decisive" verdict, asking about
+  /// the *other* choices instead: do any of them look like a real
+  /// contender at all, regardless of how faint the winner itself is.
+  static const double _noCompetitorGapCeiling = _markPresenceGap * 0.5;
 
   /// Small local re-centering search tried only for items the flat/relative
   /// checks above still call blank or ambiguous. A single page-wide
@@ -1470,7 +1486,7 @@ class OmrDecoder {
   /// Reads [imagePath] against [template] and returns the decoded marks.
   /// Throws a [StateError] with a user-facing message if the sheet couldn't
   /// be read or aligned.
-  OmrScanResult decode(String imagePath, OmrExamTemplate template) {
+  OmrScanResult decode(String imagePath, OmrExamTemplate template, {String? rectifiedOutputPath}) {
     final decodeTotalSw = _kPerfDebug ? (Stopwatch()..start()) : null;
     var decodeCornerSearchMs = 0;
     var decodeWarpMs = 0;
@@ -1748,6 +1764,14 @@ class OmrDecoder {
                             'total=${decodeTotalSw.elapsedMilliseconds}ms',
                           );
                         }
+                        // TAT's review image uses the exact perspective warp
+                        // read above. The viewer applies the persisted mesh to
+                        // overlays, just as _measureBubbleInk does to sampling.
+                        if (template.examCode == 'TAT' && rectifiedOutputPath != null) {
+                          try { cv.imwrite(rectifiedOutputPath, warped); } catch (_) {
+                            // A display-image failure must not lose a scan.
+                          }
+                        }
                         return OmrScanResult(
                           examCode: result.examCode,
                           items: result.items,
@@ -1898,18 +1922,19 @@ class OmrDecoder {
 
   /// Crops the Last Name / First Name / MI boxes (see
   /// [OmrExamTemplate.lastNameFieldRect]/[firstNameFieldRect]/
-  /// [middleInitialFieldRect]) for on-device OCR (see NameOcrService)
-  /// directly out of [imagePath] — the original captured photo, not a
-  /// rectified/display copy. Runs its own corner search and perspective
-  /// warp at [_ocrCanonicalPxPerPt] (much higher than [rectifyForOverlay]'s
-  /// [_canonicalPxPerPt]) so the handwritten answer itself has enough real
-  /// pixels to be recognizable — see [_ocrCanonicalPxPerPt]'s doc comment
-  /// for why a shared low-res rectified copy wasn't good enough. Purely a
-  /// display/suggestion input, same isolation as [rectifyForOverlay]: its
-  /// own `imread`/corner search/warp, sharing no Mat or intermediate value
-  /// with [decode] or [rectifyForOverlay] — never touches scoring. Returns
-  /// all three written paths, or null if the sheet's corners couldn't be
-  /// found in this photo.
+  /// [middleInitialFieldRect]) directly out of [imagePath] — the original
+  /// captured photo, not a rectified/display copy — so staff can read the
+  /// handwritten name and enter it manually (see showExamineeDialog); this
+  /// app does not attempt automatic handwriting recognition. Runs its own
+  /// corner search and perspective warp at [_ocrCanonicalPxPerPt] (much
+  /// higher than [rectifyForOverlay]'s [_canonicalPxPerPt]) so the crop has
+  /// enough real pixels to be legible — see [_ocrCanonicalPxPerPt]'s doc
+  /// comment for why a shared low-res rectified copy wasn't good enough.
+  /// Purely a display input, same isolation as [rectifyForOverlay]: its own
+  /// `imread`/corner search/warp, sharing no Mat or intermediate value with
+  /// [decode] or [rectifyForOverlay] — never touches scoring. Returns all
+  /// three written paths, or null if the sheet's corners couldn't be found
+  /// in this photo.
   ({String lastName, String firstName, String middleInitial})? cropNameFields(
     String imagePath,
     OmrExamTemplate template, {
@@ -1954,7 +1979,11 @@ class OmrDecoder {
                 final warpedGrayForMesh = cv.cvtColor(warped, cv.COLOR_BGR2GRAY);
                 final OmrMeshCorrection mesh;
                 try {
-                  final interiorMeasured = _detectInteriorFiducials(
+                  // TAT's new references bracket answers, not handwriting.
+                  // Preserve its existing global-only name crop mapping.
+                  final interiorMeasured = template.examCode == 'TAT'
+                      ? <OmrFiducialRole, (double, double)>{}
+                      : _detectInteriorFiducials(
                     warpedGrayForMesh,
                     template,
                     canonicalWidth,
@@ -1973,7 +2002,7 @@ class OmrDecoder {
                 } finally {
                   warpedGrayForMesh.dispose();
                 }
-                void writeField(OmrFieldRect field, String outPath) {
+                void writeField(OmrFieldRect field, String outPath, int boxCount) {
                   // Mesh-correct all 4 corners of the field rect (not just
                   // its center) and take their bounding box — a locally
                   // bent capture can skew the rect into a non-axis-aligned
@@ -2019,21 +2048,51 @@ class OmrDecoder {
                     // near-blank paper region.
                     final grayRoi = cv.cvtColor(roi, cv.COLOR_BGR2GRAY);
                     try {
-                      final clahe = cv.createCLAHE(clipLimit: 3, tileGridSize: (4, 4));
+                      // Trim trailing blank cells so a short name in a
+                      // wide, mostly-empty field (e.g. 7 letters in a
+                      // 24-cell Last Name field) doesn't produce an image
+                      // that's mostly blank paper — confirmed on a real
+                      // device this made the crop strip badly out of
+                      // proportion with narrower fields (MI) next to it.
+                      // A no-op (identical Mat) for `boxCount <= 0` (TAT's
+                      // un-boxed fields) or a field with nothing detected
+                      // to trim to. See _trimNameCropToContent's own doc
+                      // comment for why this only ever removes guaranteed-
+                      // blank trailing space, never any handwriting.
+                      final trimmed = boxCount > 0
+                          ? _trimNameCropToContent(grayRoi, roi.width, roi.height, boxCount)
+                          : grayRoi;
                       try {
-                        final enhanced = clahe.apply(grayRoi);
+                        // CLAHE re-normalizes local contrast (same
+                        // technique used before thresholding for bubble
+                        // detection) so a crop taken in poor/uneven
+                        // lighting stays legible to a human reader; a
+                        // light blur afterward tamps down the noise CLAHE
+                        // can amplify in an otherwise near-blank paper
+                        // region. Otherwise left unmodified (printed grid
+                        // lines and all) — this image is read directly by
+                        // staff, not fed to a recognizer, so within
+                        // whatever width is kept it must be a complete,
+                        // un-altered record of exactly what was
+                        // handwritten.
+                        final clahe = cv.createCLAHE(clipLimit: 3, tileGridSize: (4, 4));
                         try {
-                          final blurred = cv.gaussianBlur(enhanced, (3, 3), 0);
+                          final enhanced = clahe.apply(trimmed);
                           try {
-                            cv.imwrite(outPath, blurred);
+                            final blurred = cv.gaussianBlur(enhanced, (3, 3), 0);
+                            try {
+                              cv.imwrite(outPath, blurred);
+                            } finally {
+                              blurred.dispose();
+                            }
                           } finally {
-                            blurred.dispose();
+                            enhanced.dispose();
                           }
                         } finally {
-                          enhanced.dispose();
+                          clahe.dispose();
                         }
                       } finally {
-                        clahe.dispose();
+                        if (!identical(trimmed, grayRoi)) trimmed.dispose();
                       }
                     } finally {
                       grayRoi.dispose();
@@ -2043,9 +2102,9 @@ class OmrDecoder {
                   }
                 }
 
-                writeField(template.lastNameFieldRect, lastNameOutPath);
-                writeField(template.firstNameFieldRect, firstNameOutPath);
-                writeField(template.middleInitialFieldRect, middleInitialOutPath);
+                writeField(template.lastNameFieldRect, lastNameOutPath, template.lastNameBoxCount);
+                writeField(template.firstNameFieldRect, firstNameOutPath, template.firstNameBoxCount);
+                writeField(template.middleInitialFieldRect, middleInitialOutPath, template.middleInitialBoxCount);
                 return (
                   lastName: lastNameOutPath,
                   firstName: firstNameOutPath,
@@ -2071,6 +2130,114 @@ class OmrDecoder {
     } finally {
       src.dispose();
     }
+  }
+
+  /// How many extra letter cells past the last one classified as
+  /// containing ink to keep before trimming a name crop — deliberately
+  /// generous. This value only ever controls how much *extra blank space*
+  /// survives the trim; it can never cause real handwriting to be dropped
+  /// from the saved image, since everything to the left of the trim point
+  /// (ink or not) is always kept intact. A margin this size comfortably
+  /// covers the worst per-cell misclassification gap actually observed on
+  /// a real capture this session (a 2-cell run of faint ink misread as
+  /// blank from an uneven lighting gradient — see [_lastInkCellIndex]'s
+  /// own doc comment) with real room to spare, since under-trimming only
+  /// costs a little unused width while over-trimming would cut off a
+  /// letter.
+  static const int _nameCropTrimBufferCells = 5;
+
+  /// How much darker (0-255 gray levels) a cell's own mean brightness must
+  /// be than the brightest cell in a local window around it (see
+  /// [_nameCropBaselineWindowRadius]) to count as containing handwriting —
+  /// the same self-calibrating, gradient-tolerant approach validated
+  /// earlier this session for the (now-removed) OCR line-reconstruction
+  /// step. Reused here for a much lower-stakes purpose: finding *how far*
+  /// real handwriting extends across the field, not classifying or
+  /// dropping any individual cell, so a misclassified cell here only
+  /// shifts the trim point slightly rather than removing content.
+  static const double _nameCropInkDrop = 12.0;
+
+  /// See [_nameCropInkDrop] — window radius for its local brightest-cell
+  /// baseline, same value and same reasoning as the earlier OCR
+  /// reconstruction step.
+  static const int _nameCropBaselineWindowRadius = 6;
+
+  /// Index (0-based) of the last letter cell across [boxCount] that
+  /// appears to contain handwriting, judged by comparing each cell's mean
+  /// brightness against the brightest cell in a local window around it
+  /// (see [_nameCropInkDrop]/[_nameCropBaselineWindowRadius]) — tolerant of
+  /// a lighting/shadow gradient across the field, unlike a single
+  /// field-wide brightness reference. Returns null when nothing in the
+  /// field reads as ink (a blank field — the caller keeps the full crop
+  /// rather than trimming to nothing).
+  static int? _lastInkCellIndex(cv.Mat gray, int width, int height, int boxCount) {
+    final cellWidth = width / boxCount;
+    final cellMeans = <double>[];
+    for (var i = 0; i < boxCount; i++) {
+      final x0 = (i * cellWidth).round().clamp(0, width - 1);
+      final x1 = ((i + 1) * cellWidth).round().clamp(x0 + 1, width);
+      final cell = gray.region(cv.Rect(x0, 0, x1 - x0, height));
+      try {
+        final meanScalar = cell.mean();
+        try {
+          cellMeans.add(meanScalar.val1);
+        } finally {
+          meanScalar.dispose();
+        }
+      } finally {
+        cell.dispose();
+      }
+    }
+    int? lastInk;
+    for (var i = 0; i < boxCount; i++) {
+      final lo = math.max(0, i - _nameCropBaselineWindowRadius);
+      final hi = math.min(boxCount - 1, i + _nameCropBaselineWindowRadius);
+      var baseline = cellMeans[lo];
+      for (var j = lo + 1; j <= hi; j++) {
+        if (cellMeans[j] > baseline) baseline = cellMeans[j];
+      }
+      if ((baseline - cellMeans[i]) >= _nameCropInkDrop) lastInk = i;
+    }
+    if (_kFiducialDebug) {
+      _fidLog('nameCropTrim boxCount=$boxCount means=${cellMeans.map((m) => m.toStringAsFixed(1)).toList()} '
+          'lastInk=$lastInk');
+    }
+    return lastInk;
+  }
+
+  /// Trims [gray] (a cropped, un-warped name field, [width]x[height]) down
+  /// to just past where handwriting actually ends, so a short name in a
+  /// wide field doesn't produce an image that's mostly blank paper. Keeps
+  /// every cell from the start of the field through
+  /// [_lastInkCellIndex] plus [_nameCropTrimBufferCells] extra cells of
+  /// margin, and always returns [gray] unchanged (identical) rather than
+  /// trim — when the field reads as entirely blank ([_lastInkCellIndex]
+  /// returns null), or when the computed trim point would keep the whole
+  /// field anyway — callers must check `identical()` before disposing,
+  /// same convention as [_normalizeIllumination].
+  static cv.Mat _trimNameCropToContent(cv.Mat gray, int width, int height, int boxCount) {
+    final lastInk = _lastInkCellIndex(gray, width, height, boxCount);
+    if (lastInk == null) {
+      if (_kFiducialDebug) {
+        _fidLog('nameCropTrim boxCount=$boxCount width=$width height=$height -> blank field, no trim');
+      }
+      return gray;
+    }
+    final cellWidth = width / boxCount;
+    final keepCells = (lastInk + 1 + _nameCropTrimBufferCells).clamp(1, boxCount);
+    if (keepCells >= boxCount) {
+      if (_kFiducialDebug) {
+        _fidLog('nameCropTrim boxCount=$boxCount width=$width keepCells=$keepCells -> '
+            'no trim (would keep whole field)');
+      }
+      return gray;
+    }
+    final trimWidth = (keepCells * cellWidth).round().clamp(1, width);
+    if (_kFiducialDebug) {
+      _fidLog('nameCropTrim boxCount=$boxCount width=$width height=$height keepCells=$keepCells '
+          'trimWidth=$trimWidth');
+    }
+    return gray.region(cv.Rect(0, 0, trimWidth, height));
   }
 
   /// Debug-only: writes two annotated JPEGs to [outputDir] — the detected
@@ -2821,11 +2988,19 @@ class OmrDecoder {
     if (template.pageWidthPt <= template.pageHeightPt) {
       return (gray, _findCaptureCorners(gray, template), null);
     }
-    StateError lastError;
-    try {
-      return (gray, _findCaptureCorners(gray, template), null);
-    } on StateError catch (e) {
-      lastError = e;
+    StateError? lastError;
+    // A landscape template must be decoded from a landscape-oriented frame.
+    // Portrait camera buffers can still contain four detectable squares, so
+    // accepting the raw buffer here silently creates a sideways warp and puts
+    // landscape bubble coordinates over it. Try the 90-degree orientations
+    // first whenever the source dimensions contradict the template.
+    final sourceMatchesOrientation = gray.width >= gray.height;
+    if (sourceMatchesOrientation) {
+      try {
+        return (gray, _findCaptureCorners(gray, template), null);
+      } on StateError catch (e) {
+        lastError = e;
+      }
     }
     for (final code in [
       cv.ROTATE_90_CLOCKWISE,
@@ -2840,7 +3015,9 @@ class OmrDecoder {
         rotated.dispose();
       }
     }
-    throw lastError;
+    // `lastError` is set for every failed search; the fallback keeps the
+    // original exception message if all candidates fail.
+    throw lastError ?? StateError('Could not orient the captured sheet.');
   }
 
   /// Deliberately minimal, per explicit product direction: as long as all 4
@@ -2991,12 +3168,16 @@ class OmrDecoder {
   ) {
     if (template.interiorFiducials.isEmpty) return const {};
     final found = <OmrFiducialRole, (double, double)>{};
+    final tat = template.examCode == 'TAT';
+    final scale = canonicalWidth / template.pageWidthPt;
     cv.Mat? normalizedGray;
     try {
       for (final fiducial in template.interiorFiducials) {
         final ex = fiducial.xFrac * canonicalWidth;
         final ey = fiducial.yFrac * canonicalHeight;
-        final halfExtent = _interiorSearchHalfExtentPx(fiducial.halfSizePt);
+        final halfExtent = tat
+            ? (fiducial.halfSizePt + 14) * scale
+            : _interiorSearchHalfExtentPx(fiducial.halfSizePt);
         final box = _clampedRect(
           ex - halfExtent,
           ey - halfExtent,
@@ -3005,11 +3186,13 @@ class OmrDecoder {
           canonicalWidth,
           canonicalHeight,
         );
-        var r = _findMarkerInRegion(warpedGray, box, ex, ey);
+        var r = _findMarkerInRegion(warpedGray, box, ex, ey,
+            expectedSidePx: tat ? 2 * fiducial.halfSizePt * scale : null);
         if (r.centroid == null) {
           normalizedGray ??= _normalizeIllumination(warpedGray);
           if (!identical(normalizedGray, warpedGray)) {
-            r = _findMarkerInRegion(normalizedGray, box, ex, ey);
+            r = _findMarkerInRegion(normalizedGray, box, ex, ey,
+                expectedSidePx: tat ? 2 * fiducial.halfSizePt * scale : null);
           }
         }
         final c = r.centroid;
@@ -3441,6 +3624,7 @@ class OmrDecoder {
     double anchorY, {
     String? debugTag,
     double? anchorScaleOverride,
+    double? expectedSidePx,
   }) {
     final roi = gray.region(region);
     try {
@@ -3512,6 +3696,7 @@ class OmrDecoder {
                     // Winner tracked by COMBINED score — higher is better now
                     // (squareness-led), not the old "closest wins".
                     double bestScore = -1;
+                    double runnerUpScore = -1;
                     double bestSquareness = 0;
                     double bestContrast = 0;
                     double bestArea = 0;
@@ -3547,6 +3732,14 @@ class OmrDecoder {
                           math.max(1, math.min(rect.width, rect.height));
                       final aspect = longSide / shortSide;
                       final extent = boxArea > 0 ? area / boxArea : 0.0;
+                      // Post-warp TAT squares have a known physical size.
+                      // Include the contour dilation's two-pixel growth.
+                      if (expectedSidePx != null && !tatMarkerShapeMatches(
+                          expectedSidePx: expectedSidePx,
+                          shortSide: shortSide.toDouble(), longSide: longSide.toDouble(),
+                          extent: extent)) {
+                        continue;
+                      }
 
                       // Local contrast against this blob's own neighborhood.
                       // Computed up front — before any of the cheap gates
@@ -3745,6 +3938,7 @@ class OmrDecoder {
                         continue;
                       }
                       if (candScore > bestScore) {
+                        runnerUpScore = bestScore;
                         if (bestRect != null) {
                           reject(bestRect, bestSquareness, bestScore, 'outscored',
                               area: bestArea, contrast: bestContrast);
@@ -3757,6 +3951,7 @@ class OmrDecoder {
                         bestRect = rect;
                         bestContourIndex = ci;
                       } else {
+                        runnerUpScore = math.max(runnerUpScore, candScore);
                         reject(rect, squareness, candScore, 'outscored', area: area, contrast: contrast);
                       }
                     }
@@ -3764,7 +3959,8 @@ class OmrDecoder {
                     rejected.sort((a, b) => b.squareness.compareTo(a.squareness));
                     final topRejects = rejected.take(5).toList();
 
-                    if (bestRect == null) {
+                    if (bestRect == null ||
+                        (expectedSidePx != null && tatMarkerMatchIsAmbiguous(bestScore, runnerUpScore))) {
                       return _MarkerSearchResult(
                         centroid: null,
                         bboxGlobal: null,
@@ -3990,8 +4186,10 @@ class OmrDecoder {
 
   /// True when [measured]'s best-to-runner-up gap is too small to call the
   /// item decisively marked -- either by the flat per-exam [ambiguousMargin],
-  /// or (see [_ambiguousRelativeMarginFloor]) by falling well short of the
-  /// item's own presence gap despite a comfortably strong signal.
+  /// by (see [_ambiguousRelativeMarginFloor]) falling well short of the
+  /// item's own presence gap despite a comfortably strong signal, or (see
+  /// [_noCompetitorGapCeiling]) because there simply isn't a real second
+  /// choice regardless of how faint the winner itself is.
   bool _isAmbiguousMargin(_ItemMeasurement measured, double ambiguousMargin) {
     final margin = measured.bestFill - measured.runnerUpFill;
     if (margin >= ambiguousMargin) return false;
@@ -4000,7 +4198,9 @@ class OmrDecoder {
         presenceGap >= _markPresenceGap * _strongPresenceGapMultiplier;
     final decisiveRelativeToOwnSignal =
         strongPresence && (margin / presenceGap) >= _ambiguousRelativeMarginFloor;
-    return !decisiveRelativeToOwnSignal;
+    final runnerUpGapFromFloor = measured.runnerUpFill - measured.floorReference;
+    final noRealCompetitor = runnerUpGapFromFloor < _noCompetitorGapCeiling;
+    return !(decisiveRelativeToOwnSignal || noRealCompetitor);
   }
 
   /// Measures every choice in one item with the same (shiftXPx, shiftYPx)

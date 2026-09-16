@@ -2,11 +2,11 @@ import '../core/omr/duplicate_scan_detector.dart';
 import 'omr_scan_result.dart';
 
 /// The student a scanned sheet belongs to. Attached per [LocalScan],
-/// entered by staff on the results/review screen — optionally pre-filled
-/// from an on-device OCR guess of the sheet's handwritten name field (see
-/// [LocalScan.ocrLastNameGuess]/[ocrFirstNameGuess] and
-/// showExamineeDialog's `ocrSuggestion` param), but always staff-confirmed
-/// before it's saved here; OCR alone never writes an [ExamineeInfo].
+/// entered by staff on the results/review screen while looking at the
+/// sheet's own handwritten-name crop (see [LocalScan.nameCropLastFileName]/
+/// [nameCropFirstFileName]/[nameCropMiddleFileName] and
+/// showExamineeDialog) — this app never attempts automatic handwriting
+/// recognition; a scan's name is only ever set by a human typing it in.
 ///
 /// [examineeNumber] is the identifying field results are keyed to for a
 /// person; [firstName]/[lastName] are for human-readable lists and exports.
@@ -285,15 +285,15 @@ class LocalScan {
   /// results or archive-detail screen).
   final ExamineeInfo? examinee;
 
-  /// On-device OCR's best-effort guess at the handwritten Last Name / First
-  /// Name fields (see NameOcrService), or null when recognition found
-  /// nothing usable. Purely a suggestion to pre-fill showExamineeDialog
-  /// with — device-local only, never mirrored to the cloud sync layer (see
-  /// AppState.persistCapturedSessionToBatch), and never read once
-  /// [examinee] itself is set.
-  final String? ocrLastNameGuess;
-  final String? ocrFirstNameGuess;
-  final String? ocrMiddleNameGuess;
+  /// Paths to the cropped handwritten Last Name / First Name / MI field
+  /// images, relative to the batch directory (e.g.
+  /// "images/s_1723552000000_0_name_last.enc") — the evidence staff read
+  /// while typing a name into showExamineeDialog. Null when cropping failed
+  /// for this sheet, or the scan predates this field (older archived
+  /// scans display normally with no crop shown).
+  final String? nameCropLastFileName;
+  final String? nameCropFirstFileName;
+  final String? nameCropMiddleFileName;
 
   const LocalScan({
     required this.id,
@@ -303,9 +303,9 @@ class LocalScan {
     required this.decoded,
     this.result,
     this.examinee,
-    this.ocrLastNameGuess,
-    this.ocrFirstNameGuess,
-    this.ocrMiddleNameGuess,
+    this.nameCropLastFileName,
+    this.nameCropFirstFileName,
+    this.nameCropMiddleFileName,
   });
 
   LocalScan copyWith({
@@ -321,9 +321,9 @@ class LocalScan {
         decoded: decoded,
         result: result ?? this.result,
         examinee: clearExaminee ? null : (examinee ?? this.examinee),
-        ocrLastNameGuess: ocrLastNameGuess,
-        ocrFirstNameGuess: ocrFirstNameGuess,
-        ocrMiddleNameGuess: ocrMiddleNameGuess,
+        nameCropLastFileName: nameCropLastFileName,
+        nameCropFirstFileName: nameCropFirstFileName,
+        nameCropMiddleFileName: nameCropMiddleFileName,
       );
 
   Map<String, dynamic> toJson() => {
@@ -334,9 +334,9 @@ class LocalScan {
         'decoded': decoded.toJson(),
         'result': result?.toJson(),
         'examinee': examinee?.toJson(),
-        'ocrLastNameGuess': ocrLastNameGuess,
-        'ocrFirstNameGuess': ocrFirstNameGuess,
-        'ocrMiddleNameGuess': ocrMiddleNameGuess,
+        'nameCropLastFileName': nameCropLastFileName,
+        'nameCropFirstFileName': nameCropFirstFileName,
+        'nameCropMiddleFileName': nameCropMiddleFileName,
       };
 
   factory LocalScan.fromJson(Map<String, dynamic> json) => LocalScan(
@@ -351,9 +351,11 @@ class LocalScan {
         examinee: json['examinee'] == null
             ? null
             : ExamineeInfo.fromJson(json['examinee'] as Map<String, dynamic>),
-        ocrLastNameGuess: json['ocrLastNameGuess'] as String?,
-        ocrFirstNameGuess: json['ocrFirstNameGuess'] as String?,
-        ocrMiddleNameGuess: json['ocrMiddleNameGuess'] as String?,
+        // Absent on any scan captured before these fields existed — those
+        // just display with no crop, per their own doc comment above.
+        nameCropLastFileName: json['nameCropLastFileName'] as String?,
+        nameCropFirstFileName: json['nameCropFirstFileName'] as String?,
+        nameCropMiddleFileName: json['nameCropMiddleFileName'] as String?,
       );
 }
 
