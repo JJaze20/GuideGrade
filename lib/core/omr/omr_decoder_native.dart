@@ -196,9 +196,20 @@ class OmrDecoder {
   static double _darknessFactor(double meanBrightness) =>
       ((_referenceBrightness - meanBrightness) / _maxDarknessRange).clamp(0.0, 1.0);
 
-  /// Increase contrast correction up to 2× for dark inputs.
+  /// Washout factor: 0 at reference brightness, 1 at near-saturation (250).
+  /// Captures the opposite problem from darkness — an overexposed image from
+  /// a low-end camera's aggressive auto-exposure, where pencil marks are
+  /// compressed to within a few gray levels of white paper.
+  static double _washoutFactor(double meanBrightness) =>
+      ((meanBrightness - _referenceBrightness) / 80.0).clamp(0.0, 1.0);
+
+  /// Increase contrast correction for both dark AND washed-out inputs.
+  /// Dark inputs: up to 2× base (unchanged from before).
+  /// Washed-out inputs: up to 1.5× base — a gentler boost because the image
+  /// already has high mean brightness and aggressive CLAHE on bright images
+  /// risks amplifying JPEG artifacts more than on dark ones.
   static double _adaptiveClipLimit(double base, double meanBrightness) =>
-      base * (1 + _darknessFactor(meanBrightness));
+      base * (1 + _darknessFactor(meanBrightness) + _washoutFactor(meanBrightness) * 0.5);
 
   /// Reduce the ink threshold offset up to 50% for dark inputs.
   static double _adaptiveThresholdCFor(double base, double meanBrightness) =>
@@ -208,7 +219,14 @@ class OmrDecoder {
   static const int _illumDownscaleDiv = 8;
 
   /// Target paper-brightness band after background division, preserving faint ink.
-  static const double _illumTargetLevelMin = 170;
+  /// Min lowered from 170 → 150: on washed-out low-end camera captures (auto-
+  /// exposure pushes paper to near-255), the background mean is very high, and
+  /// clamping the division target to 170 keeps the result too bright — faint
+  /// pencil marks end up only a few gray levels below paper, well within CLAHE
+  /// noise.  A target of 150 pulls the normalized page further from saturation,
+  /// giving CLAHE and adaptive thresholding more dynamic range to separate
+  /// genuinely marked bubbles from blank paper.
+  static const double _illumTargetLevelMin = 150;
   static const double _illumTargetLevelMax = 230;
 
   /// Normalize broad lighting variations before CLAHE and thresholding by dividing
@@ -308,7 +326,17 @@ class OmrDecoder {
 
   /// Minimum ink signal. Mark presence primarily uses same-row bubble differences
   /// so changes in overall lighting do not shift every item across a fixed floor.
-  static const double _blankFillFloor = 0.15;
+  /// Per-exam: TAT's small oval bubbles on washed-out low-end camera captures
+  /// (auto-exposure blows out pencil-vs-paper contrast) can score below the
+  /// standard 0.15 even when genuinely marked — lowered to 0.10 so faint marks
+  /// at least reach the presence/ambiguity checks instead of being silently
+  /// dismissed as blank.  Risk of false positives on dirty paper is mitigated
+  /// by the _markPresenceGap check that still requires the best bubble to
+  /// stand out from its row's floor.
+  static double _blankFillFloorFor(String examCode) => switch (examCode) {
+    'TAT' => 0.10,
+    _ => 0.15,
+  };
 
   /// Minimum best-to-runner-up gap for an unambiguous mark.
   /// AT/QTM use 0.10 for lighter, ring-shaped marks observed in real scans.
@@ -326,7 +354,15 @@ class OmrDecoder {
 
   /// Minimum best-to-lowest bubble gap for mark presence, including two-choice items.
   /// Lower than the ambiguity margin so faint marks can reach review.
-  static const double _markPresenceGap = 0.08;
+  /// Per-exam: TAT on washed-out captures (low-end camera auto-exposure) can
+  /// compress the entire fill range into a narrow band where even a genuinely
+  /// marked bubble barely exceeds its row's blank floor by 0.04-0.06.  A gap
+  /// of 0.05 lets those faint-but-real marks reach the ambiguity/margin checks
+  /// instead of being dismissed as blank.
+  static double _markPresenceGapFor(String examCode) => switch (examCode) {
+    'TAT' => 0.05,
+    _ => 0.08,
+  };
 
   /// A best-to-runner-up gap at least this fraction of the item's own
   /// presence gap (best-to-floor) counts as decisive even when it falls
@@ -3931,6 +3967,8 @@ class OmrDecoder {
     final bubbleSampleHalfPxX = template.bubbleRadiusPt * _canonicalPxPerPt;
     final bubbleSampleHalfPxY = template.bubbleRadiusYPt * _canonicalPxPerPt;
     final ambiguousMargin = _ambiguousMarginFor(template.examCode);
+    final blankFloor = _blankFillFloorFor(template.examCode);
+    final presenceGap = _markPresenceGapFor(template.examCode);
     // Temporarily widened from QTM-only to every exam code for the current
     // accuracy investigation across AT/QTM/TAT -- see _kBubbleDebug's doc
     // comment. Revert to `template.examCode == _kBubbleDebugExamCode` once
@@ -3958,10 +3996,10 @@ class OmrDecoder {
           0,
           mesh,
         );
-        var hasSomething = measured.bestFill >= _blankFillFloor &&
-            (measured.bestFill - measured.floorReference) >= _markPresenceGap;
+        var hasSomething = measured.bestFill >= blankFloor &&
+            (measured.bestFill - measured.floorReference) >= presenceGap;
         var isAmbiguous = hasSomething &&
-            _isAmbiguousMargin(measured, ambiguousMargin);
+            _isAmbiguousMargin(measured, ambiguousMargin, presenceGap);
         var recentered = false;
 
         // Only spend the extra search on items the flat/relative checks
@@ -3992,10 +4030,10 @@ class OmrDecoder {
             }
           }
           if (recentered) {
-            hasSomething = measured.bestFill >= _blankFillFloor &&
-                (measured.bestFill - measured.floorReference) >= _markPresenceGap;
+            hasSomething = measured.bestFill >= blankFloor &&
+                (measured.bestFill - measured.floorReference) >= presenceGap;
             isAmbiguous = hasSomething &&
-                _isAmbiguousMargin(measured, ambiguousMargin);
+                _isAmbiguousMargin(measured, ambiguousMargin, presenceGap);
           }
         }
 
@@ -4044,12 +4082,12 @@ class OmrDecoder {
   /// item decisively marked -- either by the flat per-exam [ambiguousMargin],
   /// or (see [_ambiguousRelativeMarginFloor]) by falling well short of the
   /// item's own presence gap despite a comfortably strong signal.
-  bool _isAmbiguousMargin(_ItemMeasurement measured, double ambiguousMargin) {
+  bool _isAmbiguousMargin(_ItemMeasurement measured, double ambiguousMargin, double markPresenceGap) {
     final margin = measured.bestFill - measured.runnerUpFill;
     if (margin >= ambiguousMargin) return false;
     final presenceGap = measured.bestFill - measured.floorReference;
     final strongPresence =
-        presenceGap >= _markPresenceGap * _strongPresenceGapMultiplier;
+        presenceGap >= markPresenceGap * _strongPresenceGapMultiplier;
     final decisiveRelativeToOwnSignal =
         strongPresence && (margin / presenceGap) >= _ambiguousRelativeMarginFloor;
     return !decisiveRelativeToOwnSignal;
