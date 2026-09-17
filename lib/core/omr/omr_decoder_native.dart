@@ -160,11 +160,26 @@ class OmrDecoder {
   /// other exams retain stronger correction for uneven lighting.
   static double _claheClipLimitFor(String examCode) => switch (examCode) {
     'QTM' => 1.2,
+    // TAT's dense landscape layout packs 120 small oval T/F bubbles across
+    // many narrow columns — its bubble-to-bubble spacing is the tightest of
+    // any exam, so CLAHE noise amplification on blank paper between bubbles
+    // bleeds into neighboring fill readings more than on QTM/AT.  A clip
+    // limit between QTM's conservative 1.2 and the default 2.0 restores
+    // shadow/LED contrast without the speckle that inflates false positives.
+    'TAT' => 1.5,
     _ => 2.0,
   };
 
   /// Odd threshold window spanning several bubbles to follow lighting gradients.
-  static const int _adaptiveThresholdBlockSize = 45;
+  /// Per-exam: TAT's tighter bubble spacing means a 45-px window averages
+  /// across too many bubbles, diluting the local mean and making faint marks
+  /// harder to distinguish from blank paper.  A smaller window (31) tracks
+  /// the narrower columns more faithfully without being so small that it
+  /// loses the lighting-gradient-following property.
+  static int _adaptiveThresholdBlockSizeFor(String examCode) => switch (examCode) {
+    'TAT' => 31,
+    _ => 45,
+  };
 
   /// Constant subtracted from the local adaptive-threshold mean; higher
   /// values require darker pixels to count as "ink".
@@ -221,8 +236,14 @@ class OmrDecoder {
       // Odd kernel ~1/3 of the downscaled short side: strong enough at this
       // scale to erase text and whole clusters of bubbles, so only the
       // lighting field survives into the estimate. Capped so an unusually
-      // large page can't make this needlessly slow.
-      final k = ((math.min(downW, downH) ~/ 3) | 1).clamp(11, 151);
+      // large page can't make this needlessly slow. Floor raised from 11 to
+      // 21 so that high-frequency LED panel banding (narrow bright/dark
+      // stripes across the page from PWM flicker or rolling-shutter
+      // interaction) gets averaged out rather than surviving into the
+      // background estimate — a visible stripe in `background` divides out
+      // as a complementary stripe in the result, producing a false lighting
+      // gradient that wasn't in the original capture.
+      final k = ((math.min(downW, downH) ~/ 3) | 1).clamp(21, 151);
       smallBlurred = cv.gaussianBlur(small, (k, k), 0);
 
       background =
@@ -260,7 +281,16 @@ class OmrDecoder {
       // (paper vs. ink). If it came out far too dark or bright, or collapsed
       // toward a single shade, discard it rather than hand the rest of the
       // pipeline something worse than the raw warp.
-      if (rMean < 30 || rMean > 250 || rStd < 3) {
+      //
+      // Upper bound relaxed from 250 → 253: under strong LED panel lighting
+      // (multiple ceiling LEDs in a defense/conference room) the paper is
+      // almost saturated white in the capture, which pushes the normalized
+      // mean into 245-252. Rejecting those and falling back to the raw warp
+      // loses the gradient correction that _normalizeIllumination provides,
+      // exactly when it's needed most. A mean above 253 still indicates a
+      // degenerate division (everything near 255) where thresholding will
+      // fail regardless.
+      if (rMean < 30 || rMean > 253 || rStd < 3) {
         return gray;
       }
 
@@ -284,6 +314,13 @@ class OmrDecoder {
   /// AT/QTM use 0.10 for lighter, ring-shaped marks observed in real scans.
   static double _ambiguousMarginFor(String examCode) => switch (examCode) {
     'AT' || 'QTM' => 0.10,
+    // TAT's True/False items have only 2 choices per row — the runner-up is
+    // the *only* other bubble, so the absolute best-to-runner-up margin is
+    // structurally lower than on 4-5 choice exams where runner-up is a
+    // randomly blank neighbor.  A 0.15 flat cutoff flags too many genuinely
+    // single-marked T/F items as ambiguous; 0.08 matches the reduced
+    // headroom while still catching real double-marks.
+    'TAT' => 0.08,
     _ => 0.15,
   };
 
@@ -324,6 +361,15 @@ class OmrDecoder {
   /// are of the bubble's own outer sampling half-width/height, kept well
   /// under half the template's own bubble-to-bubble spacing.
   static const List<double> _itemRecenterShiftFracs = [-0.35, -0.15, 0.0, 0.15, 0.35];
+
+  /// Wider recenter search grid for exams without interior fiducials (no mesh
+  /// correction). Without the triangulated mesh, the single global homography
+  /// can leave center-of-page bubbles off by more than the standard ±0.35
+  /// half-width — especially on TAT's landscape layout where the sheet's
+  /// longer horizontal span amplifies any paper curl. The wider ±0.55 grid
+  /// adds only ~60% more candidates (9×9 vs 5×5 minus overlap) but covers
+  /// drift that the narrower grid simply cannot reach.
+  static const List<double> _itemRecenterShiftFracsWide = [-0.55, -0.35, -0.15, 0.0, 0.15, 0.35, 0.55];
 
   /// A fiducial blob must be at least this many gray levels darker than the
   /// local background to count as a real mark (not a shadow edge). Still a
@@ -1720,7 +1766,7 @@ class OmrDecoder {
                         255,
                         cv.ADAPTIVE_THRESH_GAUSSIAN_C,
                         cv.THRESH_BINARY_INV,
-                        _adaptiveThresholdBlockSize,
+                        _adaptiveThresholdBlockSizeFor(template.examCode),
                         _adaptiveThresholdCFor(_adaptiveThresholdC, warpedBrightness),
                       );
                       if (threshSw != null) {
@@ -2474,7 +2520,7 @@ class OmrDecoder {
                           255,
                           cv.ADAPTIVE_THRESH_GAUSSIAN_C,
                           cv.THRESH_BINARY_INV,
-                          _adaptiveThresholdBlockSize,
+                          _adaptiveThresholdBlockSizeFor(template.examCode),
                           _adaptiveThresholdCFor(_adaptiveThresholdC, warpedGrayBrightness),
                         );
                         try {
@@ -3890,6 +3936,12 @@ class OmrDecoder {
     // comment. Revert to `template.examCode == _kBubbleDebugExamCode` once
     // this pass is done; a full 72-100 item sheet is a lot of log lines.
     final bubbleDebug = _kBubbleDebug;
+    // Use the wider recenter grid when mesh correction couldn't run (no
+    // interior fiducials on this template) — the single global homography
+    // leaves more local drift to compensate for.
+    final recenterGrid = mesh.isActive
+        ? _itemRecenterShiftFracs
+        : _itemRecenterShiftFracsWide;
     final items = <OmrItemResult>[];
     for (final section in template.sections) {
       for (final itemNumber in section.items.keys.toList()..sort()) {
@@ -3917,8 +3969,8 @@ class OmrDecoder {
         // confidently marked item is left untouched, so this can only
         // rescue an uncertain result, never destabilize a good one.
         if (!hasSomething || isAmbiguous) {
-          for (final dxFrac in _itemRecenterShiftFracs) {
-            for (final dyFrac in _itemRecenterShiftFracs) {
+          for (final dxFrac in recenterGrid) {
+            for (final dyFrac in recenterGrid) {
               if (dxFrac == 0 && dyFrac == 0) continue;
               final candidate = _measureItemAt(
                 inkMap,
