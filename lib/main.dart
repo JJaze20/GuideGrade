@@ -218,7 +218,9 @@ class _GuideGradeAppState extends State<GuideGradeApp> {
         title: PlatformUtils.isWeb ? 'GuideGrade Admin Console' : 'GuideGrade',
         debugShowCheckedModeBanner: false,
         theme: AppTheme.light,
-        initialRoute: AppRoutes.login,
+        // Mobile gets a brief branded splash first; the Web admin console
+        // goes straight to its login screen as before.
+        initialRoute: PlatformUtils.isWeb ? AppRoutes.login : AppRoutes.splash,
         onGenerateRoute: (settings) => AppRoutes.onGenerateRoute(settings, widget.appState),
         // Device fingerprint/face/PIN gate on every open (cold start or
         // resumed from background) while signed in -- see AppLockGate's
