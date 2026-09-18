@@ -48,16 +48,16 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.lightBg,
+      backgroundColor: AppColors.primaryGreen,
       body: Center(
         child: FadeTransition(
           opacity: _fade,
           child: ScaleTransition(
             scale: _scale,
             child: Image.asset(
-              'assets/images/guidegrade logo2.png',
-              width: 180,
-              height: 180,
+              'assets/images/guidegrade logo2 trimmed.png',
+              width: 260,
+              fit: BoxFit.contain,
             ),
           ),
         ),

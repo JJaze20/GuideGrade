@@ -131,8 +131,9 @@ class _MobileLoginScreenState extends State<MobileLoginScreen> {
               child: Column(
                 children: [
                   Image.asset(
-                    'assets/images/guidegrade logo3.png',
-                    height: 48,
+                    'assets/images/guidegrade logo3 trimmed.png',
+                    height: 56,
+                    fit: BoxFit.contain,
                   ),
                   const SizedBox(height: 4),
                   Text(
