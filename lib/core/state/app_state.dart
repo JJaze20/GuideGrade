@@ -830,6 +830,15 @@ class AppState extends ChangeNotifier {
 
   /// Records a freshly captured sheet photo and advances the page counter.
   void addCapturedPage(XFile file) {
+    // A rescan replaces one archived sheet. Failed attempts must not remain
+    // in the compile queue and veto a subsequent good photo.
+    if (rescanScanId != null) {
+      capturedPages.clear();
+      scannedResults.clear();
+      rectifiedImagePaths.clear();
+      scanProcessingError = null;
+      rescanSaveError = null;
+    }
     capturedPages.add(file);
     currentScannedPage = capturedPages.length;
     notifyListeners();

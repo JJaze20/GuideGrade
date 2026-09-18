@@ -454,33 +454,10 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
     // itself throws, since the widget isn't fully attached to the tree
     // yet at that point.
     _appState = AppStateScope.of(context);
-    final template = omrTemplates[_appState.activeExamCode];
-    _isLandscapeExam =
-        template != null && template.pageWidthPt > template.pageHeightPt;
-    // A landscape-page exam (TAT) unlocks landscape device rotation for
-    // this screen only — a user photographing a landscape sheet naturally
-    // turns the phone sideways to fill the frame with it, the same way
-    // they'd hold any camera for a wide subject. Restored to portrait-only
-    // the moment this screen closes (see dispose()), so it never leaks
-    // into the rest of the app, which stays portrait-only throughout (see
-    // main.dart).
-    if (_isLandscapeExam) {
-      SystemChrome.setPreferredOrientations([
-        DeviceOrientation.landscapeLeft,
-        DeviceOrientation.landscapeRight,
-      ]);
-      // Allowing the sensor to pick between landscapeLeft/landscapeRight
-      // means holding the phone near the boundary between the two can flip
-      // the device's actual orientation back and forth, and each flip can
-      // cycle this Activity through pause/resume with no real backgrounding
-      // involved (confirmed: AppLockGate's own resumed handler was
-      // re-locking and re-prompting on every one of those flips, producing
-      // an infinite biometric/PIN prompt loop for exactly as long as the
-      // phone stayed in landscape). Suppressed for this screen's whole
-      // lifetime, not just around the orientation call, since a flip can
-      // happen at any point while scanning; restored in dispose().
-      _appState.suppressAppLock = true;
-    }
+    // All exams use the portrait camera UI. TAT's printed page is rotated
+    // into canonical coordinates by measured fiducials after capture.
+    _isLandscapeExam = false;
+    SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
     _initializeFuture = _setUpCamera();
   }
 
@@ -1396,9 +1373,14 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
   Widget build(BuildContext context) {
     final appState = AppStateScope.of(context);
     final activeTemplate = omrTemplates[appState.activeExamCode];
+    final portraitTat = activeTemplate?.examCode == 'TAT';
     final cornerFractions = activeTemplate == null
         ? _defaultCornerFractions
-        : activeTemplate.cornerMarkers.map((c) => (c.xFrac, c.yFrac)).toList();
+        : portraitTat
+            ? [for (final i in [2, 0, 3, 1])
+                (1 - activeTemplate.cornerMarkers[i].yFrac,
+                 activeTemplate.cornerMarkers[i].xFrac)]
+            : activeTemplate.cornerMarkers.map((c) => (c.xFrac, c.yFrac)).toList();
 
     // The 4 corner marks aren't necessarily near the page's literal
     // (0,0)-(1,1) edges (a narrow bubble grid leaves them well inside the
@@ -1406,8 +1388,8 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
     // guide box's real-world aspect ratio has to come from the marks'
     // actual bounding box, not the full page's aspect ratio, or the guide
     // rectangle drawn on screen won't match the marks' true proportions.
-    final pageWidthPt = activeTemplate?.pageWidthPt ?? 595.28;
-    final pageHeightPt = activeTemplate?.pageHeightPt ?? 841.89;
+    final pageWidthPt = (portraitTat ? activeTemplate?.pageHeightPt : activeTemplate?.pageWidthPt) ?? 595.28;
+    final pageHeightPt = (portraitTat ? activeTemplate?.pageWidthPt : activeTemplate?.pageHeightPt) ?? 841.89;
     final markerXs = [for (final c in cornerFractions) c.$1];
     final markerYs = [for (final c in cornerFractions) c.$2];
     final markerAspectRatio =
@@ -1699,6 +1681,19 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
                 letterSpacing: 0.5,
               ),
             ),
+            if (appState.activeExamCode == 'TAT') ...[
+              const SizedBox(height: 4),
+              const Text(
+                'Turn the sheet so the title reads normally at the top and '
+                'name fields are on the left',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.white70,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
             const SizedBox(height: 12),
             Row(
               children: [

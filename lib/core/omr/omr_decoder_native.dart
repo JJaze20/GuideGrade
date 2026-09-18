@@ -646,11 +646,11 @@ class OmrDecoder {
   /// the sheet being landscape — exactly this failure mode.
   ///
   /// Ignoring EXIF for TAT loads the RAW sensor buffer instead and lets
-  /// [_orientAndFindCorners]'s own rotation search (identity/90°CW/
-  /// 90°CCW/180°) determine the true orientation by actually finding the
-  /// corners — the same EXIF-independent strategy [checkCornersFromLuma]
-  /// already uses successfully for the live preview, which reads raw
-  /// camera bytes with no EXIF involved at all.
+  /// [_orientAndFindCorners]'s own fixed-rotation content search determine
+  /// the true orientation by actually finding the corners — the same
+  /// EXIF-independent strategy [checkCornersFromLuma] already uses
+  /// successfully for the live preview, which reads raw camera bytes with
+  /// no EXIF involved at all.
   static cv.Mat _imreadForTemplate(String imagePath, OmrExamTemplate template) {
     final isLandscapePage = template.pageWidthPt > template.pageHeightPt;
     return cv.imread(
@@ -669,13 +669,16 @@ class OmrDecoder {
   /// uses to keep the live preview upright) rather than guessing the
   /// rotation from pixel content.
   ///
-  /// Exists specifically for landscape-page templates (TAT), where
-  /// [_orientAndFindCorners]'s own content-based rotation search
-  /// (identity/90°CW/90°CCW/180°, picking whichever lets it find 4
-  /// corners) is fundamentally unable to always pick correctly: a printed
-  /// corner square looks identical under any 90° rotation, so more than
-  /// one candidate rotation can "succeed" at finding 4 square-shaped
-  /// blobs — it's the same 4 physical squares either way, just mislabeled.
+  /// Exists specifically for landscape-page templates (TAT), for a device
+  /// orientation lock this screen no longer applies (TAT capture is fully
+  /// portrait-locked now — see `ExamScanningScreen._isLandscapeExam`,
+  /// always false — so this method's call site is currently unreachable).
+  /// Left in place rather than removed since nothing about the underlying
+  /// need has changed: [_orientAndFindCorners]'s content-based search alone
+  /// can't always pick correctly, because a printed corner square looks
+  /// identical under any 90° rotation, so more than one candidate rotation
+  /// can "succeed" at finding 4 square-shaped blobs — it's the same 4
+  /// physical squares either way, just mislabeled.
   /// Confirmed on a real device (2026-09-14): a capture whose rectified
   /// output came out with the sheet's content rotated 90° despite the
   /// file itself being correctly landscape-shaped (the output size is
@@ -1082,11 +1085,13 @@ class OmrDecoder {
         : stage1Result;
   }
 
-  /// Sanity-checks that 3 candidate corner points ([pts], in the same
-  /// order as their template marker indices [idx]) form a triangle whose
-  /// own proportions are at least roughly consistent with what the
-  /// template says the real, physical spacing between those same 3
-  /// markers should be.
+  /// Sanity-checks that 3 candidate points ([pts], in the same order as
+  /// their known template page-fraction positions [fracs] — an outer
+  /// corner marker's own fraction, or (since 2026-09-18) an interior
+  /// fiducial's, when one of those was used to help seed the fit) form a
+  /// triangle whose own proportions are at least roughly consistent with
+  /// what the template says the real, physical spacing between those same
+  /// 3 points should be.
   ///
   /// Confirmed on a real device (2026-09-14) that this was a real,
   /// unguarded gap: [_crossCheckCornersByGeometry] validates a 4th,
@@ -1113,15 +1118,15 @@ class OmrDecoder {
   /// stricter post-warp reprojection check ([_classifyWarpVerification])
   /// once a homography actually exists to measure.
   bool _cornerTriplePlausible(
-    List<int> idx,
+    List<(double, double)> fracs,
     List<cv.Point2f> pts,
     OmrExamTemplate template,
   ) {
     double templateDist(int a, int b) {
-      final ma = template.cornerMarkers[a];
-      final mb = template.cornerMarkers[b];
-      final dx = (ma.xFrac - mb.xFrac) * template.pageWidthPt;
-      final dy = (ma.yFrac - mb.yFrac) * template.pageHeightPt;
+      final ma = fracs[a];
+      final mb = fracs[b];
+      final dx = (ma.$1 - mb.$1) * template.pageWidthPt;
+      final dy = (ma.$2 - mb.$2) * template.pageHeightPt;
       return math.sqrt(dx * dx + dy * dy);
     }
 
@@ -1132,9 +1137,9 @@ class OmrDecoder {
     }
 
     final tDist = [
-      templateDist(idx[0], idx[1]),
-      templateDist(idx[1], idx[2]),
-      templateDist(idx[0], idx[2]),
+      templateDist(0, 1),
+      templateDist(1, 2),
+      templateDist(0, 2),
     ];
     final pDist = [
       pixelDist(pts[0], pts[1]),
@@ -1184,11 +1189,15 @@ class OmrDecoder {
   /// frame where the page-boundary guess is off but all 4 real marks are
   /// genuinely visible).
   ///
-  /// Needs >=3 corners with *some* evidence (confidence != none) to fit a
-  /// transform through; no-ops otherwise, same as before this was
-  /// extracted. Mutates [points]/[results] in place. Returns a short
-  /// user-facing note when a corner was rescued or promoted this way (or
-  /// null).
+  /// Needs >=3 points with *some* evidence to fit a transform through —
+  /// outer corners with confidence != none first, topped up with
+  /// [extraAnchors] (2026-09-18: independently-found interior fiducials,
+  /// currently only TAT's — see [_findInteriorAnchorsRaw]) when fewer than
+  /// 3 outer corners qualify; no-ops (returns null) if even that isn't
+  /// enough. Mutates [points]/[results] in place — only ever for the 4
+  /// outer-corner slots; [extraAnchors] themselves are read-only inputs to
+  /// the fit, never written back to. Returns a short user-facing note when
+  /// a corner was rescued or promoted this way (or null).
   ///
   /// [_cornerTriplePlausible] is the mutual-consistency gate this method
   /// applies to its own 3-point seed before trusting it — see that
@@ -1200,6 +1209,7 @@ class OmrDecoder {
     OmrExamTemplate template, {
     required bool allowRescueSearch,
     List<String>? labels,
+    List<({cv.Point2f point, double xFrac, double yFrac})> extraAnchors = const [],
   }) {
     const fallbackLabels = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
     final names = labels ?? fallbackLabels;
@@ -1214,10 +1224,35 @@ class OmrDecoder {
         final rankB = results[b].confidence == CornerConfidence.confident ? 0 : 1;
         return rankA.compareTo(rankB);
       });
-    if (usableIdx.length < 3) return null;
 
+    // Seed with the sheet's own outer corners first (best-conditioned --
+    // widely spaced at the page's actual edges), and only reach for
+    // [extraAnchors] (2026-09-18: TAT's interior per-Test marks, found
+    // independently in raw image space -- see [_findInteriorAnchorsRaw])
+    // when outer corners alone don't reach 3. Before this, a capture with
+    // only 1-2 usable outer corners always bailed out right here
+    // (`usableIdx.length < 3`) with a hard "not fully detected" rejection,
+    // even for a template like TAT that prints 8 more real fiducials than
+    // the primary 4-corner homography strictly needs -- none of that
+    // redundancy ever got a chance to help. [threeIdx] below stays exactly
+    // the outer-corner indices actually used (never more than
+    // [usableIdx.length]), so 4a/4b's own "skip the corners already used
+    // as the seed" loops are unaffected by however many extra anchors
+    // filled the remaining slots.
     final threeIdx = usableIdx.take(3).toList();
     final threePts = [for (final i in threeIdx) points[i]!];
+    final threeFracTuples = [
+      for (final i in threeIdx)
+        (template.cornerMarkers[i].xFrac, template.cornerMarkers[i].yFrac),
+    ];
+    if (threePts.length < 3) {
+      for (final a in extraAnchors) {
+        if (threePts.length >= 3) break;
+        threePts.add(a.point);
+        threeFracTuples.add((a.xFrac, a.yFrac));
+      }
+    }
+    if (threePts.length < 3) return null;
     if (_nearCollinear(threePts)) return null;
     // Confirmed on a real device (2026-09-14): with exactly 3 corners
     // "usable" (not 4 confidently found), the 3 were blindly trusted as
@@ -1229,15 +1264,14 @@ class OmrDecoder {
     // bottom edge) sailed straight through as a trusted seed point this
     // way and produced a nonsensical warp that still got accepted. Reject
     // the whole triple up front if its own proportions are wildly
-    // inconsistent with what the template says these 3 markers' real
+    // inconsistent with what the template says these 3 points' real
     // spacing should be -- this can only make the 4th corner (if missing)
     // stay missing (an honest "not fully detected" retake) instead of
-    // silently building a homography from a corner that was never real.
-    if (!_cornerTriplePlausible(threeIdx, threePts, template)) return null;
+    // silently building a homography from a point that was never real.
+    if (!_cornerTriplePlausible(threeFracTuples, threePts, template)) return null;
 
     final threeFracs = [
-      for (final i in threeIdx)
-        cv.Point2f(template.cornerMarkers[i].xFrac, template.cornerMarkers[i].yFrac),
+      for (final f in threeFracTuples) cv.Point2f(f.$1, f.$2),
     ];
     final imgToFrac = cv.getAffineTransform2f(
       cv.VecPoint2f.fromList(threePts),
@@ -2788,6 +2822,21 @@ class OmrDecoder {
     // of which had actually locked onto the wrong feature -- was ever
     // cross-checked or rescued, producing an unusable warp with no
     // indication anything had gone wrong upstream of it.
+    //
+    // Only bother searching for extra (interior-fiducial) anchors when the
+    // outer corners alone won't reach the 3-point minimum the affine fit
+    // needs — the common case (3-4 outer corners usable) pays nothing
+    // extra for TAT's additional printed marks.
+    final usableOuterCount =
+        results.where((r) => r.confidence != CornerConfidence.none).length;
+    final extraAnchors = usableOuterCount < 3
+        ? _findInteriorAnchorsRaw(gray, pageQuad, template)
+        : const <({cv.Point2f point, double xFrac, double yFrac})>[];
+    if (_kFiducialDebug && extraAnchors.isNotEmpty) {
+      _fidLog('extra interior anchors found for corner rescue: '
+          '${extraAnchors.map((a) => "(${a.xFrac.toStringAsFixed(2)},${a.yFrac.toStringAsFixed(2)})->"
+              "(${a.point.x.toStringAsFixed(1)},${a.point.y.toStringAsFixed(1)})").join(" ")}');
+    }
     final note = _crossCheckCornersByGeometry(
       points,
       results,
@@ -2795,6 +2844,7 @@ class OmrDecoder {
       template,
       allowRescueSearch: true,
       labels: _kFiducialDebug ? labels : null,
+      extraAnchors: extraAnchors,
     );
 
     // All 4 fiducial marks must end up with a centroid — no reconstructing
@@ -2949,29 +2999,35 @@ class OmrDecoder {
   /// because the app's whole capture UI is locked to portrait (see
   /// main.dart's SystemChrome.setPreferredOrientations): the only way to
   /// get a landscape sheet to fill a portrait camera frame is to physically
-  /// turn the paper sideways, and nothing constrains which way — clockwise
-  /// or counterclockwise — a given user turns it. _refineCorners on its
-  /// own assumes the photo's own top-left/top-right/bottom-left/bottom-
-  /// right quadrants directly contain the sheet's own same-named corner
-  /// marks (see _quadrantsFor), which is only true when the sheet is
-  /// upright in frame.
+  /// turn the paper sideways. _refineCorners on its own assumes the photo's
+  /// own top-left/top-right/bottom-left/bottom-right quadrants directly
+  /// contain the sheet's own same-named corner marks (see _quadrantsFor),
+  /// which is only true when the sheet is upright in frame.
+  ///
+  /// Portrait-page templates never attempt a rotation at all — there's no
+  /// ambiguity to resolve for them, and doing so would just be wasted work.
+  ///
+  /// TEMPORARY, 2026-09-18: back to trying all four quarter turns and
+  /// picking the best-scoring one (the pre-existing, previously-working
+  /// behavior), instead of assuming a single fixed rotation. A same-day
+  /// attempt to lock TAT to one standardized physical placement (phone
+  /// portrait, sheet turned so the title reads normally at the top and name
+  /// fields are on the left — see docs/tat-portrait-capture.md) guessed
+  /// [cv.ROTATE_90_COUNTERCLOCKWISE] as that placement's raw-buffer-to-
+  /// canonical rotation, reasoning from the on-screen viewfinder guide's own
+  /// `cornerFractions` transform plus one earlier device log. That guess was
+  /// confirmed WRONG on a real device: a capture in exactly the standardized
+  /// placement (title up, name fields left, all 4 outer corners found) was
+  /// rejected. Reverted to this known-good multi-candidate search so
+  /// scanning works again; once real `[OMR FIDUCIAL DEBUG] TAT orientation
+  /// candidates=...` log data confirms which rotation code the standardized
+  /// placement actually produces, the single-rotation optimization can be
+  /// reapplied correctly instead of guessed again.
   ///
   /// Tries the image as captured first (correct for every portrait-page
   /// template, and for a landscape one shot without rotating, e.g. a flat
   /// overhead photo rather than the handheld portrait-frame case), then
-  /// each 90° rotation, then 180°, returning whichever succeeds. Portrait-
-  /// page templates never attempt a rotation at all — there's no ambiguity
-  /// to resolve for them, and doing so would just be wasted work.
-  ///
-  /// 180° is tried too (not just the two 90°s) because
-  /// [ExamScanningScreen]'s landscape unlock allows EITHER
-  /// `DeviceOrientation.landscapeLeft` OR `landscapeRight` — turning the
-  /// phone the "other way" for the same physical sheet flips the raw
-  /// sensor buffer's content 180° from the other hold, not 90°, and (see
-  /// [_imreadForTemplate]'s doc comment) this method now runs against that
-  /// raw, EXIF-uncorrected buffer for a landscape template specifically so
-  /// it can no longer rely on the camera plugin/OS to have resolved that
-  /// ambiguity beforehand.
+  /// each 90° rotation, then 180°, returning whichever succeeds.
   ///
   /// Returns the Mat actually used (identical to [gray] when no rotation
   /// was needed, otherwise a new rotated Mat the caller must separately
@@ -2988,36 +3044,85 @@ class OmrDecoder {
     if (template.pageWidthPt <= template.pageHeightPt) {
       return (gray, _findCaptureCorners(gray, template), null);
     }
-    StateError? lastError;
-    // A landscape template must be decoded from a landscape-oriented frame.
-    // Portrait camera buffers can still contain four detectable squares, so
-    // accepting the raw buffer here silently creates a sideways warp and puts
-    // landscape bubble coordinates over it. Try the 90-degree orientations
-    // first whenever the source dimensions contradict the template.
-    final sourceMatchesOrientation = gray.width >= gray.height;
-    if (sourceMatchesOrientation) {
-      try {
-        return (gray, _findCaptureCorners(gray, template), null);
-      } on StateError catch (e) {
-        lastError = e;
-      }
-    }
-    for (final code in [
-      cv.ROTATE_90_CLOCKWISE,
-      cv.ROTATE_90_COUNTERCLOCKWISE,
+    final candidates = <(int?, double)>[];
+    for (final code in <int?>[
+      null, cv.ROTATE_90_CLOCKWISE, cv.ROTATE_90_COUNTERCLOCKWISE,
       cv.ROTATE_180,
     ]) {
-      final rotated = cv.rotate(gray, code);
+      final image = code == null ? gray : cv.rotate(gray, code);
       try {
-        return (rotated, _findCaptureCorners(rotated, template), code);
-      } on StateError catch (e) {
-        lastError = e;
-        rotated.dispose();
+        final refine = _findCaptureCorners(image, template);
+        // Match the normal registration resolution: at 1 px/pt a 9pt
+        // square is only nine pixels wide, making the fixed blur/dilation
+        // and contour-extent gate disproportionately sensitive to rounding.
+        final width = (template.pageWidthPt * _canonicalPxPerPt).round();
+        final height = (template.pageHeightPt * _canonicalPxPerPt).round();
+        final src = cv.VecPoint2f.fromList(refine.corners);
+        final dst = cv.VecPoint2f.fromList([
+          for (final c in template.cornerMarkers)
+            cv.Point2f(c.xFrac * width, c.yFrac * height),
+        ]);
+        final transform = cv.getPerspectiveTransform2f(src, dst);
+        try {
+          final warped = cv.warpPerspective(image, transform, (width, height));
+          try {
+            final measured = _detectInteriorFiducials(warped, template, width, height);
+            var score = 0.0;
+            var above = 0;
+            var below = 0;
+            for (final f in template.interiorFiducials) {
+              if (f.role == OmrFiducialRole.dividerLeft ||
+                  f.role == OmrFiducialRole.dividerRight) {
+                continue;
+              }
+              final point = measured[f.role];
+              if (point == null) continue;
+              final dx = (point.$1 - f.xFrac * width) * template.pageWidthPt / width;
+              final dy = (point.$2 - f.yFrac * height) * template.pageHeightPt / height;
+              final error = math.sqrt(dx * dx + dy * dy);
+              if (error > 12) continue;
+              score += 1 - error / 48;
+              if (f.yFrac < 0.5) { above++; } else { below++; }
+            }
+            candidates.add((code, above >= 2 && below >= 2 ? score : 0));
+            if (_kFiducialDebug) {
+              _fidLog('TAT orientation rotation=$code size=${width}x$height '
+                  'above=$above below=$below score=$score measured=$measured');
+            }
+          } finally {
+            warped.dispose();
+          }
+        } finally {
+          transform.dispose();
+          src.dispose();
+          dst.dispose();
+        }
+      } on StateError {
+        candidates.add((code, 0));
+      } finally {
+        if (!identical(image, gray)) image.dispose();
       }
     }
-    // `lastError` is set for every failed search; the fallback keeps the
-    // original exception message if all candidates fail.
-    throw lastError ?? StateError('Could not orient the captured sheet.');
+    final selected = selectTatOrientation([for (final c in candidates) c.$2]);
+    if (_kFiducialDebug) {
+      _fidLog('TAT orientation candidates=$candidates selected=$selected');
+    }
+    if (selected == null) {
+      throw StateError(
+        'Could not confirm the sheet\'s placement. Hold the phone '
+        'upright and turn the sheet so "TEACHING APTITUDE TEST (TAT)" '
+        'reads normally at the top and the name fields are on the '
+        'left, then retake.',
+      );
+    }
+    final code = candidates[selected].$1;
+    final image = code == null ? gray : cv.rotate(gray, code);
+    try {
+      return (image, _findCaptureCorners(image, template), code);
+    } catch (_) {
+      if (!identical(image, gray)) image.dispose();
+      rethrow;
+    }
   }
 
   /// Deliberately minimal, per explicit product direction: as long as all 4
@@ -3589,6 +3694,76 @@ class OmrDecoder {
           stage1AnchorScale: stage1AnchorScale,
         ),
     ];
+  }
+
+  /// Approximate pixels-per-PDF-point scale for the RAW (not yet warped)
+  /// photo — used only to size the search box for [_findInteriorAnchorsRaw],
+  /// which (unlike [_detectInteriorFiducials]) has no canonical/warped image
+  /// to measure against yet. Derived from [pageQuad]'s own top edge length
+  /// when available (the same page-boundary estimate [_quadrantsFor] already
+  /// trusts for corner search positions), or from the raw image width
+  /// assuming the sheet fills the frame — the same fallback assumption
+  /// [_quadrantsFor] makes when [_detectPageQuad] found no boundary.
+  double _rawPxPerPt(
+    int width,
+    List<(double, double)>? pageQuad,
+    OmrExamTemplate template,
+  ) {
+    if (pageQuad == null) return width / template.pageWidthPt;
+    final tl = pageQuad[0], tr = pageQuad[1];
+    final topWidthPx = math.sqrt(
+      math.pow(tr.$1 - tl.$1, 2) + math.pow(tr.$2 - tl.$2, 2),
+    );
+    return topWidthPx > 0 ? topWidthPx / template.pageWidthPt : width / template.pageWidthPt;
+  }
+
+  /// Searches for TAT's interior per-Test fiducials (`tatAboveI/II/III`,
+  /// `tatBelowI/II/III`, `dividerLeft/Right`) directly in the RAW (only
+  /// rotated-for-orientation, never yet warped) image — the same "search a
+  /// small box around the expected position" technique [_quadrantsFor] uses
+  /// for the 4 outer corners, just against each interior mark's own
+  /// (smaller) printed size and using [_rawPxPerPt] instead of a canonical
+  /// warp's exact scale, since no warp exists yet at this point in
+  /// [_refineCorners].
+  ///
+  /// Added 2026-09-18 so a capture with a marginal outer corner isn't left
+  /// with zero benefit from TAT's own extra printed redundancy: only
+  /// [CornerConfidence.confident] results are returned — these feed
+  /// [_crossCheckCornersByGeometry]'s corner-rescue affine as trusted extra
+  /// anchor points (see its `extraAnchors` param), so this deliberately
+  /// only returns marks with the same strength of evidence the affine
+  /// already trusts an outer corner to have. No-op (returns const `[]`
+  /// immediately) for a template with no interior fiducials (AT/QTM/PT),
+  /// so this costs nothing for them.
+  List<({cv.Point2f point, double xFrac, double yFrac})> _findInteriorAnchorsRaw(
+    cv.Mat gray,
+    List<(double, double)>? pageQuad,
+    OmrExamTemplate template,
+  ) {
+    if (template.interiorFiducials.isEmpty) return const [];
+    final w = gray.width.toDouble();
+    final h = gray.height.toDouble();
+    final pxPerPt = _rawPxPerPt(gray.width, pageQuad, template);
+    final found = <({cv.Point2f point, double xFrac, double yFrac})>[];
+    for (final fiducial in template.interiorFiducials) {
+      final (cx, cy) = pageQuad == null
+          ? (fiducial.xFrac * w, fiducial.yFrac * h)
+          : _bilinearInterpolate(pageQuad, fiducial.xFrac, fiducial.yFrac);
+      final halfExtent = (fiducial.halfSizePt + 14) * pxPerPt;
+      final box = _clampedRect(
+        cx - halfExtent, cy - halfExtent, cx + halfExtent, cy + halfExtent,
+        gray.width, gray.height,
+      );
+      final r = _findMarkerInRegion(
+        gray, box, cx, cy,
+        expectedSidePx: 2 * fiducial.halfSizePt * pxPerPt,
+      );
+      final c = r.centroid;
+      if (c != null && r.confidence == CornerConfidence.confident) {
+        found.add((point: c, xFrac: fiducial.xFrac, yFrac: fiducial.yFrac));
+      }
+    }
+    return found;
   }
 
   /// Searches [region] for one corner square and scores every candidate

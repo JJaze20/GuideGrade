@@ -222,6 +222,28 @@ class OmrMeshCorrection {
   /// either way (see [OmrMeshVerdict.inconclusive]).
   static const int minConfidentInteriorPoints = 2;
 
+  /// TAT-specific: below this per-point residual, an incomplete detection
+  /// (missing section marks — [tatSupported] false) still gets treated as
+  /// [OmrMeshVerdict.inconclusive] (skip the mesh, keep the plain global
+  /// homography, do NOT reject) rather than [OmrMeshVerdict.unsupportedDistortion]
+  /// (hard reject). Confirmed on two real device captures (2026-09-17/18):
+  /// ordinary handheld TAT photos, missing one or two of the eight interior
+  /// marks under real lighting, measured worst residuals of 3.7pt and 2.3pt
+  /// on the marks that WERE found — i.e. genuinely tiny, well inside what
+  /// the pre-mesh global-homography-only pipeline already handled at its
+  /// established ~94-95% AT/QTM accuracy — yet both were hard-rejected
+  /// outright because [planarResidualPt] (1.5pt, meant to mean "flatter
+  /// than that needs no correction at all") was also being used as the
+  /// bar for "this needs correction we can't build, so refuse the whole
+  /// capture." Those are different questions: a few points of uncorrected
+  /// residual is not a real accuracy risk (small relative to a printed
+  /// bubble's own radius), so it should only escalate to an actual
+  /// rejection once it's large enough that skipping correction could
+  /// plausibly matter — this sits well below [misregistrationMinMeanResidualPt]
+  /// (6pt) and far below the [tooSevere] cutoff (12pt) so a genuinely
+  /// concerning capture is still caught.
+  static const double tatUnsupportedDistortionResidualPt = 6.0;
+
   /// The [OmrMeshVerdict.likelyMisregistered] coherence check only fires
   /// above this mean residual (PDF points) — a genuinely tiny, coherent
   /// wobble is just measurement noise, not evidence of a wrong corner.
@@ -494,7 +516,7 @@ class OmrMeshCorrection {
     final OmrMeshVerdict verdict;
     if (isTat && worstResidualPt > 12) {
       verdict = isCoherentShift ? OmrMeshVerdict.likelyMisregistered : OmrMeshVerdict.tooSevere;
-    } else if (isTat && !tatSupported && worstResidualPt > planarResidualPt) {
+    } else if (isTat && !tatSupported && worstResidualPt > tatUnsupportedDistortionResidualPt) {
       verdict = OmrMeshVerdict.unsupportedDistortion;
     } else if (detectedInteriorCount < (isTat ? 4 : minConfidentInteriorPoints)) {
       verdict = OmrMeshVerdict.inconclusive;
@@ -678,7 +700,7 @@ class OmrMeshCorrection {
         OmrMeshVerdict.notApplicable => null,
         OmrMeshVerdict.planar => null,
         OmrMeshVerdict.unsupportedDistortion =>
-          'The detected marks show misalignment, but some reference marks are hidden. Uncover the side and section marks, flatten the sheet, and retake.',
+          'The detected marks show misalignment, but not enough side and section marks could be matched to correct it reliably. Keep the full sheet visible, use even lighting, flatten the sheet, and retake.',
         OmrMeshVerdict.inconclusive =>
           'Could not confirm the sheet lies flat (interior alignment marks were not clearly visible) — the standard perspective correction was used. Retake with even lighting and the full sheet in frame for the most accurate reading.',
         OmrMeshVerdict.meshApplied when _isTat =>
