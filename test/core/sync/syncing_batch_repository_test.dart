@@ -11,6 +11,7 @@ import 'package:guidegrade/core/sync/sync_manager.dart';
 import 'package:guidegrade/core/sync/sync_outcome.dart';
 import 'package:guidegrade/core/sync/sync_queue.dart';
 import 'package:guidegrade/core/sync/syncing_batch_repository.dart';
+import 'package:guidegrade/models/answer_correction.dart';
 import 'package:guidegrade/models/answer_key.dart';
 import 'package:guidegrade/models/local_batch.dart';
 import 'package:guidegrade/models/omr_scan_result.dart';
@@ -209,6 +210,33 @@ class _FakeLocal implements LocalBatchRepository {
     calls.add('setScanExaminee:$batchId/$scanId');
     _maybeThrow('setScanExaminee');
     return batchResult;
+  }
+
+  /// Whether the fake treats updateScanCorrections as a real change (moves
+  /// the batch revision) or a no-op (a repeated request).
+  bool correctionsChangeBatch = true;
+
+  @override
+  Future<LocalBatch> updateScanCorrections({
+    required String batchId,
+    required String scanId,
+    required List<AnswerCorrection> corrections,
+    LocalScanResult? result,
+  }) async {
+    calls.add('updateScanCorrections:$batchId/$scanId');
+    _maybeThrow('updateScanCorrections');
+    if (correctionsChangeBatch) {
+      batchResult = batchResult.copyWith(
+        updatedAt: batchResult.updatedAt.add(const Duration(milliseconds: 1)),
+      );
+    }
+    return batchResult;
+  }
+
+  @override
+  Future<bool> confirmBatchArchived(String batchId, DateTime confirmedUpdatedAt) async {
+    calls.add('confirmBatchArchived:$batchId');
+    return true;
   }
 
   @override
@@ -610,6 +638,40 @@ void main() {
 
     expect(jobLabels(), ['pushScan', 'pushBatch']);
     expectNoNetworkOrDrain();
+  });
+
+  test('9b. a real answer correction enqueues PUSH_SCAN then PUSH_BATCH',
+      () async {
+    await repo.updateScanCorrections(
+      batchId: 'b1',
+      scanId: 's1',
+      corrections: const [],
+    );
+    await waitForJobs(2);
+
+    expect(jobLabels(), ['pushScan', 'pushBatch']);
+    expectNoNetworkOrDrain();
+  });
+
+  test('9c. a repeated correction (no change) enqueues nothing', () async {
+    fakeLocal.correctionsChangeBatch = false;
+    await repo.updateScanCorrections(
+      batchId: 'b1',
+      scanId: 's1',
+      corrections: const [],
+    );
+
+    expect(queue.jobs, isEmpty);
+    expect(fakeLocal.calls, contains('updateScanCorrections:b1/s1'));
+  });
+
+  test('9d. confirming an archive is a pure delegation and never queues a job',
+      () async {
+    final ok = await repo.confirmBatchArchived('b1', DateTime.utc(2026));
+
+    expect(ok, isTrue);
+    expect(queue.jobs, isEmpty);
+    expect(fakeLocal.calls, contains('confirmBatchArchived:b1'));
   });
 
   test('10. deleteBatch cancels pending content pushes before the local '

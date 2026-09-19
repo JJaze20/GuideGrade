@@ -29,6 +29,13 @@ class OmrDecoder {
         'OMR scanning is not supported on Web. Use the GuideGrade Android/iOS app to scan answer sheets.',
       );
 
+  /// No-op on Web (there is no diagnostic logging to enable/disable here —
+  /// every method above already throws) — exists only so callers that set
+  /// this unconditionally (e.g. before an isolate call) compile on both
+  /// targets. See the native implementation's doc comment for what this
+  /// actually controls on Android/iOS.
+  static void setDiagnosticsEnabled(bool enabled) {}
+
   AlignmentCheck locateCorners(String imagePath, OmrExamTemplate template) => _unsupported();
 
   void normalizeCaptureOrientation(String imagePath, int quarterTurnsClockwise) => _unsupported();

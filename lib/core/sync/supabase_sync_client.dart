@@ -7,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../models/local_batch.dart';
 import '../services/local_batch_repository.dart';
 import '../services/local_storage_service.dart';
+import 'scan_cloud_extensions.dart';
 import 'sync_client.dart';
 import 'sync_job.dart';
 import 'sync_outcome.dart';
@@ -575,12 +576,32 @@ class SupabaseSyncClient implements SyncClient {
     final examinee = scan.examinee;
     final hasRectified = scan.rectifiedImageFileName != null;
 
+    // Manual corrections and the optional student details have no cloud
+    // columns (see ScanCloudExtensions), so they ride in `decoded`. Read the
+    // row's current `decoded` first so the correction history is merged, not
+    // overwritten: a push must never erase an entry another device already
+    // recorded. A failed read is classified like any other Postgrest error,
+    // so the job retries (or fails visibly) instead of pushing blind.
+    Map<String, dynamic>? cloudDecoded;
+    final readOutcome = await _guardPostgrest(() async {
+      final existing = await _client
+          .from('scans')
+          .select('decoded')
+          .eq('batch_id', batch.id)
+          .eq('id', scan.id)
+          .maybeSingle();
+      final d = existing?['decoded'];
+      if (d is Map<String, dynamic>) cloudDecoded = d;
+      return const SyncOutcome.success();
+    });
+    if (!readOutcome.isSuccess) return readOutcome;
+
     final row = <String, dynamic>{
       'id': scan.id,
       'batch_id': batch.id,
       'captured_at': isoUtc(scan.capturedAt),
       'exam_code': batch.examCode,
-      'decoded': scan.decoded.toJson(),
+      'decoded': ScanCloudExtensions.decodedForCloud(scan, cloudDecoded: cloudDecoded),
 
       // result (null as a group when ungraded)
       'raw_score': result?.rawScore,

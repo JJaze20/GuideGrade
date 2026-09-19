@@ -17,6 +17,7 @@ import '../../../models/local_batch.dart';
 import '../../../shared/widgets/examinee_dialog.dart';
 import '../../../shared/widgets/name_crop_strip.dart';
 import '../../exam/screens/scanned_image_viewer_screen.dart';
+import '../../exam/widgets/scan_editing_factory.dart';
 import '../../exam/widgets/scan_result_summary.dart';
 
 /// Opens one archived batch: its info, exam type, every scanned image it
@@ -521,7 +522,7 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
 
   Widget _buildScanCard(LocalBatch batch, int index, AppState appState) {
     final scan = batch.scans[index];
-    final scored = scoreOmrResult(scan.decoded, appState.answerKeys[batch.examCode]);
+    final scored = scoreOmrResult(scan.effectiveDecoded, appState.answerKeys[batch.examCode]);
     final result = scan.result;
     final examinee = scan.examinee;
     final tagged = examinee != null && !examinee.isEmpty;
@@ -686,7 +687,7 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
       rectifiedBytes = await repo.resolveScanRectifiedImage(batch.id, scan);
     }
     if (!mounted) return;
-    Navigator.of(context).push(
+    await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => ScannedImageViewerScreen(
           imageBytes: bytes,
@@ -695,10 +696,12 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
           rectifiedImageBytes: rectifiedBytes,
           template: omrTemplates[scored.examCode],
           scanTemplateVersion: scored.templateVersion,
+          editing: scanEditingFor(appState, batch.id, scan),
           meshInteriorMeasuredFrac: scored.meshInteriorMeasuredFrac,
         ),
       ),
     );
+    if (mounted) await _load(); // pick up any corrections made in the viewer
   }
 
   static const _months = [

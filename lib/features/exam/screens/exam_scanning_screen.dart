@@ -1521,7 +1521,10 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
                 Padding(
                   padding: const EdgeInsets.only(right: 8),
                   child: InkWell(
-                    onTap: () => setState(() => _diagnosticsEnabled = !_diagnosticsEnabled),
+                    onTap: () => setState(() {
+                      _diagnosticsEnabled = !_diagnosticsEnabled;
+                      _appState.diagnosticsEnabled = _diagnosticsEnabled;
+                    }),
                     child: Container(
                       width: 32,
                       height: 32,

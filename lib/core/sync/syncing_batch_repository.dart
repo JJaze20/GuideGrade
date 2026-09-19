@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import '../../models/answer_correction.dart';
 import '../../models/local_batch.dart';
 import '../../models/omr_scan_result.dart';
 import '../services/batch_repository.dart';
@@ -263,6 +264,41 @@ class SyncingBatchRepository implements BatchRepository {
     _fireEnqueue([_pushScan(batchId, scanId), _pushBatch(batchId)]);
     return batch;
   }
+
+  // ---------------------------------------------------------------------------
+  // G2. updateScanCorrections / confirmBatchArchived
+  // ---------------------------------------------------------------------------
+
+  @override
+  Future<LocalBatch> updateScanCorrections({
+    required String batchId,
+    required String scanId,
+    required List<AnswerCorrection> corrections,
+    LocalScanResult? result,
+  }) async {
+    final before = await local.getBatchById(batchId);
+    final batch = await local.updateScanCorrections(
+      batchId: batchId,
+      scanId: scanId,
+      corrections: corrections,
+      result: result,
+    );
+    // A repeated/no-op request stores nothing and leaves the revision alone
+    // — nothing new to push, so a duplicate tap can't queue duplicate jobs.
+    if (before != null && batch.updatedAt == before.updatedAt) return batch;
+    // The corrections, the recalculated score and the student's details all
+    // ride the one scan row (see SupabaseSyncClient.pushScan); the batch row
+    // follows so its revision reaches the cloud too.
+    _fireEnqueue([_pushScan(batchId, scanId), _pushBatch(batchId)]);
+    return batch;
+  }
+
+  /// Pure delegation, no job: archiving records that the cloud already has
+  /// this revision; pushing it again would be a pointless round trip and,
+  /// worse, could look like a new change.
+  @override
+  Future<bool> confirmBatchArchived(String batchId, DateTime confirmedUpdatedAt) =>
+      local.confirmBatchArchived(batchId, confirmedUpdatedAt);
 
   // ---------------------------------------------------------------------------
   // H. setScanExaminee

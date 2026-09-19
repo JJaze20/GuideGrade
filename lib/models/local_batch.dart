@@ -1,4 +1,5 @@
 import '../core/omr/duplicate_scan_detector.dart';
+import 'answer_correction.dart';
 import 'omr_scan_result.dart';
 
 /// The student a scanned sheet belongs to. Attached per [LocalScan],
@@ -19,12 +20,94 @@ class ExamineeInfo {
   final String middleName;
   final String examineeNumber;
 
+  /// Optional details entered by staff, never read off the sheet and never
+  /// required — [isComplete] deliberately ignores all three so an untagged or
+  /// name-only examinee still saves and scans exactly as before.
+  ///
+  /// Only date-only precision is kept: stored and compared as a calendar
+  /// date, so a time zone can never shift the birth date by a day.
+  final DateTime? birthDate;
+
+  /// A hand-entered age, kept ONLY while [birthDate] is unknown. When a birth
+  /// date exists the age is derived from it (see [ageOn]) and this is
+  /// ignored, so the record can never hold two contradictory values.
+  final int? manualAge;
+
+  final String lastSchool;
+
   const ExamineeInfo({
     required this.firstName,
     required this.lastName,
     this.middleName = '',
     required this.examineeNumber,
+    this.birthDate,
+    this.manualAge,
+    this.lastSchool = '',
   });
+
+  /// Age in whole years on [examDate]: derived from [birthDate] when there
+  /// is one, otherwise the hand-entered [manualAge] (as entered — it is not
+  /// aged forward), otherwise null. Never guessed.
+  ///
+  /// The examination date is the day the sheet was scanned — see
+  /// [examDateFor]. Null when the birth date is after [examDate] (invalid).
+  int? ageOn(DateTime examDate) {
+    final b = birthDate;
+    if (b == null) return manualAge;
+    return ageFromBirthDate(b, examDate);
+  }
+
+  /// Whole years between [birthDate] and [onDate], by calendar date (the
+  /// birthday counts on the day itself). Null when [birthDate] is after
+  /// [onDate].
+  static int? ageFromBirthDate(DateTime birthDate, DateTime onDate) {
+    final b = DateTime(birthDate.year, birthDate.month, birthDate.day);
+    final d = DateTime(onDate.year, onDate.month, onDate.day);
+    if (b.isAfter(d)) return null;
+    var years = d.year - b.year;
+    if (d.month < b.month || (d.month == b.month && d.day < b.day)) years--;
+    return years;
+  }
+
+  /// The examination date used to derive age for [scan] within its batch:
+  /// the scan's capture date; if a caller has no scan (a tag being entered
+  /// before any capture time exists) the batch's creation date; and only if
+  /// neither is known, today. Documented fallback order — nothing invents a
+  /// date silently.
+  static DateTime examDateFor({DateTime? scanCapturedAt, DateTime? batchCreatedAt, DateTime? now}) =>
+      scanCapturedAt ?? batchCreatedAt ?? now ?? DateTime.now();
+
+  /// Validation for a birth date entry: null when fine, otherwise a
+  /// message for the field. [examDate] bounds it so a birth date can't be
+  /// later than the examination it belongs to.
+  static String? validateBirthDate(DateTime? birthDate, DateTime examDate, {DateTime? now}) {
+    if (birthDate == null) return null;
+    final today = now ?? DateTime.now();
+    final b = DateTime(birthDate.year, birthDate.month, birthDate.day);
+    if (b.isAfter(DateTime(today.year, today.month, today.day))) {
+      return 'Birth date can’t be in the future.';
+    }
+    if (b.isAfter(DateTime(examDate.year, examDate.month, examDate.day))) {
+      return 'Birth date can’t be after the examination date.';
+    }
+    if (ageFromBirthDate(b, examDate)! > maxAge) {
+      return 'That birth date gives an age over $maxAge. Check the year.';
+    }
+    return null;
+  }
+
+  /// Validation for a hand-entered age (whole years). Null when fine.
+  static String? validateAge(String? text) {
+    final t = text?.trim() ?? '';
+    if (t.isEmpty) return null;
+    final n = int.tryParse(t);
+    if (n == null) return 'Enter the age as a whole number.';
+    if (n < minAge || n > maxAge) return 'Enter an age from $minAge to $maxAge.';
+    return null;
+  }
+
+  static const int minAge = 3;
+  static const int maxAge = 100;
 
   /// "Last, First M." — falls back to whichever of last/first is present,
   /// and omits the middle initial entirely when [middleName] is blank.
@@ -48,34 +131,82 @@ class ExamineeInfo {
       firstName.trim().isEmpty &&
       lastName.trim().isEmpty &&
       middleName.trim().isEmpty &&
-      examineeNumber.trim().isEmpty;
+      examineeNumber.trim().isEmpty &&
+      birthDate == null &&
+      manualAge == null &&
+      lastSchool.trim().isEmpty;
+
+  /// Whether only the optional extras are present — no name and no number.
+  bool get hasOnlyExtras =>
+      firstName.trim().isEmpty &&
+      lastName.trim().isEmpty &&
+      middleName.trim().isEmpty &&
+      examineeNumber.trim().isEmpty &&
+      !isEmpty;
 
   ExamineeInfo copyWith({
     String? firstName,
     String? lastName,
     String? middleName,
     String? examineeNumber,
+    DateTime? birthDate,
+    int? manualAge,
+    String? lastSchool,
+    bool clearBirthDate = false,
+    bool clearManualAge = false,
   }) =>
       ExamineeInfo(
         firstName: firstName ?? this.firstName,
         lastName: lastName ?? this.lastName,
         middleName: middleName ?? this.middleName,
         examineeNumber: examineeNumber ?? this.examineeNumber,
+        birthDate: clearBirthDate ? null : (birthDate ?? this.birthDate),
+        manualAge: clearManualAge ? null : (manualAge ?? this.manualAge),
+        lastSchool: lastSchool ?? this.lastSchool,
       );
 
+  /// Additive JSON: the three extra keys are written only when present, so a
+  /// record without them serializes exactly as it did before this existed,
+  /// and [fromJson] accepts any older record.
   Map<String, dynamic> toJson() => {
         'firstName': firstName,
         'lastName': lastName,
         'middleName': middleName,
         'examineeNumber': examineeNumber,
+        if (birthDate != null) 'birthDate': _dateOnly(birthDate!),
+        // Only while the birth date is unknown — never both.
+        if (birthDate == null && manualAge != null) 'manualAge': manualAge,
+        if (lastSchool.trim().isNotEmpty) 'lastSchool': lastSchool,
       };
 
-  factory ExamineeInfo.fromJson(Map<String, dynamic> json) => ExamineeInfo(
-        firstName: json['firstName'] as String? ?? '',
-        lastName: json['lastName'] as String? ?? '',
-        middleName: json['middleName'] as String? ?? '',
-        examineeNumber: json['examineeNumber'] as String? ?? '',
-      );
+  factory ExamineeInfo.fromJson(Map<String, dynamic> json) {
+    final bd = _parseDateOnly(json['birthDate'] as String?);
+    return ExamineeInfo(
+      firstName: json['firstName'] as String? ?? '',
+      lastName: json['lastName'] as String? ?? '',
+      middleName: json['middleName'] as String? ?? '',
+      examineeNumber: json['examineeNumber'] as String? ?? '',
+      birthDate: bd,
+      // A stored age next to a birth date is ignored: the birth date wins.
+      manualAge: bd == null ? json['manualAge'] as int? : null,
+      lastSchool: json['lastSchool'] as String? ?? '',
+    );
+  }
+
+  /// `YYYY-MM-DD` — a calendar date with no time or zone to shift.
+  static String _dateOnly(DateTime d) =>
+      '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+  static DateTime? _parseDateOnly(String? s) {
+    if (s == null || s.isEmpty) return null;
+    final parsed = DateTime.tryParse(s);
+    if (parsed == null) return null;
+    return DateTime(parsed.year, parsed.month, parsed.day);
+  }
+
+  /// Public for the cloud mapper, which stores the same `YYYY-MM-DD` form.
+  static String birthDateToText(DateTime d) => _dateOnly(d);
+  static DateTime? birthDateFromText(String? s) => _parseDateOnly(s);
 }
 
 /// Local, on-device representation of a batch and everything it contains.
@@ -193,7 +324,10 @@ class LocalBatch {
   bool get isArchived => status == 'Archived';
 
   /// A batch can still receive new scans while it's a working batch.
-  bool get canScan => status == 'Draft' || status == 'Active';
+  /// Archived batches still accept scans: Archived only means the cloud has
+  /// confirmed the latest saved revision, and a new scan simply moves the
+  /// batch back to Active until that revision syncs (see BatchLifecycle).
+  bool get canScan => status == 'Draft' || status == 'Active' || status == 'Archived';
 
   LocalBatch copyWith({
     String? batchCode,
@@ -295,6 +429,19 @@ class LocalScan {
   final String? nameCropFirstFileName;
   final String? nameCropMiddleFileName;
 
+  /// Which capture of this scan slot [decoded]/the stored images belong to:
+  /// 0 for the first capture (and every scan saved before this field
+  /// existed), +1 each time a rescan replaces the capture. Corrections are
+  /// stamped with the revision they were made on and only ever apply to that
+  /// capture — see [AnswerCorrection.captureRevision].
+  final int captureRevision;
+
+  /// Append-only history of manual answer corrections and resets for this
+  /// scan, oldest first, across every capture. [decoded] is never edited:
+  /// the machine-detected answers and the scan image stay as captured, and
+  /// [effectiveDecoded] is what a correction changes.
+  final List<AnswerCorrection> corrections;
+
   const LocalScan({
     required this.id,
     required this.imageFileName,
@@ -306,12 +453,30 @@ class LocalScan {
     this.nameCropLastFileName,
     this.nameCropFirstFileName,
     this.nameCropMiddleFileName,
+    this.captureRevision = 0,
+    this.corrections = const [],
   });
+
+  /// [decoded] with this capture's active corrections applied — what scoring,
+  /// the review overlay and analytics should read. Equal to [decoded] when
+  /// there are none.
+  OmrScanResult get effectiveDecoded =>
+      CorrectionRules.effective(decoded, corrections, captureRevision);
+
+  /// Corrections on this capture that currently change an answer.
+  Map<String, AnswerCorrection> get activeCorrections =>
+      CorrectionRules.activeFor(corrections, captureRevision);
+
+  /// Corrections made on an earlier capture that a rescan left unreviewed —
+  /// kept for history, never applied to the current capture.
+  List<AnswerCorrection> get correctionsNeedingReview =>
+      CorrectionRules.needingReview(corrections, captureRevision);
 
   LocalScan copyWith({
     LocalScanResult? result,
     ExamineeInfo? examinee,
     bool clearExaminee = false,
+    List<AnswerCorrection>? corrections,
   }) =>
       LocalScan(
         id: id,
@@ -324,6 +489,8 @@ class LocalScan {
         nameCropLastFileName: nameCropLastFileName,
         nameCropFirstFileName: nameCropFirstFileName,
         nameCropMiddleFileName: nameCropMiddleFileName,
+        captureRevision: captureRevision,
+        corrections: corrections ?? this.corrections,
       );
 
   Map<String, dynamic> toJson() => {
@@ -337,6 +504,11 @@ class LocalScan {
         'nameCropLastFileName': nameCropLastFileName,
         'nameCropFirstFileName': nameCropFirstFileName,
         'nameCropMiddleFileName': nameCropMiddleFileName,
+        // Additive: absent for a scan with no rescan and no corrections, so
+        // such a scan serializes exactly as it did before these existed.
+        if (captureRevision != 0) 'captureRevision': captureRevision,
+        if (corrections.isNotEmpty)
+          'corrections': corrections.map((c) => c.toJson()).toList(),
       };
 
   factory LocalScan.fromJson(Map<String, dynamic> json) => LocalScan(
@@ -356,6 +528,10 @@ class LocalScan {
         nameCropLastFileName: json['nameCropLastFileName'] as String?,
         nameCropFirstFileName: json['nameCropFirstFileName'] as String?,
         nameCropMiddleFileName: json['nameCropMiddleFileName'] as String?,
+        captureRevision: json['captureRevision'] as int? ?? 0,
+        corrections: (json['corrections'] as List<dynamic>? ?? [])
+            .map((e) => AnswerCorrection.fromJson(e as Map<String, dynamic>))
+            .toList(),
       );
 }
 

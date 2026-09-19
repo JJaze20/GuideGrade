@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import '../../models/answer_correction.dart';
 import '../../models/local_batch.dart';
 import '../../models/omr_scan_result.dart';
 
@@ -124,6 +125,32 @@ abstract class BatchRepository {
     required String scanId,
     ExamineeInfo? examinee,
   });
+
+  /// Records manual answer corrections for one stored scan and, in the same
+  /// write, the [result] recalculated from them — so the stored history and
+  /// the stored score can never disagree. [corrections] is the scan's FULL
+  /// history as the caller sees it (from `CorrectionRules`); the store keeps
+  /// its append-only rule: entries already stored are never dropped or
+  /// rewritten, and a request that adds nothing new is a no-op (no revision
+  /// bump, nothing to sync), so a repeated tap or a retried call cannot apply
+  /// a correction twice. Never touches the machine-detected `decoded` answers,
+  /// the scan image, the answer key or the student's details. Throws if any
+  /// NEW entry was made against a different capture than the scan currently
+  /// holds (the sheet was rescanned meanwhile). Returns the updated batch.
+  Future<LocalBatch> updateScanCorrections({
+    required String batchId,
+    required String scanId,
+    required List<AnswerCorrection> corrections,
+    LocalScanResult? result,
+  });
+
+  /// Marks [batchId] Archived — but only if its CURRENT saved revision
+  /// (`updatedAt`) still equals [confirmedUpdatedAt], the revision the cloud
+  /// acknowledged. Returns true when it archived, false when it did not
+  /// (already archived, the batch changed since, or its required fields
+  /// have problems). Does not change `updatedAt` and never queues a push.
+  /// See `BatchLifecycle` for the full status rules.
+  Future<bool> confirmBatchArchived(String batchId, DateTime confirmedUpdatedAt);
 
   /// Decrypted bytes of a stored scan image (see [LocalBatchRepository]'s
   /// doc comment — every image is encrypted at rest), or null if the file

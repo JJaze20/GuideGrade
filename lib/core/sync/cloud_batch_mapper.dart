@@ -18,6 +18,7 @@ import '../omr/exam_score.dart';
 import '../omr/omr_scorer.dart';
 import '../omr/qtm_result.dart';
 import '../omr/tat_result.dart';
+import 'scan_cloud_extensions.dart';
 import 'sync_client.dart';
 
 /// The Admission Test's fixed itemization -- the denominator of its
@@ -60,32 +61,54 @@ LocalBatch mapCloudBatch(CloudBatchRow row) => LocalBatch(
 /// invented here.
 LocalScan mapCloudScan(CloudScanRow row, {AnswerKey? answerKey}) {
   final decoded = OmrScanResult.fromJson(row.decoded);
-  return LocalScan(
+  // Manual corrections and optional student details, when the row has them
+  // (see ScanCloudExtensions) — absent on every row written before they
+  // existed, which restores exactly as before.
+  final manual = ScanCloudExtensions.parse(row.decoded);
+  final scan = LocalScan(
     id: row.id,
     imageFileName: 'images/${row.id}.enc',
     rectifiedImageFileName:
         row.rectifiedImagePath != null ? 'images/${row.id}_rectified.enc' : null,
     capturedAt: row.capturedAt,
     decoded: decoded,
-    result: row.resultStatus == null
-        ? null
-        : _buildRestoredResult(row, decoded, answerKey),
-    examinee: _mapExaminee(row),
+    examinee: _mapExaminee(row, manual.details),
+    captureRevision: manual.captureRevision,
+    corrections: manual.corrections,
   );
+  return row.resultStatus == null
+      ? scan
+      // The TAT breakdown is recomputed from what the scan currently READS
+      // as (corrections applied), so it agrees with the restored raw score.
+      : scan.copyWith(result: _buildRestoredResult(row, scan.effectiveDecoded, answerKey));
 }
 
 /// The examinee trio, all-or-nothing (mirrors the cloud's own
-/// `examinee_all_or_nothing` CHECK) -- `null` unless all three of
-/// first/last/number are present and non-blank.
-ExamineeInfo? _mapExaminee(CloudScanRow row) {
+/// `examinee_all_or_nothing` CHECK) -- names/number are `null` unless all
+/// three of first/last/number are present and non-blank. The optional
+/// details ([details], from the `manual` block) attach independently of the
+/// trio: a scan with only a birth date or school still restores it, as an
+/// examinee with no name.
+ExamineeInfo? _mapExaminee(CloudScanRow row, ExamineeDetails? details) {
   final first = row.firstName;
   final last = row.lastName;
   final number = row.examineeNumber;
-  if (first == null || last == null || number == null) return null;
-  if (first.trim().isEmpty || last.trim().isEmpty || number.trim().isEmpty) {
-    return null;
-  }
-  return ExamineeInfo(firstName: first, lastName: last, examineeNumber: number);
+  final trioComplete = first != null &&
+      last != null &&
+      number != null &&
+      first.trim().isNotEmpty &&
+      last.trim().isNotEmpty &&
+      number.trim().isNotEmpty;
+  final hasDetails = details != null && !details.isEmpty;
+  if (!trioComplete && !hasDetails) return null;
+  return ExamineeInfo(
+    firstName: trioComplete ? first : '',
+    lastName: trioComplete ? last : '',
+    examineeNumber: trioComplete ? number : '',
+    birthDate: details?.birthDate,
+    manualAge: details?.manualAge,
+    lastSchool: details?.lastSchool ?? '',
+  );
 }
 
 /// `rawScore` / `totalGraded` / `totalItems` / `status` / `scannedAt` /

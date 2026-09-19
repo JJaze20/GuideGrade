@@ -4,8 +4,10 @@ import 'dart:typed_data';
 
 import 'package:path_provider/path_provider.dart';
 
+import '../../models/answer_correction.dart';
 import '../../models/local_batch.dart';
 import '../../models/omr_scan_result.dart';
+import '../batch/batch_lifecycle.dart';
 import 'batch_crypto_service.dart';
 import 'batch_repository.dart';
 
@@ -52,6 +54,44 @@ class LocalBatchRepository implements BatchRepository {
   static const _manifestName = 'batch.enc';
   static const _legacyManifestName = 'batch.json';
   static const _imagesDirName = 'images';
+
+  /// One in-flight read-modify-write per batch. Every mutation below reads
+  /// the manifest, changes it in memory and writes it back, so two of them
+  /// overlapping (a correction tap while a tag saves, or a double tap) would
+  /// silently lose one. Chaining them per batch id makes each see the
+  /// previous one's result.
+  final Map<String, Future<void>> _batchLocks = {};
+
+  Future<T> _serialized<T>(String batchId, Future<T> Function() body) {
+    final previous = _batchLocks[batchId] ?? Future<void>.value();
+    final run = previous.catchError((_) {}).then((_) => body());
+    final tail = run.then<void>((_) {}, onError: (_) {});
+    _batchLocks[batchId] = tail;
+    // Drop the entry once nothing newer queued behind it.
+    tail.whenComplete(() {
+      if (identical(_batchLocks[batchId], tail)) _batchLocks.remove(batchId);
+    });
+    return run;
+  }
+
+  /// Applies the derived status and a strictly-increasing revision to a
+  /// batch that is about to be saved: a local save always lands on Draft
+  /// (required fields have problems) or Active (complete). Archived is only
+  /// ever set by [confirmBatchArchived], after the cloud confirms this exact
+  /// revision — so any save, including one on an Archived batch, moves it
+  /// off Archived until the NEW revision syncs. See [BatchLifecycle].
+  LocalBatch _finalize(LocalBatch batch, LocalBatch? previous) {
+    final problems = BatchLifecycle.problems(
+      batchCode: batch.batchCode,
+      examCode: batch.examCode,
+      expectedCount: batch.expectedCount,
+    );
+    final floor = previous?.updatedAt ?? batch.updatedAt;
+    return batch.copyWith(
+      status: BatchLifecycle.statusAfterSave(problems),
+      updatedAt: BatchLifecycle.nextRevision(floor, DateTime.now()),
+    );
+  }
 
   Future<Directory> _root() async {
     if (_rootCache != null) return _rootCache!;
@@ -102,7 +142,20 @@ class LocalBatchRepository implements BatchRepository {
 
     final jsonBytes = Uint8List.fromList(utf8.encode(jsonEncode(batch.toJson())));
     final encrypted = await _crypto.encrypt(jsonBytes);
-    await File('${dir.path}/$_manifestName').writeAsBytes(encrypted, flush: true);
+    // Written beside the manifest and moved into place, so a crash or a
+    // full disk mid-write leaves the previous manifest intact instead of a
+    // truncated one (this file is the only copy of every answer, tag and
+    // correction in the batch).
+    final target = File('${dir.path}/$_manifestName');
+    final temp = File('${dir.path}/$_manifestName.tmp');
+    await temp.writeAsBytes(encrypted, flush: true);
+    try {
+      await temp.rename(target.path);
+    } on FileSystemException {
+      // Some platforms refuse to rename over an existing file.
+      if (target.existsSync()) target.deleteSync();
+      await temp.rename(target.path);
+    }
 
     final legacy = File('${dir.path}/$_legacyManifestName');
     if (legacy.existsSync()) {
@@ -152,42 +205,125 @@ class LocalBatchRepository implements BatchRepository {
   }) async {
     final now = DateTime.now();
     final id = 'b_${now.millisecondsSinceEpoch}_${now.microsecond}';
-    final batch = LocalBatch(
+    final draft = LocalBatch(
       id: id,
       batchCode: batchCode,
       examCode: examCode,
       examTitle: examTitle,
       description: description,
       expectedCount: expectedCount,
-      status: 'Draft',
+      status: BatchLifecycle.draft,
       createdByUid: createdByUid,
       createdByName: createdByName,
       createdAt: now,
       updatedAt: now,
       scans: const [],
     );
+    // Draft only if a required field is missing/invalid; a complete batch is
+    // Active as soon as it is saved.
+    final batch = _finalize(draft, null);
     await _writeManifest(batch);
     return batch;
   }
 
   @override
-  Future<LocalBatch> updateBatch(LocalBatch batch) async {
-    final root = await _root();
-    final existing = await _readManifest(_batchDir(root, batch.id));
-    if (existing == null) {
-      throw StateError('Batch ${batch.id} does not exist.');
-    }
-    // Never let an edit drop scans that were captured concurrently: keep
-    // whatever is on disk unless the caller explicitly passed a scan list.
-    final merged = batch.copyWith(
-      scans: batch.scans.isEmpty && existing.scans.isNotEmpty
-          ? existing.scans
-          : batch.scans,
-      updatedAt: DateTime.now(),
-    );
-    await _writeManifest(merged);
-    return merged;
-  }
+  Future<LocalBatch> updateBatch(LocalBatch batch) => _serialized(batch.id, () async {
+        final root = await _root();
+        final existing = await _readManifest(_batchDir(root, batch.id));
+        if (existing == null) {
+          throw StateError('Batch ${batch.id} does not exist.');
+        }
+        // Never let an edit drop scans that were captured concurrently: keep
+        // whatever is on disk unless the caller explicitly passed a scan list.
+        // The caller's `status` is ignored: status is derived (see
+        // BatchLifecycle), so an edit can neither pick nor keep Archived.
+        final merged = _finalize(
+          batch.copyWith(
+            scans: batch.scans.isEmpty && existing.scans.isNotEmpty
+                ? existing.scans
+                : batch.scans,
+          ),
+          existing,
+        );
+        await _writeManifest(merged);
+        return merged;
+      });
+
+  @override
+  Future<bool> confirmBatchArchived(
+    String batchId,
+    DateTime confirmedUpdatedAt,
+  ) =>
+      _serialized(batchId, () async {
+        final root = await _root();
+        final batch = await _readManifest(_batchDir(root, batchId));
+        if (batch == null) return false;
+        if (batch.isArchived) return false; // already recorded
+        // Compare-and-set on the revision the cloud actually acknowledged:
+        // if anything was saved since, the confirmation is for an OLDER
+        // revision and must not archive the newer, unsynced one.
+        if (batch.updatedAt != confirmedUpdatedAt) return false;
+        final problems = BatchLifecycle.problems(
+          batchCode: batch.batchCode,
+          examCode: batch.examCode,
+          expectedCount: batch.expectedCount,
+        );
+        if (problems.isNotEmpty) return false; // an incomplete batch is Draft
+        // Deliberately NOT bumping updatedAt: this is a derived marker of an
+        // already-saved revision, not a new edit — bumping it would make the
+        // revision the cloud just confirmed look unsynced again.
+        await _writeManifest(batch.copyWith(status: BatchLifecycle.archived));
+        return true;
+      });
+
+  @override
+  Future<LocalBatch> updateScanCorrections({
+    required String batchId,
+    required String scanId,
+    required List<AnswerCorrection> corrections,
+    LocalScanResult? result,
+  }) =>
+      _serialized(batchId, () async {
+        final root = await _root();
+        final batch = await _readManifest(_batchDir(root, batchId));
+        if (batch == null) {
+          throw StateError('Batch $batchId does not exist.');
+        }
+        final index = batch.scans.indexWhere((s) => s.id == scanId);
+        if (index == -1) {
+          throw StateError('Scan $scanId does not exist in batch $batchId.');
+        }
+        final scan = batch.scans[index];
+        final knownIds = {for (final c in scan.corrections) c.id};
+        for (final c in corrections) {
+          if (knownIds.contains(c.id)) continue;
+          // A new entry must be about THIS capture. If the sheet was
+          // rescanned while the editor was open, refuse rather than record a
+          // correction against a photo the counselor never looked at.
+          if (c.captureRevision != scan.captureRevision) {
+            throw StateError(
+              'This sheet was rescanned after the editor opened. Reopen the scan and review it again.',
+            );
+          }
+          if (c.scanId != scanId) {
+            throw StateError('Correction ${c.id} belongs to a different scan.');
+          }
+        }
+        // History is append-only: a write may add entries but never drop or
+        // rewrite one that is already stored.
+        final merged = CorrectionRules.merge(scan.corrections, corrections);
+        final sameHistory = merged.length == scan.corrections.length;
+        final sameResult = result == null ||
+            jsonEncode(result.toJson()) == jsonEncode(scan.result?.toJson());
+        if (sameHistory && sameResult) {
+          return batch; // a repeated request: nothing to record, no new revision
+        }
+        final scans = [...batch.scans];
+        scans[index] = scan.copyWith(corrections: merged, result: result);
+        final updated = _finalize(batch.copyWith(scans: scans), batch);
+        await _writeManifest(updated);
+        return updated;
+      });
 
   @override
   Future<void> deleteBatch(String id) async {
@@ -207,7 +343,7 @@ class LocalBatchRepository implements BatchRepository {
     File? nameCropLastImage,
     File? nameCropFirstImage,
     File? nameCropMiddleImage,
-  }) async {
+  }) => _serialized(batchId, () async {
     final root = await _root();
     final batch = await _readManifest(_batchDir(root, batchId));
     if (batch == null) {
@@ -262,15 +398,13 @@ class LocalBatchRepository implements BatchRepository {
       nameCropMiddleFileName: nameCropMiddleRelPath,
     );
 
-    final updated = batch.copyWith(
-      scans: [...batch.scans, scan],
-      // First scan promotes a Draft batch to Active.
-      status: batch.status == 'Draft' ? 'Active' : batch.status,
-      updatedAt: now,
-    );
+    // Status is derived on every save (see BatchLifecycle): scanning no
+    // longer "promotes" a Draft, because a complete batch is already Active
+    // and an incomplete one stays Draft until its required fields are fixed.
+    final updated = _finalize(batch.copyWith(scans: [...batch.scans, scan]), batch);
     await _writeManifest(updated);
     return updated;
-  }
+  });
 
   @override
   Future<LocalBatch> replaceScan({
@@ -284,7 +418,7 @@ class LocalBatchRepository implements BatchRepository {
     File? nameCropLastImage,
     File? nameCropFirstImage,
     File? nameCropMiddleImage,
-  }) async {
+  }) => _serialized(batchId, () async {
     final root = await _root();
     final batch = await _readManifest(_batchDir(root, batchId));
     if (batch == null) {
@@ -351,21 +485,26 @@ class LocalBatchRepository implements BatchRepository {
       nameCropLastFileName: nameCropLastRelPath,
       nameCropFirstFileName: nameCropFirstRelPath,
       nameCropMiddleFileName: nameCropMiddleRelPath,
+      // A rescan is a NEW capture of the same slot: corrections made on the
+      // old capture stay in the history (never dropped) but stop applying —
+      // see AnswerCorrection.captureRevision / LocalScan.correctionsNeedingReview.
+      captureRevision: existing.captureRevision + 1,
+      corrections: existing.corrections,
     );
 
     final scans = [...batch.scans];
     scans[existingIndex] = updatedScan;
-    final updated = batch.copyWith(scans: scans, updatedAt: DateTime.now());
+    final updated = _finalize(batch.copyWith(scans: scans), batch);
     await _writeManifest(updated);
     return updated;
-  }
+  });
 
   @override
   Future<LocalBatch> attachResult({
     required String batchId,
     required String scanId,
     required LocalScanResult result,
-  }) async {
+  }) => _serialized(batchId, () async {
     final root = await _root();
     final batch = await _readManifest(_batchDir(root, batchId));
     if (batch == null) {
@@ -374,17 +513,17 @@ class LocalBatchRepository implements BatchRepository {
     final scans = batch.scans
         .map((s) => s.id == scanId ? s.copyWith(result: result) : s)
         .toList();
-    final updated = batch.copyWith(scans: scans, updatedAt: DateTime.now());
+    final updated = _finalize(batch.copyWith(scans: scans), batch);
     await _writeManifest(updated);
     return updated;
-  }
+  });
 
   @override
   Future<LocalBatch> setScanExaminee({
     required String batchId,
     required String scanId,
     ExamineeInfo? examinee,
-  }) async {
+  }) => _serialized(batchId, () async {
     final root = await _root();
     final batch = await _readManifest(_batchDir(root, batchId));
     if (batch == null) {
@@ -396,10 +535,10 @@ class LocalBatchRepository implements BatchRepository {
             ? s.copyWith(examinee: examinee, clearExaminee: clear)
             : s)
         .toList();
-    final updated = batch.copyWith(scans: scans, updatedAt: DateTime.now());
+    final updated = _finalize(batch.copyWith(scans: scans), batch);
     await _writeManifest(updated);
     return updated;
-  }
+  });
 
   @override
   Future<Uint8List?> resolveScanImage(String batchId, LocalScan scan) async {
