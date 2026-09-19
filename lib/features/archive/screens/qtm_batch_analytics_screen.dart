@@ -515,7 +515,7 @@ class _QtmBatchAnalyticsScreenState extends State<QtmBatchAnalyticsScreen> {
   }
 
   Widget _scorerRow(QtmRankedScorer scorer) {
-    final name = scorer.displayName ?? 'Unnamed';
+    final name = scorer.displayName ?? 'Unnamed examinee';
     final number = scorer.examineeNumber ?? '—';
     final pct = scorer.percentage == null
         ? '—'

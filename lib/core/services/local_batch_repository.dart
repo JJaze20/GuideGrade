@@ -23,6 +23,9 @@ import 'batch_repository.dart';
 ///     images/
 ///       <scanId>.enc    - the original captured sheet photo, encrypted
 ///       <scanId>_rectified.enc  - the perspective-corrected copy, if any
+///       <scanId>_name_last.enc  - cropped Last Name field, if any
+///       <scanId>_name_first.enc - cropped First Name field, if any
+///       <scanId>_name_mi.enc    - cropped MI field, if any
 /// ```
 ///
 /// `batch.enc` is the single source of truth; the directory listing is
@@ -201,9 +204,9 @@ class LocalBatchRepository implements BatchRepository {
     File? rectifiedImage,
     LocalScanResult? result,
     ExamineeInfo? examinee,
-    String? ocrLastNameGuess,
-    String? ocrFirstNameGuess,
-    String? ocrMiddleNameGuess,
+    File? nameCropLastImage,
+    File? nameCropFirstImage,
+    File? nameCropMiddleImage,
   }) async {
     final root = await _root();
     final batch = await _readManifest(_batchDir(root, batchId));
@@ -239,6 +242,13 @@ class LocalBatchRepository implements BatchRepository {
       await File('$batchDirPath/$rectifiedRelPath').writeAsBytes(encryptedRectified, flush: true);
     }
 
+    final nameCropLastRelPath =
+        await _writeNameCropIfPresent(batchDirPath, '${scanId}_name_last.enc', nameCropLastImage);
+    final nameCropFirstRelPath =
+        await _writeNameCropIfPresent(batchDirPath, '${scanId}_name_first.enc', nameCropFirstImage);
+    final nameCropMiddleRelPath =
+        await _writeNameCropIfPresent(batchDirPath, '${scanId}_name_mi.enc', nameCropMiddleImage);
+
     final scan = LocalScan(
       id: scanId,
       imageFileName: relPath,
@@ -247,9 +257,9 @@ class LocalBatchRepository implements BatchRepository {
       decoded: decoded,
       result: result,
       examinee: examinee,
-      ocrLastNameGuess: ocrLastNameGuess,
-      ocrFirstNameGuess: ocrFirstNameGuess,
-      ocrMiddleNameGuess: ocrMiddleNameGuess,
+      nameCropLastFileName: nameCropLastRelPath,
+      nameCropFirstFileName: nameCropFirstRelPath,
+      nameCropMiddleFileName: nameCropMiddleRelPath,
     );
 
     final updated = batch.copyWith(
@@ -271,9 +281,9 @@ class LocalBatchRepository implements BatchRepository {
     File? rectifiedImage,
     LocalScanResult? result,
     ExamineeInfo? examinee,
-    String? ocrLastNameGuess,
-    String? ocrFirstNameGuess,
-    String? ocrMiddleNameGuess,
+    File? nameCropLastImage,
+    File? nameCropFirstImage,
+    File? nameCropMiddleImage,
   }) async {
     final root = await _root();
     final batch = await _readManifest(_batchDir(root, batchId));
@@ -298,29 +308,37 @@ class LocalBatchRepository implements BatchRepository {
       _deleteIfExists(File('$batchDirPath/${existing.imageFileName}'));
     }
 
-    String? rectifiedRelPath;
-    if (rectifiedImage != null && rectifiedImage.existsSync()) {
-      final newRectifiedFileName = '$_imagesDirName/${scanId}_rectified.enc';
-      final encryptedRectified = await _crypto.encrypt(await rectifiedImage.readAsBytes());
-      await File('$batchDirPath/$newRectifiedFileName').writeAsBytes(encryptedRectified, flush: true);
-      final oldRectified = existing.rectifiedImageFileName;
-      if (oldRectified != null && oldRectified != newRectifiedFileName) {
-        _deleteIfExists(File('$batchDirPath/$oldRectified'));
-      }
-      rectifiedRelPath = newRectifiedFileName;
-    } else {
-      // No rectified image this time -- deliberately left null rather than
-      // kept, so a stale rectified photo from the *previous* capture is
-      // never paired with this rescan's fresh marks (see
-      // ScannedImageViewerScreen's _hasOverlay, which just falls back to
-      // the plain photo when this is null). Clean up the old file too, if
-      // there was one.
-      final oldRectified = existing.rectifiedImageFileName;
-      if (oldRectified != null) {
-        _deleteIfExists(File('$batchDirPath/$oldRectified'));
-      }
-      rectifiedRelPath = null;
-    }
+    // Rectified overlay copy and the 3 name crops all follow the same rule:
+    // deliberately refreshed-to-null rather than kept when this rescan
+    // didn't produce a new one, so a stale image from the *previous*
+    // capture is never paired with this rescan's fresh photo (see
+    // ScannedImageViewerScreen's _hasOverlay, which falls back to the plain
+    // photo when the rectified path is null, and NameCropStrip, which
+    // falls back to "no crop available" the same way).
+    final rectifiedRelPath = await _replaceOptionalImage(
+      batchDirPath,
+      '${scanId}_rectified.enc',
+      rectifiedImage,
+      existing.rectifiedImageFileName,
+    );
+    final nameCropLastRelPath = await _replaceOptionalImage(
+      batchDirPath,
+      '${scanId}_name_last.enc',
+      nameCropLastImage,
+      existing.nameCropLastFileName,
+    );
+    final nameCropFirstRelPath = await _replaceOptionalImage(
+      batchDirPath,
+      '${scanId}_name_first.enc',
+      nameCropFirstImage,
+      existing.nameCropFirstFileName,
+    );
+    final nameCropMiddleRelPath = await _replaceOptionalImage(
+      batchDirPath,
+      '${scanId}_name_mi.enc',
+      nameCropMiddleImage,
+      existing.nameCropMiddleFileName,
+    );
 
     final updatedScan = LocalScan(
       id: existing.id,
@@ -330,9 +348,9 @@ class LocalBatchRepository implements BatchRepository {
       decoded: decoded,
       result: result,
       examinee: examinee ?? existing.examinee, // default: same physical sheet -- keep its tag
-      ocrLastNameGuess: ocrLastNameGuess ?? existing.ocrLastNameGuess,
-      ocrFirstNameGuess: ocrFirstNameGuess ?? existing.ocrFirstNameGuess,
-      ocrMiddleNameGuess: ocrMiddleNameGuess ?? existing.ocrMiddleNameGuess,
+      nameCropLastFileName: nameCropLastRelPath,
+      nameCropFirstFileName: nameCropFirstRelPath,
+      nameCropMiddleFileName: nameCropMiddleRelPath,
     );
 
     final scans = [...batch.scans];
@@ -395,8 +413,27 @@ class LocalBatchRepository implements BatchRepository {
   }
 
   @override
-  Future<Uint8List?> resolveScanRectifiedImage(String batchId, LocalScan scan) async {
-    final name = scan.rectifiedImageFileName;
+  Future<Uint8List?> resolveScanRectifiedImage(String batchId, LocalScan scan) =>
+      _resolveOptionalImage(batchId, scan.rectifiedImageFileName);
+
+  @override
+  Future<Uint8List?> resolveScanNameCropLast(String batchId, LocalScan scan) =>
+      _resolveOptionalImage(batchId, scan.nameCropLastFileName);
+
+  @override
+  Future<Uint8List?> resolveScanNameCropFirst(String batchId, LocalScan scan) =>
+      _resolveOptionalImage(batchId, scan.nameCropFirstFileName);
+
+  @override
+  Future<Uint8List?> resolveScanNameCropMiddle(String batchId, LocalScan scan) =>
+      _resolveOptionalImage(batchId, scan.nameCropMiddleFileName);
+
+  /// Shared read path for every optional per-scan image (rectified overlay
+  /// copy, name crops): null [name] (never stored) and a missing file
+  /// (deleted out from under the app) both resolve to null, same as a
+  /// genuinely-absent image -- callers already treat all of these as
+  /// "nothing to show" rather than an error.
+  Future<Uint8List?> _resolveOptionalImage(String batchId, String? name) async {
     if (name == null) return null;
     final root = await _root();
     final file = File('${_batchDir(root, batchId).path}/$name');
@@ -519,5 +556,49 @@ class LocalBatchRepository implements BatchRepository {
         // Best-effort cleanup of a superseded file; not fatal if it fails.
       }
     }
+  }
+
+  /// [addScan]'s write path for one optional per-scan image (a name crop
+  /// today; the rectified overlay copy uses this same shape inline since
+  /// it has no "existing" file to worry about on a fresh scan): encrypts
+  /// and writes [image] under [fileName] when given and present on disk,
+  /// returning the relative path to store on the [LocalScan]; returns null
+  /// (nothing written) when [image] is null or missing, e.g. cropping
+  /// failed for this sheet -- never blocks the scan itself from saving.
+  Future<String?> _writeNameCropIfPresent(String batchDirPath, String fileName, File? image) async {
+    if (image == null || !image.existsSync()) return null;
+    final relPath = '$_imagesDirName/$fileName';
+    final encrypted = await _crypto.encrypt(await image.readAsBytes());
+    await File('$batchDirPath/$relPath').writeAsBytes(encrypted, flush: true);
+    return relPath;
+  }
+
+  /// [replaceScan]'s write path for one optional per-scan image (rectified
+  /// overlay copy, or a name crop): when [newImage] is given and present on
+  /// disk, encrypts and writes it under [fileName], deletes [existingRelPath]
+  /// if it names a different file, and returns the new relative path. When
+  /// [newImage] is absent, deliberately clears to null instead of keeping
+  /// [existingRelPath] (deleting that old file too) -- see the call site's
+  /// comment for why a stale image must never survive a rescan that didn't
+  /// reproduce it.
+  Future<String?> _replaceOptionalImage(
+    String batchDirPath,
+    String fileName,
+    File? newImage,
+    String? existingRelPath,
+  ) async {
+    if (newImage != null && newImage.existsSync()) {
+      final relPath = '$_imagesDirName/$fileName';
+      final encrypted = await _crypto.encrypt(await newImage.readAsBytes());
+      await File('$batchDirPath/$relPath').writeAsBytes(encrypted, flush: true);
+      if (existingRelPath != null && existingRelPath != relPath) {
+        _deleteIfExists(File('$batchDirPath/$existingRelPath'));
+      }
+      return relPath;
+    }
+    if (existingRelPath != null) {
+      _deleteIfExists(File('$batchDirPath/$existingRelPath'));
+    }
+    return null;
   }
 }

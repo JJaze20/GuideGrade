@@ -51,8 +51,10 @@ LocalBatch mapCloudBatch(CloudBatchRow row) => LocalBatch(
 /// comment for the accepted limitation this implies when the answer key has
 /// changed since the scan was originally graded.
 ///
-/// `ocrLastNameGuess` / `ocrFirstNameGuess` / `ocrMiddleNameGuess` are
-/// always null (never pushed to the cloud, so never recoverable) and
+/// `nameCropLastFileName` / `nameCropFirstFileName` / `nameCropMiddleFileName`
+/// are always null (the name-crop images are a device-local convenience,
+/// never uploaded, so a restored scan simply has no crop to show — same as
+/// any other older scan that predates the feature) and
 /// `ExamineeInfo.middleName` is always `''` (the cloud never carries it,
 /// per `SupabaseSyncClient.pushScan`'s `'middle_name': null`) -- neither is
 /// invented here.

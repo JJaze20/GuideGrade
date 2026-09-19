@@ -59,13 +59,15 @@ abstract class BatchRepository {
 
   /// Copies [sourceImage] into [batchId]'s container and appends a scan
   /// carrying [decoded] (and [result]/[examinee] when known at capture
-  /// time). [rectifiedImage], when given, is also copied in and is purely
-  /// display material for the graded overlay (see
+  /// time — [examinee] is normally null here; staff tag a scan afterward,
+  /// see [setScanExaminee]). [rectifiedImage], when given, is also copied
+  /// in and is purely display material for the graded overlay (see
   /// [resolveScanRectifiedImage]) — never part of [decoded]/scoring.
-  /// [ocrLastNameGuess]/[ocrFirstNameGuess], when given, are on-device OCR's
-  /// best-effort read of the sheet's handwritten name field — stored only
-  /// to pre-fill the tag-student dialog later (see [LocalScan]), never
-  /// treated as a confirmed [ExamineeInfo]. Returns the updated batch.
+  /// [nameCropLastImage]/[nameCropFirstImage]/[nameCropMiddleImage], when
+  /// given, are the sheet's cropped handwritten-name field photos — stored
+  /// so staff can read them later while typing a name into
+  /// showExamineeDialog (see [LocalScan]); this app never runs automatic
+  /// handwriting recognition on them. Returns the updated batch.
   ///
   /// Throws [BatchScanLimitExceededException], with nothing written to
   /// disk, if the batch is already at its scan-count cap — see
@@ -78,25 +80,23 @@ abstract class BatchRepository {
     File? rectifiedImage,
     LocalScanResult? result,
     ExamineeInfo? examinee,
-    String? ocrLastNameGuess,
-    String? ocrFirstNameGuess,
-    String? ocrMiddleNameGuess,
+    File? nameCropLastImage,
+    File? nameCropFirstImage,
+    File? nameCropMiddleImage,
   });
 
   /// Replaces an existing scan's stored image/decode/result in place —
   /// same scan id and position in the batch; only the photo/decode/
-  /// result/rectified image actually change. Used by "Rescan" in the batch
-  /// archive, when a sheet's original capture needs to be redone (e.g. a
-  /// bad photo). Throws if [scanId] doesn't exist in [batchId].
+  /// result/rectified/name-crop images actually change. Used by "Rescan" in
+  /// the batch archive, when a sheet's original capture needs to be redone
+  /// (e.g. a bad photo). Throws if [scanId] doesn't exist in [batchId].
   ///
   /// [examinee], when given, replaces the stored tag; omitted (the
-  /// default), the existing tag is kept as-is — this is what "same
-  /// physical sheet, just a bad photo" means. Callers that recompute an
-  /// OCR name guess against the new photo (see
-  /// AppState.finishRescan) pass a refreshed [examinee] only when the
-  /// existing tag wasn't already staff-confirmed, and pass
-  /// [ocrLastNameGuess]/[ocrFirstNameGuess]/[ocrMiddleNameGuess] alongside
-  /// it the same way [addScan] does.
+  /// default, and what [AppState.finishRescan] always passes), the
+  /// existing tag is kept as-is — a rescan means the same physical sheet,
+  /// just a bad photo, so any already-entered name stays untouched.
+  /// [nameCropLastImage]/[nameCropFirstImage]/[nameCropMiddleImage] follow
+  /// [addScan]'s convention and always refresh to match the new photo.
   Future<LocalBatch> replaceScan({
     required String batchId,
     required String scanId,
@@ -105,9 +105,9 @@ abstract class BatchRepository {
     File? rectifiedImage,
     LocalScanResult? result,
     ExamineeInfo? examinee,
-    String? ocrLastNameGuess,
-    String? ocrFirstNameGuess,
-    String? ocrMiddleNameGuess,
+    File? nameCropLastImage,
+    File? nameCropFirstImage,
+    File? nameCropMiddleImage,
   });
 
   /// Attaches/overwrites the grading outcome for one already-stored scan.
@@ -136,6 +136,17 @@ abstract class BatchRepository {
   /// none was stored for it (see [LocalScan.rectifiedImageFileName]) or the
   /// file is missing on disk.
   Future<Uint8List?> resolveScanRectifiedImage(String batchId, LocalScan scan);
+
+  /// Decrypted bytes of [scan]'s cropped Last Name / First Name / MI
+  /// handwriting images, or null when none was stored for it (see
+  /// [LocalScan.nameCropLastFileName]/[nameCropFirstFileName]/
+  /// [nameCropMiddleFileName]) or the file is missing on disk — both
+  /// ordinary, non-error cases (an older scan predating this feature, or a
+  /// sheet whose crop failed) that callers should render as "no crop
+  /// available", not surface as an error.
+  Future<Uint8List?> resolveScanNameCropLast(String batchId, LocalScan scan);
+  Future<Uint8List?> resolveScanNameCropFirst(String batchId, LocalScan scan);
+  Future<Uint8List?> resolveScanNameCropMiddle(String batchId, LocalScan scan);
 
   /// Cloud-restore only — never called by the scan/create/edit flows.
   ///

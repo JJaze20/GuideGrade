@@ -10,6 +10,7 @@ import '../../../core/state/app_state.dart';
 import '../../../models/local_batch.dart';
 import '../../../models/omr_scan_result.dart';
 import '../../../shared/widgets/examinee_dialog.dart';
+import '../../../shared/widgets/name_crop_strip.dart';
 import '../../../shared/widgets/primary_button.dart';
 import '../widgets/scan_result_summary.dart';
 import 'scanned_image_viewer_screen.dart';
@@ -240,26 +241,14 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
         if (s.id != thisId) (s.examinee?.examineeNumber.trim() ?? ''),
     }..removeWhere((e) => e.isEmpty);
 
-    // Only offered when there's no confirmed tag yet — see
-    // showExamineeDialog's doc comment.
-    final ocrLast = scan?.ocrLastNameGuess;
-    final ocrFirst = scan?.ocrFirstNameGuess;
-    final ocrMiddle = scan?.ocrMiddleNameGuess;
-    final ocrSuggestion = current == null && (ocrLast != null || ocrFirst != null || ocrMiddle != null)
-        ? ExamineeInfo(
-            lastName: ocrLast ?? '',
-            firstName: ocrFirst ?? '',
-            middleName: ocrMiddle ?? '',
-            examineeNumber: '',
-          )
-        : null;
-
     final res = await showExamineeDialog(
       context,
       initial: current,
-      ocrSuggestion: ocrSuggestion,
       sheetLabel: 'Sheet ${sheetIndex + 1}',
       otherNumbers: others,
+      batchId: batch.id,
+      scan: scan,
+      repository: appState.batchRepository,
     );
     if (res == null) return;
     await appState.tagSessionScanExaminee(sheetIndex, res.cleared ? null : res.info);
@@ -277,8 +266,8 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
     final ambiguousCount = scored.items.where((i) => i.isAmbiguous).length;
     final examinee = scan?.examinee;
     final tagged = examinee != null && !examinee.isEmpty;
-    final viewerTitle =
-        tagged ? 'Sheet ${sheetIndex + 1} — ${examinee.displayName}' : 'Sheet ${sheetIndex + 1}';
+    final cardTitle = tagged ? examinee.displayName : 'Unnamed examinee';
+    final viewerTitle = tagged ? 'Sheet ${sheetIndex + 1} — ${examinee.displayName}' : 'Sheet ${sheetIndex + 1}';
 
     final bySection = <String, List<ScoredItem>>{};
     for (final item in scored.items) {
@@ -302,7 +291,7 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  tagged ? examinee.displayName : 'Sheet ${sheetIndex + 1}',
+                  cardTitle,
                   style: AppTextStyles.heading(size: 13),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -314,9 +303,17 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
           Text(
             tagged
                 ? 'Sheet ${sheetIndex + 1} · Examinee ${examinee.examineeNumber}'
-                : '${scored.items.length} items · $blankCount blank · $ambiguousCount flagged',
+                : 'Sheet ${sheetIndex + 1} · ${scored.items.length} items · $blankCount blank · $ambiguousCount flagged',
             style: AppTextStyles.body(size: 9, color: AppColors.textGray),
           ),
+          if (scan != null) ...[
+            const SizedBox(height: 8),
+            NameCropStrip(
+              batchId: appState.scanBatch!.id,
+              scan: scan,
+              repository: appState.batchRepository,
+            ),
+          ],
           const SizedBox(height: 8),
           ScanResultSummary(
             examCode: appState.scanBatch?.examCode ?? appState.activeExamCode,
@@ -400,16 +397,18 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
     }
 
     if (tagged) {
-      // A name alone (no examinee number) means OCR auto-filled it at scan
-      // time (see AppState.persistCapturedSessionToBatch) — not yet staff-
-      // confirmed, so this gets a distinct "needs number" treatment rather
-      // than the same checkmark a fully-tagged sheet gets.
+      // A tag can now be genuinely partial in either direction — name typed
+      // in before the number is known, or (with the name fields no longer
+      // required) a number entered before a name — so the "needs X" label
+      // names whichever piece is actually still missing, rather than
+      // always assuming it's the number.
       final complete = examinee!.isComplete;
+      final hasName = examinee.firstName.trim().isNotEmpty || examinee.lastName.trim().isNotEmpty;
+      final hasNumber = examinee.examineeNumber.trim().isNotEmpty;
+      final displayName = hasName ? examinee.displayName : 'Unnamed examinee';
       final icon = complete ? FontAwesomeIcons.userCheck : FontAwesomeIcons.userPen;
       final color = complete ? AppColors.primaryGreen : AppColors.amber800;
-      final label = complete
-          ? '${examinee.displayName} · #${examinee.examineeNumber}'
-          : '${examinee.displayName} — needs examinee #';
+      final label = hasNumber ? '$displayName · #${examinee.examineeNumber}' : '$displayName — needs examinee #';
       return Row(
         children: [
           FaIcon(icon, size: 11, color: color),

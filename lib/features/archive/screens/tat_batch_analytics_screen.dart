@@ -696,7 +696,7 @@ class _TatBatchAnalyticsScreenState extends State<TatBatchAnalyticsScreen> {
   }
 
   Widget _scorerRow(TatRankedScorer scorer, int index) {
-    final name = scorer.displayName ?? 'Unnamed';
+    final name = scorer.displayName ?? 'Unnamed examinee';
     final number = scorer.examineeNumber ?? '—';
     final pct = scorer.percentage == null
         ? '—'

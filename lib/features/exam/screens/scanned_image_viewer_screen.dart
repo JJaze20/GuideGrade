@@ -1,4 +1,5 @@
 import 'dart:io';
+import '../../../core/omr/omr_tat_legacy_template.dart';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -77,8 +78,13 @@ class ScannedImageViewerScreen extends StatelessWidget {
   /// plain rectified image; it just skips the overlay/mesh correction
   /// rather than risk drawing it with coordinates from a sheet layout
   /// that has since changed underneath it.
+  OmrExamTemplate? get _overlayTemplate =>
+      template?.examCode == 'TAT' && scanTemplateVersion == 'TAT-redesign-v1'
+          ? legacyTatTemplate : template;
+
   bool get _templateStillMatches =>
-      scanTemplateVersion == null || template == null || scanTemplateVersion == template!.templateVersion;
+      (scanTemplateVersion == null && template?.examCode != 'TAT') ||
+      (scanTemplateVersion != null && scanTemplateVersion == _overlayTemplate?.templateVersion);
 
   bool get _hasOverlay =>
       (rectifiedImagePath != null || rectifiedImageBytes != null) &&
@@ -135,7 +141,7 @@ class ScannedImageViewerScreen extends StatelessWidget {
                               child: CustomPaint(
                                 painter: _GradedOverlayPainter(
                                   items: scoredItems,
-                                  template: template!,
+                                  template: _overlayTemplate!,
                                   meshInteriorMeasuredFrac: meshInteriorMeasuredFrac,
                                 ),
                               ),
@@ -240,8 +246,11 @@ class _GradedOverlayPainter extends CustomPainter {
     if (template.pageWidthPt <= 0 || template.pageHeightPt <= 0) return;
     final pxPerPtX = size.width / template.pageWidthPt;
     final pxPerPtY = size.height / template.pageHeightPt;
-    final ringRx = template.bubbleRadiusPt * 1.8 * pxPerPtX;
-    final ringRy = template.bubbleRadiusYPt * 1.8 * pxPerPtY;
+    // Keep the review indicator close to the printed oval. The previous
+    // 1.8 multiplier made rings overlap adjacent choices and falsely looked
+    // like a coordinate error on dense TAT rows.
+    final ringRx = template.bubbleRadiusPt * 1.14 * pxPerPtX;
+    final ringRy = template.bubbleRadiusYPt * 1.14 * pxPerPtY;
     final strokeWidth = (ringRx < ringRy ? ringRx : ringRy) * 0.3;
     final badgeRadius = (ringRx < ringRy ? ringRx : ringRy) * 0.6;
 

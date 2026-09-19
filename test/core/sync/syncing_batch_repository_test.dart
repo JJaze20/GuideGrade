@@ -108,6 +108,24 @@ class _FakeLocal implements LocalBatchRepository {
   }
 
   @override
+  Future<Uint8List?> resolveScanNameCropLast(String batchId, LocalScan scan) async {
+    calls.add('resolveScanNameCropLast:$batchId/${scan.id}');
+    return null;
+  }
+
+  @override
+  Future<Uint8List?> resolveScanNameCropFirst(String batchId, LocalScan scan) async {
+    calls.add('resolveScanNameCropFirst:$batchId/${scan.id}');
+    return null;
+  }
+
+  @override
+  Future<Uint8List?> resolveScanNameCropMiddle(String batchId, LocalScan scan) async {
+    calls.add('resolveScanNameCropMiddle:$batchId/${scan.id}');
+    return null;
+  }
+
+  @override
   Future<LocalBatch> createBatch({
     required String batchCode,
     required String examCode,
@@ -144,9 +162,9 @@ class _FakeLocal implements LocalBatchRepository {
     File? rectifiedImage,
     LocalScanResult? result,
     ExamineeInfo? examinee,
-    String? ocrLastNameGuess,
-    String? ocrFirstNameGuess,
-    String? ocrMiddleNameGuess,
+    File? nameCropLastImage,
+    File? nameCropFirstImage,
+    File? nameCropMiddleImage,
   }) async {
     calls.add('addScan:$batchId');
     _maybeThrow('addScan');
@@ -162,9 +180,9 @@ class _FakeLocal implements LocalBatchRepository {
     File? rectifiedImage,
     LocalScanResult? result,
     ExamineeInfo? examinee,
-    String? ocrLastNameGuess,
-    String? ocrFirstNameGuess,
-    String? ocrMiddleNameGuess,
+    File? nameCropLastImage,
+    File? nameCropFirstImage,
+    File? nameCropMiddleImage,
   }) async {
     calls.add('replaceScan:$batchId/$scanId');
     _maybeThrow('replaceScan');
