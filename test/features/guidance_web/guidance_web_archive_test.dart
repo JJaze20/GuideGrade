@@ -403,7 +403,7 @@ void main() {
       await tester.pumpWidget(MaterialApp(
         home: Scaffold(
           body: home ??
-              GuidanceWebResultsView(service: resultsService, archiveService: archiveService),
+              GuidanceWebResultsView(service: resultsService, archiveService: archiveService, refreshInterval: null),
         ),
       ));
       await tester.pumpAndSettle();
