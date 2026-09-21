@@ -574,6 +574,29 @@ class AppState extends ChangeNotifier {
   /// page, in capture order. Cleared by [resetScanProgress].
   final List<XFile> capturedPages = [];
 
+  final Map<String, ({OmrScanResult result, String? reviewPath})>
+      _capturePreviews = {};
+
+  /// Decode before accepting the photo, so the score can be shown right
+  /// after the capture. The result and review image are reused when the
+  /// session is compiled, so the sheet is only decoded once.
+  Future<OmrScanResult> previewCapturedPage(XFile file) async {
+    final template = omrTemplates[activeExamCode];
+    if (template == null) throw StateError('No sheet layout is available.');
+    final directory = await _prepareRectifiedImagesDir();
+    final reviewPath = directory == null ? null
+        : '$directory/preview_${DateTime.now().microsecondsSinceEpoch}.jpg';
+    final result = await compute(_decodeOmrPage, _OmrDecodeRequest(
+      file.path, template, rectifiedOutputPath: reviewPath,
+      diagnosticsEnabled: diagnosticsEnabled,
+    ));
+    final savedReview = reviewPath != null && await File(reviewPath).exists()
+        ? reviewPath : null;
+    addCapturedPage(file);
+    _capturePreviews[file.path] = (result: result, reviewPath: savedReview);
+    return result;
+  }
+
   /// Decoded bubble results for the in-progress scan session, one per
   /// captured page, populated by [processCapturedPages]. Cleared by
   /// [resetScanProgress].
@@ -839,6 +862,7 @@ class AppState extends ChangeNotifier {
 
   void resetScanProgress() {
     currentScannedPage = 0;
+    _capturePreviews.clear();
     capturedPages.clear();
     scannedResults.clear();
     rectifiedImagePaths.clear();
@@ -857,6 +881,7 @@ class AppState extends ChangeNotifier {
     // in the compile queue and veto a subsequent good photo.
     if (rescanScanId != null) {
       capturedPages.clear();
+      _capturePreviews.clear();
       scannedResults.clear();
       rectifiedImagePaths.clear();
       scanProcessingError = null;
@@ -905,11 +930,12 @@ class AppState extends ChangeNotifier {
       // parameter. Timestamped, not a fixed per-page name, so a rescan
       // retry can never display a stale cached copy of a previous
       // attempt's image at the same path.
-      final reviewOutput = rectifiedDir != null
+      final preview = _capturePreviews[page.path];
+      final reviewOutput = preview != null ? preview.reviewPath : rectifiedDir != null
           ? '$rectifiedDir/${scanRef}_${pageIndex}_${DateTime.now().microsecondsSinceEpoch}.jpg' : null;
       var decoded = false;
       try {
-        final result = await compute(_decodeOmrPage, _OmrDecodeRequest(page.path, template,
+        final OmrScanResult result = preview?.result ?? await compute<_OmrDecodeRequest, OmrScanResult>(_decodeOmrPage, _OmrDecodeRequest(page.path, template,
             rectifiedOutputPath: reviewOutput, diagnosticsEnabled: diagnosticsEnabled));
         scannedResults.add(result);
         decoded = true;

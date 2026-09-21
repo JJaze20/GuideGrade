@@ -11,7 +11,9 @@ import '../../../core/constants/app_colors.dart';
 import '../../../core/omr/duplicate_scan_detector.dart';
 import '../../../core/omr/fiducial_coordinate_mapping.dart';
 import '../../../core/omr/fiducial_search_tuning.dart';
+import '../../../core/omr/exam_score.dart';
 import '../../../core/omr/omr_decoder.dart';
+import '../../../core/omr/omr_scorer.dart';
 import '../../../core/omr/omr_templates.dart';
 import '../../../core/routes/app_routes.dart';
 import '../../../core/state/app_state.dart';
@@ -1159,7 +1161,56 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
         }
       }
       if (!mounted) return;
-      appState.addCapturedPage(file);
+      final decoded = await appState.previewCapturedPage(file);
+      if (!mounted) return;
+      final scored = scoreOmrResult(
+        decoded, appState.answerKeys[decoded.examCode],
+      );
+      final score = computeExamScoreForCode(scored);
+      // Hold the shutter lock while the score is visible. Rearm automatic
+      // capture only after the user removes or repositions this sheet.
+      _autoCaptureArmed = false;
+      final endSession = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => PopScope(
+          canPop: false,
+          child: AlertDialog(
+            title: Text('Sheet ${appState.currentScannedPage}'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  score != null && score.isGraded
+                      ? '${score.rawScore} / ${score.isTat ? 160 : score.totalItems}'
+                      : 'No answer key available',
+                  style: Theme.of(context).textTheme.headlineLarge,
+                  textAlign: TextAlign.center,
+                ),
+                if (score != null && score.isGraded && score.totalGraded < score.totalItems)
+                  const Text('Partial answer key'),
+                if (scored.items.any((item) => item.isAmbiguous))
+                  const Text('Preliminary score — some answers need review.'),
+              ],
+            ),
+            actions: [
+              if (appState.rescanScanId == null)
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(true),
+                  child: const Text('End Session'),
+                ),
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: Text(appState.rescanScanId != null
+                    ? 'Save Rescan'
+                    : appState.scanLimitBlockMessage != null
+                        ? 'Continue' : 'Next Sheet'),
+              ),
+            ],
+          ),
+        ),
+      );
+      if (!mounted) return;
       if (captureSw != null) {
         omrPerfLog(
           'capture pageIndex=${appState.currentScannedPage} takePicture=${takePictureMs}ms '
@@ -1173,7 +1224,7 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
       // "Save Rescan" button. _compileData already handles the full
       // decode → finishRescan → pop-back-to-archive sequence and all its
       // own error/mounted handling.
-      if (appState.rescanScanId != null) {
+      if (appState.rescanScanId != null || endSession == true) {
         await _compileData(appState);
       }
     } on CameraException catch (e) {
