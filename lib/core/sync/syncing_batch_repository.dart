@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import '../../models/answer_correction.dart';
 import '../../models/local_batch.dart';
 import '../../models/omr_scan_result.dart';
 import '../services/batch_repository.dart';
@@ -67,6 +68,18 @@ class SyncingBatchRepository implements BatchRepository {
   @override
   Future<Uint8List?> resolveScanRectifiedImage(String batchId, LocalScan scan) =>
       local.resolveScanRectifiedImage(batchId, scan);
+
+  @override
+  Future<Uint8List?> resolveScanNameCropLast(String batchId, LocalScan scan) =>
+      local.resolveScanNameCropLast(batchId, scan);
+
+  @override
+  Future<Uint8List?> resolveScanNameCropFirst(String batchId, LocalScan scan) =>
+      local.resolveScanNameCropFirst(batchId, scan);
+
+  @override
+  Future<Uint8List?> resolveScanNameCropMiddle(String batchId, LocalScan scan) =>
+      local.resolveScanNameCropMiddle(batchId, scan);
 
   // ---------------------------------------------------------------------------
   // B2. Cloud restore -- pure delegation, same as the reads above: no
@@ -152,9 +165,9 @@ class SyncingBatchRepository implements BatchRepository {
     File? rectifiedImage,
     LocalScanResult? result,
     ExamineeInfo? examinee,
-    String? ocrLastNameGuess,
-    String? ocrFirstNameGuess,
-    String? ocrMiddleNameGuess,
+    File? nameCropLastImage,
+    File? nameCropFirstImage,
+    File? nameCropMiddleImage,
   }) async {
     final batch = await local.addScan(
       batchId: batchId,
@@ -163,14 +176,14 @@ class SyncingBatchRepository implements BatchRepository {
       rectifiedImage: rectifiedImage,
       result: result,
       examinee: examinee,
-      // OCR guesses are a device-local suggestion only — forwarded to the
-      // local store so the tag-student dialog can read them back, but
-      // deliberately never included in any cloud upsert below (see
-      // supabase_sync_client.dart's column builders, which this method
-      // never touches).
-      ocrLastNameGuess: ocrLastNameGuess,
-      ocrFirstNameGuess: ocrFirstNameGuess,
-      ocrMiddleNameGuess: ocrMiddleNameGuess,
+      // Name crops are a device-local convenience only, for staff to read
+      // while manually tagging a scan — forwarded to the local store, but
+      // deliberately never uploaded to the cloud below (see
+      // supabase_sync_client.dart's upload/column builders, which this
+      // method never touches).
+      nameCropLastImage: nameCropLastImage,
+      nameCropFirstImage: nameCropFirstImage,
+      nameCropMiddleImage: nameCropMiddleImage,
     );
 
     // The scan LocalBatchRepository just appended is the last one.
@@ -205,9 +218,9 @@ class SyncingBatchRepository implements BatchRepository {
     File? rectifiedImage,
     LocalScanResult? result,
     ExamineeInfo? examinee,
-    String? ocrLastNameGuess,
-    String? ocrFirstNameGuess,
-    String? ocrMiddleNameGuess,
+    File? nameCropLastImage,
+    File? nameCropFirstImage,
+    File? nameCropMiddleImage,
   }) async {
     final batch = await local.replaceScan(
       batchId: batchId,
@@ -217,9 +230,9 @@ class SyncingBatchRepository implements BatchRepository {
       rectifiedImage: rectifiedImage,
       result: result,
       examinee: examinee,
-      ocrLastNameGuess: ocrLastNameGuess,
-      ocrFirstNameGuess: ocrFirstNameGuess,
-      ocrMiddleNameGuess: ocrMiddleNameGuess,
+      nameCropLastImage: nameCropLastImage,
+      nameCropFirstImage: nameCropFirstImage,
+      nameCropMiddleImage: nameCropMiddleImage,
     );
     _fireEnqueue([
       _pushScan(batchId, scanId),
@@ -251,6 +264,41 @@ class SyncingBatchRepository implements BatchRepository {
     _fireEnqueue([_pushScan(batchId, scanId), _pushBatch(batchId)]);
     return batch;
   }
+
+  // ---------------------------------------------------------------------------
+  // G2. updateScanCorrections / confirmBatchArchived
+  // ---------------------------------------------------------------------------
+
+  @override
+  Future<LocalBatch> updateScanCorrections({
+    required String batchId,
+    required String scanId,
+    required List<AnswerCorrection> corrections,
+    LocalScanResult? result,
+  }) async {
+    final before = await local.getBatchById(batchId);
+    final batch = await local.updateScanCorrections(
+      batchId: batchId,
+      scanId: scanId,
+      corrections: corrections,
+      result: result,
+    );
+    // A repeated/no-op request stores nothing and leaves the revision alone
+    // — nothing new to push, so a duplicate tap can't queue duplicate jobs.
+    if (before != null && batch.updatedAt == before.updatedAt) return batch;
+    // The corrections, the recalculated score and the student's details all
+    // ride the one scan row (see SupabaseSyncClient.pushScan); the batch row
+    // follows so its revision reaches the cloud too.
+    _fireEnqueue([_pushScan(batchId, scanId), _pushBatch(batchId)]);
+    return batch;
+  }
+
+  /// Pure delegation, no job: archiving records that the cloud already has
+  /// this revision; pushing it again would be a pointless round trip and,
+  /// worse, could look like a new change.
+  @override
+  Future<bool> confirmBatchArchived(String batchId, DateTime confirmedUpdatedAt) =>
+      local.confirmBatchArchived(batchId, confirmedUpdatedAt);
 
   // ---------------------------------------------------------------------------
   // H. setScanExaminee

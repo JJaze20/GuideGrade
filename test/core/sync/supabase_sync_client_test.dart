@@ -528,10 +528,10 @@ void main() {
     });
   });
 
-  group('scanIdentityColumns (examinee_all_or_nothing CHECK)', () {
-    const trioKeys = {'first_name', 'last_name', 'examinee_number'};
+  group('scanIdentityColumns (independent fields, automatic Examinee ID)', () {
+    const identityKeys = {'first_name', 'last_name', 'examinee_number', 'middle_name'};
 
-    test('1. a complete examinee sends all three identity fields', () {
+    test('1. a fully complete examinee sends all four identity fields', () {
       final cols = SupabaseSyncClient.scanIdentityColumns(
         const ExamineeInfo(
           firstName: 'JUAN',
@@ -539,53 +539,87 @@ void main() {
           examineeNumber: '12345',
         ),
       );
-      expect(cols.keys.toSet(), trioKeys);
+      expect(cols.keys.toSet(), identityKeys);
       expect(cols['first_name'], 'JUAN');
       expect(cols['last_name'], 'CRUZ');
       expect(cols['examinee_number'], '12345');
-      // -> all NOT NULL branch of the CHECK.
-      expect(cols.values.every((v) => v != null), isTrue);
+      expect(cols['middle_name'], isNull);
     });
 
-    test('2. a partial examinee (name, blank number) sends all three as null',
+    test(
+        '2. a generated Examinee ID with no OCR name yet (full OCR failure): '
+        'number is sent, names are independently null -- never all-null',
         () {
       final cols = SupabaseSyncClient.scanIdentityColumns(
         const ExamineeInfo(
-          firstName: 'JUAN',
-          lastName: 'CRUZ',
-          examineeNumber: '', // OCR-suggested name, number not entered yet
+          firstName: '',
+          lastName: '',
+          examineeNumber: 'EX-1700000000000-0', // auto-generated
         ),
       );
-      expect(cols.keys.toSet(), trioKeys);
+      expect(cols['examinee_number'], 'EX-1700000000000-0');
       expect(cols['first_name'], isNull);
       expect(cols['last_name'], isNull);
-      expect(cols['examinee_number'], isNull);
-      // -> all NULL branch; the old code sent CRUZ/JUAN/null == SQLSTATE 23514.
+      expect(cols['middle_name'], isNull);
     });
 
-    test('2b. a whitespace-only examinee number is still treated as partial',
+    test(
+        '3. a generated Examinee ID with a PARTIAL OCR read (last name only): '
+        'last name sent, first/middle independently null, number always sent',
         () {
       final cols = SupabaseSyncClient.scanIdentityColumns(
         const ExamineeInfo(
-          firstName: 'JUAN',
+          firstName: '',
           lastName: 'CRUZ',
-          examineeNumber: '   ',
+          examineeNumber: 'EX-1700000000000-1',
         ),
       );
+      expect(cols['examinee_number'], 'EX-1700000000000-1');
+      expect(cols['last_name'], 'CRUZ');
       expect(cols['first_name'], isNull);
-      expect(cols['last_name'], isNull);
-      expect(cols['examinee_number'], isNull);
+      expect(cols['middle_name'], isNull);
     });
 
-    test('3. a null examinee sends all three as null', () {
+    test('APPROVED FIX — TEST 2 (complete tag): all four columns are populated,'
+        ' including the previously-hardcoded middle_name', () {
+      final cols = SupabaseSyncClient.scanIdentityColumns(
+        const ExamineeInfo(
+          firstName: 'John',
+          middleName: 'Michael',
+          lastName: 'Doe',
+          examineeNumber: '12345',
+        ),
+      );
+      expect(cols['first_name'], 'John');
+      expect(cols['middle_name'], 'Michael');
+      expect(cols['last_name'], 'Doe');
+      expect(cols['examinee_number'], '12345');
+    });
+
+    test('4. a whitespace-only field is blank-to-null on that field alone,'
+        ' independent of the other fields', () {
+      final cols = SupabaseSyncClient.scanIdentityColumns(
+        const ExamineeInfo(
+          firstName: 'JUAN',
+          lastName: '   ',
+          examineeNumber: 'EX-1',
+        ),
+      );
+      expect(cols['first_name'], 'JUAN');
+      expect(cols['last_name'], isNull);
+      expect(cols['examinee_number'], 'EX-1');
+    });
+
+    test('5. a null examinee sends all four identity columns as null', () {
       final cols = SupabaseSyncClient.scanIdentityColumns(null);
-      expect(cols.keys.toSet(), trioKeys);
+      expect(cols.keys.toSet(), identityKeys);
       expect(cols['first_name'], isNull);
       expect(cols['last_name'], isNull);
       expect(cols['examinee_number'], isNull);
+      expect(cols['middle_name'], isNull);
     });
 
-    test('3b. a fully empty examinee sends all three as null', () {
+    test('6. a fully empty examinee (no generated id at all) sends all null', () {
       final cols = SupabaseSyncClient.scanIdentityColumns(
         const ExamineeInfo(firstName: '', lastName: '', examineeNumber: ''),
       );
@@ -594,20 +628,8 @@ void main() {
       expect(cols['examinee_number'], isNull);
     });
 
-    test('4. name present but missing last name only -> still all null', () {
-      final cols = SupabaseSyncClient.scanIdentityColumns(
-        const ExamineeInfo(
-          firstName: 'JUAN',
-          lastName: '',
-          examineeNumber: '12345',
-        ),
-      );
-      expect(cols['first_name'], isNull);
-      expect(cols['last_name'], isNull);
-      expect(cols['examinee_number'], isNull);
-    });
-
-    test('5. examineeTagged mirrors ExamineeInfo.isComplete', () {
+    test('7. examineeTagged still mirrors ExamineeInfo.isComplete (unrelated'
+        ' tag-audit-column concern -- unchanged by the independent-field push)', () {
       expect(
         SupabaseSyncClient.examineeTagged(
           const ExamineeInfo(

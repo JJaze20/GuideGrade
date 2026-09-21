@@ -2,7 +2,10 @@ import 'package:flutter/material.dart';
 
 import '../../core/constants/app_colors.dart';
 import '../../core/constants/app_text_styles.dart';
+import '../../core/services/batch_repository.dart';
 import '../../models/local_batch.dart';
+import 'form_field_decoration.dart';
+import 'name_crop_strip.dart';
 
 /// Result of [showExamineeDialog]: [ExamineeDialogResult.cleared] is true
 /// when the user chose "Remove", otherwise [info] holds the entered values.
@@ -13,126 +16,226 @@ class ExamineeDialogResult {
   const ExamineeDialogResult({this.info, this.cleared = false});
 }
 
-/// Per-sheet student entry — last name, first name, examinee number.
-/// Last/First Name may arrive pre-filled from [ocrSuggestion] (an on-device
-/// OCR guess at the sheet's handwritten name field — see NameOcrService),
-/// but staff always review/correct it before saving; [ocrSuggestion] is
-/// never itself treated as a saved tag (only [initial] is — see the
-/// "Remove" button below). Returns null if dismissed without saving.
+/// Per-sheet student entry — last name, first name, middle name, examinee
+/// number. Existing birth date, age and school details are preserved on save.
+/// When [batchId]/[scan]/[repository] are all given, the sheet's own
+/// cropped handwriting (see [NameCropStrip]) is shown above the fields so staff
+/// can read it while typing — this app runs no automatic handwriting
+/// recognition, so nothing here is ever pre-filled from the scan itself.
+/// Last/First Name and every detail may be left blank (a counselor may not
+/// know them yet); Examinee Number is still required.
+///
+/// [onReviewAnswers], when given, adds a separate "Answers" section with a
+/// button that opens the scan for answer correction on top of this dialog,
+/// leaving anything typed here untouched. Answer corrections are never part
+/// of this form's Save.
+///
+/// Returns null if dismissed without saving.
 Future<ExamineeDialogResult?> showExamineeDialog(
   BuildContext context, {
   ExamineeInfo? initial,
-  ExamineeInfo? ocrSuggestion,
   String? sheetLabel,
   Set<String> otherNumbers = const {},
+  String? batchId,
+  LocalScan? scan,
+  BatchRepository? repository,
+  DateTime? examDate,
+  VoidCallback? onReviewAnswers,
 }) {
-  // ocrSuggestion only ever seeds the fields when there's no confirmed tag
-  // yet — a real, saved [initial] always wins.
-  final appliedSuggestion = initial == null ? ocrSuggestion : null;
-  final lastCtrl = TextEditingController(text: initial?.lastName ?? appliedSuggestion?.lastName ?? '');
-  final firstCtrl = TextEditingController(text: initial?.firstName ?? appliedSuggestion?.firstName ?? '');
-  final middleCtrl = TextEditingController(text: initial?.middleName ?? '');
-  final numberCtrl = TextEditingController(text: initial?.examineeNumber ?? '');
-  final formKey = GlobalKey<FormState>();
-  final hasSuggestion = appliedSuggestion != null && !appliedSuggestion.isEmpty;
-
-  InputDecoration deco(String label) => InputDecoration(
-        labelText: label,
-        isDense: true,
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-      );
-
   return showDialog<ExamineeDialogResult>(
     context: context,
-    builder: (ctx) => AlertDialog(
+    builder: (ctx) => _ExamineeDialog(
+      initial: initial,
+      sheetLabel: sheetLabel,
+      otherNumbers: otherNumbers,
+      batchId: batchId,
+      scan: scan,
+      repository: repository,
+      examDate: examDate ?? ExamineeInfo.examDateFor(scanCapturedAt: scan?.capturedAt),
+      onReviewAnswers: onReviewAnswers,
+    ),
+  );
+}
+
+class _ExamineeDialog extends StatefulWidget {
+  final ExamineeInfo? initial;
+  final String? sheetLabel;
+  final Set<String> otherNumbers;
+  final String? batchId;
+  final LocalScan? scan;
+  final BatchRepository? repository;
+  final DateTime examDate;
+  final VoidCallback? onReviewAnswers;
+
+  const _ExamineeDialog({
+    required this.initial,
+    required this.sheetLabel,
+    required this.otherNumbers,
+    required this.batchId,
+    required this.scan,
+    required this.repository,
+    required this.examDate,
+    required this.onReviewAnswers,
+  });
+
+  @override
+  State<_ExamineeDialog> createState() => _ExamineeDialogState();
+}
+
+class _ExamineeDialogState extends State<_ExamineeDialog> {
+  late final _lastCtrl = TextEditingController(text: widget.initial?.lastName ?? '');
+  late final _firstCtrl = TextEditingController(text: widget.initial?.firstName ?? '');
+  late final _middleCtrl = TextEditingController(text: widget.initial?.middleName ?? '');
+  late final _numberCtrl = TextEditingController(text: widget.initial?.examineeNumber ?? '');
+  final _formKey = GlobalKey<FormState>();
+
+  @override
+  void dispose() {
+    for (final c in [_lastCtrl, _firstCtrl, _middleCtrl, _numberCtrl]) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  void _save() {
+    if (!_formKey.currentState!.validate()) return;
+    Navigator.pop(
+      context,
+      ExamineeDialogResult(
+        info: ExamineeInfo(
+          firstName: _firstCtrl.text.trim(),
+          lastName: _lastCtrl.text.trim(),
+          middleName: _middleCtrl.text.trim(),
+          examineeNumber: _numberCtrl.text.trim(),
+          birthDate: widget.initial?.birthDate,
+          manualAge: widget.initial?.manualAge,
+          lastSchool: widget.initial?.lastSchool ?? '',
+        ),
+      ),
+    );
+  }
+
+  Widget _sectionLabel(String text) => Padding(
+        padding: const EdgeInsets.only(top: 4, bottom: 8),
+        child: Text(
+          text,
+          style: AppTextStyles.body(size: 10.5, color: AppColors.textGray, weight: FontWeight.w800),
+        ),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    final initial = widget.initial;
+    final hasCrop = widget.batchId != null && widget.scan != null && widget.repository != null;
+    return AlertDialog(
       title: Text(
-        sheetLabel == null ? 'Student for this sheet' : 'Student — $sheetLabel',
+        widget.sheetLabel == null ? 'Student for this sheet' : 'Student — ${widget.sheetLabel}',
         style: AppTextStyles.heading(size: 14),
       ),
-      content: Form(
-        key: formKey,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (hasSuggestion) ...[
-              Row(
-                children: [
-                  const Icon(Icons.auto_awesome, size: 14, color: AppColors.primaryGreen),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      'Detected from handwriting — please verify',
-                      style: AppTextStyles.body(size: 11, color: AppColors.primaryGreen),
+      content: SizedBox(
+        width: double.maxFinite,
+        child: SingleChildScrollView(
+          child: Form(
+            key: _formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (hasCrop) ...[
+                  Text(
+                    'Handwritten name on this sheet',
+                    style: AppTextStyles.body(size: 10.5, color: AppColors.textGray, weight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 6),
+                  NameCropStrip(
+                    batchId: widget.batchId!,
+                    scan: widget.scan!,
+                    repository: widget.repository!,
+                    height: 94,
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                _sectionLabel('STUDENT'),
+                TextFormField(
+                  key: const Key('examineeDialog.lastName'),
+                  controller: _lastCtrl,
+                  textCapitalization: TextCapitalization.words,
+                  textInputAction: TextInputAction.next,
+                  decoration: FormFieldStyle.decoration(label: 'Last name (optional)'),
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  key: const Key('examineeDialog.firstName'),
+                  controller: _firstCtrl,
+                  textCapitalization: TextCapitalization.words,
+                  textInputAction: TextInputAction.next,
+                  decoration: FormFieldStyle.decoration(label: 'First name (optional)'),
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  key: const Key('examineeDialog.middleName'),
+                  controller: _middleCtrl,
+                  textCapitalization: TextCapitalization.words,
+                  textInputAction: TextInputAction.next,
+                  decoration: FormFieldStyle.decoration(label: 'Middle name (optional)'),
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  key: const Key('examineeDialog.examineeNumber'),
+                  controller: _numberCtrl,
+                  keyboardType: TextInputType.text,
+                  textInputAction: TextInputAction.done,
+                  decoration: FormFieldStyle.decoration(label: 'Examinee number', required: true),
+                  validator: (v) {
+                    final t = v?.trim() ?? '';
+                    if (t.isEmpty) return 'Required';
+                    if (widget.otherNumbers.contains(t)) {
+                      return 'Already used by another sheet in this batch';
+                    }
+                    return null;
+                  },
+                ),
+                if (widget.onReviewAnswers != null) ...[
+                  const SizedBox(height: 16),
+                  const Divider(height: 1),
+                  const SizedBox(height: 12),
+                  _sectionLabel('ANSWERS'),
+                  Text(
+                    'Fix an answer the scanner misread. This is separate from the student details above.',
+                    style: AppTextStyles.body(size: 10.5, color: AppColors.textGray),
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    key: const Key('examineeDialog.reviewAnswers'),
+                    onPressed: widget.onReviewAnswers,
+                    icon: const Icon(Icons.fact_check_outlined, size: 16),
+                    label: const Text('Review & correct answers'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppColors.primaryGreen,
+                      side: const BorderSide(color: AppColors.primaryGreen, width: 1.2),
                     ),
                   ),
                 ],
-              ),
-              const SizedBox(height: 8),
-            ],
-            TextFormField(
-              controller: lastCtrl,
-              textCapitalization: TextCapitalization.words,
-              decoration: deco('Last name'),
-              validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null,
+              ],
             ),
-            const SizedBox(height: 10),
-            TextFormField(
-              controller: firstCtrl,
-              textCapitalization: TextCapitalization.words,
-              decoration: deco('First name'),
-              validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null,
-            ),
-            const SizedBox(height: 10),
-            TextFormField(
-              controller: middleCtrl,
-              textCapitalization: TextCapitalization.words,
-              decoration: deco('Middle name (optional)'),
-            ),
-            const SizedBox(height: 10),
-            TextFormField(
-              controller: numberCtrl,
-              keyboardType: TextInputType.text,
-              decoration: deco('Examinee number'),
-              validator: (v) {
-                final t = v?.trim() ?? '';
-                if (t.isEmpty) return 'Required';
-                if (otherNumbers.contains(t)) {
-                  return 'Already used by another sheet in this batch';
-                }
-                return null;
-              },
-            ),
-          ],
+          ),
         ),
       ),
       actions: [
         if (initial != null && !initial.isEmpty)
           TextButton(
-            onPressed: () => Navigator.pop(ctx, const ExamineeDialogResult(cleared: true)),
+            onPressed: () => Navigator.pop(context, const ExamineeDialogResult(cleared: true)),
             style: TextButton.styleFrom(foregroundColor: const Color(0xFF991B1B)),
             child: const Text('Remove'),
           ),
-        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
         TextButton(
-          onPressed: () {
-            if (!formKey.currentState!.validate()) return;
-            Navigator.pop(
-              ctx,
-              ExamineeDialogResult(
-                info: ExamineeInfo(
-                  firstName: firstCtrl.text.trim(),
-                  lastName: lastCtrl.text.trim(),
-                  middleName: middleCtrl.text.trim(),
-                  examineeNumber: numberCtrl.text.trim(),
-                ),
-              ),
-            );
-          },
+          onPressed: _save,
           style: TextButton.styleFrom(foregroundColor: AppColors.primaryGreen),
           child: const Text('Save'),
         ),
       ],
-    ),
-  );
+    );
+  }
+
 }

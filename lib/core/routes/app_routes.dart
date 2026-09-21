@@ -29,6 +29,7 @@ import '../../features/admin/screens/user_management_screen.dart';
 import '../../features/admin/screens/create_user_screen.dart';
 import '../../features/admin/screens/edit_user_screen.dart';
 import '../../features/admin/screens/system_logs_screen.dart';
+import '../../features/guidance_web/screens/guidance_web_home_screen.dart';
 import '../constants/exam_catalog.dart';
 import '../../models/local_batch.dart';
 import '../../models/user.dart';
@@ -64,6 +65,7 @@ class AppRoutes {
   static const String createUser = '/create-user';
   static const String editUser = '/edit-user';
   static const String systemLogs = '/system-logs';
+  static const String guidanceWebHome = '/guidance-web-home';
 
   /// Routes reachable without being signed in at all.
   static const Set<String> _publicRoutes = {splash, login, mobileLogin, adminLogin};
@@ -105,6 +107,22 @@ class AppRoutes {
     atBatchAnalytics,
   };
 
+  /// Routes for the Guidance Council WEB Console — deliberately a
+  /// SEPARATE set from [_guidanceOnlyRoutes] (the mobile examination
+  /// workflow), never merged into it and never merged into
+  /// [_adminOnlyRoutes]. Gated the same way: requires an approved,
+  /// active `guidance_council` [AppState.currentUser]. `system_admin` must
+  /// never reach these, and a `guidance_council` account reaching one of
+  /// these on mobile (or a [_guidanceOnlyRoutes] route on Web) is not
+  /// specially prevented here — nothing in the app currently navigates a
+  /// mobile build to a route in this set, or a Web build to a route in
+  /// [_guidanceOnlyRoutes]. Phase 1 has only [guidanceWebHome]; later
+  /// phases (Results, Examinee Records, Archive, Analytics, Export) add
+  /// their own route names here.
+  static const Set<String> _guidanceWebRoutes = {
+    guidanceWebHome,
+  };
+
   /// Generates routes for [MaterialApp.onGenerateRoute]. Using this
   /// approach (rather than a static `routes` map) lets us pass
   /// arguments cleanly to screens like Exam Setup/Results.
@@ -123,12 +141,14 @@ class AppRoutes {
   /// what `login` (this app's `initialRoute`) actually shows.
   ///
   /// Beyond that, an approved user's *role* additionally gates
-  /// [_adminOnlyRoutes] and [_guidanceOnlyRoutes] against each other — a
-  /// `guidance_council` account can never reach the Admin Dashboard, and a
-  /// `system_admin` account can never reach the examination workflow, even
-  /// though both are otherwise "approved." Each is bounced to their own
-  /// role's home screen rather than a login screen, since they're validly
-  /// signed in — just not for the route they asked for.
+  /// [_adminOnlyRoutes] against [_guidanceOnlyRoutes]/[_guidanceWebRoutes]
+  /// — a `guidance_council` account can never reach the Admin Dashboard,
+  /// and a `system_admin` account can never reach the examination
+  /// workflow (mobile) or the Guidance Council Web Console, even though
+  /// both are otherwise "approved." Each is bounced to their own role's
+  /// home screen (see [_guidanceHomeScreen], platform-aware) rather than a
+  /// login screen, since they're validly signed in — just not for the
+  /// route they asked for.
   ///
   /// `profile` is intentionally left role-neutral (in neither restricted
   /// set) — it only shows the signed-in identity and a logout action, so
@@ -152,10 +172,11 @@ class AppRoutes {
       }
 
       if (_adminOnlyRoutes.contains(name) && approvedUser.role != 'system_admin') {
-        return _fade(const StaffHomeScreen());
+        return _fade(_guidanceHomeScreen());
       }
 
-      if (_guidanceOnlyRoutes.contains(name) && approvedUser.role != 'guidance_council') {
+      if ((_guidanceOnlyRoutes.contains(name) || _guidanceWebRoutes.contains(name)) &&
+          approvedUser.role != 'guidance_council') {
         // Fire-and-forget: onGenerateRoute must return synchronously, so
         // this audit write isn't (can't be) awaited. LoggingService never
         // throws internally, so this can't affect navigation either way.
@@ -192,7 +213,7 @@ class AppRoutes {
       case examHub:
         return _fade(const ExamHubScreen());
       case examSetup:
-        return _slide(const ExamSetupScreen());
+        return _slide(ExamSetupScreen(preselectBatchId: settings.arguments as String?));
       case examScanning:
         return _slide(const ExamScanningScreen());
       case examResults:
@@ -229,6 +250,8 @@ class AppRoutes {
         return _fade(EditUserScreen(user: settings.arguments as UserModel?));
       case systemLogs:
         return _fade(const SystemLogsScreen());
+      case guidanceWebHome:
+        return _fade(const GuidanceWebHomeScreen());
       default:
         return _fade(_landingScreen(appState));
     }
@@ -246,7 +269,21 @@ class AppRoutes {
     if (!isApproved) {
       return PlatformUtils.isWeb ? const AdminLoginScreen() : const MobileLoginScreen();
     }
-    return approvedUser.role == 'system_admin' ? const AdminDashboardScreen() : const StaffHomeScreen();
+    return approvedUser.role == 'system_admin' ? const AdminDashboardScreen() : _guidanceHomeScreen();
+  }
+
+  /// The Guidance Council's own home screen, platform-appropriate: the
+  /// mobile examination workflow's [StaffHomeScreen] on Android/iOS, or the
+  /// Web Console's [GuidanceWebHomeScreen] on Web. Used both as the
+  /// approved-user landing screen and as the bounce target when a
+  /// `guidance_council` account is denied an [_adminOnlyRoutes] route —
+  /// this is the platform-aware replacement for what used to
+  /// unconditionally return [StaffHomeScreen] (which would have been wrong
+  /// to show inside a Web browser once a `guidance_council` account could
+  /// be approved on Web at all — see [AdminLoginScreen.
+  /// _navigateAfterLogin]).
+  static Widget _guidanceHomeScreen() {
+    return PlatformUtils.isWeb ? const GuidanceWebHomeScreen() : const StaffHomeScreen();
   }
 
   static Route<dynamic> _fade(Widget child) {

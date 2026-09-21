@@ -9,6 +9,7 @@ import 'fiducial_search_tuning.dart';
 import 'omr_alignment_check.dart';
 import 'omr_mesh_correction.dart';
 import 'omr_templates.dart';
+import 'tat_marker_validation.dart';
 
 /// Template-centered search box, fallback quadrant, and scoring anchor.
 typedef _QuadrantSearch = ({
@@ -309,6 +310,21 @@ class OmrDecoder {
   /// waved through just because they happen to dominate a razor-thin signal.
   static const double _strongPresenceGapMultiplier = 1.5;
 
+  /// Below this gap between the runner-up and the item's own blank floor,
+  /// the "runner-up" isn't a real second choice -- it's indistinguishable
+  /// from the other genuinely-blank bubbles in the same item. Rescues a
+  /// faint-but-uncontested mark that [_strongPresenceGapMultiplier] alone
+  /// would still flag ambiguous: that check asks "is the *winning* mark's
+  /// own ink strong enough to trust its ratio," which a light mark can fail
+  /// even with zero real competition (confirmed against a real AT capture,
+  /// 2026-09-15, where a faint but singly-marked item read
+  /// bestFill=0.10/runnerUp=0.02/floorReference=0.015 -- comfortably
+  /// uncontested, but presenceGap 0.085 fell under the 0.12 bar). This is a
+  /// second, independent path to the same "decisive" verdict, asking about
+  /// the *other* choices instead: do any of them look like a real
+  /// contender at all, regardless of how faint the winner itself is.
+  static const double _noCompetitorGapCeiling = _markPresenceGap * 0.5;
+
   /// Small local re-centering search tried only for items the flat/relative
   /// checks above still call blank or ambiguous. A single page-wide
   /// perspective correction can leave individual rows slightly
@@ -423,16 +439,23 @@ class OmrDecoder {
   /// Purely observational — no threshold, filter, or selection decision
   /// reads this or the extra metrics it logs.
   ///
-  /// Left on through the anchor-mismatch and affine-tolerance
-  /// investigations; now confirmed fixed on a real device (post-warp
-  /// reprojection error 0.3px on a genuinely tilted QTM capture), so this
-  /// is switched off — with the search boxes doubled, a full-quadrant
-  /// Stage-2 fallback can evaluate 1000+ candidate contours, each
-  /// triggering a synchronous `print()`, sitting directly on the capture
-  /// path (this runs on every `locateCorners`/`decode` call, not just the
-  /// live preview). Flip back to `true` only if fiducial detection needs
-  /// this level of diagnosis again.
-  static const bool _kFiducialDebug = true;
+  /// Runtime diagnostic-mode switch (2026-09-19) — was a hardcoded `const
+  /// bool = true` despite this doc comment already saying it should be
+  /// off: with the search boxes doubled, a full-quadrant Stage-2 fallback
+  /// can evaluate 1000+ candidate contours, each triggering a synchronous
+  /// `print()`, sitting directly on the capture path (this runs on every
+  /// `locateCorners`/`decode` call in ordinary production scanning, not
+  /// just a debug session or the live preview). Now defaults to `false` —
+  /// ordinary scanning stays quiet — and is flipped only via
+  /// [OmrDecoder.setDiagnosticsEnabled], which
+  /// [ExamScanningScreen]'s existing debug-build-only bug-icon toggle
+  /// calls once per capture, threaded through the isolate boundary via
+  /// [_OmrDecodeRequest.diagnosticsEnabled]/[_DebugVizRequest] (see
+  /// `app_state.dart`) since each `compute()` call gets its own isolate
+  /// memory — a plain static set on the main isolate would never be seen
+  /// there. Each isolate call sets this explicitly at its own start, so no
+  /// isolate can carry a stale value from a previous call.
+  static bool _kFiducialDebug = false;
 
   /// TEMPORARY. Synchronous stdout (not debugPrint, whose throttle can drop
   /// the tail when the decode isolate tears down) — every line reaches
@@ -452,19 +475,31 @@ class OmrDecoder {
   // ignore: avoid_print
   static void _perfLog(String line) => print('[OMR PERF] $line');
 
-  /// TEMPORARY diagnostic switch for the ring/whole/center bubble-scoring
-  /// investigation (real shaded bubbles reading as blank/ambiguous despite
-  /// confirmed-accurate registration). Mirrors [_kFiducialDebug]/[_fidLog] —
-  /// same isolate-safety reasoning. Gated additionally to QTM only in
-  /// [_readBubbles] (see [_kBubbleDebugExamCode]), since this logs 4+ lines
-  /// per item and a full sheet is 60+ items. Purely observational — no
-  /// threshold or classification decision reads these numbers. Remove once
-  /// the combined score is confirmed/tuned.
-  static const bool _kBubbleDebug = true;
-  static const String _kBubbleDebugExamCode = 'QTM';
+  /// Diagnostic switch for the ring/whole/center per-bubble-candidate log
+  /// (4+ lines per item, so a full sheet is 250-400+ lines). Same runtime
+  /// toggle as [_kFiducialDebug] — see [OmrDecoder.setDiagnosticsEnabled] —
+  /// rather than a separate one, so "diagnostic mode" is one on/off switch,
+  /// not several to remember. Purely observational — no threshold or
+  /// classification decision reads these numbers.
+  static bool _kBubbleDebug = false;
 
   // ignore: avoid_print
   static void _bubbleLog(String block) => print('[OMR BUBBLE] $block');
+
+  /// Enables or disables verbose fiducial/bubble diagnostic logging
+  /// ([_kFiducialDebug]/[_kBubbleDebug]) for whichever isolate this runs
+  /// in. Ordinary decoding never calls this (diagnostics default off);
+  /// `app_state.dart`'s isolate wrapper functions call it once, first
+  /// thing, using a flag threaded in through the request object for that
+  /// call — see [_kFiducialDebug]'s doc comment for why a plain static
+  /// can't just be toggled from the main isolate directly. Does not gate
+  /// [_kPerfDebug] (the cheap, one-line-per-stage timing log) — that stays
+  /// independently controlled by `kOmrPerfDebug`, since it produces no
+  /// images and no per-candidate volume.
+  static void setDiagnosticsEnabled(bool enabled) {
+    _kFiducialDebug = enabled;
+    _kBubbleDebug = enabled;
+  }
 
   static double _clamp01(double v) => v < 0 ? 0 : (v > 1 ? 1 : v);
 
@@ -630,11 +665,11 @@ class OmrDecoder {
   /// the sheet being landscape — exactly this failure mode.
   ///
   /// Ignoring EXIF for TAT loads the RAW sensor buffer instead and lets
-  /// [_orientAndFindCorners]'s own rotation search (identity/90°CW/
-  /// 90°CCW/180°) determine the true orientation by actually finding the
-  /// corners — the same EXIF-independent strategy [checkCornersFromLuma]
-  /// already uses successfully for the live preview, which reads raw
-  /// camera bytes with no EXIF involved at all.
+  /// [_orientAndFindCorners]'s own fixed-rotation content search determine
+  /// the true orientation by actually finding the corners — the same
+  /// EXIF-independent strategy [checkCornersFromLuma] already uses
+  /// successfully for the live preview, which reads raw camera bytes with
+  /// no EXIF involved at all.
   static cv.Mat _imreadForTemplate(String imagePath, OmrExamTemplate template) {
     final isLandscapePage = template.pageWidthPt > template.pageHeightPt;
     return cv.imread(
@@ -653,13 +688,16 @@ class OmrDecoder {
   /// uses to keep the live preview upright) rather than guessing the
   /// rotation from pixel content.
   ///
-  /// Exists specifically for landscape-page templates (TAT), where
-  /// [_orientAndFindCorners]'s own content-based rotation search
-  /// (identity/90°CW/90°CCW/180°, picking whichever lets it find 4
-  /// corners) is fundamentally unable to always pick correctly: a printed
-  /// corner square looks identical under any 90° rotation, so more than
-  /// one candidate rotation can "succeed" at finding 4 square-shaped
-  /// blobs — it's the same 4 physical squares either way, just mislabeled.
+  /// Exists specifically for landscape-page templates (TAT), for a device
+  /// orientation lock this screen no longer applies (TAT capture is fully
+  /// portrait-locked now — see `ExamScanningScreen._isLandscapeExam`,
+  /// always false — so this method's call site is currently unreachable).
+  /// Left in place rather than removed since nothing about the underlying
+  /// need has changed: [_orientAndFindCorners]'s content-based search alone
+  /// can't always pick correctly, because a printed corner square looks
+  /// identical under any 90° rotation, so more than one candidate rotation
+  /// can "succeed" at finding 4 square-shaped blobs — it's the same 4
+  /// physical squares either way, just mislabeled.
   /// Confirmed on a real device (2026-09-14): a capture whose rectified
   /// output came out with the sheet's content rotated 90° despite the
   /// file itself being correctly landscape-shaped (the output size is
@@ -1066,11 +1104,13 @@ class OmrDecoder {
         : stage1Result;
   }
 
-  /// Sanity-checks that 3 candidate corner points ([pts], in the same
-  /// order as their template marker indices [idx]) form a triangle whose
-  /// own proportions are at least roughly consistent with what the
-  /// template says the real, physical spacing between those same 3
-  /// markers should be.
+  /// Sanity-checks that 3 candidate points ([pts], in the same order as
+  /// their known template page-fraction positions [fracs] — an outer
+  /// corner marker's own fraction, or (since 2026-09-18) an interior
+  /// fiducial's, when one of those was used to help seed the fit) form a
+  /// triangle whose own proportions are at least roughly consistent with
+  /// what the template says the real, physical spacing between those same
+  /// 3 points should be.
   ///
   /// Confirmed on a real device (2026-09-14) that this was a real,
   /// unguarded gap: [_crossCheckCornersByGeometry] validates a 4th,
@@ -1097,15 +1137,15 @@ class OmrDecoder {
   /// stricter post-warp reprojection check ([_classifyWarpVerification])
   /// once a homography actually exists to measure.
   bool _cornerTriplePlausible(
-    List<int> idx,
+    List<(double, double)> fracs,
     List<cv.Point2f> pts,
     OmrExamTemplate template,
   ) {
     double templateDist(int a, int b) {
-      final ma = template.cornerMarkers[a];
-      final mb = template.cornerMarkers[b];
-      final dx = (ma.xFrac - mb.xFrac) * template.pageWidthPt;
-      final dy = (ma.yFrac - mb.yFrac) * template.pageHeightPt;
+      final ma = fracs[a];
+      final mb = fracs[b];
+      final dx = (ma.$1 - mb.$1) * template.pageWidthPt;
+      final dy = (ma.$2 - mb.$2) * template.pageHeightPt;
       return math.sqrt(dx * dx + dy * dy);
     }
 
@@ -1116,9 +1156,9 @@ class OmrDecoder {
     }
 
     final tDist = [
-      templateDist(idx[0], idx[1]),
-      templateDist(idx[1], idx[2]),
-      templateDist(idx[0], idx[2]),
+      templateDist(0, 1),
+      templateDist(1, 2),
+      templateDist(0, 2),
     ];
     final pDist = [
       pixelDist(pts[0], pts[1]),
@@ -1168,11 +1208,15 @@ class OmrDecoder {
   /// frame where the page-boundary guess is off but all 4 real marks are
   /// genuinely visible).
   ///
-  /// Needs >=3 corners with *some* evidence (confidence != none) to fit a
-  /// transform through; no-ops otherwise, same as before this was
-  /// extracted. Mutates [points]/[results] in place. Returns a short
-  /// user-facing note when a corner was rescued or promoted this way (or
-  /// null).
+  /// Needs >=3 points with *some* evidence to fit a transform through —
+  /// outer corners with confidence != none first, topped up with
+  /// [extraAnchors] (2026-09-18: independently-found interior fiducials,
+  /// currently only TAT's — see [_findInteriorAnchorsRaw]) when fewer than
+  /// 3 outer corners qualify; no-ops (returns null) if even that isn't
+  /// enough. Mutates [points]/[results] in place — only ever for the 4
+  /// outer-corner slots; [extraAnchors] themselves are read-only inputs to
+  /// the fit, never written back to. Returns a short user-facing note when
+  /// a corner was rescued or promoted this way (or null).
   ///
   /// [_cornerTriplePlausible] is the mutual-consistency gate this method
   /// applies to its own 3-point seed before trusting it — see that
@@ -1184,6 +1228,7 @@ class OmrDecoder {
     OmrExamTemplate template, {
     required bool allowRescueSearch,
     List<String>? labels,
+    List<({cv.Point2f point, double xFrac, double yFrac})> extraAnchors = const [],
   }) {
     const fallbackLabels = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
     final names = labels ?? fallbackLabels;
@@ -1198,10 +1243,35 @@ class OmrDecoder {
         final rankB = results[b].confidence == CornerConfidence.confident ? 0 : 1;
         return rankA.compareTo(rankB);
       });
-    if (usableIdx.length < 3) return null;
 
+    // Seed with the sheet's own outer corners first (best-conditioned --
+    // widely spaced at the page's actual edges), and only reach for
+    // [extraAnchors] (2026-09-18: TAT's interior per-Test marks, found
+    // independently in raw image space -- see [_findInteriorAnchorsRaw])
+    // when outer corners alone don't reach 3. Before this, a capture with
+    // only 1-2 usable outer corners always bailed out right here
+    // (`usableIdx.length < 3`) with a hard "not fully detected" rejection,
+    // even for a template like TAT that prints 8 more real fiducials than
+    // the primary 4-corner homography strictly needs -- none of that
+    // redundancy ever got a chance to help. [threeIdx] below stays exactly
+    // the outer-corner indices actually used (never more than
+    // [usableIdx.length]), so 4a/4b's own "skip the corners already used
+    // as the seed" loops are unaffected by however many extra anchors
+    // filled the remaining slots.
     final threeIdx = usableIdx.take(3).toList();
     final threePts = [for (final i in threeIdx) points[i]!];
+    final threeFracTuples = [
+      for (final i in threeIdx)
+        (template.cornerMarkers[i].xFrac, template.cornerMarkers[i].yFrac),
+    ];
+    if (threePts.length < 3) {
+      for (final a in extraAnchors) {
+        if (threePts.length >= 3) break;
+        threePts.add(a.point);
+        threeFracTuples.add((a.xFrac, a.yFrac));
+      }
+    }
+    if (threePts.length < 3) return null;
     if (_nearCollinear(threePts)) return null;
     // Confirmed on a real device (2026-09-14): with exactly 3 corners
     // "usable" (not 4 confidently found), the 3 were blindly trusted as
@@ -1213,15 +1283,14 @@ class OmrDecoder {
     // bottom edge) sailed straight through as a trusted seed point this
     // way and produced a nonsensical warp that still got accepted. Reject
     // the whole triple up front if its own proportions are wildly
-    // inconsistent with what the template says these 3 markers' real
+    // inconsistent with what the template says these 3 points' real
     // spacing should be -- this can only make the 4th corner (if missing)
     // stay missing (an honest "not fully detected" retake) instead of
-    // silently building a homography from a corner that was never real.
-    if (!_cornerTriplePlausible(threeIdx, threePts, template)) return null;
+    // silently building a homography from a point that was never real.
+    if (!_cornerTriplePlausible(threeFracTuples, threePts, template)) return null;
 
     final threeFracs = [
-      for (final i in threeIdx)
-        cv.Point2f(template.cornerMarkers[i].xFrac, template.cornerMarkers[i].yFrac),
+      for (final f in threeFracTuples) cv.Point2f(f.$1, f.$2),
     ];
     final imgToFrac = cv.getAffineTransform2f(
       cv.VecPoint2f.fromList(threePts),
@@ -1470,7 +1539,7 @@ class OmrDecoder {
   /// Reads [imagePath] against [template] and returns the decoded marks.
   /// Throws a [StateError] with a user-facing message if the sheet couldn't
   /// be read or aligned.
-  OmrScanResult decode(String imagePath, OmrExamTemplate template) {
+  OmrScanResult decode(String imagePath, OmrExamTemplate template, {String? rectifiedOutputPath}) {
     final decodeTotalSw = _kPerfDebug ? (Stopwatch()..start()) : null;
     var decodeCornerSearchMs = 0;
     var decodeWarpMs = 0;
@@ -1488,7 +1557,7 @@ class OmrDecoder {
       final gray = cv.cvtColor(src, cv.COLOR_BGR2GRAY);
       try {
         final cornerSw = _kPerfDebug ? (Stopwatch()..start()) : null;
-        final (oriented, refine, _) = _orientAndFindCorners(gray, template);
+        final (oriented, refine, rotationCode) = _orientAndFindCorners(gray, template);
         if (cornerSw != null) {
           decodeCornerSearchMs = cornerSw.elapsedMilliseconds;
         }
@@ -1748,6 +1817,51 @@ class OmrDecoder {
                             'total=${decodeTotalSw.elapsedMilliseconds}ms',
                           );
                         }
+                        // The review/overlay image uses the exact
+                        // perspective transform already fitted above —
+                        // the viewer applies the persisted mesh to
+                        // overlays, just as _measureBubbleInk does to
+                        // sampling (see ScannedImageViewerScreen). TAT
+                        // writes `warped` itself (grayscale, already
+                        // computed for bubble sampling — unchanged
+                        // behavior). Every other exam (2026-09-19,
+                        // previously handled by a fully separate
+                        // `rectifyForOverlay` call that re-read the file
+                        // and re-ran its own independent corner search)
+                        // instead warps the ORIGINAL COLOR `src` through
+                        // this SAME `transform` — one extra warpPerspective
+                        // call (cheap: reuses an already-fitted transform,
+                        // no new search), not a second corner detection —
+                        // preserving the color review image AT/QTM staff
+                        // already see, without the duplicate registration
+                        // work or its risk of landing on a different
+                        // (contradictory) quad than the one bubbles were
+                        // actually scored against.
+                        if (rectifiedOutputPath != null) {
+                          if (template.examCode == 'TAT') {
+                            try {
+                              cv.imwrite(rectifiedOutputPath, warped);
+                            } catch (_) {
+                              // A display-image failure must not lose a scan.
+                            }
+                          } else {
+                            final orientedSrc =
+                                rotationCode == null ? src : cv.rotate(src, rotationCode);
+                            try {
+                              final warpedColor = cv.warpPerspective(
+                                orientedSrc, transform, (canonicalWidth, canonicalHeight));
+                              try {
+                                cv.imwrite(rectifiedOutputPath, warpedColor);
+                              } catch (_) {
+                                // A display-image failure must not lose a scan.
+                              } finally {
+                                warpedColor.dispose();
+                              }
+                            } finally {
+                              if (!identical(orientedSrc, src)) orientedSrc.dispose();
+                            }
+                          }
+                        }
                         return OmrScanResult(
                           examCode: result.examCode,
                           items: result.items,
@@ -1898,24 +2012,25 @@ class OmrDecoder {
 
   /// Crops the Last Name / First Name / MI boxes (see
   /// [OmrExamTemplate.lastNameFieldRect]/[firstNameFieldRect]/
-  /// [middleInitialFieldRect]) for on-device OCR (see NameOcrService)
-  /// directly out of [imagePath] — the original captured photo, not a
-  /// rectified/display copy. Runs its own corner search and perspective
-  /// warp at [_ocrCanonicalPxPerPt] (much higher than [rectifyForOverlay]'s
-  /// [_canonicalPxPerPt]) so the handwritten answer itself has enough real
-  /// pixels to be recognizable — see [_ocrCanonicalPxPerPt]'s doc comment
-  /// for why a shared low-res rectified copy wasn't good enough. Purely a
-  /// display/suggestion input, same isolation as [rectifyForOverlay]: its
-  /// own `imread`/corner search/warp, sharing no Mat or intermediate value
-  /// with [decode] or [rectifyForOverlay] — never touches scoring. Returns
-  /// all three written paths, or null if the sheet's corners couldn't be
-  /// found in this photo.
-  ({String lastName, String firstName, String middleInitial})? cropNameFields(
+  /// [middleNameFieldRect]) directly out of [imagePath] — the original
+  /// captured photo, not a rectified/display copy — so staff can read the
+  /// handwritten name and enter it manually (see showExamineeDialog); this
+  /// app does not attempt automatic handwriting recognition. Runs its own
+  /// corner search and perspective warp at [_ocrCanonicalPxPerPt] (much
+  /// higher than [rectifyForOverlay]'s [_canonicalPxPerPt]) so the crop has
+  /// enough real pixels to be legible — see [_ocrCanonicalPxPerPt]'s doc
+  /// comment for why a shared low-res rectified copy wasn't good enough.
+  /// Purely a display input, same isolation as [rectifyForOverlay]: its own
+  /// `imread`/corner search/warp, sharing no Mat or intermediate value with
+  /// [decode] or [rectifyForOverlay] — never touches scoring. Returns all
+  /// three written paths, or null if the sheet's corners couldn't be found
+  /// in this photo.
+  ({String lastName, String firstName, String middleName})? cropNameFields(
     String imagePath,
     OmrExamTemplate template, {
     required String lastNameOutPath,
     required String firstNameOutPath,
-    required String middleInitialOutPath,
+    required String middleNameOutPath,
   }) {
     final src = _imreadForTemplate(imagePath, template);
     try {
@@ -1936,71 +2051,126 @@ class OmrDecoder {
           try {
             final canonicalWidth = (template.pageWidthPt * _ocrCanonicalPxPerPt).round();
             final canonicalHeight = (template.pageHeightPt * _ocrCanonicalPxPerPt).round();
-            final dstCorners = cv.VecPoint2f.fromList([
-              for (final corner in template.cornerMarkers)
-                cv.Point2f(corner.xFrac * canonicalWidth, corner.yFrac * canonicalHeight),
-            ]);
             final srcCorners = cv.VecPoint2f.fromList(corners);
-            final transform = cv.getPerspectiveTransform2f(srcCorners, dstCorners);
             try {
-              final warped = cv.warpPerspective(orientedSrc, transform, (canonicalWidth, canonicalHeight));
+              // Mesh detection needs the interior fiducials found
+              // somewhere on a warped page, but not at this method's much
+              // higher OCR resolution — reuse [_canonicalPxPerPt] (the
+              // same small canonical scale `decode()` itself builds its
+              // own mesh at) on `oriented` (already grayscale, no extra
+              // cvtColor needed) instead of warping a whole page at
+              // [_ocrCanonicalPxPerPt] just to search for a handful of
+              // small printed squares. 2026-09-19: this used to warp the
+              // FULL page in color at 6px/pt (≈54-62MB for a typical exam
+              // page) purely to extract ~0.3% of it per field; see the
+              // direct field-region warp below for the other half of that
+              // fix.
+              final meshWidth = (template.pageWidthPt * _canonicalPxPerPt).round();
+              final meshHeight = (template.pageHeightPt * _canonicalPxPerPt).round();
+              final meshDstCorners = cv.VecPoint2f.fromList([
+                for (final corner in template.cornerMarkers)
+                  cv.Point2f(corner.xFrac * meshWidth, corner.yFrac * meshHeight),
+              ]);
+              final OmrMeshCorrection mesh;
               try {
-                // Independent re-detection at THIS method's own (much
-                // higher, [_ocrCanonicalPxPerPt]) resolution — same
-                // isolation reasoning as the rest of this method (see its
-                // own doc comment): never reuses decode()'s mesh, only the
-                // fractional template geometry both are built from. A no-op
-                // for a template with no interior fiducials.
-                final warpedGrayForMesh = cv.cvtColor(warped, cv.COLOR_BGR2GRAY);
-                final OmrMeshCorrection mesh;
+                final meshTransform = cv.getPerspectiveTransform2f(srcCorners, meshDstCorners);
                 try {
-                  final interiorMeasured = _detectInteriorFiducials(
-                    warpedGrayForMesh,
-                    template,
-                    canonicalWidth,
-                    canonicalHeight,
-                  );
-                  mesh = OmrMeshCorrection.build(
-                    template: template,
-                    canonicalWidth: canonicalWidth,
-                    canonicalHeight: canonicalHeight,
-                    cornersMeasuredPx: [
-                      for (final c in template.cornerMarkers)
-                        (c.xFrac * canonicalWidth, c.yFrac * canonicalHeight),
-                    ],
-                    interiorMeasuredPx: interiorMeasured,
-                  );
-                } finally {
-                  warpedGrayForMesh.dispose();
-                }
-                void writeField(OmrFieldRect field, String outPath) {
-                  // Mesh-correct all 4 corners of the field rect (not just
-                  // its center) and take their bounding box — a locally
-                  // bent capture can skew the rect into a non-axis-aligned
-                  // quad, and the crop must stay a rectangle; the bounding
-                  // box only ever grows the crop slightly, never loses
-                  // handwriting at an edge. A no-op whenever
-                  // `mesh.isActive` is false.
-                  final x0 = field.xFrac * canonicalWidth;
-                  final y0 = field.yFrac * canonicalHeight;
-                  final x1 = (field.xFrac + field.widthFrac) * canonicalWidth;
-                  final y1 = (field.yFrac + field.heightFrac) * canonicalHeight;
-                  final corrected = [
-                    mesh.correct(x0, y0),
-                    mesh.correct(x1, y0),
-                    mesh.correct(x0, y1),
-                    mesh.correct(x1, y1),
-                  ];
-                  final rect = _clampedRect(
-                    corrected.map((p) => p.$1).reduce(math.min),
-                    corrected.map((p) => p.$2).reduce(math.min),
-                    corrected.map((p) => p.$1).reduce(math.max),
-                    corrected.map((p) => p.$2).reduce(math.max),
-                    canonicalWidth,
-                    canonicalHeight,
-                  );
-                  final roi = warped.region(rect);
+                  final meshWarped = cv.warpPerspective(oriented, meshTransform, (meshWidth, meshHeight));
                   try {
+                    // TAT's new references bracket answers, not
+                    // handwriting. Preserve its existing global-only name
+                    // crop mapping.
+                    final interiorMeasuredSmall = template.examCode == 'TAT'
+                        ? <OmrFiducialRole, (double, double)>{}
+                        : _detectInteriorFiducials(meshWarped, template, meshWidth, meshHeight);
+                    // Rescale from the small detection resolution up to
+                    // this method's own OCR canonical scale —
+                    // OmrMeshCorrection operates in whatever pixel space
+                    // it's built with, and a measured canonical position
+                    // scales linearly between the two (both describe the
+                    // same warped page, just sampled at a different
+                    // density).
+                    final ocrScale = _ocrCanonicalPxPerPt / _canonicalPxPerPt;
+                    final interiorMeasured = {
+                      for (final entry in interiorMeasuredSmall.entries)
+                        entry.key: (entry.value.$1 * ocrScale, entry.value.$2 * ocrScale),
+                    };
+                    mesh = OmrMeshCorrection.build(
+                      template: template,
+                      canonicalWidth: canonicalWidth,
+                      canonicalHeight: canonicalHeight,
+                      cornersMeasuredPx: [
+                        for (final c in template.cornerMarkers)
+                          (c.xFrac * canonicalWidth, c.yFrac * canonicalHeight),
+                      ],
+                      interiorMeasuredPx: interiorMeasured,
+                    );
+                  } finally {
+                    meshWarped.dispose();
+                  }
+                } finally {
+                  meshTransform.dispose();
+                }
+              } finally {
+                meshDstCorners.dispose();
+              }
+              // Direct field-region warp (2026-09-19): each field's own
+              // small output rectangle is warped straight from
+              // `orientedSrc` (the original capture) by shifting the SAME
+              // page-wide destination correspondence (`corners` ->
+              // template.cornerMarkers' canonical positions) so the
+              // field's own top-left lands at (0,0) of a field-sized
+              // output — the identical global 4-corner registration used
+              // everywhere else, just queried for a small output window
+              // instead of the whole page. `warpPerspective` only samples
+              // the source pixels its requested output window actually
+              // needs, so this does the same real per-field work as
+              // before without ever allocating a full-page intermediate.
+              void writeField(OmrFieldRect field, String outPath, int boxCount) {
+                // Mesh-correct all 4 corners of the field rect (not just
+                // its center) and take their bounding box — a locally
+                // bent capture can skew the rect into a non-axis-aligned
+                // quad, and the crop must stay a rectangle; the bounding
+                // box only ever grows the crop slightly, never loses
+                // handwriting at an edge. A no-op whenever
+                // `mesh.isActive` is false.
+                final x0 = field.xFrac * canonicalWidth;
+                final y0 = field.yFrac * canonicalHeight;
+                final x1 = (field.xFrac + field.widthFrac) * canonicalWidth;
+                final y1 = (field.yFrac + field.heightFrac) * canonicalHeight;
+                final corrected = [
+                  mesh.correct(x0, y0),
+                  mesh.correct(x1, y0),
+                  mesh.correct(x0, y1),
+                  mesh.correct(x1, y1),
+                ];
+                final rect = _clampedRect(
+                  corrected.map((p) => p.$1).reduce(math.min),
+                  corrected.map((p) => p.$2).reduce(math.min),
+                  corrected.map((p) => p.$1).reduce(math.max),
+                  corrected.map((p) => p.$2).reduce(math.max),
+                  canonicalWidth,
+                  canonicalHeight,
+                );
+                final dstCornersLocal = cv.VecPoint2f.fromList([
+                  for (final corner in template.cornerMarkers)
+                    cv.Point2f(
+                      corner.xFrac * canonicalWidth - rect.x,
+                      corner.yFrac * canonicalHeight - rect.y,
+                    ),
+                ]);
+                final cv.Mat roi;
+                try {
+                  final transformLocal = cv.getPerspectiveTransform2f(srcCorners, dstCornersLocal);
+                  try {
+                    roi = cv.warpPerspective(orientedSrc, transformLocal, (rect.width, rect.height));
+                  } finally {
+                    transformLocal.dispose();
+                  }
+                } finally {
+                  dstCornersLocal.dispose();
+                }
+                try {
                     // Pencil handwriting has much lower/uneven contrast
                     // against paper than the crisp printed field label —
                     // confirmed on a real scan (via a temporary raw-OCR-text
@@ -2019,21 +2189,51 @@ class OmrDecoder {
                     // near-blank paper region.
                     final grayRoi = cv.cvtColor(roi, cv.COLOR_BGR2GRAY);
                     try {
-                      final clahe = cv.createCLAHE(clipLimit: 3, tileGridSize: (4, 4));
+                      // Trim trailing blank cells so a short name in a
+                      // wide, mostly-empty field (e.g. 7 letters in a
+                      // 24-cell Last Name field) doesn't produce an image
+                      // that's mostly blank paper — confirmed on a real
+                      // device this made the crop strip badly out of
+                      // proportion with narrower fields (MI) next to it.
+                      // A no-op (identical Mat) for `boxCount <= 0` (TAT's
+                      // un-boxed fields) or a field with nothing detected
+                      // to trim to. See _trimNameCropToContent's own doc
+                      // comment for why this only ever removes guaranteed-
+                      // blank trailing space, never any handwriting.
+                      final trimmed = boxCount > 0
+                          ? _trimNameCropToContent(grayRoi, roi.width, roi.height, boxCount)
+                          : grayRoi;
                       try {
-                        final enhanced = clahe.apply(grayRoi);
+                        // CLAHE re-normalizes local contrast (same
+                        // technique used before thresholding for bubble
+                        // detection) so a crop taken in poor/uneven
+                        // lighting stays legible to a human reader; a
+                        // light blur afterward tamps down the noise CLAHE
+                        // can amplify in an otherwise near-blank paper
+                        // region. Otherwise left unmodified (printed grid
+                        // lines and all) — this image is read directly by
+                        // staff, not fed to a recognizer, so within
+                        // whatever width is kept it must be a complete,
+                        // un-altered record of exactly what was
+                        // handwritten.
+                        final clahe = cv.createCLAHE(clipLimit: 3, tileGridSize: (4, 4));
                         try {
-                          final blurred = cv.gaussianBlur(enhanced, (3, 3), 0);
+                          final enhanced = clahe.apply(trimmed);
                           try {
-                            cv.imwrite(outPath, blurred);
+                            final blurred = cv.gaussianBlur(enhanced, (3, 3), 0);
+                            try {
+                              cv.imwrite(outPath, blurred);
+                            } finally {
+                              blurred.dispose();
+                            }
                           } finally {
-                            blurred.dispose();
+                            enhanced.dispose();
                           }
                         } finally {
-                          enhanced.dispose();
+                          clahe.dispose();
                         }
                       } finally {
-                        clahe.dispose();
+                        if (!identical(trimmed, grayRoi)) trimmed.dispose();
                       }
                     } finally {
                       grayRoi.dispose();
@@ -2043,21 +2243,16 @@ class OmrDecoder {
                   }
                 }
 
-                writeField(template.lastNameFieldRect, lastNameOutPath);
-                writeField(template.firstNameFieldRect, firstNameOutPath);
-                writeField(template.middleInitialFieldRect, middleInitialOutPath);
-                return (
-                  lastName: lastNameOutPath,
-                  firstName: firstNameOutPath,
-                  middleInitial: middleInitialOutPath,
-                );
-              } finally {
-                warped.dispose();
-              }
+              writeField(template.lastNameFieldRect, lastNameOutPath, template.lastNameBoxCount);
+              writeField(template.firstNameFieldRect, firstNameOutPath, template.firstNameBoxCount);
+              writeField(template.middleNameFieldRect, middleNameOutPath, template.middleNameBoxCount);
+              return (
+                lastName: lastNameOutPath,
+                firstName: firstNameOutPath,
+                middleName: middleNameOutPath,
+              );
             } finally {
-              transform.dispose();
               srcCorners.dispose();
-              dstCorners.dispose();
             }
           } finally {
             if (!identical(orientedSrc, src)) orientedSrc.dispose();
@@ -2071,6 +2266,114 @@ class OmrDecoder {
     } finally {
       src.dispose();
     }
+  }
+
+  /// How many extra letter cells past the last one classified as
+  /// containing ink to keep before trimming a name crop — deliberately
+  /// generous. This value only ever controls how much *extra blank space*
+  /// survives the trim; it can never cause real handwriting to be dropped
+  /// from the saved image, since everything to the left of the trim point
+  /// (ink or not) is always kept intact. A margin this size comfortably
+  /// covers the worst per-cell misclassification gap actually observed on
+  /// a real capture this session (a 2-cell run of faint ink misread as
+  /// blank from an uneven lighting gradient — see [_lastInkCellIndex]'s
+  /// own doc comment) with real room to spare, since under-trimming only
+  /// costs a little unused width while over-trimming would cut off a
+  /// letter.
+  static const int _nameCropTrimBufferCells = 5;
+
+  /// How much darker (0-255 gray levels) a cell's own mean brightness must
+  /// be than the brightest cell in a local window around it (see
+  /// [_nameCropBaselineWindowRadius]) to count as containing handwriting —
+  /// the same self-calibrating, gradient-tolerant approach validated
+  /// earlier this session for the (now-removed) OCR line-reconstruction
+  /// step. Reused here for a much lower-stakes purpose: finding *how far*
+  /// real handwriting extends across the field, not classifying or
+  /// dropping any individual cell, so a misclassified cell here only
+  /// shifts the trim point slightly rather than removing content.
+  static const double _nameCropInkDrop = 12.0;
+
+  /// See [_nameCropInkDrop] — window radius for its local brightest-cell
+  /// baseline, same value and same reasoning as the earlier OCR
+  /// reconstruction step.
+  static const int _nameCropBaselineWindowRadius = 6;
+
+  /// Index (0-based) of the last letter cell across [boxCount] that
+  /// appears to contain handwriting, judged by comparing each cell's mean
+  /// brightness against the brightest cell in a local window around it
+  /// (see [_nameCropInkDrop]/[_nameCropBaselineWindowRadius]) — tolerant of
+  /// a lighting/shadow gradient across the field, unlike a single
+  /// field-wide brightness reference. Returns null when nothing in the
+  /// field reads as ink (a blank field — the caller keeps the full crop
+  /// rather than trimming to nothing).
+  static int? _lastInkCellIndex(cv.Mat gray, int width, int height, int boxCount) {
+    final cellWidth = width / boxCount;
+    final cellMeans = <double>[];
+    for (var i = 0; i < boxCount; i++) {
+      final x0 = (i * cellWidth).round().clamp(0, width - 1);
+      final x1 = ((i + 1) * cellWidth).round().clamp(x0 + 1, width);
+      final cell = gray.region(cv.Rect(x0, 0, x1 - x0, height));
+      try {
+        final meanScalar = cell.mean();
+        try {
+          cellMeans.add(meanScalar.val1);
+        } finally {
+          meanScalar.dispose();
+        }
+      } finally {
+        cell.dispose();
+      }
+    }
+    int? lastInk;
+    for (var i = 0; i < boxCount; i++) {
+      final lo = math.max(0, i - _nameCropBaselineWindowRadius);
+      final hi = math.min(boxCount - 1, i + _nameCropBaselineWindowRadius);
+      var baseline = cellMeans[lo];
+      for (var j = lo + 1; j <= hi; j++) {
+        if (cellMeans[j] > baseline) baseline = cellMeans[j];
+      }
+      if ((baseline - cellMeans[i]) >= _nameCropInkDrop) lastInk = i;
+    }
+    if (_kFiducialDebug) {
+      _fidLog('nameCropTrim boxCount=$boxCount means=${cellMeans.map((m) => m.toStringAsFixed(1)).toList()} '
+          'lastInk=$lastInk');
+    }
+    return lastInk;
+  }
+
+  /// Trims [gray] (a cropped, un-warped name field, [width]x[height]) down
+  /// to just past where handwriting actually ends, so a short name in a
+  /// wide field doesn't produce an image that's mostly blank paper. Keeps
+  /// every cell from the start of the field through
+  /// [_lastInkCellIndex] plus [_nameCropTrimBufferCells] extra cells of
+  /// margin, and always returns [gray] unchanged (identical) rather than
+  /// trim — when the field reads as entirely blank ([_lastInkCellIndex]
+  /// returns null), or when the computed trim point would keep the whole
+  /// field anyway — callers must check `identical()` before disposing,
+  /// same convention as [_normalizeIllumination].
+  static cv.Mat _trimNameCropToContent(cv.Mat gray, int width, int height, int boxCount) {
+    final lastInk = _lastInkCellIndex(gray, width, height, boxCount);
+    if (lastInk == null) {
+      if (_kFiducialDebug) {
+        _fidLog('nameCropTrim boxCount=$boxCount width=$width height=$height -> blank field, no trim');
+      }
+      return gray;
+    }
+    final cellWidth = width / boxCount;
+    final keepCells = (lastInk + 1 + _nameCropTrimBufferCells).clamp(1, boxCount);
+    if (keepCells >= boxCount) {
+      if (_kFiducialDebug) {
+        _fidLog('nameCropTrim boxCount=$boxCount width=$width keepCells=$keepCells -> '
+            'no trim (would keep whole field)');
+      }
+      return gray;
+    }
+    final trimWidth = (keepCells * cellWidth).round().clamp(1, width);
+    if (_kFiducialDebug) {
+      _fidLog('nameCropTrim boxCount=$boxCount width=$width height=$height keepCells=$keepCells '
+          'trimWidth=$trimWidth');
+    }
+    return gray.region(cv.Rect(0, 0, trimWidth, height));
   }
 
   /// Debug-only: writes two annotated JPEGs to [outputDir] — the detected
@@ -2621,6 +2924,21 @@ class OmrDecoder {
     // of which had actually locked onto the wrong feature -- was ever
     // cross-checked or rescued, producing an unusable warp with no
     // indication anything had gone wrong upstream of it.
+    //
+    // Only bother searching for extra (interior-fiducial) anchors when the
+    // outer corners alone won't reach the 3-point minimum the affine fit
+    // needs — the common case (3-4 outer corners usable) pays nothing
+    // extra for TAT's additional printed marks.
+    final usableOuterCount =
+        results.where((r) => r.confidence != CornerConfidence.none).length;
+    final extraAnchors = usableOuterCount < 3
+        ? _findInteriorAnchorsRaw(gray, pageQuad, template)
+        : const <({cv.Point2f point, double xFrac, double yFrac})>[];
+    if (_kFiducialDebug && extraAnchors.isNotEmpty) {
+      _fidLog('extra interior anchors found for corner rescue: '
+          '${extraAnchors.map((a) => "(${a.xFrac.toStringAsFixed(2)},${a.yFrac.toStringAsFixed(2)})->"
+              "(${a.point.x.toStringAsFixed(1)},${a.point.y.toStringAsFixed(1)})").join(" ")}');
+    }
     final note = _crossCheckCornersByGeometry(
       points,
       results,
@@ -2628,6 +2946,7 @@ class OmrDecoder {
       template,
       allowRescueSearch: true,
       labels: _kFiducialDebug ? labels : null,
+      extraAnchors: extraAnchors,
     );
 
     // All 4 fiducial marks must end up with a centroid — no reconstructing
@@ -2782,29 +3101,35 @@ class OmrDecoder {
   /// because the app's whole capture UI is locked to portrait (see
   /// main.dart's SystemChrome.setPreferredOrientations): the only way to
   /// get a landscape sheet to fill a portrait camera frame is to physically
-  /// turn the paper sideways, and nothing constrains which way — clockwise
-  /// or counterclockwise — a given user turns it. _refineCorners on its
-  /// own assumes the photo's own top-left/top-right/bottom-left/bottom-
-  /// right quadrants directly contain the sheet's own same-named corner
-  /// marks (see _quadrantsFor), which is only true when the sheet is
-  /// upright in frame.
+  /// turn the paper sideways. _refineCorners on its own assumes the photo's
+  /// own top-left/top-right/bottom-left/bottom-right quadrants directly
+  /// contain the sheet's own same-named corner marks (see _quadrantsFor),
+  /// which is only true when the sheet is upright in frame.
+  ///
+  /// Portrait-page templates never attempt a rotation at all — there's no
+  /// ambiguity to resolve for them, and doing so would just be wasted work.
+  ///
+  /// TEMPORARY, 2026-09-18: back to trying all four quarter turns and
+  /// picking the best-scoring one (the pre-existing, previously-working
+  /// behavior), instead of assuming a single fixed rotation. A same-day
+  /// attempt to lock TAT to one standardized physical placement (phone
+  /// portrait, sheet turned so the title reads normally at the top and name
+  /// fields are on the left — see docs/tat-portrait-capture.md) guessed
+  /// [cv.ROTATE_90_COUNTERCLOCKWISE] as that placement's raw-buffer-to-
+  /// canonical rotation, reasoning from the on-screen viewfinder guide's own
+  /// `cornerFractions` transform plus one earlier device log. That guess was
+  /// confirmed WRONG on a real device: a capture in exactly the standardized
+  /// placement (title up, name fields left, all 4 outer corners found) was
+  /// rejected. Reverted to this known-good multi-candidate search so
+  /// scanning works again; once real `[OMR FIDUCIAL DEBUG] TAT orientation
+  /// candidates=...` log data confirms which rotation code the standardized
+  /// placement actually produces, the single-rotation optimization can be
+  /// reapplied correctly instead of guessed again.
   ///
   /// Tries the image as captured first (correct for every portrait-page
   /// template, and for a landscape one shot without rotating, e.g. a flat
   /// overhead photo rather than the handheld portrait-frame case), then
-  /// each 90° rotation, then 180°, returning whichever succeeds. Portrait-
-  /// page templates never attempt a rotation at all — there's no ambiguity
-  /// to resolve for them, and doing so would just be wasted work.
-  ///
-  /// 180° is tried too (not just the two 90°s) because
-  /// [ExamScanningScreen]'s landscape unlock allows EITHER
-  /// `DeviceOrientation.landscapeLeft` OR `landscapeRight` — turning the
-  /// phone the "other way" for the same physical sheet flips the raw
-  /// sensor buffer's content 180° from the other hold, not 90°, and (see
-  /// [_imreadForTemplate]'s doc comment) this method now runs against that
-  /// raw, EXIF-uncorrected buffer for a landscape template specifically so
-  /// it can no longer rely on the camera plugin/OS to have resolved that
-  /// ambiguity beforehand.
+  /// each 90° rotation, then 180°, returning whichever succeeds.
   ///
   /// Returns the Mat actually used (identical to [gray] when no rotation
   /// was needed, otherwise a new rotated Mat the caller must separately
@@ -2819,28 +3144,101 @@ class OmrDecoder {
     OmrExamTemplate template,
   ) {
     if (template.pageWidthPt <= template.pageHeightPt) {
-      return (gray, _findCaptureCorners(gray, template), null);
+      final upright = _findCaptureCorners(gray, template);
+      if (template.templateVersion != 'TAT-portrait-v5') return (gray, upright, null);
+      return _resolveTatPortraitDirection(gray, upright, template);
     }
-    StateError lastError;
-    try {
-      return (gray, _findCaptureCorners(gray, template), null);
-    } on StateError catch (e) {
-      lastError = e;
-    }
-    for (final code in [
-      cv.ROTATE_90_CLOCKWISE,
-      cv.ROTATE_90_COUNTERCLOCKWISE,
+    // Cache each candidate's full corner-search result (2026-09-19) —
+    // `_RefineResult` is plain value data (Point2f/Rect/enums/doubles, no
+    // Mat), so holding all 4 costs nothing worth measuring. Previously the
+    // winning candidate's corners were computed here, then thrown away and
+    // recomputed a second time below via a fresh `_findCaptureCorners` call
+    // after rotating `gray` again — the same expensive contour search
+    // (Stage 1/Stage 2 blob search + squareness scoring across every
+    // quadrant) run twice for whichever rotation turned out to be correct.
+    // Only the (cheap) `cv.rotate` needs repeating, to hand back a live
+    // Mat that isn't one of the (disposed) per-candidate scratch rotations.
+    final candidates = <(int?, double)>[];
+    final refineByCode = <int?, _RefineResult>{};
+    for (final code in <int?>[
+      null, cv.ROTATE_90_CLOCKWISE, cv.ROTATE_90_COUNTERCLOCKWISE,
       cv.ROTATE_180,
     ]) {
-      final rotated = cv.rotate(gray, code);
+      final image = code == null ? gray : cv.rotate(gray, code);
       try {
-        return (rotated, _findCaptureCorners(rotated, template), code);
-      } on StateError catch (e) {
-        lastError = e;
-        rotated.dispose();
+        final refine = _findCaptureCorners(image, template);
+        refineByCode[code] = refine;
+        // Match the normal registration resolution: at 1 px/pt a 9pt
+        // square is only nine pixels wide, making the fixed blur/dilation
+        // and contour-extent gate disproportionately sensitive to rounding.
+        final width = (template.pageWidthPt * _canonicalPxPerPt).round();
+        final height = (template.pageHeightPt * _canonicalPxPerPt).round();
+        final src = cv.VecPoint2f.fromList(refine.corners);
+        final dst = cv.VecPoint2f.fromList([
+          for (final c in template.cornerMarkers)
+            cv.Point2f(c.xFrac * width, c.yFrac * height),
+        ]);
+        final transform = cv.getPerspectiveTransform2f(src, dst);
+        try {
+          final warped = cv.warpPerspective(image, transform, (width, height));
+          try {
+            final measured = _detectInteriorFiducials(warped, template, width, height);
+            var score = 0.0;
+            var above = 0;
+            var below = 0;
+            for (final f in template.interiorFiducials) {
+              if (f.role == OmrFiducialRole.dividerLeft ||
+                  f.role == OmrFiducialRole.dividerRight) {
+                continue;
+              }
+              final point = measured[f.role];
+              if (point == null) continue;
+              final dx = (point.$1 - f.xFrac * width) * template.pageWidthPt / width;
+              final dy = (point.$2 - f.yFrac * height) * template.pageHeightPt / height;
+              final error = math.sqrt(dx * dx + dy * dy);
+              if (error > 12) continue;
+              score += 1 - error / 48;
+              if (f.yFrac < 0.5) { above++; } else { below++; }
+            }
+            candidates.add((code, above >= 2 && below >= 2 ? score : 0));
+            if (_kFiducialDebug) {
+              _fidLog('TAT orientation rotation=$code size=${width}x$height '
+                  'above=$above below=$below score=$score measured=$measured');
+            }
+          } finally {
+            warped.dispose();
+          }
+        } finally {
+          transform.dispose();
+          src.dispose();
+          dst.dispose();
+        }
+      } on StateError {
+        candidates.add((code, 0));
+      } finally {
+        if (!identical(image, gray)) image.dispose();
       }
     }
-    throw lastError;
+    final selected = selectTatOrientation([for (final c in candidates) c.$2]);
+    if (_kFiducialDebug) {
+      _fidLog('TAT orientation candidates=$candidates selected=$selected');
+    }
+    if (selected == null) {
+      throw StateError(
+        'Could not confirm the sheet\'s placement. Hold the phone '
+        'upright and turn the sheet so "TEACHING APTITUDE TEST (TAT)" '
+        'reads normally at the top and the name fields are on the '
+        'left, then retake.',
+      );
+    }
+    final code = candidates[selected].$1;
+    final image = code == null ? gray : cv.rotate(gray, code);
+    try {
+      return (image, refineByCode[code]!, code);
+    } catch (_) {
+      if (!identical(image, gray)) image.dispose();
+      rethrow;
+    }
   }
 
   /// Deliberately minimal, per explicit product direction: as long as all 4
@@ -2972,6 +3370,107 @@ class OmrDecoder {
   static double _interiorSearchHalfExtentPx(double halfSizePt) =>
       math.max(14.0, halfSizePt * _canonicalPxPerPt * 2.5);
 
+  /// How well the small marks of a portrait TAT v5 sheet line up in [image]
+  /// warped by [refine]'s corners: how many were found within 12pt of their
+  /// printed position, and their summed closeness. The side pair and centre
+  /// mark look the same turned around, so they say nothing about direction and
+  /// are skipped.
+  ({int count, double score}) _tatSmallMarkEvidence(
+    cv.Mat image,
+    _RefineResult refine,
+    OmrExamTemplate template,
+  ) {
+    final width = (template.pageWidthPt * _canonicalPxPerPt).round();
+    final height = (template.pageHeightPt * _canonicalPxPerPt).round();
+    final src = cv.VecPoint2f.fromList(refine.corners);
+    final dst = cv.VecPoint2f.fromList([
+      for (final c in template.cornerMarkers) cv.Point2f(c.xFrac * width, c.yFrac * height),
+    ]);
+    try {
+      final transform = cv.getPerspectiveTransform2f(src, dst);
+      try {
+        final warped = cv.warpPerspective(image, transform, (width, height));
+        try {
+          final small = [for (final f in template.interiorFiducials) if (f.halfSizePt < 4) f];
+          final measured = _detectInteriorFiducials(warped, template, width, height, only: small);
+          var count = 0;
+          var score = 0.0;
+          for (final f in small) {
+            final point = measured[f.role];
+            if (point == null) continue;
+            final dx = (point.$1 - f.xFrac * width) * template.pageWidthPt / width;
+            final dy = (point.$2 - f.yFrac * height) * template.pageHeightPt / height;
+            final error = math.sqrt(dx * dx + dy * dy);
+            if (error > 12) continue;
+            count++;
+            score += 1 - error / 48;
+          }
+          return (count: count, score: score);
+        } finally {
+          warped.dispose();
+        }
+      } finally {
+        transform.dispose();
+      }
+    } finally {
+      src.dispose();
+      dst.dispose();
+    }
+  }
+
+  /// Portrait TAT v5 is held upright in the portrait-locked camera, so only
+  /// two states are possible: the sheet as shot, or turned 180 degrees. The
+  /// four corner squares look identical either way, so direction comes from
+  /// the seven small marks. A sheet already the right way up is accepted after
+  /// one look (4+ small marks); the 180 degree search only runs when that
+  /// look is weak, keeping the common case cheap on older phones.
+  (cv.Mat, _RefineResult, int?) _resolveTatPortraitDirection(
+    cv.Mat gray,
+    _RefineResult upright,
+    OmrExamTemplate template,
+  ) {
+    final asShot = _tatSmallMarkEvidence(gray, upright, template);
+    if (asShot.count >= 4) return (gray, upright, null);
+
+    var turnedEvidence = (count: 0, score: 0.0);
+    final turned = cv.rotate(gray, cv.ROTATE_180);
+    try {
+      _RefineResult? turnedRefine;
+      try {
+        turnedRefine = _findCaptureCorners(turned, template);
+        turnedEvidence = _tatSmallMarkEvidence(turned, turnedRefine, template);
+      } on StateError {
+        // Turned reading has no usable corners: as shot is the only candidate.
+      }
+      final selected = selectTatPortraitDirection(
+        asShotCount: asShot.count,
+        asShotScore: asShot.score,
+        turnedCount: turnedEvidence.count,
+        turnedScore: turnedEvidence.score,
+      );
+      if (_kFiducialDebug) {
+        _fidLog('TAT portrait direction asShot=$asShot turned=$turnedEvidence selected=$selected');
+      }
+      if (selected == 0) {
+        turned.dispose();
+        return (gray, upright, null);
+      }
+      if (selected == 1 && turnedRefine != null) return (turned, turnedRefine, cv.ROTATE_180);
+    } catch (_) {
+      turned.dispose();
+      rethrow;
+    }
+    turned.dispose();
+    throw StateError(
+      asShot.count == 0 && turnedEvidence.count == 0
+          ? 'Could not match the small alignment squares on the TAT sheet, so its '
+              'direction is unknown. Hold the phone upright with the whole sheet in '
+              'frame (title on the right edge), use even lighting, tap to focus, and retake.'
+          : 'The TAT sheet direction is unclear. Keep every small square above the '
+              'answer sections visible, hold the phone steady and upright, and retake.',
+    );
+  }
+
   /// Independently re-detects every one of [template]'s
   /// [OmrExamTemplate.interiorFiducials] directly on the already
   /// (4-corner-)warped [warpedGray] — the exact same "search a box around
@@ -2987,16 +3486,21 @@ class OmrDecoder {
     cv.Mat warpedGray,
     OmrExamTemplate template,
     int canonicalWidth,
-    int canonicalHeight,
-  ) {
+    int canonicalHeight, {
+    Iterable<OmrFiducial>? only,
+  }) {
     if (template.interiorFiducials.isEmpty) return const {};
     final found = <OmrFiducialRole, (double, double)>{};
+    final tat = template.examCode == 'TAT';
+    final scale = canonicalWidth / template.pageWidthPt;
     cv.Mat? normalizedGray;
     try {
-      for (final fiducial in template.interiorFiducials) {
+      for (final fiducial in only ?? template.interiorFiducials) {
         final ex = fiducial.xFrac * canonicalWidth;
         final ey = fiducial.yFrac * canonicalHeight;
-        final halfExtent = _interiorSearchHalfExtentPx(fiducial.halfSizePt);
+        final halfExtent = tat
+            ? (fiducial.halfSizePt + 14) * scale
+            : _interiorSearchHalfExtentPx(fiducial.halfSizePt);
         final box = _clampedRect(
           ex - halfExtent,
           ey - halfExtent,
@@ -3005,11 +3509,13 @@ class OmrDecoder {
           canonicalWidth,
           canonicalHeight,
         );
-        var r = _findMarkerInRegion(warpedGray, box, ex, ey);
+        var r = _findMarkerInRegion(warpedGray, box, ex, ey,
+            expectedSidePx: tat ? 2 * fiducial.halfSizePt * scale : null);
         if (r.centroid == null) {
           normalizedGray ??= _normalizeIllumination(warpedGray);
           if (!identical(normalizedGray, warpedGray)) {
-            r = _findMarkerInRegion(normalizedGray, box, ex, ey);
+            r = _findMarkerInRegion(normalizedGray, box, ex, ey,
+                expectedSidePx: tat ? 2 * fiducial.halfSizePt * scale : null);
           }
         }
         final c = r.centroid;
@@ -3408,6 +3914,76 @@ class OmrDecoder {
     ];
   }
 
+  /// Approximate pixels-per-PDF-point scale for the RAW (not yet warped)
+  /// photo — used only to size the search box for [_findInteriorAnchorsRaw],
+  /// which (unlike [_detectInteriorFiducials]) has no canonical/warped image
+  /// to measure against yet. Derived from [pageQuad]'s own top edge length
+  /// when available (the same page-boundary estimate [_quadrantsFor] already
+  /// trusts for corner search positions), or from the raw image width
+  /// assuming the sheet fills the frame — the same fallback assumption
+  /// [_quadrantsFor] makes when [_detectPageQuad] found no boundary.
+  double _rawPxPerPt(
+    int width,
+    List<(double, double)>? pageQuad,
+    OmrExamTemplate template,
+  ) {
+    if (pageQuad == null) return width / template.pageWidthPt;
+    final tl = pageQuad[0], tr = pageQuad[1];
+    final topWidthPx = math.sqrt(
+      math.pow(tr.$1 - tl.$1, 2) + math.pow(tr.$2 - tl.$2, 2),
+    );
+    return topWidthPx > 0 ? topWidthPx / template.pageWidthPt : width / template.pageWidthPt;
+  }
+
+  /// Searches for TAT's interior per-Test fiducials (`tatAboveI/II/III`,
+  /// `tatBelowI/II/III`, `dividerLeft/Right`) directly in the RAW (only
+  /// rotated-for-orientation, never yet warped) image — the same "search a
+  /// small box around the expected position" technique [_quadrantsFor] uses
+  /// for the 4 outer corners, just against each interior mark's own
+  /// (smaller) printed size and using [_rawPxPerPt] instead of a canonical
+  /// warp's exact scale, since no warp exists yet at this point in
+  /// [_refineCorners].
+  ///
+  /// Added 2026-09-18 so a capture with a marginal outer corner isn't left
+  /// with zero benefit from TAT's own extra printed redundancy: only
+  /// [CornerConfidence.confident] results are returned — these feed
+  /// [_crossCheckCornersByGeometry]'s corner-rescue affine as trusted extra
+  /// anchor points (see its `extraAnchors` param), so this deliberately
+  /// only returns marks with the same strength of evidence the affine
+  /// already trusts an outer corner to have. No-op (returns const `[]`
+  /// immediately) for a template with no interior fiducials (AT/QTM/PT),
+  /// so this costs nothing for them.
+  List<({cv.Point2f point, double xFrac, double yFrac})> _findInteriorAnchorsRaw(
+    cv.Mat gray,
+    List<(double, double)>? pageQuad,
+    OmrExamTemplate template,
+  ) {
+    if (template.interiorFiducials.isEmpty) return const [];
+    final w = gray.width.toDouble();
+    final h = gray.height.toDouble();
+    final pxPerPt = _rawPxPerPt(gray.width, pageQuad, template);
+    final found = <({cv.Point2f point, double xFrac, double yFrac})>[];
+    for (final fiducial in template.interiorFiducials) {
+      final (cx, cy) = pageQuad == null
+          ? (fiducial.xFrac * w, fiducial.yFrac * h)
+          : _bilinearInterpolate(pageQuad, fiducial.xFrac, fiducial.yFrac);
+      final halfExtent = (fiducial.halfSizePt + 14) * pxPerPt;
+      final box = _clampedRect(
+        cx - halfExtent, cy - halfExtent, cx + halfExtent, cy + halfExtent,
+        gray.width, gray.height,
+      );
+      final r = _findMarkerInRegion(
+        gray, box, cx, cy,
+        expectedSidePx: 2 * fiducial.halfSizePt * pxPerPt,
+      );
+      final c = r.centroid;
+      if (c != null && r.confidence == CornerConfidence.confident) {
+        found.add((point: c, xFrac: fiducial.xFrac, yFrac: fiducial.yFrac));
+      }
+    }
+    return found;
+  }
+
   /// Searches [region] for one corner square and scores every candidate
   /// blob by a combination of **shape** (`_squarenessOf` — the printed
   /// marker is a solid filled square, not a hollow/filled circle or a
@@ -3441,6 +4017,7 @@ class OmrDecoder {
     double anchorY, {
     String? debugTag,
     double? anchorScaleOverride,
+    double? expectedSidePx,
   }) {
     final roi = gray.region(region);
     try {
@@ -3512,6 +4089,7 @@ class OmrDecoder {
                     // Winner tracked by COMBINED score — higher is better now
                     // (squareness-led), not the old "closest wins".
                     double bestScore = -1;
+                    double runnerUpScore = -1;
                     double bestSquareness = 0;
                     double bestContrast = 0;
                     double bestArea = 0;
@@ -3547,6 +4125,14 @@ class OmrDecoder {
                           math.max(1, math.min(rect.width, rect.height));
                       final aspect = longSide / shortSide;
                       final extent = boxArea > 0 ? area / boxArea : 0.0;
+                      // Post-warp TAT squares have a known physical size.
+                      // Include the contour dilation's two-pixel growth.
+                      if (expectedSidePx != null && !tatMarkerShapeMatches(
+                          expectedSidePx: expectedSidePx,
+                          shortSide: shortSide.toDouble(), longSide: longSide.toDouble(),
+                          extent: extent)) {
+                        continue;
+                      }
 
                       // Local contrast against this blob's own neighborhood.
                       // Computed up front — before any of the cheap gates
@@ -3745,6 +4331,7 @@ class OmrDecoder {
                         continue;
                       }
                       if (candScore > bestScore) {
+                        runnerUpScore = bestScore;
                         if (bestRect != null) {
                           reject(bestRect, bestSquareness, bestScore, 'outscored',
                               area: bestArea, contrast: bestContrast);
@@ -3757,6 +4344,7 @@ class OmrDecoder {
                         bestRect = rect;
                         bestContourIndex = ci;
                       } else {
+                        runnerUpScore = math.max(runnerUpScore, candScore);
                         reject(rect, squareness, candScore, 'outscored', area: area, contrast: contrast);
                       }
                     }
@@ -3764,7 +4352,8 @@ class OmrDecoder {
                     rejected.sort((a, b) => b.squareness.compareTo(a.squareness));
                     final topRejects = rejected.take(5).toList();
 
-                    if (bestRect == null) {
+                    if (bestRect == null ||
+                        (expectedSidePx != null && tatMarkerMatchIsAmbiguous(bestScore, runnerUpScore))) {
                       return _MarkerSearchResult(
                         centroid: null,
                         bboxGlobal: null,
@@ -3885,10 +4474,6 @@ class OmrDecoder {
     final bubbleSampleHalfPxX = template.bubbleRadiusPt * _canonicalPxPerPt;
     final bubbleSampleHalfPxY = template.bubbleRadiusYPt * _canonicalPxPerPt;
     final ambiguousMargin = _ambiguousMarginFor(template.examCode);
-    // Temporarily widened from QTM-only to every exam code for the current
-    // accuracy investigation across AT/QTM/TAT -- see _kBubbleDebug's doc
-    // comment. Revert to `template.examCode == _kBubbleDebugExamCode` once
-    // this pass is done; a full 72-100 item sheet is a lot of log lines.
     final bubbleDebug = _kBubbleDebug;
     final items = <OmrItemResult>[];
     for (final section in template.sections) {
@@ -3990,8 +4575,10 @@ class OmrDecoder {
 
   /// True when [measured]'s best-to-runner-up gap is too small to call the
   /// item decisively marked -- either by the flat per-exam [ambiguousMargin],
-  /// or (see [_ambiguousRelativeMarginFloor]) by falling well short of the
-  /// item's own presence gap despite a comfortably strong signal.
+  /// by (see [_ambiguousRelativeMarginFloor]) falling well short of the
+  /// item's own presence gap despite a comfortably strong signal, or (see
+  /// [_noCompetitorGapCeiling]) because there simply isn't a real second
+  /// choice regardless of how faint the winner itself is.
   bool _isAmbiguousMargin(_ItemMeasurement measured, double ambiguousMargin) {
     final margin = measured.bestFill - measured.runnerUpFill;
     if (margin >= ambiguousMargin) return false;
@@ -4000,7 +4587,9 @@ class OmrDecoder {
         presenceGap >= _markPresenceGap * _strongPresenceGapMultiplier;
     final decisiveRelativeToOwnSignal =
         strongPresence && (margin / presenceGap) >= _ambiguousRelativeMarginFloor;
-    return !decisiveRelativeToOwnSignal;
+    final runnerUpGapFromFloor = measured.runnerUpFill - measured.floorReference;
+    final noRealCompetitor = runnerUpGapFromFloor < _noCompetitorGapCeiling;
+    return !(decisiveRelativeToOwnSignal || noRealCompetitor);
   }
 
   /// Measures every choice in one item with the same (shiftXPx, shiftYPx)

@@ -1,14 +1,27 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
+import '../../../core/batch/batch_lifecycle.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
 import '../../../core/state/app_state.dart';
 import '../../../models/local_batch.dart';
+import '../../../shared/widgets/form_field_decoration.dart';
 import '../../../shared/widgets/primary_button.dart';
 
 /// Edit Batch screen for Guidance Council users.
-/// Allows editing of existing local batches with status-based restrictions.
+///
+/// Every input has a visible outline in every state (resting, focused,
+/// disabled, error — see [FormFieldStyle]), required fields carry a red `*`,
+/// and problems are explained under the field they belong to.
+///
+/// The batch's status is never picked here: it is derived from the fields
+/// (see [BatchLifecycle]) and shown read-only, with an explanation. The batch
+/// code and exam are fixed once a batch exists; the description and the
+/// expected sheet count stay editable in every status, Archived included —
+/// saving simply re-evaluates the status (and an edited Archived batch is
+/// archived again once its new revision reaches the cloud).
 class EditBatchScreen extends StatefulWidget {
   final LocalBatch? batch;
 
@@ -24,8 +37,6 @@ class _EditBatchScreenState extends State<EditBatchScreen> {
   late final TextEditingController _batchCodeController;
   late final TextEditingController _descriptionController;
   late final TextEditingController _expectedCountController;
-
-  late String _selectedStatus;
 
   bool _isLoading = true;
   bool _isSaving = false;
@@ -55,34 +66,32 @@ class _EditBatchScreenState extends State<EditBatchScreen> {
       _batchCodeController = TextEditingController(text: args.batchCode);
       _descriptionController = TextEditingController(text: args.description);
       _expectedCountController = TextEditingController(text: args.expectedCount.toString());
-      _selectedStatus = args.status;
       _isLoading = false;
     });
   }
 
   @override
   void dispose() {
-    _batchCodeController.dispose();
-    _descriptionController.dispose();
-    _expectedCountController.dispose();
+    if (!_isLoading || _batch != null) {
+      _batchCodeController.dispose();
+      _descriptionController.dispose();
+      _expectedCountController.dispose();
+    }
     super.dispose();
   }
 
   Future<void> _saveBatch() async {
-    if (_batch == null) return;
-    if (!_formKey.currentState!.validate()) {
-      return;
-    }
+    if (_batch == null || _isSaving) return; // ignore repeated taps
+    if (!_formKey.currentState!.validate()) return;
 
     setState(() => _isSaving = true);
 
     try {
-      // Update batch
+      // Status is not passed on: the repository derives it from the saved
+      // fields (Draft/Active), and archiving only follows cloud confirmation.
       final updatedBatch = _batch!.copyWith(
         description: _descriptionController.text.trim(),
-        expectedCount: int.parse(_expectedCountController.text),
-        status: _selectedStatus,
-        updatedAt: DateTime.now(),
+        expectedCount: int.parse(_expectedCountController.text.trim()),
       );
 
       await AppStateScope.of(context).batchRepository.updateBatch(updatedBatch);
@@ -105,50 +114,16 @@ class _EditBatchScreenState extends State<EditBatchScreen> {
     }
   }
 
-  bool _isFieldEditable(String fieldName) {
-    if (_batch == null) return false;
-
-    switch (_batch!.status) {
-      case 'Draft':
-        // All fields editable except exam linkage
-        return fieldName != 'exam';
-      case 'Active':
-        // Description, plus the scan-limit field itself -- this is
-        // deliberately still editable once scanning has started, since
-        // raising it is exactly how a full batch's cap gets increased (see
-        // LocalBatch.hasScanLimit/isFull). Was previously checking for
-        // 'actualCount', which this screen never passes, so this was
-        // silently unreachable and Expected Count went read-only the
-        // moment a batch left Draft.
-        return fieldName == 'description' || fieldName == 'expectedCount';
-      case 'Completed':
-        // Same reasoning as Active -- a batch already marked Completed
-        // (e.g. by the expected-count-reached prompt) still needs its cap
-        // raisable if more sheets show up.
-        return fieldName == 'description' || fieldName == 'expectedCount';
-      case 'Archived':
-        // Nothing editable
-        return false;
-      default:
-        return false;
-    }
-  }
-
-  List<String> _getAvailableStatusOptions() {
-    if (_batch == null) return ['Draft'];
-    
-    switch (_batch!.status) {
-      case 'Draft':
-        return ['Draft', 'Active', 'Archived'];
-      case 'Active':
-        return ['Active', 'Completed', 'Archived'];
-      case 'Completed':
-        return ['Completed', 'Archived'];
-      case 'Archived':
-        return ['Archived'];
-      default:
-        return ['Draft'];
-    }
+  /// What the status would be if the form were saved as it stands now — the
+  /// same rules the repository applies on save.
+  String get _statusIfSaved {
+    final count = int.tryParse(_expectedCountController.text.trim()) ?? 0;
+    final problems = BatchLifecycle.problems(
+      batchCode: _batch!.batchCode,
+      examCode: _batch!.examCode,
+      expectedCount: count,
+    );
+    return BatchLifecycle.statusAfterSave(problems);
   }
 
   @override
@@ -165,8 +140,6 @@ class _EditBatchScreenState extends State<EditBatchScreen> {
       );
     }
 
-    final isArchived = _batch!.isArchived;
-
     return Scaffold(
       backgroundColor: AppColors.lightBg,
       appBar: AppBar(
@@ -174,99 +147,93 @@ class _EditBatchScreenState extends State<EditBatchScreen> {
         foregroundColor: AppColors.textDark,
         elevation: 0.5,
         title: Text('Edit Batch', style: AppTextStyles.heading(size: 13)),
-        actions: [
-          if (isArchived)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              margin: const EdgeInsets.only(right: 16),
-              decoration: BoxDecoration(
-                color: AppColors.textGray.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const FaIcon(FontAwesomeIcons.lock, size: 12, color: AppColors.textGray),
-                  const SizedBox(width: 6),
-                  Text('Read-Only', style: AppTextStyles.body(size: 10, color: AppColors.textGray)),
-                ],
-              ),
-            ),
-        ],
       ),
       body: SafeArea(
         child: Form(
           key: _formKey,
+          autovalidateMode: AutovalidateMode.onUserInteraction,
           child: ListView(
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
             padding: const EdgeInsets.all(16),
             children: [
               _buildSection('Basic Information'),
-              const SizedBox(height: 16),
-              _buildTextField(
-                label: 'Batch Code',
+              const SizedBox(height: 14),
+              TextFormField(
+                key: const Key('editBatch.batchCode'),
                 controller: _batchCodeController,
-                hint: 'e.g., B-2026-001',
-                required: true,
                 enabled: false,
+                decoration: FormFieldStyle.disabled(
+                  label: 'Batch code',
+                  required: true,
+                  helper: 'Assigned when the batch was created and can not be changed.',
+                ),
               ),
-              const SizedBox(height: 12),
-              _buildTextField(
-                label: 'Description',
+              const SizedBox(height: 16),
+              TextFormField(
+                key: const Key('editBatch.description'),
                 controller: _descriptionController,
-                hint: 'e.g., Morning Session A',
-                required: false,
-                enabled: _isFieldEditable('description'),
+                textInputAction: TextInputAction.next,
+                textCapitalization: TextCapitalization.sentences,
+                maxLength: 120,
+                decoration: FormFieldStyle.decoration(
+                  label: 'Description (optional)',
+                  hint: 'e.g., Morning Session A',
+                  helper: 'Optional. Does not affect the batch status.',
+                ),
               ),
-              const SizedBox(height: 16),
-              _buildSection('Exam Information'),
-              const SizedBox(height: 16),
-              _buildInfoField('Exam Code', _batch!.examCode),
               const SizedBox(height: 8),
+              _buildSection('Exam Information'),
+              const SizedBox(height: 14),
+              _buildInfoField('Exam Code', _batch!.examCode),
+              const SizedBox(height: 10),
               _buildInfoField('Exam Title', _batch!.examTitle),
-              const SizedBox(height: 16),
+              const SizedBox(height: 20),
               _buildSection('Batch Configuration'),
-              const SizedBox(height: 16),
+              const SizedBox(height: 14),
               Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Expanded(
-                    child: _buildNumberField(
-                      label: 'Expected Count',
+                    child: TextFormField(
+                      key: const Key('editBatch.expectedCount'),
                       controller: _expectedCountController,
-                      required: true,
-                      enabled: _isFieldEditable('expectedCount'),
-                      // This is a hard scan-count cap (LocalBatch.isFull),
-                      // not just an estimate any more -- it must never be
-                      // droppable below scans already saved, or a batch
-                      // that already holds N scans would end up unable to
-                      // even display its own existing sheets as "within
-                      // the limit".
-                      minValue: _batch!.scanCount,
+                      keyboardType: TextInputType.number,
+                      inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(5)],
+                      textInputAction: TextInputAction.done,
+                      onChanged: (_) => setState(() {}), // refresh the status preview
+                      onFieldSubmitted: (_) => _saveBatch(),
+                      decoration: FormFieldStyle.decoration(
+                        label: 'Expected sheets',
+                        required: true,
+                        // The count is a hard scan cap (LocalBatch.isFull), so
+                        // it can never go below the sheets already saved.
+                        helper: _batch!.scanCount > 0 ? 'At least ${_batch!.scanCount} (already scanned).' : null,
+                      ),
+                      validator: (value) {
+                        final t = value?.trim() ?? '';
+                        if (t.isEmpty) return 'Required. Enter how many sheets to expect.';
+                        final number = int.tryParse(t);
+                        if (number == null || number <= 0) return 'Enter a whole number greater than zero.';
+                        if (number < _batch!.scanCount) {
+                          return 'Must be at least ${_batch!.scanCount}, the sheets already saved.';
+                        }
+                        return null;
+                      },
                     ),
                   ),
                   const SizedBox(width: 12),
-                  Expanded(
-                    child: _buildInfoField('Scans Captured', '${_batch!.scanCount}'),
-                  ),
+                  Expanded(child: _buildInfoField('Scans captured', '${_batch!.scanCount}')),
                 ],
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 20),
               _buildSection('Status'),
-              const SizedBox(height: 16),
-              _buildDropdown(
-                label: 'Batch Status',
-                value: _selectedStatus,
-                items: _getAvailableStatusOptions(),
-                onChanged: (value) {
-                  if (value != null) setState(() => _selectedStatus = value);
-                },
-                enabled: !isArchived,
-              ),
+              const SizedBox(height: 14),
+              _buildStatusCard(),
               const SizedBox(height: 24),
-              if (!isArchived)
-                PrimaryButton(
-                  label: _isSaving ? 'Saving...' : 'Save Changes',
-                  onPressed: _isSaving ? null : _saveBatch,
-                ),
+              PrimaryButton(
+                label: _isSaving ? 'Saving...' : 'Save Changes',
+                onPressed: _isSaving ? null : _saveBatch,
+              ),
               const SizedBox(height: 16),
             ],
           ),
@@ -282,199 +249,63 @@ class _EditBatchScreenState extends State<EditBatchScreen> {
     );
   }
 
-  Widget _buildTextField({
-    required String label,
-    required TextEditingController controller,
-    String? hint,
-    bool required = false,
-    bool enabled = true,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Text(label, style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600)),
-            if (required)
-              Text(' *', style: AppTextStyles.body(size: 10.5, color: Colors.red)),
-            if (!enabled)
-              Text(' (Read-only)', style: AppTextStyles.body(size: 9, color: AppColors.textGray)),
-          ],
-        ),
-        const SizedBox(height: 6),
-        TextField(
-          controller: controller,
-          enabled: enabled,
-          decoration: InputDecoration(
-            hintText: hint,
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: AppColors.cardBorder),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: AppColors.cardBorder),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: AppColors.primaryGreen),
-            ),
-            disabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: AppColors.cardBorder.withOpacity(0.5)),
-            ),
-            filled: !enabled,
-            fillColor: AppColors.lightBg.withOpacity(0.5),
-            contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildNumberField({
-    required String label,
-    required TextEditingController controller,
-    bool required = false,
-    bool enabled = true,
-    // Rejects any value below this (in addition to the required/positive
-    // checks below) — used for Expected Count so it can never drop below
-    // scans already saved (see the scan-limit cap this field enforces).
-    int? minValue,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Text(label, style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600)),
-            if (required)
-              Text(' *', style: AppTextStyles.body(size: 10.5, color: Colors.red)),
-            if (!enabled)
-              Text(' (Read-only)', style: AppTextStyles.body(size: 9, color: AppColors.textGray)),
-          ],
-        ),
-        const SizedBox(height: 6),
-        TextFormField(
-          controller: controller,
-          keyboardType: TextInputType.number,
-          enabled: enabled,
-          decoration: InputDecoration(
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: AppColors.cardBorder),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: AppColors.cardBorder),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: AppColors.primaryGreen),
-            ),
-            disabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: AppColors.cardBorder.withOpacity(0.5)),
-            ),
-            filled: !enabled,
-            fillColor: AppColors.lightBg.withOpacity(0.5),
-            contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          ),
-          validator: required
-              ? (value) {
-                  if (value == null || value.trim().isEmpty) {
-                    return 'Required';
-                  }
-                  final number = int.tryParse(value);
-                  if (number == null || number <= 0) {
-                    return 'Enter a valid number';
-                  }
-                  if (minValue != null && number < minValue) {
-                    return 'Must be at least $minValue (scans already saved)';
-                  }
-                  return null;
-                }
-              : null,
-        ),
-      ],
-    );
-  }
-
   Widget _buildInfoField(String label, String value) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(label, style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600)),
-        const SizedBox(height: 6),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          decoration: BoxDecoration(
-            color: AppColors.lightBg,
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: AppColors.cardBorder),
-          ),
-          child: Text(
-            value,
-            style: AppTextStyles.body(size: 11),
-          ),
-        ),
-      ],
+    return InputDecorator(
+      decoration: FormFieldStyle.disabled(label: label),
+      child: Text(value, style: AppTextStyles.body(size: 12)),
     );
   }
 
-  Widget _buildDropdown({
-    required String label,
-    required String value,
-    required List<String> items,
-    required void Function(String?)? onChanged,
-    bool enabled = true,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Text(label, style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600)),
-            if (!enabled)
-              Text(' (Read-only)', style: AppTextStyles.body(size: 9, color: AppColors.textGray)),
-          ],
-        ),
-        const SizedBox(height: 6),
-        DropdownButtonFormField<String>(
-          value: value,
-          decoration: InputDecoration(
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: AppColors.cardBorder),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: AppColors.cardBorder),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: AppColors.primaryGreen),
-            ),
-            disabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: AppColors.cardBorder.withOpacity(0.5)),
-            ),
-            filled: !enabled,
-            fillColor: AppColors.lightBg.withOpacity(0.5),
-            contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+  /// The batch's status, read-only, with the rule that produced it.
+  Widget _buildStatusCard() {
+    final current = _batch!.status;
+    final ifSaved = _statusIfSaved;
+    final String explanation = switch (ifSaved) {
+      BatchLifecycle.draft => 'Draft: a required field is missing or invalid. '
+          'Fill in every field marked * to make this batch Active.',
+      _ => 'Active: every required field is filled in. The batch becomes Archived '
+          'automatically once the cloud has confirmed this saved version.',
+    };
+    return Container(
+      key: const Key('editBatch.statusCard'),
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: FormFieldStyle.disabledFill,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: FormFieldStyle.disabledBorder, width: FormFieldStyle.restingWidth),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const FaIcon(FontAwesomeIcons.lock, size: 11, color: AppColors.textGray),
+              const SizedBox(width: 8),
+              Text('Current status: ', style: AppTextStyles.body(size: 11, color: AppColors.textGray)),
+              Text(current, style: AppTextStyles.body(size: 11.5, weight: FontWeight.w800)),
+            ],
           ),
-          items: items.map((item) {
-            return DropdownMenuItem(
-              value: item,
-              child: Text(
-                item,
-                style: AppTextStyles.body(size: 11),
-              ),
-            );
-          }).toList(),
-          onChanged: enabled ? onChanged : null,
-        ),
-      ],
+          const SizedBox(height: 6),
+          Text(
+            'Set automatically — it can not be chosen by hand.',
+            style: AppTextStyles.body(size: 10.5, color: AppColors.textGray),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'If saved now: $explanation',
+            key: const Key('editBatch.statusExplanation'),
+            style: AppTextStyles.body(size: 10.5),
+          ),
+          if (current == BatchLifecycle.archived) ...[
+            const SizedBox(height: 8),
+            Text(
+              'This batch is Archived. Saving a change makes it Active again until the change reaches the cloud.',
+              style: AppTextStyles.body(size: 10.5, color: AppColors.textGray),
+            ),
+          ],
+        ],
+      ),
     );
   }
 }

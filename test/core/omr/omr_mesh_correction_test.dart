@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:guidegrade/core/omr/omr_mesh_correction.dart';
 import 'package:guidegrade/core/omr/omr_templates.dart';
+import 'package:guidegrade/core/omr/omr_tat_legacy_template.dart';
 
 /// Regression coverage for the redesigned-sheet local mesh correction
 /// (see OmrMeshCorrection's own doc comment). Pure geometry/math, no
@@ -15,7 +16,7 @@ import 'package:guidegrade/core/omr/omr_templates.dart';
 /// plan notes).
 void main() {
   final at = omrTemplates['AT']!;
-  final tat = omrTemplates['TAT']!;
+  final tat = legacyTatTemplate;
   final canonicalWidth = at.pageWidthPt.round();
   final canonicalHeight = at.pageHeightPt.round();
 
@@ -29,7 +30,7 @@ void main() {
       }
     });
 
-    test('TAT (unaffected by the AT/QTM redesign) has no interior fiducials', () {
+    test('archived TAT v1 retains its original no-mesh behavior', () {
       expect(tat.interiorFiducials, isEmpty);
     });
 

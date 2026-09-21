@@ -110,6 +110,65 @@ class _ThrowingSyncClient implements SyncClient {
   Future<SyncOutcome> deleteBatch(String batchId) => _no();
   @override
   Future<SyncOutcome> deleteStoragePrefix(String batchId) => _no();
+  @override
+  Future<CloudExamineesRead> readCloudExaminees() async =>
+      throw StateError('no network in AppState sync-wiring tests');
+  @override
+  Future<CloudExamineeWrite> createExamineeFromScan({
+    required String batchId,
+    required String scanId,
+    required String firstName,
+    String? middleName,
+    required String lastName,
+  }) async =>
+      throw StateError('no network in AppState sync-wiring tests');
+  @override
+  Future<CloudExamineeWrite> updateCloudExaminee({
+    required String id,
+    required String firstName,
+    String? middleName,
+    required String lastName,
+  }) async =>
+      throw StateError('no network in AppState sync-wiring tests');
+  @override
+  Future<CloudExamineeWrite> setExamineeArchived(String id, bool archived) async =>
+      throw StateError('no network in AppState sync-wiring tests');
+  @override
+  Future<SyncOutcome> linkScanToExaminee({
+    required String batchId,
+    required String scanId,
+    required String? examineeId,
+  }) =>
+      _no();
+  @override
+  Future<SyncOutcome> unlinkScanFromExaminee({
+    required String batchId,
+    required String scanId,
+    required String examineeId,
+  }) async =>
+      throw StateError('no network in AppState sync-wiring tests');
+
+  @override
+  Future<CloudBatchArchivesRead> readBatchArchives() async =>
+      throw StateError('no network in AppState sync-wiring tests');
+
+  @override
+  Future<SyncOutcome> archiveBatch({
+    required String batchId,
+    String? reason,
+  }) async =>
+      throw StateError('no network in AppState sync-wiring tests');
+
+  @override
+  Future<CloudScanCountsRead> readScanCounts(List<String> batchIds) async =>
+      throw StateError('no network in AppState sync-wiring tests');
+
+  @override
+  Future<CloudScansRead> readCloudScansForExaminee(String examineeId) async =>
+      throw StateError('no network in AppState sync-wiring tests');
+  @override
+  Future<CloudScansRead> readUnlinkedScans() async =>
+      throw StateError('no network in AppState sync-wiring tests');
 }
 
 UserModel _user({required String role, bool active = true}) => UserModel(

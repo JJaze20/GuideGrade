@@ -1,115 +1,84 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:guidegrade/core/omr/omr_templates.dart';
 
-/// Regression checks for the AT/QTM "clip the caption strip off the top"
-/// fix (see generate_sheets.dart's clipCaptionTop/kNameCaptionHeight and
-/// omr_templates.dart's generated note). These assert the crop-box
-/// geometry itself, not OCR behavior -- cleanNameOcrText's own tests cover
-/// the text-cleanup fallback.
-typedef _OriginalBox = ({double x, double y, double w, double h});
+/// Goldens for the Last Name / First Name / Middle Name crop rectangles of
+/// every sheet. These are the shipped values themselves (writing space only,
+/// printed captions excluded), recorded as fixed numbers rather than
+/// re-derived from layout constants, so a layout change can not silently move
+/// the crops that staff read names from. They assert crop-box geometry, not
+/// OCR behavior.
+///
+/// Every sheet has ONE row of open name fields (no per-letter cells, so every
+/// box count is 0). AT and QTM give the Middle Name field room for a full name
+/// rather than an initial; TAT's v5 row keeps its short M.I. box.
+typedef _Rect = ({double x, double y, double w, double h});
 
-void _expectTopClippedOnly(
-  OmrFieldRect rect,
-  _OriginalBox original,
-  String label,
-) {
-  expect(
-    rect.xFrac,
-    closeTo(original.x, 1e-5),
-    reason: '$label: left edge must not move',
-  );
-  expect(
-    rect.widthFrac,
-    closeTo(original.w, 1e-5),
-    reason: '$label: width must not change',
-  );
-  expect(
-    rect.yFrac,
-    greaterThan(original.y),
-    reason: '$label: top edge must move down',
-  );
-  expect(
-    rect.yFrac + rect.heightFrac,
-    closeTo(original.y + original.h, 1e-5),
-    reason: '$label: bottom edge must stay put',
-  );
-  expect(
-    rect.heightFrac,
-    lessThan(original.h),
-    reason: '$label: height must shrink to match the raised top',
-  );
+void _expectRect(OmrFieldRect r, _Rect e, String label) {
+  expect(r.xFrac, closeTo(e.x, 1e-5), reason: '$label x');
+  expect(r.yFrac, closeTo(e.y, 1e-5), reason: '$label y');
+  expect(r.widthFrac, closeTo(e.w, 1e-5), reason: '$label width');
+  expect(r.heightFrac, closeTo(e.h, 1e-5), reason: '$label height');
 }
 
-/// Shared by AT and QTM (both now use the same two-row boxed Last Name/
-/// (First Name+MI) header design, each with its own dedicated caption/box
-/// split -- see generate_sheets.dart's _paintSimpleHeader/_paintQtmHeader).
-void _testRedesignedNameCrop(
+void _testNameCrops(
   String examCode,
-  _OriginalBox originalLastName,
-  _OriginalBox originalFirstName,
-  _OriginalBox originalMi,
-) {
-  group('$examCode name-field crops (caption removed from the top only)', () {
+  _Rect last,
+  _Rect first,
+  _Rect middle, {
+  double? minMiddleWidthPt,
+}) {
+  group('$examCode name-field crops', () {
     final exam = omrTemplates[examCode]!;
 
-    test('lastNameFieldRect: only the top edge moves', () {
-      _expectTopClippedOnly(exam.lastNameFieldRect, originalLastName, 'lastName');
-    });
-    test('firstNameFieldRect: only the top edge moves', () {
-      _expectTopClippedOnly(exam.firstNameFieldRect, originalFirstName, 'firstName');
-    });
-    test('middleInitialFieldRect: only the top edge moves', () {
-      _expectTopClippedOnly(exam.middleInitialFieldRect, originalMi, 'middleInitial');
+    test('last name, first name and middle name rectangles', () {
+      _expectRect(exam.lastNameFieldRect, last, 'lastName');
+      _expectRect(exam.firstNameFieldRect, first, 'firstName');
+      _expectRect(exam.middleNameFieldRect, middle, 'middleName');
     });
 
-    test('inset clears the caption baseline without eating the whole row', () {
-      for (final MapEntry(key: rect, value: original) in {
-        exam.lastNameFieldRect: originalLastName,
-        exam.firstNameFieldRect: originalFirstName,
-        exam.middleInitialFieldRect: originalMi,
-      }.entries) {
-        final insetPt = (rect.yFrac - original.y) * exam.pageHeightPt;
-        // The caption's own baseline sits 10pt down (_paintSimpleHeader/
-        // _paintQtmHeader); the inset must clear at least that. It must
-        // also leave more than half the original row height for
-        // handwriting -- a much bigger inset would mean tall ascenders
-        // written right under the caption get cut off by the crop itself.
-        expect(insetPt, greaterThanOrEqualTo(10.0));
-        expect(insetPt, lessThan(original.h * exam.pageHeightPt / 2));
-      }
+    test('no letter cells: every box count is 0', () {
+      expect(exam.lastNameBoxCount, 0);
+      expect(exam.firstNameBoxCount, 0);
+      expect(exam.middleNameBoxCount, 0);
     });
+
+    test('the three fields share one row and sit edge to edge', () {
+      final l = exam.lastNameFieldRect, f = exam.firstNameFieldRect, m = exam.middleNameFieldRect;
+      expect(l.yFrac, f.yFrac);
+      expect(f.yFrac, m.yFrac);
+      expect(l.heightFrac, f.heightFrac);
+      expect(l.xFrac + l.widthFrac, closeTo(f.xFrac, 1e-4));
+      expect(f.xFrac + f.widthFrac, closeTo(m.xFrac, 1e-4));
+    });
+
+    if (minMiddleWidthPt != null) {
+      test('the middle name field is long enough for a full name (>= $minMiddleWidthPt pt)', () {
+        expect(exam.middleNameFieldRect.widthFrac * exam.pageWidthPt, greaterThanOrEqualTo(minMiddleWidthPt));
+      });
+    }
   });
 }
 
 void main() {
-  // Original (pre-fix, full-box) rects, recorded as fixed goldens rather
-  // than re-derived from layout constants -- this should only fail if the
-  // actual shipped AT/QTM fractions regress, not because of an unrelated
-  // layout change elsewhere. Last Name has its own full-width row; First
-  // Name/MI share the row below it, so their original y differs from Last
-  // Name's.
-  _testRedesignedNameCrop(
+  _testNameCrops(
     'AT',
-    (x: 0.07391, y: 0.10690, w: 0.75931, h: 0.04039),
-    (x: 0.07391, y: 0.14966, w: 0.64541, h: 0.04039),
-    (x: 0.71933, y: 0.14966, w: 0.11390, h: 0.04039),
+    (x: 0.07391, y: 0.12353, w: 0.31132, h: 0.02376),
+    (x: 0.38523, y: 0.12353, w: 0.31132, h: 0.02376),
+    (x: 0.69655, y: 0.12353, w: 0.13668, h: 0.02376),
+    minMiddleWidthPt: 80,
   );
-  _testRedesignedNameCrop(
+  _testNameCrops(
     'QTM',
-    (x: 0.07190, y: 0.10256, w: 0.75817, h: 0.03633),
-    (x: 0.07190, y: 0.14102, w: 0.64444, h: 0.03633),
-    (x: 0.71634, y: 0.14102, w: 0.11373, h: 0.03633),
+    (x: 0.07190, y: 0.11752, w: 0.31085, h: 0.02137),
+    (x: 0.38275, y: 0.11752, w: 0.31085, h: 0.02137),
+    (x: 0.69359, y: 0.11752, w: 0.13647, h: 0.02137),
+    minMiddleWidthPt: 80,
   );
-
-  group('TAT name-field crop is untouched (AT/QTM-only fix)', () {
-    test('TAT keeps its original full-box crop', () {
-      final tat = omrTemplates['TAT']!;
-      expect(tat.lastNameFieldRect.xFrac, closeTo(0.04701, 1e-5));
-      expect(tat.lastNameFieldRect.yFrac, closeTo(0.13889, 1e-5));
-      expect(tat.lastNameFieldRect.widthFrac, closeTo(0.29808, 1e-5));
-      expect(tat.lastNameFieldRect.heightFrac, closeTo(0.02451, 1e-5));
-      expect(tat.firstNameFieldRect.yFrac, closeTo(0.13889, 1e-5));
-      expect(tat.middleInitialFieldRect.yFrac, closeTo(0.13889, 1e-5));
-    });
-  });
+  // TAT (portrait v5): straight from the sheet's geometry JSON.
+  _testNameCrops(
+    'TAT',
+    (x: 0.07843, y: 0.11325, w: 0.24510, h: 0.02350),
+    (x: 0.32353, y: 0.11325, w: 0.24510, h: 0.02350),
+    (x: 0.56863, y: 0.11325, w: 0.05882, h: 0.02350),
+  );
 }

@@ -8,9 +8,16 @@ import '../../../core/services/auth_service.dart';
 import '../../../core/state/app_state.dart';
 import '../../../models/user.dart';
 
-/// Admin Login screen for web platform.
-/// This is specifically designed for the web admin console with a more
-/// desktop-friendly layout and admin-focused authentication.
+/// Web login screen — the single entry point for BOTH Web-authorized
+/// roles (`system_admin` and `guidance_council`; see [AppRoutes]). Kept as
+/// one screen rather than two, per the smallest-safe-change approach: it
+/// authenticates via [AuthService.signInForWeb] (no role is requested or
+/// assumed at sign-in time) and then routes purely by whichever role the
+/// account's own Firestore document actually has ([_navigateAfterLogin]) —
+/// never a value chosen by the person signing in. A `system_admin` account
+/// still lands on exactly the same [AdminDashboardScreen] as before this
+/// change; only a `guidance_council` account signing in here is new
+/// behavior (routes to `GuidanceWebHomeScreen`).
 class AdminLoginScreen extends StatefulWidget {
   const AdminLoginScreen({super.key});
 
@@ -25,12 +32,6 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
 
   bool _obscurePassword = true;
   bool _isLoading = false;
-
-  @override
-  void initState() {
-    super.initState();
-    print('AdminLoginScreen initialized');
-  }
 
   @override
   void dispose() {
@@ -60,23 +61,24 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
     final password = _passwordController.text;
 
     if (email.isEmpty || password.isEmpty) {
-      _showError('Enter your admin email and password.');
+      _showError('Enter your email and password.');
       return;
     }
 
     _runAuth(
-      () => _authService.signInWithEmail(email: email, password: password, requiredRole: 'system_admin'),
+      () => _authService.signInForWeb(email: email, password: password),
     );
   }
 
-  // AuthService has already confirmed [user] is approved, active, AND
-  // specifically 'system_admin' by the time this runs — a guidance_council
-  // account is denied with a WrongPortalException before ever reaching
-  // here (see AuthService._authorize), so there's no non-admin case left
-  // to branch on: every successful call always lands on the Admin Dashboard.
+  // AuthService has already confirmed [user] is approved and active by the
+  // time this runs (see AuthService.signInForWeb/_authorize) — but, unlike
+  // before this screen became the shared Web login, [user] may now be
+  // EITHER known role. Route by the account's own role, never a value
+  // chosen at sign-in.
   void _navigateAfterLogin(UserModel user) {
     AppStateScope.of(context).setCurrentUser(user);
-    Navigator.of(context).pushNamedAndRemoveUntil(AppRoutes.adminDashboard, (route) => false);
+    final destination = user.role == 'system_admin' ? AppRoutes.adminDashboard : AppRoutes.guidanceWebHome;
+    Navigator.of(context).pushNamedAndRemoveUntil(destination, (route) => false);
   }
 
   void _showError(String message) {
@@ -89,7 +91,6 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
 
   @override
   Widget build(BuildContext context) {
-    print('AdminLoginScreen build called');
     return Scaffold(
       backgroundColor: AppColors.darkNavy,
       body: Center(
@@ -147,7 +148,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
               ),
               const SizedBox(height: 12),
               Text(
-                'Admin Console',
+                'Web Console',
                 style: AppTextStyles.heading(size: 18, color: Colors.white),
                 textAlign: TextAlign.center,
               ),
@@ -180,18 +181,18 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Text(
-                      'Admin Sign In',
+                      'Sign In',
                       style: AppTextStyles.heading(size: 16),
                       textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 24),
-                    
+
                     TextField(
                       controller: _emailController,
                       enabled: !_isLoading,
                       decoration: InputDecoration(
-                        labelText: 'Admin Email',
-                        hintText: 'admin@ndmu.edu.ph',
+                        labelText: 'Email',
+                        hintText: 'you@ndmu.edu.ph',
                         prefixIcon: const Icon(Icons.email_outlined),
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(8),
@@ -254,7 +255,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
                               ),
                             )
                           : const Text(
-                              'SIGN IN TO ADMIN CONSOLE',
+                              'SIGN IN',
                               style: TextStyle(
                                 fontSize: 14,
                                 fontWeight: FontWeight.w700,

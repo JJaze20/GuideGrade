@@ -6,6 +6,9 @@ import 'package:flutter/material.dart';
 import '../../../core/omr/omr_mesh_correction.dart';
 import '../../../core/omr/omr_scorer.dart';
 import '../../../core/omr/omr_templates.dart';
+import '../../../models/answer_correction.dart';
+import '../../../models/local_batch.dart';
+import '../widgets/answer_correction_sheet.dart';
 
 /// Full-screen viewer for one originally-captured OMR sheet photo, so staff
 /// can manually verify a scan (marked bubbles, unclear/ambiguous marks)
@@ -29,7 +32,7 @@ import '../../../core/omr/omr_templates.dart';
 /// (older scans, or rectification failed for this sheet -- see
 /// [AppState.rectifiedImagePaths]) this falls back to the plain photo with
 /// no overlay, exactly as before.
-class ScannedImageViewerScreen extends StatelessWidget {
+class ScannedImageViewerScreen extends StatefulWidget {
   /// The original sheet photo, as a file path (an in-session, not-yet
   /// persisted capture) or already-loaded bytes (an archived scan, whose
   /// image is decrypted before this screen ever sees it — see
@@ -54,6 +57,12 @@ class ScannedImageViewerScreen extends StatelessWidget {
   final String? scanTemplateVersion;
   final Map<String, (double, double)>? meshInteriorMeasuredFrac;
 
+  /// When given, answers can be corrected from this screen: tap an item's
+  /// bubbles/number on the sheet, or its row in the answer-key drawer. The
+  /// items shown are then recomputed from the scan's corrected reading after
+  /// every change ([scoredItems] is only the starting point). Null = view-only.
+  final ScanEditing? editing;
+
   const ScannedImageViewerScreen({
     super.key,
     this.imagePath,
@@ -65,10 +74,41 @@ class ScannedImageViewerScreen extends StatelessWidget {
     this.template,
     this.scanTemplateVersion,
     this.meshInteriorMeasuredFrac,
+    this.editing,
   }) : assert(
-          imagePath != null || imageBytes != null,
-          'ScannedImageViewerScreen needs either imagePath or imageBytes.',
-        );
+         imagePath != null || imageBytes != null,
+         'ScannedImageViewerScreen needs either imagePath or imageBytes.',
+       );
+
+  @override
+  State<ScannedImageViewerScreen> createState() => _ScannedImageViewerScreenState();
+}
+
+class _ScannedImageViewerScreenState extends State<ScannedImageViewerScreen> {
+  late LocalScan? _scan = widget.editing?.scan;
+
+  String? get imagePath => widget.imagePath;
+  Uint8List? get imageBytes => widget.imageBytes;
+  String get title => widget.title;
+  String? get rectifiedImagePath => widget.rectifiedImagePath;
+  Uint8List? get rectifiedImageBytes => widget.rectifiedImageBytes;
+  OmrExamTemplate? get template => widget.template;
+  String? get scanTemplateVersion => widget.scanTemplateVersion;
+  ScanEditing? get editing => widget.editing;
+
+  /// Items as they read NOW: recomputed from the detected answers plus this
+  /// capture's corrections through the unchanged scorer whenever the screen
+  /// can edit; the caller's list otherwise.
+  List<ScoredItem> get scoredItems {
+    final e = editing;
+    final scan = _scan;
+    if (e == null || scan == null) return widget.scoredItems;
+    return scoreOmrResult(scan.effectiveDecoded, e.answerKey).items;
+  }
+
+  /// A correction never moves the bubbles, so the mesh readings the scan was
+  /// decoded with stay right for the overlay.
+  Map<String, (double, double)>? get meshInteriorMeasuredFrac => widget.meshInteriorMeasuredFrac;
 
   /// True only when the scan's own recorded template version still
   /// matches [template]'s current one (or the scan predates version
@@ -77,22 +117,83 @@ class ScannedImageViewerScreen extends StatelessWidget {
   /// plain rectified image; it just skips the overlay/mesh correction
   /// rather than risk drawing it with coordinates from a sheet layout
   /// that has since changed underneath it.
+  OmrExamTemplate? get _overlayTemplate {
+    final t = template;
+    // widget.scoredItems, not the recomputing scoredItems getter: a correction
+    // never changes an item's section name, and this getter runs several times
+    // per build.
+    final items = widget.scoredItems;
+    if (t == null || items.isEmpty) return null;
+    // Legacy-aware selector: pre-redesign AT/QTM scans resolve to their
+    // historical geometry, versioned scans to the layout they were captured
+    // against, and TAT versions through the template registry.
+    return overlayTemplateForScan(
+      t,
+      scanTemplateVersion: scanTemplateVersion,
+      sectionName: items.first.sectionName,
+    );
+  }
+
   bool get _templateStillMatches =>
-      scanTemplateVersion == null || template == null || scanTemplateVersion == template!.templateVersion;
+      (scanTemplateVersion == null && template?.examCode != 'TAT') ||
+      (scanTemplateVersion != null && scanTemplateVersion == _overlayTemplate?.templateVersion);
 
   bool get _hasOverlay =>
       (rectifiedImagePath != null || rectifiedImageBytes != null) &&
-      template != null &&
+      _overlayTemplate != null &&
       _templateStillMatches &&
       scoredItems.any((i) => i.correctChoice != null);
 
-  Widget _mainImage() => imageBytes != null ? Image.memory(imageBytes!) : Image.file(File(imagePath!));
+  Widget _mainImage() => imageBytes != null
+      ? Image.memory(imageBytes!)
+      : Image.file(File(imagePath!));
 
-  Widget _rectifiedImage() =>
-      rectifiedImageBytes != null ? Image.memory(rectifiedImageBytes!) : Image.file(File(rectifiedImagePath!));
+  Widget _rectifiedImage() => rectifiedImageBytes != null
+      ? Image.memory(rectifiedImageBytes!)
+      : Image.file(File(rectifiedImagePath!));
+
+  bool get _canEdit => editing != null && _scan != null && _overlayTemplate != null;
+
+  Future<void> _openItem(String sectionName, int itemNumber) async {
+    final e = editing;
+    final scan = _scan;
+    final tpl = _overlayTemplate;
+    if (e == null || scan == null || tpl == null) return;
+    final updated = await editScanItem(
+      context,
+      editing: e,
+      scan: scan,
+      template: tpl,
+      sectionName: sectionName,
+      itemNumber: itemNumber,
+      rectifiedBytes: rectifiedImageBytes,
+      rectifiedPath: rectifiedImagePath,
+    );
+    if (updated != null && mounted) setState(() => _scan = updated);
+  }
+
+  /// The overlay item whose row (badge, number gutter and bubbles) was tapped.
+  void _onOverlayTap(Offset local, Size size) {
+    final items = scoredItems;
+    final tpl = _overlayTemplate;
+    if (tpl == null) return;
+    final hit = _GradedOverlayPainter.itemAt(
+      point: local,
+      size: size,
+      items: items,
+      template: tpl,
+      meshInteriorMeasuredFrac: meshInteriorMeasuredFrac,
+    );
+    if (hit != null) _openItem(hit.sectionName, hit.itemNumber);
+  }
 
   @override
   Widget build(BuildContext context) {
+    final items = scoredItems;
+    final corrected = <String>{
+      if (_scan != null)
+        ...CorrectionRules.activeFor(_scan!.corrections, _scan!.captureRevision).keys,
+    };
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
@@ -101,27 +202,38 @@ class ScannedImageViewerScreen extends StatelessWidget {
         elevation: 0,
         title: Text(title),
         actions: [
-          if (scoredItems.isNotEmpty)
+          if (items.isNotEmpty)
             Builder(
               builder: (context) => IconButton(
                 icon: const Icon(Icons.fact_check_outlined),
-                tooltip: 'Answer key',
+                tooltip: _canEdit ? 'Answer key and corrections' : 'Answer key',
                 onPressed: () => Scaffold.of(context).openEndDrawer(),
               ),
             ),
         ],
       ),
-      endDrawer: scoredItems.isNotEmpty
+      endDrawer: items.isNotEmpty
           ? Drawer(
               backgroundColor: const Color(0xFF111827),
-              width: 220,
-              child: SafeArea(child: _AnswerKeyPanel(items: scoredItems)),
+              width: 240,
+              child: SafeArea(
+                child: _AnswerKeyPanel(
+                  items: items,
+                  correctedKeys: corrected,
+                  onTapItem: _canEdit
+                      ? (item) {
+                          Navigator.of(context).pop(); // close the drawer
+                          _openItem(item.sectionName, item.itemNumber);
+                        }
+                      : null,
+                ),
+              ),
             )
           : null,
       body: SafeArea(
         child: Column(
           children: [
-            if (_hasOverlay) const _GradedOverlayLegend(),
+            if (_hasOverlay) _GradedOverlayLegend(editable: _canEdit),
             Expanded(
               child: InteractiveViewer(
                 minScale: 1,
@@ -132,11 +244,20 @@ class ScannedImageViewerScreen extends StatelessWidget {
                           children: [
                             _rectifiedImage(),
                             Positioned.fill(
-                              child: CustomPaint(
-                                painter: _GradedOverlayPainter(
-                                  items: scoredItems,
-                                  template: template!,
-                                  meshInteriorMeasuredFrac: meshInteriorMeasuredFrac,
+                              child: LayoutBuilder(
+                                builder: (context, box) => GestureDetector(
+                                  behavior: HitTestBehavior.opaque,
+                                  onTapUp: _canEdit
+                                      ? (d) => _onOverlayTap(d.localPosition, Size(box.maxWidth, box.maxHeight))
+                                      : null,
+                                  child: CustomPaint(
+                                    painter: _GradedOverlayPainter(
+                                      items: items,
+                                      template: _overlayTemplate!,
+                                      meshInteriorMeasuredFrac: meshInteriorMeasuredFrac,
+                                      correctedKeys: corrected,
+                                    ),
+                                  ),
                                 ),
                               ),
                             ),
@@ -156,7 +277,8 @@ class ScannedImageViewerScreen extends StatelessWidget {
 /// Small always-visible key for the overlay's colors, so "green/red/yellow"
 /// isn't left for staff to guess.
 class _GradedOverlayLegend extends StatelessWidget {
-  const _GradedOverlayLegend();
+  final bool editable;
+  const _GradedOverlayLegend({this.editable = false});
 
   @override
   Widget build(BuildContext context) {
@@ -164,13 +286,26 @@ class _GradedOverlayLegend extends StatelessWidget {
       width: double.infinity,
       color: const Color(0xFF111827),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      child: Wrap(
-        spacing: 14,
-        runSpacing: 4,
-        children: const [
-          _LegendDot(color: Color(0xFF16A34A), label: 'Correct'),
-          _LegendDot(color: Color(0xFFDC2626), label: 'Wrong'),
-          _LegendDot(color: Color(0xFFEAB308), label: 'Correct answer'),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Wrap(
+            spacing: 14,
+            runSpacing: 4,
+            children: [
+              _LegendDot(color: Color(0xFF16A34A), label: 'Correct'),
+              _LegendDot(color: Color(0xFFDC2626), label: 'Wrong'),
+              // The yellow ring is the KEY's answer, never the student's mark.
+              _LegendDot(color: Color(0xFFEAB308), label: 'Answer key (not the student’s mark)'),
+            ],
+          ),
+          if (editable) ...[
+            const SizedBox(height: 4),
+            const Text(
+              'Tap a question to correct what was read. Grading follows the answer key.',
+              style: TextStyle(color: Colors.white54, fontSize: 10, fontWeight: FontWeight.w600),
+            ),
+          ],
         ],
       ),
     );
@@ -193,7 +328,14 @@ class _LegendDot extends StatelessWidget {
           decoration: BoxDecoration(color: color, shape: BoxShape.circle),
         ),
         const SizedBox(width: 5),
-        Text(label, style: const TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.w600)),
+        Text(
+          label,
+          style: const TextStyle(
+            color: Colors.white70,
+            fontSize: 10,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
       ],
     );
   }
@@ -224,11 +366,72 @@ class _GradedOverlayPainter extends CustomPainter {
   /// after the primary 4-corner homography).
   final Map<String, (double, double)>? meshInteriorMeasuredFrac;
 
+  /// Items (section|number keys) whose reading was manually corrected; they
+  /// get a small blue dot so a corrected result is never mistaken for a
+  /// machine-read one.
+  final Set<String> correctedKeys;
+
   const _GradedOverlayPainter({
     required this.items,
     required this.template,
     this.meshInteriorMeasuredFrac,
+    this.correctedKeys = const {},
   });
+
+  /// The graded item whose row (number gutter, badge and bubbles) contains
+  /// [point], using the same geometry as [paint].
+  static ScoredItem? itemAt({
+    required Offset point,
+    required Size size,
+    required List<ScoredItem> items,
+    required OmrExamTemplate template,
+    Map<String, (double, double)>? meshInteriorMeasuredFrac,
+  }) {
+    if (template.pageWidthPt <= 0 || template.pageHeightPt <= 0) return null;
+    final pxPerPtX = size.width / template.pageWidthPt;
+    final pxPerPtY = size.height / template.pageHeightPt;
+    final canonicalW = template.pageWidthPt.round();
+    final canonicalH = template.pageHeightPt.round();
+    final mesh = OmrMeshCorrection.fromMeasuredFractions(
+      template: template,
+      canonicalWidth: canonicalW,
+      canonicalHeight: canonicalH,
+      measuredFrac: meshInteriorMeasuredFrac,
+    );
+    Offset centerOf(BubblePos b) {
+      final (cx, cy) = mesh.correct(b.xFrac * canonicalW, b.yFrac * canonicalH);
+      return Offset(cx / canonicalW * size.width, cy / canonicalH * size.height);
+    }
+
+    final halfH = template.bubbleRadiusYPt * 1.5 * pxPerPtY;
+    final gutter = (template.bubbleRadiusPt + 16) * pxPerPtX;
+    final reach = template.bubbleRadiusPt * 1.5 * pxPerPtX;
+    ScoredItem? best;
+    var bestDy = double.infinity;
+    for (final item in items) {
+      final bubbles = bubblesForOverlayItem(
+        template,
+        item.sectionName,
+        item.itemNumber,
+      );
+      if (bubbles == null || bubbles.isEmpty) continue;
+      var left = double.infinity, right = -double.infinity, sumY = 0.0;
+      for (final b in bubbles) {
+        final c = centerOf(b);
+        if (c.dx < left) left = c.dx;
+        if (c.dx > right) right = c.dx;
+        sumY += c.dy;
+      }
+      final cy = sumY / bubbles.length;
+      final dy = (point.dy - cy).abs();
+      if (dy > halfH || point.dx < left - gutter || point.dx > right + reach) continue;
+      if (dy < bestDy) {
+        bestDy = dy;
+        best = item;
+      }
+    }
+    return best;
+  }
 
   static const _correctColor = Color(0xFF16A34A);
   static const _wrongColor = Color(0xFFDC2626);
@@ -240,14 +443,13 @@ class _GradedOverlayPainter extends CustomPainter {
     if (template.pageWidthPt <= 0 || template.pageHeightPt <= 0) return;
     final pxPerPtX = size.width / template.pageWidthPt;
     final pxPerPtY = size.height / template.pageHeightPt;
-    final ringRx = template.bubbleRadiusPt * 1.8 * pxPerPtX;
-    final ringRy = template.bubbleRadiusYPt * 1.8 * pxPerPtY;
+    // Keep the review indicator close to the printed oval. The previous
+    // 1.8 multiplier made rings overlap adjacent choices and falsely looked
+    // like a coordinate error on dense TAT rows.
+    final ringRx = template.bubbleRadiusPt * 1.14 * pxPerPtX;
+    final ringRy = template.bubbleRadiusYPt * 1.14 * pxPerPtY;
     final strokeWidth = (ringRx < ringRy ? ringRx : ringRy) * 0.3;
     final badgeRadius = (ringRx < ringRy ? ringRx : ringRy) * 0.6;
-
-    final byNumber = <String, Map<int, List<BubblePos>>>{
-      for (final section in template.sections) section.name: section.items,
-    };
 
     // Mesh built at page-point scale (1 canonical unit = 1 pt) — the
     // triangulation/barycentric math is scale-invariant, so this is exactly
@@ -265,12 +467,19 @@ class _GradedOverlayPainter extends CustomPainter {
 
     Offset centerOf(BubblePos b) {
       final (cx, cy) = mesh.correct(b.xFrac * canonicalW, b.yFrac * canonicalH);
-      return Offset(cx / canonicalW * size.width, cy / canonicalH * size.height);
+      return Offset(
+        cx / canonicalW * size.width,
+        cy / canonicalH * size.height,
+      );
     }
 
     void ring(BubblePos b, Color color) {
       canvas.drawOval(
-        Rect.fromCenter(center: centerOf(b), width: ringRx * 2, height: ringRy * 2),
+        Rect.fromCenter(
+          center: centerOf(b),
+          width: ringRx * 2,
+          height: ringRy * 2,
+        ),
         Paint()
           ..color = color
           ..style = PaintingStyle.stroke
@@ -301,9 +510,17 @@ class _GradedOverlayPainter extends CustomPainter {
     }
 
     for (final item in items) {
-      if (item.correctChoice == null) continue; // ungraded -- nothing to compare against
-      final bubbles = byNumber[item.sectionName]?[item.itemNumber];
-      if (bubbles == null || bubbles.isEmpty) continue;
+      if (item.correctChoice == null) {
+        continue; // ungraded -- nothing to compare against
+      }
+      final bubbles = bubblesForOverlayItem(
+        template,
+        item.sectionName,
+        item.itemNumber,
+      );
+      if (bubbles == null || bubbles.isEmpty) {
+        continue;
+      }
 
       BubblePos? find(String? choice) {
         if (choice == null) return null;
@@ -332,8 +549,18 @@ class _GradedOverlayPainter extends CustomPainter {
       for (final b in bubbles) {
         if (b.xFrac < leftmost.xFrac) leftmost = b;
       }
-      final badgeColor = isRight ? _correctColor : (item.isAmbiguous ? _ambiguousColor : _wrongColor);
+      final badgeColor = isRight
+          ? _correctColor
+          : (item.isAmbiguous ? _ambiguousColor : _wrongColor);
       badge(leftmost, isRight, badgeColor);
+      if (correctedKeys.contains('${item.sectionName}|${item.itemNumber}')) {
+        final a = centerOf(leftmost);
+        canvas.drawCircle(
+          Offset(a.dx - (template.bubbleRadiusPt + 9) * pxPerPtX - badgeRadius, a.dy - badgeRadius),
+          badgeRadius * 0.45,
+          Paint()..color = const Color(0xFF3B82F6),
+        );
+      }
     }
   }
 
@@ -341,6 +568,7 @@ class _GradedOverlayPainter extends CustomPainter {
   bool shouldRepaint(covariant _GradedOverlayPainter oldDelegate) =>
       oldDelegate.items != items ||
       oldDelegate.template != template ||
+      oldDelegate.correctedKeys != correctedKeys ||
       oldDelegate.meshInteriorMeasuredFrac != meshInteriorMeasuredFrac;
 }
 
@@ -348,7 +576,12 @@ class _GradedOverlayPainter extends CustomPainter {
 class _AnswerKeyPanel extends StatelessWidget {
   final List<ScoredItem> items;
 
-  const _AnswerKeyPanel({required this.items});
+  /// Items whose reading was manually corrected, and the tap handler that
+  /// opens the correction editor (null = read-only).
+  final Set<String> correctedKeys;
+  final void Function(ScoredItem item)? onTapItem;
+
+  const _AnswerKeyPanel({required this.items, this.correctedKeys = const {}, this.onTapItem});
 
   @override
   Widget build(BuildContext context) {
@@ -362,7 +595,12 @@ class _AnswerKeyPanel extends StatelessWidget {
       children: [
         const Text(
           'ANSWER KEY',
-          style: TextStyle(color: Colors.white70, fontSize: 10.5, fontWeight: FontWeight.w800, letterSpacing: 0.6),
+          style: TextStyle(
+            color: Colors.white70,
+            fontSize: 10.5,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 0.6,
+          ),
         ),
         const SizedBox(height: 12),
         ...bySection.entries.map(
@@ -373,7 +611,11 @@ class _AnswerKeyPanel extends StatelessWidget {
               children: [
                 Text(
                   entry.key,
-                  style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w700),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
                 const SizedBox(height: 6),
                 ...entry.value.map(_buildRow),
@@ -402,31 +644,60 @@ class _AnswerKeyPanel extends StatelessWidget {
       foreground = Colors.white70;
     }
 
-    return Container(
+    final wasCorrected = correctedKeys.contains('${item.sectionName}|${item.itemNumber}');
+    final read = item.isAmbiguous ? 'multiple' : (item.markedChoice ?? 'blank');
+    final row = Container(
       margin: const EdgeInsets.only(bottom: 3),
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-      decoration: BoxDecoration(color: background, borderRadius: BorderRadius.circular(6)),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(6),
+      ),
       child: Row(
         children: [
           SizedBox(
             width: 20,
             child: Text(
               '${item.itemNumber}',
-              style: TextStyle(color: foreground, fontSize: 10, fontWeight: FontWeight.w600),
+              style: TextStyle(
+                color: foreground,
+                fontSize: 10,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
           Expanded(
             child: Text(
-              item.correctChoice ?? '—',
-              style: TextStyle(color: foreground, fontSize: 10, fontWeight: FontWeight.w800),
+              'Key ${item.correctChoice ?? "—"} · read $read',
+              style: TextStyle(
+                color: foreground,
+                fontSize: 10,
+                fontWeight: FontWeight.w800,
+              ),
             ),
           ),
+          if (wasCorrected) const Icon(Icons.edit, size: 12, color: Color(0xFF3B82F6)),
           if (item.isAmbiguous)
-            const Icon(Icons.warning_amber_rounded, size: 12, color: Color(0xFF92400E))
+            const Icon(
+              Icons.warning_amber_rounded,
+              size: 12,
+              color: Color(0xFF92400E),
+            )
           else if (item.isBlank)
-            const Icon(Icons.remove_circle_outline, size: 12, color: Colors.white70),
+            const Icon(
+              Icons.remove_circle_outline,
+              size: 12,
+              color: Colors.white70,
+            ),
         ],
       ),
+    );
+    final tap = onTapItem;
+    if (tap == null) return row;
+    return InkWell(
+      borderRadius: BorderRadius.circular(6),
+      onTap: () => tap(item),
+      child: row,
     );
   }
 }

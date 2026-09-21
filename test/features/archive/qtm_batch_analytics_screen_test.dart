@@ -325,7 +325,7 @@ void main() {
       expect(
         find.descendant(
           of: find.byKey(const Key('qtmAnalytics.topScorer.1.top')),
-          matching: find.text('Unnamed'),
+          matching: find.text('Unnamed examinee'),
         ),
         findsOneWidget,
       );
