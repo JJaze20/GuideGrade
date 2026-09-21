@@ -8,6 +8,7 @@ import '../../models/omr_scan_result.dart';
 import 'fiducial_search_tuning.dart';
 import 'omr_alignment_check.dart';
 import 'omr_mesh_correction.dart';
+import 'omr_bubble_classifier.dart';
 import 'omr_templates.dart';
 import 'tat_marker_validation.dart';
 
@@ -4361,6 +4362,11 @@ class OmrDecoder {
         ? _itemRecenterShiftFracs
         : _itemRecenterShiftFracsWide;
     final items = <OmrItemResult>[];
+    // Kept alongside [items] so the classifier can re-decide every item once
+    // the whole sheet has been measured -- its sheet-relative feature needs a
+    // median over every bubble, which is only known after the loop.
+    final classifierBubbles = <List<BubbleScores>>[];
+    final classifierItems = <OmrItemResult>[];
     for (final section in template.sections) {
       for (final itemNumber in section.items.keys.toList()..sort()) {
         final choices = section.items[itemNumber]!;
@@ -4431,6 +4437,25 @@ class OmrDecoder {
             isAmbiguous: isAmbiguous,
           ),
         );
+        if (OmrBubbleClassifier.enabled) {
+          classifierBubbles.add(<BubbleScores>[
+            for (final (choice, m) in measured.measurements)
+              BubbleScores(
+                choice: choice,
+                ring: m.ringFill,
+                whole: m.wholeFill,
+                center: m.centerFill,
+                score: m.score,
+              ),
+          ]);
+          classifierItems.add(
+            OmrItemResult(
+              sectionName: section.name,
+              itemNumber: itemNumber,
+              markedChoice: null,
+            ),
+          );
+        }
         if (bubbleDebug) {
           final debugResult = markedChoice ?? (isAmbiguous ? 'AMBIGUOUS' : 'BLANK');
           final buf = StringBuffer('Q$itemNumber\n');
@@ -4453,6 +4478,21 @@ class OmrDecoder {
           buf.write('result=$debugResult');
           _bubbleLog(buf.toString());
         }
+      }
+    }
+    if (OmrBubbleClassifier.enabled &&
+        classifierBubbles.length == items.length &&
+        classifierBubbles.isNotEmpty) {
+      final medianScore = OmrBubbleClassifier.sheetMedianScore(classifierBubbles);
+      for (var i = 0; i < classifierBubbles.length; i++) {
+        final verdict =
+            OmrBubbleClassifier.classify(classifierBubbles[i], medianScore);
+        items[i] = OmrItemResult(
+          sectionName: classifierItems[i].sectionName,
+          itemNumber: classifierItems[i].itemNumber,
+          markedChoice: verdict.markedChoice,
+          isAmbiguous: verdict.isAmbiguous,
+        );
       }
     }
     return OmrScanResult(examCode: template.examCode, items: items);
