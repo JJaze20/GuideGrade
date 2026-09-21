@@ -6,8 +6,9 @@ void main() {
     for (final template in omrTemplates.values) {
       final last = template.lastNameFieldRect;
       final first = template.firstNameFieldRect;
-      final mi = template.middleInitialFieldRect;
-      expect(last.xFrac * template.pageWidthPt, closeTo(44, 0.01));
+      final mi = template.middleNameFieldRect;
+      // AT and QTM start their name row at 44 pt; portrait TAT v5 at 48 pt.
+      expect(last.xFrac * template.pageWidthPt, closeTo(template.examCode == 'TAT' ? 48 : 44, 0.01));
       expect(last.xFrac + last.widthFrac, closeTo(first.xFrac, 0.00002));
       expect(first.xFrac + first.widthFrac, closeTo(mi.xFrac, 0.00006));
       expect(last.yFrac, first.yFrac);

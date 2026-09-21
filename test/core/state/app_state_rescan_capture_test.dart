@@ -1,4 +1,4 @@
-import 'package:camera/camera.dart';
+import 'package:cross_file/cross_file.dart' show XFile;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:guidegrade/core/state/app_state.dart';
 

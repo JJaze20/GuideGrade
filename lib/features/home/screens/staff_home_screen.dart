@@ -47,7 +47,10 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
     final appState = AppStateScope.of(context);
     if (batch.canScan && !batch.isArchived) {
       appState.setActiveExamCode(batch.examCode);
-      Navigator.of(context).pushNamed(AppRoutes.examSetup).then((_) => _load());
+      // Pass the pressed batch so Select Batch opens with it already chosen.
+      Navigator.of(context)
+          .pushNamed(AppRoutes.examSetup, arguments: batch.id)
+          .then((_) => _load());
     } else {
       Navigator.of(context)
           .pushNamed(AppRoutes.batchArchiveDetail, arguments: batch.id)

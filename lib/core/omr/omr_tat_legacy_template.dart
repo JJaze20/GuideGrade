@@ -12,10 +12,10 @@ final OmrExamTemplate legacyTatTemplate = OmrExamTemplate(
   interiorFiducials: const [],
   lastNameFieldRect: const OmrFieldRect(0.04701, 0.15523, 0.12756, 0.02288),
   firstNameFieldRect: const OmrFieldRect(0.17457, 0.15523, 0.11056, 0.02288),
-  middleInitialFieldRect: const OmrFieldRect(0.28513, 0.15523, 0.03402, 0.02288),
+  middleNameFieldRect: const OmrFieldRect(0.28513, 0.15523, 0.03402, 0.02288),
   lastNameBoxCount: 0,
   firstNameBoxCount: 0,
-  middleInitialBoxCount: 0,
+  middleNameBoxCount: 0,
   sections: const [
     OmrSection(
       name: "Test I",

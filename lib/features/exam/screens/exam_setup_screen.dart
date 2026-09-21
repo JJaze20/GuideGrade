@@ -18,7 +18,13 @@ import '../../../shared/widgets/primary_button.dart';
 /// scanner launches, [AppState.startScanSession] binds every captured sheet
 /// and result to it.
 class ExamSetupScreen extends StatefulWidget {
-  const ExamSetupScreen({super.key});
+  /// A batch to have already selected when the screen opens: set when the
+  /// user came here by pressing that batch in the registry on the home
+  /// screen, so they do not have to find and pick it again. Ignored if the
+  /// batch is not among the scannable batches for the active exam.
+  final String? preselectBatchId;
+
+  const ExamSetupScreen({super.key, this.preselectBatchId});
 
   @override
   State<ExamSetupScreen> createState() => _ExamSetupScreenState();
@@ -26,6 +32,7 @@ class ExamSetupScreen extends StatefulWidget {
 
 class _ExamSetupScreenState extends State<ExamSetupScreen> {
   bool _didInit = false;
+  bool _appliedPreselect = false;
   bool _loading = true;
   List<LocalBatch> _batches = [];
   LocalBatch? _selected;
@@ -45,11 +52,14 @@ class _ExamSetupScreenState extends State<ExamSetupScreen> {
     final scannable = all.where((b) => b.canScan).toList()
       ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
     if (!mounted) return;
-    // Keep the current selection only if it's still in the list.
-    final priorId = _selected?.id;
+    // Keep the current selection only if it's still in the list. On the first
+    // load, with nothing chosen yet, select the batch the user pressed on the
+    // home screen (if any). After that the user's own choice always wins.
+    final wantedId = _selected?.id ?? (_appliedPreselect ? null : widget.preselectBatchId);
+    _appliedPreselect = true;
     LocalBatch? stillSelected;
     for (final b in scannable) {
-      if (b.id == priorId) stillSelected = b;
+      if (b.id == wantedId) stillSelected = b;
     }
     setState(() {
       _batches = scannable;
@@ -113,7 +123,7 @@ class _ExamSetupScreenState extends State<ExamSetupScreen> {
               ),
               const SizedBox(height: 12),
               PrimaryButton(
-                label: 'LAUNCH OMR SCANNER LOOP',
+                label: 'START SCANNING',
                 icon: FontAwesomeIcons.camera,
                 onPressed: _selected == null ? null : () => _launchScanner(appState),
               ),

@@ -1,5 +1,5 @@
 import 'dart:io';
-import '../../../core/omr/omr_tat_legacy_template.dart';
+import '../../../core/omr/omr_template_registry.dart';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -118,9 +118,13 @@ class _ScannedImageViewerScreenState extends State<ScannedImageViewerScreen> {
   /// plain rectified image; it just skips the overlay/mesh correction
   /// rather than risk drawing it with coordinates from a sheet layout
   /// that has since changed underneath it.
-  OmrExamTemplate? get _overlayTemplate =>
-      template?.examCode == 'TAT' && scanTemplateVersion == 'TAT-redesign-v1'
-          ? legacyTatTemplate : template;
+  OmrExamTemplate? get _overlayTemplate {
+    final t = template;
+    if (t == null) return null;
+    // The layout this scan was captured against (a scan from before version
+    // tracking has no version and uses the current one).
+    return scanTemplateVersion == null ? t : omrTemplateFor(t.examCode, scanTemplateVersion);
+  }
 
   bool get _templateStillMatches =>
       (scanTemplateVersion == null && template?.examCode != 'TAT') ||

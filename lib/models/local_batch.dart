@@ -109,16 +109,17 @@ class ExamineeInfo {
   static const int minAge = 3;
   static const int maxAge = 100;
 
-  /// "Last, First M." — falls back to whichever of last/first is present,
-  /// and omits the middle initial entirely when [middleName] is blank.
+  /// "Last, First Middle" — the whole middle name, not an initial. Falls back to
+  /// whichever of last/first is present, and omits the middle name entirely when
+  /// [middleName] is blank.
   String get displayName {
     final last = lastName.trim();
     final first = firstName.trim();
     final middle = middleName.trim();
-    final middleInitial = middle.isEmpty ? '' : ' ${middle[0].toUpperCase()}.';
-    if (last.isNotEmpty && first.isNotEmpty) return '$last, $first$middleInitial';
+    final middleSuffix = middle.isEmpty ? '' : ' $middle';
+    if (last.isNotEmpty && first.isNotEmpty) return '$last, $first$middleSuffix';
     if (last.isNotEmpty) return last;
-    if (first.isNotEmpty) return '$first$middleInitial';
+    if (first.isNotEmpty) return '$first$middleSuffix';
     return 'Unnamed';
   }
 

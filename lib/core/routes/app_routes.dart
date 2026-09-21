@@ -185,7 +185,7 @@ class AppRoutes {
       case examHub:
         return _fade(const ExamHubScreen());
       case examSetup:
-        return _slide(const ExamSetupScreen());
+        return _slide(ExamSetupScreen(preselectBatchId: settings.arguments as String?));
       case examScanning:
         return _slide(const ExamScanningScreen());
       case examResults:

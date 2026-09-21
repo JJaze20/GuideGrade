@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../../core/constants/app_colors.dart';
 import '../../core/constants/app_text_styles.dart';
@@ -18,18 +17,13 @@ class ExamineeDialogResult {
 }
 
 /// Per-sheet student entry — last name, first name, middle name, examinee
-/// number, plus the optional details birth date, age and last school
-/// attended. When [batchId]/[scan]/[repository] are all given, the sheet's own
+/// number. Existing birth date, age and school details are preserved on save.
+/// When [batchId]/[scan]/[repository] are all given, the sheet's own
 /// cropped handwriting (see [NameCropStrip]) is shown above the fields so staff
 /// can read it while typing — this app runs no automatic handwriting
 /// recognition, so nothing here is ever pre-filled from the scan itself.
 /// Last/First Name and every detail may be left blank (a counselor may not
 /// know them yet); Examinee Number is still required.
-///
-/// Age: with a birth date, the age is DERIVED (shown read-only) as of the
-/// exam date — [examDate], the scan's capture date, falling back to today —
-/// so the two can never disagree. With no birth date, an age can be typed in
-/// directly; picking a birth date later replaces it.
 ///
 /// [onReviewAnswers], when given, adds a separate "Answers" section with a
 /// button that opens the scan for answer correction on top of this dialog,
@@ -93,50 +87,18 @@ class _ExamineeDialogState extends State<_ExamineeDialog> {
   late final _firstCtrl = TextEditingController(text: widget.initial?.firstName ?? '');
   late final _middleCtrl = TextEditingController(text: widget.initial?.middleName ?? '');
   late final _numberCtrl = TextEditingController(text: widget.initial?.examineeNumber ?? '');
-  late final _schoolCtrl = TextEditingController(text: widget.initial?.lastSchool ?? '');
-  late final _ageCtrl = TextEditingController(text: widget.initial?.manualAge?.toString() ?? '');
   final _formKey = GlobalKey<FormState>();
-
-  late DateTime? _birthDate = widget.initial?.birthDate;
-  String? _birthError;
 
   @override
   void dispose() {
-    for (final c in [_lastCtrl, _firstCtrl, _middleCtrl, _numberCtrl, _schoolCtrl, _ageCtrl]) {
+    for (final c in [_lastCtrl, _firstCtrl, _middleCtrl, _numberCtrl]) {
       c.dispose();
     }
     super.dispose();
   }
 
-  int? get _derivedAge => _birthDate == null ? null : ExamineeInfo.ageFromBirthDate(_birthDate!, widget.examDate);
-
-  Future<void> _pickBirthDate() async {
-    final now = DateTime.now();
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: _birthDate ?? DateTime(now.year - 15, 1, 1),
-      firstDate: DateTime(now.year - ExamineeInfo.maxAge - 1, 1, 1),
-      lastDate: now, // a future birth date can not be picked at all
-      helpText: 'Birth date',
-    );
-    if (picked == null || !mounted) return;
-    setState(() {
-      _birthDate = picked;
-      _birthError = ExamineeInfo.validateBirthDate(picked, widget.examDate);
-      _ageCtrl.clear(); // the age is now derived; never keep a second value
-    });
-  }
-
-  void _clearBirthDate() => setState(() {
-        _birthDate = null;
-        _birthError = null;
-      });
-
   void _save() {
-    final birthError = ExamineeInfo.validateBirthDate(_birthDate, widget.examDate);
-    setState(() => _birthError = birthError);
-    if (!_formKey.currentState!.validate() || birthError != null) return;
-    final typedAge = int.tryParse(_ageCtrl.text.trim());
+    if (!_formKey.currentState!.validate()) return;
     Navigator.pop(
       context,
       ExamineeDialogResult(
@@ -145,10 +107,9 @@ class _ExamineeDialogState extends State<_ExamineeDialog> {
           lastName: _lastCtrl.text.trim(),
           middleName: _middleCtrl.text.trim(),
           examineeNumber: _numberCtrl.text.trim(),
-          birthDate: _birthDate,
-          // Only kept when there is no birth date to derive it from.
-          manualAge: _birthDate == null ? typedAge : null,
-          lastSchool: _schoolCtrl.text.trim(),
+          birthDate: widget.initial?.birthDate,
+          manualAge: widget.initial?.manualAge,
+          lastSchool: widget.initial?.lastSchool ?? '',
         ),
       ),
     );
@@ -223,7 +184,7 @@ class _ExamineeDialogState extends State<_ExamineeDialog> {
                   key: const Key('examineeDialog.examineeNumber'),
                   controller: _numberCtrl,
                   keyboardType: TextInputType.text,
-                  textInputAction: TextInputAction.next,
+                  textInputAction: TextInputAction.done,
                   decoration: FormFieldStyle.decoration(label: 'Examinee number', required: true),
                   validator: (v) {
                     final t = v?.trim() ?? '';
@@ -233,19 +194,6 @@ class _ExamineeDialogState extends State<_ExamineeDialog> {
                     }
                     return null;
                   },
-                ),
-                const SizedBox(height: 16),
-                _sectionLabel('DETAILS (all optional)'),
-                _birthDateField(),
-                const SizedBox(height: 12),
-                _ageField(),
-                const SizedBox(height: 12),
-                TextFormField(
-                  key: const Key('examineeDialog.lastSchool'),
-                  controller: _schoolCtrl,
-                  textCapitalization: TextCapitalization.words,
-                  textInputAction: TextInputAction.done,
-                  decoration: FormFieldStyle.decoration(label: 'Last school attended (optional)'),
                 ),
                 if (widget.onReviewAnswers != null) ...[
                   const SizedBox(height: 16),
@@ -290,54 +238,4 @@ class _ExamineeDialogState extends State<_ExamineeDialog> {
     );
   }
 
-  Widget _birthDateField() {
-    final text = _birthDate == null ? '' : ExamineeInfo.birthDateToText(_birthDate!);
-    return InkWell(
-      key: const Key('examineeDialog.birthDate'),
-      borderRadius: BorderRadius.circular(10),
-      onTap: _pickBirthDate,
-      child: InputDecorator(
-        decoration: FormFieldStyle.decoration(
-          label: 'Birth date (optional)',
-          hint: 'Tap to choose',
-          helper: _birthError == null ? 'Age is worked out from this as of the exam date.' : null,
-          suffixIcon: _birthDate == null
-              ? const Icon(Icons.calendar_today_outlined, size: 18)
-              : IconButton(
-                  tooltip: 'Clear birth date',
-                  icon: const Icon(Icons.close, size: 18),
-                  onPressed: _clearBirthDate,
-                ),
-        ).copyWith(errorText: _birthError),
-        isEmpty: text.isEmpty,
-        child: Text(text, style: AppTextStyles.body(size: 13)),
-      ),
-    );
-  }
-
-  Widget _ageField() {
-    if (_birthDate != null) {
-      final age = _derivedAge;
-      return InputDecorator(
-        key: const Key('examineeDialog.ageDerived'),
-        decoration: FormFieldStyle.disabled(
-          label: 'Age at exam',
-          helper: 'Worked out from the birth date. Clear the birth date to type an age instead.',
-        ),
-        child: Text(age == null ? '—' : '$age', style: AppTextStyles.body(size: 13)),
-      );
-    }
-    return TextFormField(
-      key: const Key('examineeDialog.age'),
-      controller: _ageCtrl,
-      keyboardType: TextInputType.number,
-      inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(3)],
-      textInputAction: TextInputAction.next,
-      decoration: FormFieldStyle.decoration(
-        label: 'Age (optional)',
-        helper: 'Use this only if the birth date is unknown.',
-      ),
-      validator: ExamineeInfo.validateAge,
-    );
-  }
 }

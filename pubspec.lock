@@ -89,46 +89,22 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.1.2"
-  camera:
+  camerawesome:
     dependency: "direct main"
     description:
-      name: camera
-      sha256: "558230d6ce6ccea856b32d390db7e7b557adf4d9320aa614481bd3f2f608953f"
+      name: camerawesome
+      sha256: "8e7f61ac78d4e58f1b198d6baa74b8af931819843e5247262c79539fb2f9949c"
       url: "https://pub.dev"
     source: hosted
-    version: "0.12.0+2"
-  camera_android_camerax:
+    version: "2.5.0"
+  carousel_slider:
     dependency: transitive
     description:
-      name: camera_android_camerax
-      sha256: "4fb17b62dc25f97ec752596b749a31e80ccc9829ef95412badfdf0bc6c43a166"
+      name: carousel_slider
+      sha256: febf4b0163e0242adc13d7a863b04965351f59e7dfea56675c7c2caa7bcd7476
       url: "https://pub.dev"
     source: hosted
-    version: "0.7.4+2"
-  camera_avfoundation:
-    dependency: transitive
-    description:
-      name: camera_avfoundation
-      sha256: "866e9cd8370f8055d005c0413937a52dc1d7a472687f0ee3ce02392955aababa"
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.10.2"
-  camera_platform_interface:
-    dependency: transitive
-    description:
-      name: camera_platform_interface
-      sha256: "4524ca6eb4176b066864036ad4fe02c3e4863e63b77eadc21a5bf56824f43498"
-      url: "https://pub.dev"
-    source: hosted
-    version: "2.13.1"
-  camera_web:
-    dependency: transitive
-    description:
-      name: camera_web
-      sha256: "1245a480a113437f8d46d19c0fb90cea9db921436d9cf2ba5fb11854a1312693"
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.3.5+4"
+    version: "5.1.2"
   change_case:
     dependency: transitive
     description:
@@ -193,6 +169,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.19.1"
+  colorfilter_generator:
+    dependency: transitive
+    description:
+      name: colorfilter_generator
+      sha256: ccc2995e440b1d828d55d99150e7cad64624f3cb4a1e235000de3f93cf10d35c
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.0.8"
   connectivity_plus:
     dependency: "direct main"
     description:
@@ -218,7 +202,7 @@ packages:
     source: hosted
     version: "3.1.2"
   cross_file:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: cross_file
       sha256: "92c9c43c383bfa1c32079d3bc492d55d6d4318044b7b47edaff8971cbb555c51"
@@ -688,6 +672,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.13.0"
+  matrix2d:
+    dependency: transitive
+    description:
+      name: matrix2d
+      sha256: "188718dd3bc2a31e372cfd0791b0f77f4f13ea76164147342cc378d9132949e7"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.0.4"
   meta:
     dependency: transitive
     description:
@@ -928,6 +920,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.6.0"
+  rxdart:
+    dependency: transitive
+    description:
+      name: rxdart
+      sha256: "5c3004a4a8dbb94bd4bf5412a4def4acdaa12e12f269737a5751369e12d1a962"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.28.0"
   shared_preferences:
     dependency: "direct main"
     description:
@@ -1021,14 +1021,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.1.4"
-  stream_transform:
-    dependency: transitive
-    description:
-      name: stream_transform
-      sha256: ad47125e588cfd37a9a7f86c7d6356dde8dfe89d071d293f80ca9e9273a33871
-      url: "https://pub.dev"
-    source: hosted
-    version: "2.1.1"
   string_scanner:
     dependency: transitive
     description:

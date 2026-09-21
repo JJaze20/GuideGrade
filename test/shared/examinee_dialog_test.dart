@@ -9,6 +9,8 @@ void main() {
     ExamineeInfo? initial,
     DateTime? examDate,
     VoidCallback? onReviewAnswers,
+    ValueChanged<ExamineeDialogResult?>? onSaved,
+    Set<String> otherNumbers = const {},
   }) async {
     tester.view.physicalSize = const Size(1200, 3000);
     tester.view.devicePixelRatio = 1.0;
@@ -27,7 +29,9 @@ void main() {
                     initial: initial,
                     examDate: examDate ?? DateTime(2026, 6, 15),
                     onReviewAnswers: onReviewAnswers,
+                    otherNumbers: otherNumbers,
                   );
+                  onSaved?.call(result);
                 },
                 child: const Text('open'),
               ),
@@ -49,26 +53,31 @@ void main() {
     expect(find.byType(AlertDialog), findsNothing);
   });
 
-  testWidgets('age can be entered alone when the birth date is unknown', (tester) async {
+  testWidgets('only the four identity fields are editable', (tester) async {
     await open(tester);
-    await tester.enterText(find.byKey(const Key('examineeDialog.examineeNumber')), '101');
-    await tester.enterText(find.byKey(const Key('examineeDialog.age')), '17');
-    await tester.tap(find.text('Save'));
-    await tester.pumpAndSettle();
-    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.byType(TextFormField), findsNWidgets(4));
+    for (final field in ['lastName','firstName','middleName','examineeNumber']) {
+      expect(find.byKey(Key('examineeDialog.$field')), findsOneWidget);
+    }
+    for (final field in ['birthDate','age','ageDerived','lastSchool']) {
+      expect(find.byKey(Key('examineeDialog.$field')), findsNothing);
+    }
   });
 
-  testWidgets('an out-of-range age shows a helpful message and blocks saving', (tester) async {
-    await open(tester);
-    await tester.enterText(find.byKey(const Key('examineeDialog.examineeNumber')), '101');
-    await tester.enterText(find.byKey(const Key('examineeDialog.age')), '2');
+  testWidgets('required and duplicate examinee numbers still block saving', (tester) async {
+    await open(tester, otherNumbers: {'101'});
     await tester.tap(find.text('Save'));
     await tester.pumpAndSettle();
-    expect(find.textContaining('Enter an age from'), findsOneWidget);
+    expect(find.text('Required'), findsOneWidget);
+    await tester.enterText(find.byKey(const Key('examineeDialog.examineeNumber')), '101');
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+    expect(find.text('Already used by another sheet in this batch'), findsOneWidget);
     expect(find.byType(AlertDialog), findsOneWidget);
   });
 
-  testWidgets('with a birth date the age is derived and read-only (no second editable age)', (tester) async {
+  testWidgets('editing a full middle name preserves hidden saved details', (tester) async {
+    ExamineeDialogResult? saved;
     await open(
       tester,
       initial: ExamineeInfo(
@@ -76,11 +85,19 @@ void main() {
         lastName: 'B',
         examineeNumber: '1',
         birthDate: DateTime(2010, 6, 15),
+        manualAge: 16,
+        lastSchool: 'Existing school',
       ),
+      onSaved: (result) => saved = result,
     );
-    expect(find.byKey(const Key('examineeDialog.age')), findsNothing);
-    expect(find.byKey(const Key('examineeDialog.ageDerived')), findsOneWidget);
-    expect(find.text('16'), findsOneWidget, reason: 'age on the 2026-06-15 exam date');
+    await tester.enterText(find.byKey(const Key('examineeDialog.middleName')), 'Maria del Carmen');
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+    expect(saved?.info?.middleName, 'Maria del Carmen');
+    expect(saved?.info?.birthDate, DateTime(2010, 6, 15));
+    expect(saved?.info?.manualAge, 16);
+    expect(saved?.info?.lastSchool, 'Existing school');
+    expect(saved?.info?.examineeNumber, '1');
   });
 
   testWidgets('the answers section is separate and only shown when review is available', (tester) async {

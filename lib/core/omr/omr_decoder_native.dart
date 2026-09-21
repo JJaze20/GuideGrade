@@ -2012,7 +2012,7 @@ class OmrDecoder {
 
   /// Crops the Last Name / First Name / MI boxes (see
   /// [OmrExamTemplate.lastNameFieldRect]/[firstNameFieldRect]/
-  /// [middleInitialFieldRect]) directly out of [imagePath] — the original
+  /// [middleNameFieldRect]) directly out of [imagePath] — the original
   /// captured photo, not a rectified/display copy — so staff can read the
   /// handwritten name and enter it manually (see showExamineeDialog); this
   /// app does not attempt automatic handwriting recognition. Runs its own
@@ -2025,12 +2025,12 @@ class OmrDecoder {
   /// [decode] or [rectifyForOverlay] — never touches scoring. Returns all
   /// three written paths, or null if the sheet's corners couldn't be found
   /// in this photo.
-  ({String lastName, String firstName, String middleInitial})? cropNameFields(
+  ({String lastName, String firstName, String middleName})? cropNameFields(
     String imagePath,
     OmrExamTemplate template, {
     required String lastNameOutPath,
     required String firstNameOutPath,
-    required String middleInitialOutPath,
+    required String middleNameOutPath,
   }) {
     final src = _imreadForTemplate(imagePath, template);
     try {
@@ -2245,11 +2245,11 @@ class OmrDecoder {
 
               writeField(template.lastNameFieldRect, lastNameOutPath, template.lastNameBoxCount);
               writeField(template.firstNameFieldRect, firstNameOutPath, template.firstNameBoxCount);
-              writeField(template.middleInitialFieldRect, middleInitialOutPath, template.middleInitialBoxCount);
+              writeField(template.middleNameFieldRect, middleNameOutPath, template.middleNameBoxCount);
               return (
                 lastName: lastNameOutPath,
                 firstName: firstNameOutPath,
-                middleInitial: middleInitialOutPath,
+                middleName: middleNameOutPath,
               );
             } finally {
               srcCorners.dispose();
