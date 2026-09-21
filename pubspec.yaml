@@ -40,6 +40,7 @@ dependencies:
   cupertino_icons: ^1.0.8
   google_fonts: ^6.2.1
   font_awesome_flutter: ^11.0.0
+  camera: ^0.12.0+1
   opencv_dart: ^2.2.1
   path_provider: ^2.1.5
   shared_preferences: ^2.3.3
@@ -65,8 +66,6 @@ dependencies:
   # access. Requires MainActivity to be a FlutterFragmentActivity (see
   # android/.../MainActivity.kt) -- BiometricPrompt needs a FragmentActivity host.
   local_auth: ^2.3.0
-  camerawesome: ^2.5.0
-  cross_file: 0.3.5+4
 
 dev_dependencies:
   flutter_test:
