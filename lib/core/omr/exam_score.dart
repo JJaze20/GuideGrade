@@ -108,6 +108,10 @@ class ExamScore {
   /// for a TAT sheet.
   final int? tatTotal;
 
+  /// The highest headline score this exam can give: the 160-point TAT total,
+  /// or the fixed item count for a raw-scored exam. What [rawScore] is "out of".
+  int get maxScore => isTat ? 160 : totalItems;
+
   /// True for the three-part TAT rule.
   bool get isTat => model == ExamScoringModel.tat;
 

@@ -177,6 +177,19 @@ class SyncQueue {
           j.status != SyncJobStatus.inProgress);
     }
 
+    // 2b. A DELETE_SCAN for one scan cancels that scan's not-yet-running
+    //     row/image pushes: uploading a sheet that was just deleted would only
+    //     resurrect it in the cloud. (Batch-level pushes stay: the batch row
+    //     carries the new revision.)
+    if (job.type == SyncJobType.deleteScan && job.scanId != null) {
+      _jobs.removeWhere((j) =>
+          j.isBatchContentPush &&
+          j.type != SyncJobType.pushBatch &&
+          j.batchId == job.batchId &&
+          j.scanId == job.scanId &&
+          j.status != SyncJobStatus.inProgress);
+    }
+
     // 3. Coalesce by dedupeKey.
     final sameKey = _jobs.where((j) => j.dedupeKey == job.dedupeKey).toList()
       ..sort((a, b) => a.id.compareTo(b.id));

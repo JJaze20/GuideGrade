@@ -23,6 +23,7 @@ enum SyncJobType {
   patchImageStatus,
   pushAnswerKey,
   deleteBatch,
+  deleteScan,
   deleteStoragePrefix,
 }
 
@@ -56,6 +57,7 @@ const Map<SyncJobType, String> _typeWire = {
   SyncJobType.patchImageStatus: 'PATCH_IMAGE_STATUS',
   SyncJobType.pushAnswerKey: 'PUSH_ANSWER_KEY',
   SyncJobType.deleteBatch: 'DELETE_BATCH',
+  SyncJobType.deleteScan: 'DELETE_SCAN',
   SyncJobType.deleteStoragePrefix: 'DELETE_STORAGE_PREFIX',
 };
 
@@ -193,6 +195,8 @@ class SyncJob {
         return 'PUSH_ANSWER_KEY:$entityId';
       case SyncJobType.deleteBatch:
         return 'DELETE_BATCH:$batchId';
+      case SyncJobType.deleteScan:
+        return 'DELETE_SCAN:$batchId:$scanId';
       case SyncJobType.deleteStoragePrefix:
         return 'DELETE_STORAGE_PREFIX:$batchId';
     }

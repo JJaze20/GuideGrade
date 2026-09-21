@@ -319,6 +319,19 @@ class LocalBatch {
           .map((p) => (a: scans[p.indexA], b: scans[p.indexB], matchFraction: p.matchFraction))
           .toList();
 
+  /// Scans the scanner flagged as unclear (double/stray marks) that nobody has
+  /// resolved yet, in capture order. Derived from data already stored on each
+  /// scan — no image is decoded. A wrong answer never lands here; only scanner
+  /// uncertainty does. See [LocalScan.unresolvedFlaggedItems].
+  List<LocalScan> get scansNeedingReview =>
+      scans.where((s) => s.needsReview).toList();
+
+  /// How many scans are in [scansNeedingReview]. Zero clears the batch's
+  /// "Needs review" indicator.
+  int get needsReviewCount => scans.where((s) => s.needsReview).length;
+
+  bool get needsReview => scans.any((s) => s.needsReview);
+
   bool get isDraft => status == 'Draft';
   bool get isActive => status == 'Active';
   bool get isCompleted => status == 'Completed';
@@ -463,6 +476,23 @@ class LocalScan {
   /// there are none.
   OmrScanResult get effectiveDecoded =>
       CorrectionRules.effective(decoded, corrections, captureRevision);
+
+  /// Items the scanner could not read cleanly (a double/stray mark) that a
+  /// reviewer has not yet decided. An item leaves this list as soon as the
+  /// current capture has an active correction for it. Read from the stored
+  /// [decoded] answers and [corrections] only — nothing is re-decoded.
+  List<OmrItemResult> get unresolvedFlaggedItems {
+    final active = activeCorrections;
+    return [
+      for (final item in decoded.items)
+        if (item.isAmbiguous &&
+            !active.containsKey(AnswerCorrection.keyFor(item.sectionName, item.itemNumber)))
+          item,
+    ];
+  }
+
+  /// Whether at least one flagged item is still unresolved.
+  bool get needsReview => unresolvedFlaggedItems.isNotEmpty;
 
   /// Corrections on this capture that currently change an answer.
   Map<String, AnswerCorrection> get activeCorrections =>

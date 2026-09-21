@@ -432,6 +432,8 @@ class SyncManager extends ChangeNotifier {
         return client.patchImageStatus(job.batchId!, job.scanId!);
       case SyncJobType.pushAnswerKey:
         return client.pushAnswerKey(job.entityId, meta: job.meta);
+      case SyncJobType.deleteScan:
+        return client.deleteScan(job.batchId!, job.scanId!);
       case SyncJobType.deleteBatch:
         return client.deleteBatch(job.batchId!);
       case SyncJobType.deleteStoragePrefix:
@@ -448,6 +450,7 @@ class SyncManager extends ChangeNotifier {
       case SyncJobType.pushScan:
       case SyncJobType.uploadImage:
       case SyncJobType.patchImageStatus:
+      case SyncJobType.deleteScan:
         if (job.batchId == null) return 'batchId';
         if (job.scanId == null) return 'scanId';
         return null;

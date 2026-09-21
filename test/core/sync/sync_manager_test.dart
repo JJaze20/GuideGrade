@@ -135,6 +135,10 @@ class _FakeSyncClient implements SyncClient {
   }
 
   @override
+  Future<SyncOutcome> deleteScan(String batchId, String scanId) =>
+      _run('deleteScan:$batchId:$scanId');
+
+  @override
   Future<SyncOutcome> deleteBatch(String batchId) =>
       _run('deleteBatch:$batchId');
 
