@@ -1,91 +1,57 @@
 "use strict";
 
 /**
- * GuideGrade — Phase 3 Cloud Function.
+ * GuideGrade Cloud Function: keep the Firebase custom claims Supabase needs
+ * in sync with the Firestore `users/{uid}` document.
  *
- * PURPOSE (and the ONLY thing this function does):
- *   Project the single Firebase custom claim that Supabase's native Firebase
- *   third-party auth integration requires — `role: "authenticated"` — from
- *   the app's existing source of truth, the Firestore `users/{uid}` doc.
+ * Claim policy (see claims.js for the full rules and their tests):
+ *   ACTIVE guidance_council -> role="authenticated" AND user_role="guidance_council"
+ *   everyone else           -> those two claims absent
  *
- * It is a READ-ONLY PROJECTION:
- *   - never writes Firestore
- *   - never changes `role`, `isActive`, `guidancePosition`, or any user field
- *   - never touches the Admin Console, User Management, System Logs,
- *     AuthService, UserProvisioningService, or any login flow
- *   - only calls admin.auth().setCustomUserClaims(uid, ...)
- *
- * CLAIM POLICY (smallest safe form for Phase 3):
- *   active guidance_council user  ->  { role: "authenticated" }
- *   everyone else (system_admin, deactivated, unknown role, deleted doc,
- *                  no matching auth user)  ->  claims cleared (null)
- *
- *   `role: "authenticated"` on its own GRANTS NOTHING — with no tables and
- *   no RLS/Storage policies deployed it only lets Supabase run the request
- *   as the `authenticated` Postgres role instead of `anon`. Because a
- *   system_admin's token never gets this claim, a system_admin is `anon` to
- *   Supabase and is denied by default now and after RLS is added later.
- *
- *   `user_role` (the guidance-vs-admin authorization claim used by future
- *   RLS) is deliberately NOT set here yet. When it is added in a later
- *   phase, replace the `setCustomUserClaims` payloads below with a merged
- *   object rather than overwriting.
+ * Properties:
+ *   - Authorization comes only from the CURRENT Firestore document (re-read
+ *     on every run, never the possibly-stale event snapshot), never from
+ *     client-supplied data.
+ *   - Unrelated existing custom claims are preserved (merge, not replace).
+ *   - It only READS Firestore and calls admin.auth() (getUser /
+ *     setCustomUserClaims). It NEVER writes Firestore, so the `lastLoginAt` write on every login cannot
+ *     cause a loop -- that write just runs a cheap no-op comparison.
+ *   - A claim change does NOT rewrite an already-issued ID token: the user
+ *     picks it up on their next token refresh (automatic within ~1 hour) or
+ *     re-login. See README.md.
  */
 
 const { onDocumentWritten } = require("firebase-functions/v2/firestore");
 const { logger } = require("firebase-functions/v2");
 const admin = require("firebase-admin");
 
+const { syncUserClaims, readCurrentUserData } = require("./claims");
+
 admin.initializeApp();
 
-/** Desired `role` claim value for a given users/{uid} doc snapshot. */
-function desiredRoleClaim(userData) {
-  const isActiveGuidance =
-    userData != null &&
-    userData.role === "guidance_council" &&
-    userData.isActive === true;
-  return isActiveGuidance ? "authenticated" : null;
-}
-
+// Region MUST match the Firestore database location (`(default)` is in
+// asia-southeast1) -- Gen 2 Firestore triggers are location-bound.
+//
+// retry: true -- failed executions (a thrown Auth/Firestore error, a timeout,
+// a crash between the claim write and its verification) are delivered again,
+// so a failed deactivation cannot stay authorized indefinitely. Safe because
+// the handler is idempotent and every run re-reads the LIVE users/{uid}
+// document, so a redelivered (older) event can never re-grant stale claims.
 exports.syncSupabaseAuthClaim = onDocumentWritten(
-  { document: "users/{uid}", region: "us-central1" },
+  { document: "users/{uid}", region: "asia-southeast1", retry: true },
   async (event) => {
     const uid = event.params.uid;
+    const db = admin.firestore();
 
-    const afterSnap = event.data && event.data.after;
-    const userData =
-      afterSnap && afterSnap.exists ? afterSnap.data() : null; // null = doc deleted
-
-    const wanted = desiredRoleClaim(userData);
-
-    let userRecord;
-    try {
-      userRecord = await admin.auth().getUser(uid);
-    } catch (err) {
-      // The users/{uid} id is the Firebase Auth UID by construction
-      // (see UserProvisioningService). If there is no auth user, there is
-      // nothing to project a claim onto.
-      logger.warn(
-        `syncSupabaseAuthClaim: no Firebase Auth user for users/${uid} (${err.code || err.message}); skipping`
-      );
-      return;
-    }
-
-    const current =
-      (userRecord.customClaims && userRecord.customClaims.role) || null;
-
-    if (current === wanted) {
-      return; // no-op — avoids forcing a needless ID-token refresh
-    }
-
-    // Preserve nothing else on purpose: Phase 3 uses exactly one custom
-    // claim. (A later phase that introduces `user_role` must merge instead.)
-    const nextClaims = wanted ? { role: wanted } : null;
-
-    await admin.auth().setCustomUserClaims(uid, nextClaims);
-
-    logger.info(
-      `syncSupabaseAuthClaim: users/${uid} role claim "${current || "none"}" -> "${wanted || "none"}"`
-    );
+    // The event's own snapshot is deliberately IGNORED: events can arrive
+    // out of order, so a stale one must never decide the claims. The live
+    // users/{uid} document is re-read (and re-verified after any write) --
+    // see syncUserClaims in claims.js. A deleted document reads as null.
+    await syncUserClaims({
+      auth: admin.auth(),
+      uid,
+      readUserData: () => readCurrentUserData(db, uid),
+      logger,
+    });
   }
 );

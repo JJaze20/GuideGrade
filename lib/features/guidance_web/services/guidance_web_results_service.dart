@@ -81,6 +81,19 @@ class GuidanceWebResultsService {
     return read.batches.map(mapCloudBatch).toList();
   }
 
+  /// Ids of every batch archived in the Web application (a `batch_archives`
+  /// marker exists). Used ONLY by the normal Results page to leave archived
+  /// batches out of its own batch list — never to hide scans or history from
+  /// Examinee Records, examinee history, or Unlinked Scans. Read-only.
+  /// Throws [GuidanceWebResultsException] on failure.
+  Future<Set<String>> loadArchivedBatchIds() async {
+    final read = await _client.readBatchArchives();
+    if (!read.isSuccess) {
+      throw GuidanceWebResultsException(_messageFor(read.error));
+    }
+    return {for (final a in read.archives) a.batchId};
+  }
+
   /// Every scan belonging to [batch], mapped the same way
   /// [CloudRestoreService] maps a scan — recomputed official percentage,
   /// TAT breakdown left null here (no answer key is fetched for this list

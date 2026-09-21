@@ -4,6 +4,7 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
 import '../../../models/local_batch.dart';
+import '../services/guidance_web_archive_service.dart';
 import '../services/guidance_web_results_service.dart';
 import 'guidance_web_result_detail_view.dart';
 
@@ -34,10 +35,27 @@ import 'guidance_web_result_detail_view.dart';
 /// itself (`_activeBatch?.examCode == examCode`), not from any per-exam
 /// memory.
 class GuidanceWebResultsView extends StatefulWidget {
-  const GuidanceWebResultsView({super.key, GuidanceWebResultsService? service})
-    : _service = service;
+  const GuidanceWebResultsView({
+    super.key,
+    GuidanceWebResultsService? service,
+    GuidanceWebArchiveService? archiveService,
+    this.archivedBatch,
+    this.onBackToArchive,
+  }) : _service = service,
+       _archiveService = archiveService;
 
   final GuidanceWebResultsService? _service;
+
+  /// Injectable for tests; only touched when the Archive action is used.
+  final GuidanceWebArchiveService? _archiveService;
+
+  /// When set, this page shows exactly this ARCHIVED batch (opened from the
+  /// Web Archive) using the same scan table, search, filter, sort and
+  /// Detailed Result view as the normal Results page — no second
+  /// implementation. The batch dropdowns and the Archive action are not
+  /// shown in this mode; [onBackToArchive] returns to the Archive list.
+  final LocalBatch? archivedBatch;
+  final VoidCallback? onBackToArchive;
 
   @override
   State<GuidanceWebResultsView> createState() => _GuidanceWebResultsViewState();
@@ -56,9 +74,29 @@ const List<(String examCode, String label)> _examGroups = [
   ('QTM', 'Quantitative Math Test (QTM)'),
 ];
 
+/// Sorts scans by their already-computed official percentage
+/// ([LocalScanResult.percentage] — never a recalculation, never the legacy
+/// cloud `score_percentage` column, which isn't even modeled on this class).
+/// Ungraded scans (`result == null`) have no score to sort by and are
+/// always placed last, regardless of direction.
+List<LocalScan> sortScansByScore(List<LocalScan> scans, bool ascending) {
+  final sorted = List<LocalScan>.from(scans);
+  sorted.sort((a, b) {
+    final pa = a.result?.percentage;
+    final pb = b.result?.percentage;
+    if (pa == null && pb == null) return 0;
+    if (pa == null) return 1;
+    if (pb == null) return -1;
+    return ascending ? pa.compareTo(pb) : pb.compareTo(pa);
+  });
+  return sorted;
+}
+
 class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
   late final GuidanceWebResultsService _service =
       widget._service ?? GuidanceWebResultsService();
+  late final GuidanceWebArchiveService _archiveService =
+      widget._archiveService ?? GuidanceWebArchiveService();
   final TextEditingController _searchController = TextEditingController();
 
   bool _loadingBatches = true;
@@ -79,6 +117,12 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
 
   String _statusFilter = 'All';
 
+  /// `null` = natural (as-loaded) order; `true`/`false` = Score column
+  /// sorted ascending/descending. Cycles null → ascending → descending →
+  /// null on each tap of the Score header. Purely a display-order concern —
+  /// never mutates [_scans] or recomputes any result value.
+  bool? _scoreSortAscending;
+
   /// The scan currently open in the Detailed Result view (Phase 3), or null
   /// while the Results table itself is showing. Set only by a row's View
   /// button ([_buildResultRow]) and cleared only by the detail view's own
@@ -91,7 +135,18 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
   void initState() {
     super.initState();
     _searchController.addListener(() => setState(() {}));
-    _loadBatches();
+    final archived = widget.archivedBatch;
+    if (archived != null) {
+      // Archive mode: show exactly this batch; no batch-list request.
+      _loadingBatches = false;
+      _batches = [archived];
+      _activeBatch = archived;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _selectExamBatch(archived.examCode, archived);
+      });
+    } else {
+      _loadBatches();
+    }
   }
 
   @override
@@ -106,8 +161,18 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
       _batchesError = null;
     });
     try {
-      final batches = await _service.loadBatches();
-      batches.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+      final all = await _service.loadBatches();
+      // Batches archived in the Web Archive leave the NORMAL Results list
+      // only. If the archive markers cannot be read (e.g. the table is not
+      // deployed yet) Results still works and simply shows every batch.
+      var archivedIds = <String>{};
+      try {
+        archivedIds = await _service.loadArchivedBatchIds();
+      } catch (_) {}
+      final batches = [
+        for (final b in all)
+          if (!archivedIds.contains(b.id)) b,
+      ]..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
       if (!mounted) return;
       setState(() {
         _batches = batches;
@@ -224,33 +289,161 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              for (var i = 0; i < _examGroups.length; i++) ...[
-                if (i > 0) const SizedBox(width: 16),
-                Expanded(
-                  child: _buildExamDropdown(
-                    _examGroups[i].$1,
-                    _examGroups[i].$2,
+          if (widget.archivedBatch != null)
+            _buildArchivedHeader(widget.archivedBatch!)
+          else
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (var i = 0; i < _examGroups.length; i++) ...[
+                  if (i > 0) const SizedBox(width: 16),
+                  Expanded(
+                    child: _buildExamDropdown(
+                      _examGroups[i].$1,
+                      _examGroups[i].$2,
+                    ),
                   ),
-                ),
+                ],
               ],
-            ],
-          ),
+            ),
           if (_activeBatch != null) ...[
             const SizedBox(height: 14),
             Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 Expanded(flex: 2, child: _buildSearchField()),
                 const SizedBox(width: 16),
                 Expanded(flex: 1, child: _buildStatusFilter()),
+                if (widget.archivedBatch == null) ...[
+                  const SizedBox(width: 16),
+                  OutlinedButton.icon(
+                    key: const Key('archiveBatchButton'),
+                    onPressed: _archiveActiveBatch,
+                    icon: const FaIcon(FontAwesomeIcons.boxArchive, size: 13),
+                    label: const Text('Archive Batch'),
+                  ),
+                ],
               ],
             ),
           ],
         ],
       ),
     );
+  }
+
+  /// Header shown instead of the batch dropdowns when an ARCHIVED batch is
+  /// opened from the Web Archive.
+  Widget _buildArchivedHeader(LocalBatch batch) {
+    return Row(
+      children: [
+        TextButton.icon(
+          onPressed: widget.onBackToArchive,
+          icon: const Icon(Icons.arrow_back, size: 16),
+          label: const Text('Back to Archive'),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Text(
+            '${batch.batchCode} — ${batch.examTitle.isNotEmpty ? batch.examTitle : batch.examCode} (Archived)',
+            style: AppTextStyles.body(size: 12, weight: FontWeight.w700),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// "Archive Batch": only a Completed batch can be archived. Confirms, then
+  /// creates the Web Archive marker (never touching the batch, its scans, or
+  /// its mobile status) and drops the batch from this normal Results list.
+  Future<void> _archiveActiveBatch() async {
+    final batch = _activeBatch;
+    if (batch == null) return;
+
+    if (!batch.isCompleted) {
+      await showDialog<void>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('Cannot Archive This Batch'),
+          content: Text(
+            'Only completed batches can be archived. '
+            '${batch.batchCode} is currently ${batch.status}.',
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
+    final reasonController = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Archive this completed batch?'),
+        content: SizedBox(
+          width: 420,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'The batch will be removed from the normal Results list and '
+                'moved to Archive. Its results, scans, images, answers, and '
+                'examinee records will remain available.',
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                key: const Key('archiveReasonField'),
+                controller: reasonController,
+                decoration: const InputDecoration(labelText: 'Reason (optional)'),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Archive'),
+          ),
+        ],
+      ),
+    );
+    final reason = reasonController.text;
+    if (confirmed != true || !mounted) return;
+
+    try {
+      await _archiveService.archiveBatch(batch, reason: reason);
+      if (!mounted) return;
+      setState(() {
+        _batches = [
+          for (final b in _batches)
+            if (b.id != batch.id) b,
+        ];
+        _activeBatch = null;
+        _scans = [];
+        _viewingScan = null;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${batch.batchCode} was moved to Archive.')),
+      );
+    } on GuidanceWebArchiveException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not archive this batch. Please try again.')),
+      );
+    }
   }
 
   /// One exam-specific batch dropdown, populated ONLY with [_batchesFor]
@@ -421,7 +614,23 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
         'No results match your search or filter.',
       );
     }
-    return _buildTable(filtered);
+    final sortAscending = _scoreSortAscending;
+    final display = sortAscending == null
+        ? filtered
+        : sortScansByScore(filtered, sortAscending);
+    return _buildTable(display);
+  }
+
+  void _cycleScoreSort() {
+    setState(() {
+      if (_scoreSortAscending == null) {
+        _scoreSortAscending = true;
+      } else if (_scoreSortAscending == true) {
+        _scoreSortAscending = false;
+      } else {
+        _scoreSortAscending = null;
+      }
+    });
   }
 
   Widget _buildMessage(
@@ -493,12 +702,34 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
       child: Row(
         children: [
           SizedBox(width: 28, child: Text('#', style: style)),
-          Expanded(flex: 3, child: Text('EXAMINEE', style: style)),
-          Expanded(flex: 2, child: Text('NUMBER', style: style)),
-          Expanded(flex: 2, child: Text('SCORE', style: style)),
+          Expanded(flex: 4, child: Text('EXAMINEE', style: style)),
+          Expanded(flex: 2, child: _buildScoreHeader(style)),
           Expanded(flex: 1, child: Text('%', style: style)),
           Expanded(flex: 2, child: Text('STATUS', style: style)),
           const SizedBox(width: 72),
+        ],
+      ),
+    );
+  }
+
+  /// The Score column header, tappable to cycle sort order (see
+  /// [_cycleScoreSort]). Icon reflects the current state: unsorted shows a
+  /// neutral up/down glyph, ascending an up arrow, descending a down arrow —
+  /// the standard convention (↑ lowest→highest, ↓ highest→lowest).
+  Widget _buildScoreHeader(TextStyle style) {
+    final ascending = _scoreSortAscending;
+    final IconData icon = ascending == null
+        ? Icons.unfold_more
+        : (ascending ? Icons.arrow_upward : Icons.arrow_downward);
+    return InkWell(
+      key: const Key('scoreSortHeader'),
+      onTap: _cycleScoreSort,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text('SCORE', style: style),
+          const SizedBox(width: 4),
+          Icon(icon, size: 13, color: style.color),
         ],
       ),
     );
@@ -508,9 +739,6 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
     final examinee = scan.examinee;
     final result = scan.result;
     final name = examinee?.displayName ?? 'Untagged';
-    final number = examinee?.examineeNumber.isNotEmpty == true
-        ? examinee!.examineeNumber
-        : '—';
     final score = result == null
         ? '—'
         : '${result.rawScore} / ${_denominatorFor(batch, result)}';
@@ -529,7 +757,7 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
             child: Text('$index', style: AppTextStyles.body(size: 11)),
           ),
           Expanded(
-            flex: 3,
+            flex: 4,
             child: Text(
               name,
               style: AppTextStyles.body(
@@ -541,10 +769,6 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
               ),
               overflow: TextOverflow.ellipsis,
             ),
-          ),
-          Expanded(
-            flex: 2,
-            child: Text(number, style: AppTextStyles.body(size: 11)),
           ),
           Expanded(
             flex: 2,

@@ -1,0 +1,1070 @@
+import 'dart:typed_data';
+
+import 'package:flutter/material.dart';
+import 'package:font_awesome_flutter/font_awesome_flutter.dart';
+
+import '../../../core/constants/app_colors.dart';
+import '../../../core/constants/app_text_styles.dart';
+import '../../../models/examinee_record.dart';
+import '../../../models/local_batch.dart';
+import '../services/guidance_web_examinee_records_service.dart';
+import '../services/guidance_web_results_service.dart';
+import 'guidance_web_examinee_detail_view.dart';
+
+const List<String> _statusFilterOptions = ['All', 'Active', 'Archived'];
+
+enum _RecordsTab { examinees, unlinkedScans }
+
+/// The Guidance Council Web Console's Examinee Records page.
+///
+/// There is deliberately NO "Add Examinee" button and no blank-record
+/// creation path anywhere in this file: every [ExamineeRecord] originates
+/// from a specific scan, via one of two explicit, human-confirmed actions
+/// surfaced in the "Unlinked Scans" tab —
+/// "Create Examinee Record from this Scan" (a brand-new applicant) or
+/// "Link to Existing Examinee" (a later exam for someone already on file).
+/// Neither action ever guesses: OCR-detected names are shown as a starting
+/// point only, and nothing is linked or created without an explicit click
+/// and a final confirmation naming both sides of the action.
+///
+/// Search and the status filter both run over the already-loaded examinee
+/// list in memory, mirroring [GuidanceWebResultsView]'s own convention —
+/// only loading, creating, linking, or archiving/restoring issues a new
+/// Supabase request.
+///
+/// System Admin never reaches this widget at all: it is only ever built
+/// from inside `GuidanceWebHomeScreen`'s sidebar body, which itself is only
+/// reachable via a route gated to `role == 'guidance_council'` (see
+/// `AppRoutes._guidanceWebRoutes`) — no separate access check is needed
+/// here.
+class GuidanceWebExamineeRecordsView extends StatefulWidget {
+  const GuidanceWebExamineeRecordsView({
+    super.key,
+    GuidanceWebExamineeRecordsService? service,
+    GuidanceWebResultsService? resultsService,
+  })  : _service = service,
+        _resultsService = resultsService;
+
+  final GuidanceWebExamineeRecordsService? _service;
+
+  /// Used only to preview a scan's image from the Unlinked Scans queue —
+  /// injectable for tests, same reasoning as
+  /// `GuidanceWebExamineeDetailView._resultsService`.
+  final GuidanceWebResultsService? _resultsService;
+
+  @override
+  State<GuidanceWebExamineeRecordsView> createState() =>
+      _GuidanceWebExamineeRecordsViewState();
+}
+
+class _GuidanceWebExamineeRecordsViewState
+    extends State<GuidanceWebExamineeRecordsView> {
+  late final GuidanceWebExamineeRecordsService _service =
+      widget._service ?? GuidanceWebExamineeRecordsService();
+  late final GuidanceWebResultsService _resultsService =
+      widget._resultsService ?? GuidanceWebResultsService();
+  final TextEditingController _searchController = TextEditingController();
+
+  _RecordsTab _tab = _RecordsTab.examinees;
+
+  bool _loadingExaminees = true;
+  List<ExamineeRecord> _examinees = [];
+  String? _examineesError;
+  String _statusFilter = 'Active';
+
+  bool _loadingUnlinked = true;
+  List<ExamineeHistoryItem> _unlinkedScans = [];
+  String? _unlinkedError;
+
+  /// The examinee currently open in the Detail view, or null while a tab's
+  /// own list is showing.
+  ExamineeRecord? _viewingExaminee;
+
+  @override
+  void initState() {
+    super.initState();
+    _searchController.addListener(() => setState(() {}));
+    _loadExaminees();
+    _loadUnlinkedScans();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadExaminees() async {
+    setState(() {
+      _loadingExaminees = true;
+      _examineesError = null;
+    });
+    try {
+      final examinees = await _service.loadExaminees();
+      examinees.sort((a, b) => a.displayName.compareTo(b.displayName));
+      if (!mounted) return;
+      setState(() {
+        _examinees = examinees;
+        _loadingExaminees = false;
+      });
+    } on GuidanceWebExamineeRecordsException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _examineesError = e.message;
+        _loadingExaminees = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _examineesError = 'Could not load examinee records. Please try again.';
+        _loadingExaminees = false;
+      });
+    }
+  }
+
+  Future<void> _loadUnlinkedScans() async {
+    setState(() {
+      _loadingUnlinked = true;
+      _unlinkedError = null;
+    });
+    try {
+      final scans = await _service.loadUnlinkedScans();
+      if (!mounted) return;
+      setState(() {
+        _unlinkedScans = scans;
+        _loadingUnlinked = false;
+      });
+    } on GuidanceWebExamineeRecordsException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _unlinkedError = e.message;
+        _loadingUnlinked = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _unlinkedError = 'Could not load unlinked scans. Please try again.';
+        _loadingUnlinked = false;
+      });
+    }
+  }
+
+  List<ExamineeRecord> get _filteredExaminees {
+    final term = _searchController.text.trim().toLowerCase();
+    return _examinees.where((e) {
+      if (_statusFilter == 'Active' && !e.isActive) return false;
+      if (_statusFilter == 'Archived' && !e.isArchived) return false;
+      if (term.isEmpty) return true;
+      return e.displayName.toLowerCase().contains(term) ||
+          e.temporaryExamineeId.toLowerCase().contains(term);
+    }).toList();
+  }
+
+  Future<void> _toggleArchive(ExamineeRecord examinee) async {
+    final archiving = examinee.isActive;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text(archiving ? 'Archive Examinee' : 'Restore Examinee'),
+        content: Text(
+          archiving
+              ? 'Archive ${examinee.displayName}? This does not delete any examination results — the record can be restored at any time.'
+              : 'Restore ${examinee.displayName} to active records?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(archiving ? 'Archive' : 'Restore'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      final updated = archiving
+          ? await _service.archiveExaminee(examinee)
+          : await _service.restoreExaminee(examinee);
+      if (!mounted) return;
+      setState(() {
+        _examinees = [
+          for (final e in _examinees) e.id == updated.id ? updated : e,
+        ];
+      });
+    } on GuidanceWebExamineeRecordsException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+    }
+  }
+
+  Future<void> _createFromScan(ExamineeHistoryItem item) async {
+    final created = await showDialog<ExamineeRecord>(
+      context: context,
+      builder: (_) => _CreateExamineeFromScanDialog(service: _service, item: item),
+    );
+    if (created == null || !mounted) return;
+    setState(() {
+      _examinees = [..._examinees, created]
+        ..sort((a, b) => a.displayName.compareTo(b.displayName));
+      _unlinkedScans = [
+        for (final s in _unlinkedScans) if (s.scan.id != item.scan.id) s,
+      ];
+      // "show the new Examinee Record" -- go straight to its detail page.
+      _viewingExaminee = created;
+    });
+  }
+
+  Future<void> _linkToExisting(ExamineeHistoryItem item) async {
+    final linked = await showDialog<bool>(
+      context: context,
+      builder: (_) => _LinkExistingExamineeDialog(
+        service: _service,
+        item: item,
+        examinees: _examinees,
+      ),
+    );
+    if (linked != true || !mounted) return;
+    setState(() {
+      _unlinkedScans = [
+        for (final s in _unlinkedScans) if (s.scan.id != item.scan.id) s,
+      ];
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Scan attached to the selected Examinee Record.')),
+    );
+  }
+
+  Future<void> _previewImage(ExamineeHistoryItem item) async {
+    await showDialog<void>(
+      context: context,
+      builder: (_) => _ScanImagePreviewDialog(
+        service: _resultsService,
+        batch: item.batch,
+        scan: item.scan,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final viewing = _viewingExaminee;
+    return Padding(
+      padding: const EdgeInsets.all(24),
+      child: viewing != null
+          ? GuidanceWebExamineeDetailView(
+              examinee: viewing,
+              service: _service,
+              resultsService: _resultsService,
+              onBack: () => setState(() => _viewingExaminee = null),
+              // A scan attached/removed from the detail page changes the
+              // Unlinked Scans queue, so re-read it.
+              onLinksChanged: _loadUnlinkedScans,
+              onExamineeUpdated: (updated) => setState(() {
+                _viewingExaminee = updated;
+                _examinees = [
+                  for (final e in _examinees) e.id == updated.id ? updated : e,
+                ];
+              }),
+            )
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _buildTabSwitcher(),
+                const SizedBox(height: 16),
+                Expanded(
+                  child: _tab == _RecordsTab.examinees
+                      ? _buildExamineesTab()
+                      : _buildUnlinkedScansTab(),
+                ),
+              ],
+            ),
+    );
+  }
+
+  Widget _buildTabSwitcher() {
+    return Row(
+      children: [
+        _tabButton(_RecordsTab.examinees, 'Examinees'),
+        const SizedBox(width: 8),
+        _tabButton(
+          _RecordsTab.unlinkedScans,
+          'Unlinked Scans${_unlinkedScans.isEmpty ? '' : ' (${_unlinkedScans.length})'}',
+        ),
+      ],
+    );
+  }
+
+  Widget _tabButton(_RecordsTab tab, String label) {
+    final selected = _tab == tab;
+    return TextButton(
+      onPressed: () => setState(() => _tab = tab),
+      style: TextButton.styleFrom(
+        backgroundColor: selected ? AppColors.emerald100 : Colors.transparent,
+        foregroundColor: selected ? AppColors.primaryGreen : AppColors.textGray,
+      ),
+      child: Text(label, style: AppTextStyles.body(size: 11.5, weight: FontWeight.w700)),
+    );
+  }
+
+  // -------------------------------------------------------------------
+  // Examinees tab
+  // -------------------------------------------------------------------
+
+  Widget _buildExamineesTab() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildExamineesControls(),
+        const SizedBox(height: 16),
+        Expanded(child: _buildExamineesBody()),
+      ],
+    );
+  }
+
+  Widget _buildExamineesControls() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.cardBorder),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(flex: 2, child: _buildSearchField()),
+          const SizedBox(width: 16),
+          Expanded(child: _buildStatusFilter()),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSearchField() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Search', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600)),
+        const SizedBox(height: 6),
+        TextField(
+          controller: _searchController,
+          decoration: _fieldDecoration(
+            hint: 'Search name or Temporary Examinee ID...',
+          ).copyWith(prefixIcon: const Icon(Icons.search, size: 18)),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildStatusFilter() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Status', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600)),
+        const SizedBox(height: 6),
+        DropdownButtonFormField<String>(
+          initialValue: _statusFilter,
+          decoration: _fieldDecoration(),
+          items: _statusFilterOptions
+              .map((s) => DropdownMenuItem(value: s, child: Text(s, style: AppTextStyles.body(size: 11))))
+              .toList(),
+          onChanged: (v) => setState(() => _statusFilter = v ?? 'Active'),
+        ),
+      ],
+    );
+  }
+
+  InputDecoration _fieldDecoration({String? hint}) {
+    return InputDecoration(
+      hintText: hint,
+      isDense: true,
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+        borderSide: const BorderSide(color: AppColors.cardBorder),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+        borderSide: const BorderSide(color: AppColors.cardBorder),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+        borderSide: const BorderSide(color: AppColors.primaryGreen),
+      ),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+    );
+  }
+
+  Widget _buildExamineesBody() {
+    if (_loadingExaminees) return _buildMessage(FontAwesomeIcons.spinner, 'Loading examinee records...');
+    if (_examineesError != null) {
+      return _buildMessage(FontAwesomeIcons.triangleExclamation, _examineesError!, isError: true);
+    }
+    if (_examinees.isEmpty) {
+      return _buildMessage(FontAwesomeIcons.userGraduate, 'No examinee records found.');
+    }
+    final filtered = _filteredExaminees;
+    if (filtered.isEmpty) {
+      return _buildMessage(FontAwesomeIcons.magnifyingGlass, 'No examinees match your search or filter.');
+    }
+    return _buildExamineeTable(filtered);
+  }
+
+  Widget _buildMessage(FaIconData icon, String message, {bool isError = false}) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          FaIcon(icon, size: 36, color: isError ? AppColors.warmRedOrange : AppColors.textGray),
+          const SizedBox(height: 14),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 360),
+            child: Text(
+              message,
+              textAlign: TextAlign.center,
+              style: AppTextStyles.body(size: 11.5, color: isError ? AppColors.warmRedOrange : AppColors.textGray),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildExamineeTable(List<ExamineeRecord> examinees) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.cardBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _buildExamineeTableHeader(),
+          const Divider(height: 1, color: AppColors.cardBorder),
+          Expanded(
+            child: ListView.separated(
+              itemCount: examinees.length,
+              separatorBuilder: (_, _) => const Divider(height: 1, color: AppColors.cardBorder),
+              itemBuilder: (context, index) => _buildExamineeRow(examinees[index]),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildExamineeTableHeader() {
+    final style = AppTextStyles.body(size: 9.5, weight: FontWeight.w800, color: AppColors.textGray);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: Row(
+        children: [
+          Expanded(flex: 3, child: Text('NAME', style: style)),
+          Expanded(flex: 2, child: Text('TEMPORARY ID', style: style)),
+          Expanded(flex: 1, child: Text('STATUS', style: style)),
+          const SizedBox(width: 175),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildExamineeRow(ExamineeRecord examinee) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: Row(
+        children: [
+          Expanded(
+            flex: 3,
+            child: Text(
+              examinee.displayName,
+              style: AppTextStyles.body(size: 11, weight: FontWeight.w600),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          Expanded(flex: 2, child: Text(examinee.temporaryExamineeId, style: AppTextStyles.body(size: 11))),
+          Expanded(flex: 1, child: _statusChip(examinee)),
+          SizedBox(
+            width: 175,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton(
+                  style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 8)),
+                  onPressed: () => _toggleArchive(examinee),
+                  child: Text(
+                    examinee.isActive ? 'Archive' : 'Restore',
+                    style: AppTextStyles.body(size: 10.5, weight: FontWeight.w700, color: AppColors.textGray),
+                  ),
+                ),
+                TextButton(
+                  style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 8)),
+                  onPressed: () => setState(() => _viewingExaminee = examinee),
+                  child: Text(
+                    'View',
+                    style: AppTextStyles.body(size: 10.5, weight: FontWeight.w700, color: AppColors.primaryGreen),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _statusChip(ExamineeRecord examinee) {
+    final isActive = examinee.isActive;
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: isActive ? AppColors.emerald100 : const Color(0xFFF3F4F6),
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Text(
+          isActive ? 'Active' : 'Archived',
+          style: AppTextStyles.body(
+            size: 9.5,
+            weight: FontWeight.w700,
+            color: isActive ? const Color(0xFF065F46) : AppColors.textGray,
+          ),
+        ),
+      ),
+    );
+  }
+
+  // -------------------------------------------------------------------
+  // Unlinked Scans tab
+  // -------------------------------------------------------------------
+
+  Widget _buildUnlinkedScansTab() {
+    if (_loadingUnlinked) return _buildMessage(FontAwesomeIcons.spinner, 'Loading unlinked scans...');
+    if (_unlinkedError != null) {
+      return _buildMessage(FontAwesomeIcons.triangleExclamation, _unlinkedError!, isError: true);
+    }
+    if (_unlinkedScans.isEmpty) {
+      return _buildMessage(FontAwesomeIcons.circleCheck, 'No unlinked scans — every scan has an Examinee Record.');
+    }
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.cardBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _buildUnlinkedTableHeader(),
+          const Divider(height: 1, color: AppColors.cardBorder),
+          Expanded(
+            child: ListView.separated(
+              itemCount: _unlinkedScans.length,
+              separatorBuilder: (_, _) => const Divider(height: 1, color: AppColors.cardBorder),
+              itemBuilder: (context, index) => _buildUnlinkedRow(_unlinkedScans[index]),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildUnlinkedTableHeader() {
+    final style = AppTextStyles.body(size: 9.5, weight: FontWeight.w800, color: AppColors.textGray);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: Row(
+        children: [
+          Expanded(flex: 3, child: Text('OCR NAME', style: style)),
+          Expanded(flex: 1, child: Text('EXAM', style: style)),
+          Expanded(flex: 2, child: Text('BATCH', style: style)),
+          Expanded(flex: 2, child: Text('CAPTURED', style: style)),
+          const SizedBox(width: 480),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildUnlinkedRow(ExamineeHistoryItem item) {
+    final name = item.scan.examinee?.displayName;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: Row(
+        children: [
+          Expanded(
+            flex: 3,
+            child: Text(
+              (name == null || name.isEmpty) ? 'Unnamed' : name,
+              style: AppTextStyles.body(
+                size: 11,
+                weight: FontWeight.w600,
+                color: (name == null || name.isEmpty) ? AppColors.textGray : AppColors.textDark,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          Expanded(flex: 1, child: Text(item.examCode, style: AppTextStyles.body(size: 11))),
+          Expanded(flex: 2, child: Text(item.batch.batchCode, style: AppTextStyles.body(size: 11))),
+          Expanded(flex: 2, child: Text(_formatDate(item.scan.capturedAt), style: AppTextStyles.body(size: 11))),
+          SizedBox(
+            width: 610,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton(
+                  style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 6)),
+                  onPressed: () => _previewImage(item),
+                  child: Text('View Image', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w700, color: AppColors.textGray)),
+                ),
+                TextButton(
+                  style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 6)),
+                  onPressed: () => _linkToExisting(item),
+                  child: Text('Link to Existing', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w700, color: AppColors.textGray)),
+                ),
+                TextButton(
+                  style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 6)),
+                  onPressed: () => _createFromScan(item),
+                  child: Text('Confirm and Create Examinee', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w700, color: AppColors.primaryGreen)),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+const List<String> _months = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+];
+
+String _formatDate(DateTime d) => '${_months[d.month - 1]} ${d.day}, ${d.year}';
+
+/// Workflow 1 — "Create Examinee Record from this Scan." Pre-filled from
+/// [item].scan's own confirmed tag (never a blank form); the name fields
+/// are freely editable and NOT required, since OCR failure must never
+/// block creating the record — the Temporary Examinee ID exists
+/// independently of whether a name was ever captured.
+class _CreateExamineeFromScanDialog extends StatefulWidget {
+  const _CreateExamineeFromScanDialog({required this.service, required this.item});
+
+  final GuidanceWebExamineeRecordsService service;
+  final ExamineeHistoryItem item;
+
+  @override
+  State<_CreateExamineeFromScanDialog> createState() => _CreateExamineeFromScanDialogState();
+}
+
+class _CreateExamineeFromScanDialogState extends State<_CreateExamineeFromScanDialog> {
+  late final TextEditingController _firstName =
+      TextEditingController(text: widget.item.scan.examinee?.firstName ?? '');
+  late final TextEditingController _middleName =
+      TextEditingController(text: widget.item.scan.examinee?.middleName ?? '');
+  late final TextEditingController _lastName =
+      TextEditingController(text: widget.item.scan.examinee?.lastName ?? '');
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _firstName.dispose();
+    _middleName.dispose();
+    _lastName.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      final created = await widget.service.createExamineeFromScan(
+        batchId: widget.item.batch.id,
+        scan: widget.item.scan,
+        firstName: _firstName.text.trim(),
+        middleName: _middleName.text.trim().isEmpty ? null : _middleName.text.trim(),
+        lastName: _lastName.text.trim(),
+      );
+      if (!mounted) return;
+      Navigator.pop(context, created);
+    } on GuidanceWebExamineeRecordsException catch (e) {
+      setState(() {
+        _error = e.message;
+        _saving = false;
+      });
+    } catch (_) {
+      setState(() {
+        _error = 'Could not create this Examinee Record. Please try again.';
+        _saving = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Create Examinee Record from this Scan'),
+      content: SizedBox(
+        width: 420,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '${widget.item.examCode} — Batch ${widget.item.batch.batchCode} — ${_formatDate(widget.item.scan.capturedAt)}',
+              style: AppTextStyles.body(size: 10.5, color: AppColors.textGray),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'A new, permanent Temporary Examinee ID will be generated by the database. '
+              'Correct the name below if OCR read it wrong or left it blank.',
+              style: AppTextStyles.body(size: 10.5, color: AppColors.textGray),
+            ),
+            const SizedBox(height: 12),
+            TextFormField(
+              controller: _firstName,
+              decoration: const InputDecoration(labelText: 'First name'),
+            ),
+            const SizedBox(height: 10),
+            TextFormField(
+              controller: _middleName,
+              decoration: const InputDecoration(labelText: 'Middle name (optional)'),
+            ),
+            const SizedBox(height: 10),
+            TextFormField(
+              controller: _lastName,
+              decoration: const InputDecoration(labelText: 'Last name'),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 10),
+              Text(_error!, style: AppTextStyles.body(size: 11, color: AppColors.warmRedOrange)),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _saving ? null : _save,
+          child: Text(_saving ? 'Creating...' : 'Create Examinee Record'),
+        ),
+      ],
+    );
+  }
+}
+
+/// Workflow 3 — "Link to Existing Examinee." Searches the ALREADY-LOADED
+/// examinee list in memory (no new request per keystroke); the OCR name on
+/// [item], if any, only pre-fills the search box as a starting point — it
+/// never pre-selects or auto-confirms a candidate. Guidance Council must
+/// explicitly click a row, then explicitly confirm, before
+/// `scans.examinee_id` is ever touched.
+class _LinkExistingExamineeDialog extends StatefulWidget {
+  const _LinkExistingExamineeDialog({
+    required this.service,
+    required this.item,
+    required this.examinees,
+  });
+
+  final GuidanceWebExamineeRecordsService service;
+  final ExamineeHistoryItem item;
+  final List<ExamineeRecord> examinees;
+
+  @override
+  State<_LinkExistingExamineeDialog> createState() => _LinkExistingExamineeDialogState();
+}
+
+class _LinkExistingExamineeDialogState extends State<_LinkExistingExamineeDialog> {
+  late final TextEditingController _search =
+      TextEditingController(text: widget.item.scan.examinee?.displayName ?? '');
+  ExamineeRecord? _selected;
+  bool _linking = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _search.addListener(() => setState(() {}));
+  }
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  List<ExamineeRecord> get _candidates {
+    final term = _search.text.trim().toLowerCase();
+    if (term.isEmpty) return widget.examinees;
+    return widget.examinees
+        .where((e) =>
+            e.displayName.toLowerCase().contains(term) ||
+            e.temporaryExamineeId.toLowerCase().contains(term))
+        .toList();
+  }
+
+  Future<void> _confirmAndLink(ExamineeRecord examinee) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Attach Scan to Examinee Record'),
+        content: Text(
+          'Attach this ${widget.item.examCode} scan from Batch ${widget.item.batch.batchCode} '
+          'to Examinee Record ${examinee.temporaryExamineeId} (${examinee.displayName})?',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Confirm Attach')),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() {
+      _linking = true;
+      _error = null;
+      _selected = examinee;
+    });
+    try {
+      await widget.service.linkScanToExaminee(
+        batchId: widget.item.batch.id,
+        scan: widget.item.scan,
+        examinee: examinee,
+        examCode: widget.item.examCode,
+      );
+      if (!mounted) return;
+      Navigator.pop(context, true);
+    } on GuidanceWebExamineeRecordsException catch (e) {
+      setState(() {
+        _error = e.message;
+        _linking = false;
+      });
+    } catch (_) {
+      setState(() {
+        _error = 'Could not attach this scan. Please try again.';
+        _linking = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final candidates = _candidates;
+    return AlertDialog(
+      title: const Text('Link to Existing Examinee'),
+      content: SizedBox(
+        width: 460,
+        height: 420,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              '${widget.item.examCode} — Batch ${widget.item.batch.batchCode} — ${_formatDate(widget.item.scan.capturedAt)}',
+              style: AppTextStyles.body(size: 10.5, color: AppColors.textGray),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _search,
+              decoration: const InputDecoration(
+                labelText: 'Search name or Temporary Examinee ID',
+                prefixIcon: Icon(Icons.search, size: 18),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Expanded(
+              child: candidates.isEmpty
+                  ? Center(
+                      child: Text('No matching Examinee Records.', style: AppTextStyles.body(size: 11, color: AppColors.textGray)),
+                    )
+                  : ListView.separated(
+                      itemCount: candidates.length,
+                      separatorBuilder: (_, _) => const Divider(height: 1, color: AppColors.cardBorder),
+                      itemBuilder: (context, index) {
+                        final e = candidates[index];
+                        return ListTile(
+                          dense: true,
+                          title: Text(e.displayName, style: AppTextStyles.body(size: 12, weight: FontWeight.w600)),
+                          subtitle: Text(e.temporaryExamineeId, style: AppTextStyles.body(size: 10.5, color: AppColors.textGray)),
+                          trailing: (_linking && _selected?.id == e.id)
+                              ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                              : null,
+                          onTap: _linking ? null : () => _confirmAndLink(e),
+                        );
+                      },
+                    ),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 8),
+              Text(_error!, style: AppTextStyles.body(size: 11, color: AppColors.warmRedOrange)),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _linking ? null : () => Navigator.pop(context, false),
+          child: const Text('Cancel'),
+        ),
+      ],
+    );
+  }
+}
+
+/// A plain photo preview for a scan in the Unlinked Scans queue — never the
+/// graded overlay [GuidanceWebResultDetailView] draws (that requires a
+/// scored/answer-keyed context an unlinked, possibly-ungraded scan may not
+/// have). Rectified image preferred, original as a fallback, matching
+/// [GuidanceWebResultDetailView]'s own convention.
+class _ScanImagePreviewDialog extends StatefulWidget {
+  const _ScanImagePreviewDialog({required this.service, required this.batch, required this.scan});
+
+  final GuidanceWebResultsService service;
+  final LocalBatch batch;
+  final LocalScan scan;
+
+  @override
+  State<_ScanImagePreviewDialog> createState() => _ScanImagePreviewDialogState();
+}
+
+class _ScanImagePreviewDialogState extends State<_ScanImagePreviewDialog> {
+  bool _loading = true;
+  Uint8List? _bytes;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      Uint8List? bytes;
+      if (widget.scan.rectifiedImageFileName != null) {
+        bytes = await widget.service.loadScanImage(widget.batch.id, widget.scan.id, rectified: true);
+      }
+      bytes ??= await widget.service.loadScanImage(widget.batch.id, widget.scan.id, rectified: false);
+      if (!mounted) return;
+      setState(() {
+        _bytes = bytes;
+        _loading = false;
+      });
+    } on GuidanceWebResultsException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.message;
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _error = 'Could not load the scan image.';
+        _loading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      child: SizedBox(
+        width: 500,
+        height: 500,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            children: [
+              Align(
+                alignment: Alignment.topRight,
+                child: IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(context)),
+              ),
+              Expanded(
+                child: Center(
+                  child: _loading
+                      ? const CircularProgressIndicator()
+                      : _error != null
+                          ? Text(_error!, style: AppTextStyles.body(size: 11, color: AppColors.warmRedOrange))
+                          : _bytes == null
+                              ? Text('No image available.', style: AppTextStyles.body(size: 11, color: AppColors.textGray))
+                              : Column(
+                                  // Stretch so the click target is the whole
+                                  // preview box, even before the image decodes.
+                                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                                  children: [
+                                    Expanded(
+                                      child: MouseRegion(
+                                        cursor: SystemMouseCursors.zoomIn,
+                                        child: GestureDetector(
+                                          key: const Key('scanPreviewImage'),
+                                          behavior: HitTestBehavior.opaque,
+                                          onTap: () => showDialog<void>(
+                                            context: context,
+                                            builder: (_) => _ZoomableImageViewer(bytes: _bytes!),
+                                          ),
+                                          child: Image.memory(_bytes!, fit: BoxFit.contain),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      'Click the image to zoom',
+                                      textAlign: TextAlign.center,
+                                      style: AppTextStyles.body(size: 10, color: AppColors.textGray),
+                                    ),
+                                  ],
+                                ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Full-screen, zoomable view of a scan photo (opened by clicking the
+/// preview image). Pinch / scroll-wheel / drag to zoom and pan via
+/// [InteractiveViewer]; the close button or Escape dismisses it. Read-only —
+/// it never changes the scan.
+class _ZoomableImageViewer extends StatelessWidget {
+  const _ZoomableImageViewer({required this.bytes});
+
+  final Uint8List bytes;
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog.fullscreen(
+      backgroundColor: Colors.black,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: InteractiveViewer(
+              key: const Key('zoomableScanImage'),
+              minScale: 1,
+              maxScale: 8,
+              child: Center(child: Image.memory(bytes, fit: BoxFit.contain)),
+            ),
+          ),
+          Positioned(
+            top: 8,
+            right: 8,
+            child: IconButton(
+              icon: const Icon(Icons.close, color: Colors.white),
+              tooltip: 'Close',
+              onPressed: () => Navigator.of(context).pop(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}

@@ -5,6 +5,9 @@ import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
 import '../../../core/state/app_state.dart';
 import '../../../shared/utils/logout_helper.dart';
+import 'guidance_web_analytics_view.dart';
+import 'guidance_web_archive_view.dart';
+import 'guidance_web_examinee_records_view.dart';
 import 'guidance_web_results_view.dart';
 
 /// The Guidance Council Web Console's persistent shell: header, sidebar,
@@ -28,7 +31,8 @@ import 'guidance_web_results_view.dart';
 /// destination. Phase 2 wires up Results ([GuidanceWebResultsView]) —
 /// still read-only, still no local write, no `CloudRestoreService`, no
 /// image download (see that class's own doc comment). Examinee Records,
-/// Archive, Analytics, and Export remain placeholders.
+/// Archive ([GuidanceWebArchiveView]) and Analytics
+/// ([GuidanceWebAnalyticsView]) are built; Export remains a placeholder.
 class GuidanceWebHomeScreen extends StatefulWidget {
   const GuidanceWebHomeScreen({super.key});
 
@@ -94,23 +98,11 @@ class _GuidanceWebHomeScreenState extends State<GuidanceWebHomeScreen> {
       case _GuidanceWebDestination.results:
         return const GuidanceWebResultsView();
       case _GuidanceWebDestination.examineeRecords:
-        return const _PlaceholderBody(
-          icon: FontAwesomeIcons.userGraduate,
-          title: 'Examinee Records',
-          message: 'Cross-batch examinee record lookup will be available in a later phase.',
-        );
+        return const GuidanceWebExamineeRecordsView();
       case _GuidanceWebDestination.archive:
-        return const _PlaceholderBody(
-          icon: FontAwesomeIcons.boxArchive,
-          title: 'Archive',
-          message: 'Cloud batch retrieval will be available in a later phase.',
-        );
+        return const GuidanceWebArchiveView();
       case _GuidanceWebDestination.analytics:
-        return const _PlaceholderBody(
-          icon: FontAwesomeIcons.chartColumn,
-          title: 'Analytics',
-          message: 'QTM, TAT, and Admission Test analytics will be available in a later phase.',
-        );
+        return const GuidanceWebAnalyticsView();
       case _GuidanceWebDestination.export:
         return const _PlaceholderBody(
           icon: FontAwesomeIcons.fileExport,
@@ -295,8 +287,8 @@ class _DashboardBody extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           Text(
-            'This is the Guidance Council Web Console. Results, Examinee Records, '
-            'Archive, Analytics, and Export will be built out in upcoming phases.',
+            'This is the Guidance Council Web Console. Export will be built '
+            'out in an upcoming phase.',
             style: AppTextStyles.body(size: 11, color: AppColors.textGray),
           ),
         ],

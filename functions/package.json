@@ -1,12 +1,13 @@
 {
   "name": "guidegrade-functions",
-  "description": "GuideGrade Firebase Cloud Functions (Phase 3: Supabase auth-claim projection only)",
+  "description": "GuideGrade Firebase Cloud Functions (Supabase auth-claim synchronization: role + user_role)",
   "private": true,
   "engines": {
     "node": "20"
   },
   "main": "index.js",
   "scripts": {
+    "test": "node --test claims.test.js",
     "deploy": "firebase deploy --only functions:syncSupabaseAuthClaim",
     "backfill": "node backfill_claims.js"
   },

@@ -1015,6 +1015,463 @@ class SupabaseSyncClient implements SyncClient {
   }
 
   // ---------------------------------------------------------------------------
+  // F2b. Examinee Records -- additive cloud reads/writes for the canonical
+  // `examinees` table and `scans.examinee_id`. Never called by SyncManager;
+  // used only by GuidanceWebExamineeRecordsService. Mirrors readCloudBatches/
+  // readCloudScans's exact guard/retry shape.
+  // ---------------------------------------------------------------------------
+
+  static const List<String> _examineeColumns = [
+    'id',
+    'temporary_examinee_id',
+    'official_student_id',
+    'first_name',
+    'middle_name',
+    'last_name',
+    'birth_date',
+    'last_attended_school',
+    'status',
+    'archived_at',
+    'archived_by_uid',
+    'created_at',
+    'created_by_uid',
+    'updated_at',
+    'updated_by_uid',
+  ];
+
+  /// Parses one raw `examinees` row (as returned by `.select()`) into a
+  /// [CloudExamineeRow].
+  static CloudExamineeRow parseCloudExamineeRow(Map<String, dynamic> row) =>
+      CloudExamineeRow(
+        id: row['id'] as String,
+        temporaryExamineeId: row['temporary_examinee_id'] as String? ?? '',
+        officialStudentId: row['official_student_id'] as String?,
+        firstName: row['first_name'] as String? ?? '',
+        middleName: row['middle_name'] as String?,
+        lastName: row['last_name'] as String? ?? '',
+        birthDate: _dateOrNull(row['birth_date']),
+        lastAttendedSchool: row['last_attended_school'] as String?,
+        status: row['status'] as String? ?? 'active',
+        archivedAt: _dateOrNull(row['archived_at']),
+        archivedByUid: row['archived_by_uid'] as String?,
+        createdAt: _dateOrNull(row['created_at']) ?? DateTime.now().toUtc(),
+        createdByUid: row['created_by_uid'] as String? ?? '',
+        updatedAt: _dateOrNull(row['updated_at']) ?? DateTime.now().toUtc(),
+        updatedByUid: row['updated_by_uid'] as String? ?? '',
+      );
+
+  /// Read-only fetch of every cloud `examinees` row visible under RLS.
+  @override
+  Future<CloudExamineesRead> readCloudExaminees() async {
+    var refreshed = false;
+    while (true) {
+      try {
+        final rows = await _client
+            .from('examinees')
+            .select(_examineeColumns.join(', '));
+        return CloudExamineesRead.found(
+          rows.map((r) => parseCloudExamineeRow(r)).toList(),
+        );
+      } on PostgrestException catch (e) {
+        final code = _sanitizeCode(e.code);
+        if ((code == '401' || code == 'PGRST301') && !refreshed) {
+          refreshed = true;
+          if (await _safeRefresh()) continue;
+        }
+        return CloudExamineesRead.failed(classifyPostgrestCode(code));
+      } on TimeoutException {
+        return const CloudExamineesRead.failed(SyncOutcome.transient('network'));
+      } on SocketException {
+        return const CloudExamineesRead.failed(SyncOutcome.transient('network'));
+      } catch (e) {
+        _logUnclassified(e);
+        return CloudExamineesRead.failed(classifyUnexpectedError(e));
+      }
+    }
+  }
+
+  /// Every cloud `scans` row linked to [examineeId], across ALL batches.
+  /// Mirrors [readCloudScans] exactly, filtered by `examinee_id` instead of
+  /// `batch_id`.
+  @override
+  Future<CloudScansRead> readCloudScansForExaminee(String examineeId) async {
+    var refreshed = false;
+    while (true) {
+      try {
+        final rows = await _client
+            .from('scans')
+            .select(
+              'id, batch_id, exam_code, captured_at, decoded, raw_score, '
+              'total_graded, total_items, result_status, scanned_at, '
+              'processed_by_uid, processed_by_name, first_name, last_name, '
+              'middle_name, examinee_number, image_path, image_uploaded, '
+              'rectified_image_path, rectified_image_uploaded',
+            )
+            .eq('examinee_id', examineeId);
+        return CloudScansRead.found(
+          rows.map((r) => parseCloudScanRow(r)).toList(),
+        );
+      } on PostgrestException catch (e) {
+        final code = _sanitizeCode(e.code);
+        if ((code == '401' || code == 'PGRST301') && !refreshed) {
+          refreshed = true;
+          if (await _safeRefresh()) continue;
+        }
+        return CloudScansRead.failed(classifyPostgrestCode(code));
+      } on TimeoutException {
+        return const CloudScansRead.failed(SyncOutcome.transient('network'));
+      } on SocketException {
+        return const CloudScansRead.failed(SyncOutcome.transient('network'));
+      } catch (e) {
+        _logUnclassified(e);
+        return CloudScansRead.failed(classifyUnexpectedError(e));
+      }
+    }
+  }
+
+  /// Every cloud `scans` row with `examinee_id IS NULL`, across ALL
+  /// batches -- the "Unlinked Scans" queue. Mirrors [readCloudScans]/
+  /// [readCloudScansForExaminee] exactly, filtered by `examinee_id is null`
+  /// instead. Read-only, does no matching of its own.
+  @override
+  Future<CloudScansRead> readUnlinkedScans() async {
+    var refreshed = false;
+    while (true) {
+      try {
+        final rows = await _client
+            .from('scans')
+            .select(
+              'id, batch_id, exam_code, captured_at, decoded, raw_score, '
+              'total_graded, total_items, result_status, scanned_at, '
+              'processed_by_uid, processed_by_name, first_name, last_name, '
+              'middle_name, examinee_number, image_path, image_uploaded, '
+              'rectified_image_path, rectified_image_uploaded',
+            )
+            .isFilter('examinee_id', null);
+        return CloudScansRead.found(
+          rows.map((r) => parseCloudScanRow(r)).toList(),
+        );
+      } on PostgrestException catch (e) {
+        final code = _sanitizeCode(e.code);
+        if ((code == '401' || code == 'PGRST301') && !refreshed) {
+          refreshed = true;
+          if (await _safeRefresh()) continue;
+        }
+        return CloudScansRead.failed(classifyPostgrestCode(code));
+      } on TimeoutException {
+        return const CloudScansRead.failed(SyncOutcome.transient('network'));
+      } on SocketException {
+        return const CloudScansRead.failed(SyncOutcome.transient('network'));
+      } catch (e) {
+        _logUnclassified(e);
+        return CloudScansRead.failed(classifyUnexpectedError(e));
+      }
+    }
+  }
+
+  /// Atomically creates a new `examinees` row and links [scanId] (in
+  /// [batchId]) to it via the `create_examinee_from_scan` Postgres function
+  /// (see `0004_create_examinee_from_scan_function.sql`) — a single
+  /// database transaction, never two separate client calls. There is no
+  /// "create a blank examinee" method anywhere on this client: every
+  /// examinee must originate from a specific scan.
+  ///
+  /// `temporary_examinee_id` is never sent -- the column has a PostgreSQL
+  /// sequence-backed `DEFAULT` (see `0001_create_examinees.sql`), so the
+  /// database assigns it atomically on insert; two concurrent creates can
+  /// never race to the same value the way a client-generated
+  /// timestamp+counter could, and it is never copied from the scan's own
+  /// `examinee_number`. No method on this client can ever change it
+  /// afterward, and the database enforces that independently too (see
+  /// `0001_create_examinees.sql`'s trigger).
+  @override
+  Future<CloudExamineeWrite> createExamineeFromScan({
+    required String batchId,
+    required String scanId,
+    required String firstName,
+    String? middleName,
+    required String lastName,
+  }) async {
+    var refreshed = false;
+    while (true) {
+      try {
+        final result = await _client.rpc('create_examinee_from_scan', params: {
+          'p_batch_id': batchId,
+          'p_scan_id': scanId,
+          'p_first_name': firstName,
+          'p_middle_name': middleName ?? '',
+          'p_last_name': lastName,
+        });
+        final row = result is List
+            ? Map<String, dynamic>.from(result.first as Map)
+            : Map<String, dynamic>.from(result as Map);
+        return CloudExamineeWrite.success(parseCloudExamineeRow(row));
+      } on PostgrestException catch (e) {
+        final code = _sanitizeCode(e.code);
+        if ((code == '401' || code == 'PGRST301') && !refreshed) {
+          refreshed = true;
+          if (await _safeRefresh()) continue;
+        }
+        return CloudExamineeWrite.failed(classifyPostgrestCode(code));
+      } on TimeoutException {
+        return const CloudExamineeWrite.failed(SyncOutcome.transient('network'));
+      } on SocketException {
+        return const CloudExamineeWrite.failed(SyncOutcome.transient('network'));
+      } catch (e) {
+        _logUnclassified(e);
+        return CloudExamineeWrite.failed(classifyUnexpectedError(e));
+      }
+    }
+  }
+
+  /// Updates only the editable canonical fields — name-only, for correcting
+  /// an OCR misread. Deliberately has no `temporaryExamineeId`/`status`/
+  /// `archived*`/`birthDate`/`lastAttendedSchool`/`officialStudentId`
+  /// parameter -- this method cannot touch any of them even if a caller
+  /// wanted it to (those columns are simply absent from the `update()` map
+  /// below, so Postgres leaves their existing values untouched). Returns
+  /// the row as it now stands in the database, so the caller never has to
+  /// reconstruct `updated_at`/`updated_by_uid` itself.
+  @override
+  Future<CloudExamineeWrite> updateCloudExaminee({
+    required String id,
+    required String firstName,
+    String? middleName,
+    required String lastName,
+  }) async {
+    var refreshed = false;
+    while (true) {
+      try {
+        final updated = await _client.from('examinees').update({
+          'first_name': firstName,
+          'middle_name': middleName,
+          'last_name': lastName,
+          'updated_at': isoUtc(DateTime.now()),
+          'updated_by_uid': identity.uid ?? '',
+        }).eq('id', id).select(_examineeColumns.join(', ')).single();
+        return CloudExamineeWrite.success(parseCloudExamineeRow(updated));
+      } on PostgrestException catch (e) {
+        final code = _sanitizeCode(e.code);
+        if ((code == '401' || code == 'PGRST301') && !refreshed) {
+          refreshed = true;
+          if (await _safeRefresh()) continue;
+        }
+        return CloudExamineeWrite.failed(classifyPostgrestCode(code));
+      } on TimeoutException {
+        return const CloudExamineeWrite.failed(SyncOutcome.transient('network'));
+      } on SocketException {
+        return const CloudExamineeWrite.failed(SyncOutcome.transient('network'));
+      } catch (e) {
+        _logUnclassified(e);
+        return CloudExamineeWrite.failed(classifyUnexpectedError(e));
+      }
+    }
+  }
+
+  /// Archives ([archived] = true) or restores ([archived] = false) an
+  /// examinee -- a `status` flip only. Never deletes the row, never touches
+  /// any linked scan/result. Returns the row as it now stands in the
+  /// database.
+  @override
+  Future<CloudExamineeWrite> setExamineeArchived(String id, bool archived) async {
+    var refreshed = false;
+    while (true) {
+      try {
+        final now = isoUtc(DateTime.now());
+        final updated = await _client.from('examinees').update({
+          'status': archived ? 'archived' : 'active',
+          'archived_at': archived ? now : null,
+          'archived_by_uid': archived ? (identity.uid ?? '') : null,
+          'updated_at': now,
+          'updated_by_uid': identity.uid ?? '',
+        }).eq('id', id).select(_examineeColumns.join(', ')).single();
+        return CloudExamineeWrite.success(parseCloudExamineeRow(updated));
+      } on PostgrestException catch (e) {
+        final code = _sanitizeCode(e.code);
+        if ((code == '401' || code == 'PGRST301') && !refreshed) {
+          refreshed = true;
+          if (await _safeRefresh()) continue;
+        }
+        return CloudExamineeWrite.failed(classifyPostgrestCode(code));
+      } on TimeoutException {
+        return const CloudExamineeWrite.failed(SyncOutcome.transient('network'));
+      } on SocketException {
+        return const CloudExamineeWrite.failed(SyncOutcome.transient('network'));
+      } catch (e) {
+        _logUnclassified(e);
+        return CloudExamineeWrite.failed(classifyUnexpectedError(e));
+      }
+    }
+  }
+
+  /// Links one scan to [examineeId] -- ONLY if the scan is still unlinked at
+  /// the moment of the update (`examinee_id IS NULL`). Conceptually:
+  /// `UPDATE scans SET examinee_id = ? WHERE batch_id = ? AND id = ? AND
+  /// examinee_id IS NULL`. `.select('id')` reads back the rows actually
+  /// changed and exactly one is required, so a scan that another session
+  /// already linked (or one that is missing / hidden by RLS) is never
+  /// overwritten and never reported as success -- it yields
+  /// [SyncOutcome.conflict] `scan_already_linked`. Only `examinee_id` is
+  /// written. No matching/suggestion logic here -- the caller has already
+  /// confirmed this exact link. Clearing a link is [unlinkScanFromExaminee].
+  @override
+  Future<SyncOutcome> linkScanToExaminee({
+    required String batchId,
+    required String scanId,
+    required String examineeId,
+  }) {
+    return _guardPostgrest(() async {
+      final changed = await _client
+          .from('scans')
+          .update({'examinee_id': examineeId})
+          .eq('batch_id', batchId)
+          .eq('id', scanId)
+          .isFilter('examinee_id', null)
+          .select('id');
+      if (changed.length != 1) {
+        return const SyncOutcome.conflict('scan_already_linked');
+      }
+      return const SyncOutcome.success();
+    });
+  }
+
+  /// Removes ONLY the scan/examinee link: `examinee_id = NULL`, guarded by
+  /// `batch_id` + `id` + the CURRENT `examinee_id`. `.select('id')` returns
+  /// the rows actually changed so zero rows can never masquerade as success
+  /// (an update matching nothing is not an error to PostgREST). Never
+  /// deletes anything and never sends any column but `examinee_id`.
+  @override
+  Future<SyncOutcome> unlinkScanFromExaminee({
+    required String batchId,
+    required String scanId,
+    required String examineeId,
+  }) {
+    return _guardPostgrest(() async {
+      final changed = await _client
+          .from('scans')
+          .update({'examinee_id': null})
+          .eq('batch_id', batchId)
+          .eq('id', scanId)
+          .eq('examinee_id', examineeId)
+          .select('id');
+      if (changed.length != 1) {
+        return const SyncOutcome.conflict('scan_not_linked_to_examinee');
+      }
+      return const SyncOutcome.success();
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Guidance Council WEB Archive (`batch_archives`, see
+  // 0007_create_batch_archives.sql). Independent of the mobile app: nothing
+  // here reads or writes `batches`, and there is no restore/unarchive.
+  // ---------------------------------------------------------------------------
+
+  /// Parses one raw `batch_archives` row into a [CloudBatchArchiveRow].
+  static CloudBatchArchiveRow parseCloudBatchArchiveRow(Map<String, dynamic> row) =>
+      CloudBatchArchiveRow(
+        batchId: row['batch_id'] as String,
+        archivedAt: _dateOrNull(row['archived_at']) ?? DateTime.now().toUtc(),
+        archivedByUid: row['archived_by_uid'] as String? ?? '',
+        archivedByName: row['archived_by_name'] as String?,
+        reason: row['reason'] as String?,
+      );
+
+  /// Read-only fetch of every `batch_archives` marker visible under RLS.
+  @override
+  Future<CloudBatchArchivesRead> readBatchArchives() async {
+    var refreshed = false;
+    while (true) {
+      try {
+        final rows = await _client.from('batch_archives').select(
+              'batch_id, archived_at, archived_by_uid, archived_by_name, reason',
+            );
+        return CloudBatchArchivesRead.found(
+          rows.map((r) => parseCloudBatchArchiveRow(r)).toList(),
+        );
+      } on PostgrestException catch (e) {
+        final code = _sanitizeCode(e.code);
+        if ((code == '401' || code == 'PGRST301') && !refreshed) {
+          refreshed = true;
+          if (await _safeRefresh()) continue;
+        }
+        return CloudBatchArchivesRead.failed(classifyPostgrestCode(code));
+      } on TimeoutException {
+        return const CloudBatchArchivesRead.failed(SyncOutcome.transient('network'));
+      } on SocketException {
+        return const CloudBatchArchivesRead.failed(SyncOutcome.transient('network'));
+      } catch (e) {
+        _logUnclassified(e);
+        return CloudBatchArchivesRead.failed(classifyUnexpectedError(e));
+      }
+    }
+  }
+
+  /// Creates the archive marker: a single INSERT into `batch_archives`
+  /// (`batch_id`, the signed-in actor's uid/name, optional reason;
+  /// `archived_at` is the column default). It never writes `batches` or
+  /// `scans`. A batch that already has a marker fails with a permanent
+  /// `23505`; the database's insert policy also rejects a batch that is not
+  /// Completed (42501). No update/delete method exists — there is no restore.
+  @override
+  Future<SyncOutcome> archiveBatch({
+    required String batchId,
+    String? reason,
+  }) {
+    final uid = identity.uid;
+    if (uid == null || uid.isEmpty) {
+      return Future.value(const SyncOutcome.permanent('no_uid'));
+    }
+    final trimmedReason = reason?.trim();
+    final name = identity.displayName?.trim();
+    return _guardPostgrest(() async {
+      await _client.from('batch_archives').insert({
+        'batch_id': batchId,
+        'archived_by_uid': uid,
+        'archived_by_name': (name == null || name.isEmpty) ? null : name,
+        'reason': (trimmedReason == null || trimmedReason.isEmpty) ? null : trimmedReason,
+      });
+      return const SyncOutcome.success();
+    });
+  }
+
+  /// Exact scan count per batch (one small counted request per batch id —
+  /// never a row dump, so PostgREST's row cap can't truncate a count).
+  @override
+  Future<CloudScanCountsRead> readScanCounts(List<String> batchIds) async {
+    var refreshed = false;
+    while (true) {
+      try {
+        final counts = <String, int>{};
+        for (final id in batchIds) {
+          final response = await _client
+              .from('scans')
+              .select('id')
+              .eq('batch_id', id)
+              .limit(1)
+              .count(CountOption.exact);
+          counts[id] = response.count;
+        }
+        return CloudScanCountsRead.found(counts);
+      } on PostgrestException catch (e) {
+        final code = _sanitizeCode(e.code);
+        if ((code == '401' || code == 'PGRST301') && !refreshed) {
+          refreshed = true;
+          if (await _safeRefresh()) continue;
+        }
+        return CloudScanCountsRead.failed(classifyPostgrestCode(code));
+      } on TimeoutException {
+        return const CloudScanCountsRead.failed(SyncOutcome.transient('network'));
+      } on SocketException {
+        return const CloudScanCountsRead.failed(SyncOutcome.transient('network'));
+      } catch (e) {
+        _logUnclassified(e);
+        return CloudScanCountsRead.failed(classifyUnexpectedError(e));
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // F3. downloadScanImage -- additive cloud image retrieval. Never called by
   // SyncManager; used only by CloudRestoreService.restoreImageIfMissing,
   // which is solely responsible for encrypting the returned bytes before

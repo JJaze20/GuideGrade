@@ -141,6 +141,92 @@ class _FakeSyncClient implements SyncClient {
   @override
   Future<SyncOutcome> deleteStoragePrefix(String batchId) =>
       _run('deleteStoragePrefix:$batchId');
+
+  @override
+  Future<CloudExamineesRead> readCloudExaminees() async {
+    calls.add('readCloudExaminees');
+    return CloudExamineesRead.found(const []);
+  }
+
+  @override
+  Future<CloudExamineeWrite> createExamineeFromScan({
+    required String batchId,
+    required String scanId,
+    required String firstName,
+    String? middleName,
+    required String lastName,
+  }) async {
+    calls.add('createExamineeFromScan');
+    throw StateError('must never call createExamineeFromScan');
+  }
+
+  @override
+  Future<CloudExamineeWrite> updateCloudExaminee({
+    required String id,
+    required String firstName,
+    String? middleName,
+    required String lastName,
+  }) async {
+    calls.add('updateCloudExaminee:$id');
+    throw StateError('must never call updateCloudExaminee');
+  }
+
+  @override
+  Future<CloudExamineeWrite> setExamineeArchived(String id, bool archived) async {
+    calls.add('setExamineeArchived:$id/$archived');
+    throw StateError('must never call setExamineeArchived');
+  }
+
+  @override
+  Future<SyncOutcome> linkScanToExaminee({
+    required String batchId,
+    required String scanId,
+    required String? examineeId,
+  }) =>
+      _run('linkScanToExaminee:$batchId/$scanId');
+
+  @override
+  Future<SyncOutcome> unlinkScanFromExaminee({
+    required String batchId,
+    required String scanId,
+    required String examineeId,
+  }) async {
+    calls.add('unlinkScanFromExaminee:$batchId/$scanId');
+    return const SyncOutcome.success();
+  }
+
+  @override
+  Future<CloudBatchArchivesRead> readBatchArchives() async {
+    calls.add('readBatchArchives');
+    return CloudBatchArchivesRead.found(const []);
+  }
+
+  @override
+  Future<SyncOutcome> archiveBatch({
+    required String batchId,
+    String? reason,
+  }) async {
+    calls.add('archiveBatch:$batchId');
+    return const SyncOutcome.success();
+  }
+
+  @override
+  Future<CloudScanCountsRead> readScanCounts(List<String> batchIds) async {
+    calls.add('readScanCounts');
+    return CloudScanCountsRead.found(const {});
+  }
+
+  @override
+  Future<CloudScansRead> readCloudScansForExaminee(String examineeId) async {
+    calls.add('readCloudScansForExaminee:$examineeId');
+    return CloudScansRead.found(const []);
+  }
+
+  @override
+  Future<CloudScansRead> readUnlinkedScans() async {
+    calls.add('readUnlinkedScans');
+    return CloudScansRead.found(const []);
+  }
 }
 
 void main() {

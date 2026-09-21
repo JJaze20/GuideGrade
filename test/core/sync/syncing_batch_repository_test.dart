@@ -288,6 +288,92 @@ class _NeverSyncClient implements SyncClient {
   @override
   Future<SyncOutcome> deleteStoragePrefix(String batchId) =>
       _rec('deleteStoragePrefix');
+
+  @override
+  Future<CloudExamineesRead> readCloudExaminees() async {
+    calls.add('readCloudExaminees');
+    throw StateError('SyncingBatchRepository must not call the network client');
+  }
+
+  @override
+  Future<CloudExamineeWrite> createExamineeFromScan({
+    required String batchId,
+    required String scanId,
+    required String firstName,
+    String? middleName,
+    required String lastName,
+  }) async {
+    calls.add('createExamineeFromScan');
+    throw StateError('SyncingBatchRepository must not call the network client');
+  }
+
+  @override
+  Future<CloudExamineeWrite> updateCloudExaminee({
+    required String id,
+    required String firstName,
+    String? middleName,
+    required String lastName,
+  }) async {
+    calls.add('updateCloudExaminee');
+    throw StateError('SyncingBatchRepository must not call the network client');
+  }
+
+  @override
+  Future<CloudExamineeWrite> setExamineeArchived(String id, bool archived) async {
+    calls.add('setExamineeArchived');
+    throw StateError('SyncingBatchRepository must not call the network client');
+  }
+
+  @override
+  Future<SyncOutcome> linkScanToExaminee({
+    required String batchId,
+    required String scanId,
+    required String? examineeId,
+  }) =>
+      _rec('linkScanToExaminee');
+
+  @override
+  Future<SyncOutcome> unlinkScanFromExaminee({
+    required String batchId,
+    required String scanId,
+    required String examineeId,
+  }) async {
+    calls.add('unlinkScanFromExaminee');
+    throw StateError('SyncingBatchRepository must not call the network client');
+  }
+
+  @override
+  Future<CloudBatchArchivesRead> readBatchArchives() async {
+    calls.add('readBatchArchives');
+    throw StateError('SyncingBatchRepository must not call the network client');
+  }
+
+  @override
+  Future<SyncOutcome> archiveBatch({
+    required String batchId,
+    String? reason,
+  }) async {
+    calls.add('archiveBatch');
+    throw StateError('SyncingBatchRepository must not call the network client');
+  }
+
+  @override
+  Future<CloudScanCountsRead> readScanCounts(List<String> batchIds) async {
+    calls.add('readScanCounts');
+    throw StateError('SyncingBatchRepository must not call the network client');
+  }
+
+  @override
+  Future<CloudScansRead> readCloudScansForExaminee(String examineeId) async {
+    calls.add('readCloudScansForExaminee');
+    throw StateError('SyncingBatchRepository must not call the network client');
+  }
+
+  @override
+  Future<CloudScansRead> readUnlinkedScans() async {
+    calls.add('readUnlinkedScans');
+    throw StateError('SyncingBatchRepository must not call the network client');
+  }
 }
 
 /// Real [SyncQueue] under the hood, but every drain entry point is stubbed
