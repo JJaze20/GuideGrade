@@ -410,6 +410,11 @@ class AppState extends ChangeNotifier {
   /// (not the first event on an already-online device) triggers a drain.
   bool _wasOnline = true;
 
+  /// Best-effort "device has a network" flag for UI (e.g. greying out the
+  /// load-from-cloud button). Only updated from connectivity events, so it
+  /// assumes online until the first change is reported.
+  bool get isOnline => _wasOnline;
+
   void _wireReconnectSync(Stream<List<ConnectivityResult>>? stream) {
     // No cloud data plane -> nothing to drain, so never subscribe.
     if (stream == null || syncManager == null) return;
@@ -433,6 +438,7 @@ class AppState extends ChangeNotifier {
     final online = results.any((r) => r != ConnectivityResult.none);
     final wasOnline = _wasOnline;
     _wasOnline = online;
+    if (online != wasOnline) notifyListeners();
 
     if (online && !wasOnline) {
       // Disconnected -> connected: (re)arm a one-shot debounce so rapid

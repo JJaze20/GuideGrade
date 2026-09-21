@@ -5,6 +5,7 @@ import '../../core/services/logging_service.dart';
 import '../../core/state/app_state.dart';
 import '../../core/utils/platform_utils.dart';
 import '../../features/authentication/screens/mobile_login_screen.dart';
+import '../../features/splash/screens/splash_screen.dart';
 import '../../features/admin/screens/admin_login_screen.dart';
 import '../../features/home/screens/staff_home_screen.dart';
 import '../../features/home/screens/profile_screen.dart';
@@ -38,6 +39,7 @@ import '../../models/user.dart';
 class AppRoutes {
   AppRoutes._();
 
+  static const String splash = '/splash';
   static const String login = '/login';
   static const String mobileLogin = '/mobile-login';
   static const String adminLogin = '/admin-login';
@@ -66,7 +68,7 @@ class AppRoutes {
   static const String guidanceWebHome = '/guidance-web-home';
 
   /// Routes reachable without being signed in at all.
-  static const Set<String> _publicRoutes = {login, mobileLogin, adminLogin};
+  static const Set<String> _publicRoutes = {splash, login, mobileLogin, adminLogin};
 
   /// Routes that additionally require the `system_admin` role, on top of
   /// being an approved, active user. System Administrator responsibilities
@@ -186,6 +188,11 @@ class AppRoutes {
     }
 
     switch (settings.name) {
+      case splash:
+        return PageRouteBuilder(
+          pageBuilder: (_, __, ___) => const SplashScreen(),
+          transitionDuration: Duration.zero,
+        );
       case login:
         // This is initialRoute (see main.dart's MaterialApp) — the very
         // first route generated on every cold start, before the guard

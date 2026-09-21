@@ -130,44 +130,10 @@ class _MobileLoginScreenState extends State<MobileLoginScreen> {
               padding: const EdgeInsets.symmetric(vertical: 10),
               child: Column(
                 children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Container(
-                        width: 40,
-                        height: 40,
-                        decoration: BoxDecoration(
-                          gradient: const LinearGradient(
-                            colors: [
-                              AppColors.warmRedOrange,
-                              AppColors.accentYellowGreen,
-                              Color(0xFF1565C0),
-                            ],
-                          ),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: const FaIcon(
-                          FontAwesomeIcons.shieldHalved,
-                          color: Colors.white,
-                          size: 18,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Guide',
-                        style: AppTextStyles.logo(
-                          size: 28,
-                          color: AppColors.warmRedOrange,
-                        ),
-                      ),
-                      Text(
-                        'Grade',
-                        style: AppTextStyles.logo(
-                          size: 28,
-                          color: AppColors.primaryGreen,
-                        ),
-                      ),
-                    ],
+                  Image.asset(
+                    'assets/images/guidegrade logo3 trimmed.png',
+                    height: 56,
+                    fit: BoxFit.contain,
                   ),
                   const SizedBox(height: 4),
                   Text(
