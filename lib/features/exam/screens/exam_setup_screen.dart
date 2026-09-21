@@ -7,6 +7,7 @@ import '../../../core/constants/exam_catalog.dart';
 import '../../../core/routes/app_routes.dart';
 import '../../../core/state/app_state.dart';
 import '../../../models/local_batch.dart';
+import '../../../shared/widgets/needs_review_badge.dart';
 import '../../../shared/widgets/primary_button.dart';
 
 /// Select Compatible Batch — the batch-binding step of the scan workflow.
@@ -298,6 +299,10 @@ class _ExamSetupScreenState extends State<ExamSetupScreen> {
                     '${batch.batchCode}  ·  ${batch.scanCount}/${batch.expectedCount} sheets  ·  ${batch.status}',
                     style: AppTextStyles.body(size: 9, color: AppColors.textGray),
                   ),
+                  if (batch.needsReview) ...[
+                    const SizedBox(height: 4),
+                    NeedsReviewChip(count: batch.needsReviewCount),
+                  ],
                 ],
               ),
             ),
