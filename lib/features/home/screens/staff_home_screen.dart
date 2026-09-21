@@ -7,6 +7,7 @@ import '../../../core/routes/app_routes.dart';
 import '../../../core/state/app_state.dart';
 import '../../../models/local_batch.dart';
 import '../../../shared/widgets/app_bottom_nav.dart';
+import '../../../shared/widgets/needs_review_badge.dart';
 
 /// Staff Home / Dashboard. Shows the welcome card, the Exam/Batch
 /// management entry points, and the batch registry — every local batch,
@@ -270,6 +271,10 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
                     '${batch.resultsAvailable ? ' · results ready' : ''}',
                     style: AppTextStyles.body(size: 9, color: AppColors.textGray),
                   ),
+                  if (batch.needsReview) ...[
+                    const SizedBox(height: 6),
+                    NeedsReviewChip(count: batch.needsReviewCount),
+                  ],
                 ],
               ),
             ),

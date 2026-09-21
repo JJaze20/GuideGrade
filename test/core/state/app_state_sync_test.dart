@@ -109,6 +109,8 @@ class _ThrowingSyncClient implements SyncClient {
   @override
   Future<SyncOutcome> deleteBatch(String batchId) => _no();
   @override
+  Future<SyncOutcome> deleteScan(String batchId, String scanId) => _no();
+  @override
   Future<SyncOutcome> deleteStoragePrefix(String batchId) => _no();
   @override
   Future<CloudExamineesRead> readCloudExaminees() async =>

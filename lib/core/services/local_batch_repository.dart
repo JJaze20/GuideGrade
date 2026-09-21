@@ -519,6 +519,47 @@ class LocalBatchRepository implements BatchRepository {
   });
 
   @override
+  Future<LocalBatch> deleteScan({
+    required String batchId,
+    required String scanId,
+  }) =>
+      _serialized(batchId, () async {
+        final root = await _root();
+        final batch = await _readManifest(_batchDir(root, batchId));
+        if (batch == null) {
+          throw StateError('Batch $batchId does not exist.');
+        }
+        final index = batch.scans.indexWhere((s) => s.id == scanId);
+        if (index == -1) {
+          throw StateError('Scan $scanId does not exist in batch $batchId.');
+        }
+        final removed = batch.scans[index];
+        final scans = [...batch.scans]..removeAt(index);
+        var updated = _finalize(batch.copyWith(scans: scans), batch);
+        // Removing a sheet corrects the record; it doesn't reopen it. A save
+        // normally drops Archived until the cloud re-confirms the new
+        // revision (see _finalize), but here the batch stays Archived.
+        if (batch.isArchived && updated.status != BatchLifecycle.draft) {
+          updated = updated.copyWith(status: BatchLifecycle.archived);
+        }
+        // Manifest first: if this write fails nothing has been deleted and the
+        // batch is exactly as it was. Files go after — a failure there only
+        // leaves an unreferenced encrypted file behind, never a broken scan.
+        await _writeManifest(updated);
+        final batchDirPath = _batchDir(root, batchId).path;
+        for (final name in [
+          removed.imageFileName,
+          removed.rectifiedImageFileName,
+          removed.nameCropLastFileName,
+          removed.nameCropFirstFileName,
+          removed.nameCropMiddleFileName,
+        ]) {
+          if (name != null) _deleteIfExists(File('$batchDirPath/$name'));
+        }
+        return updated;
+      });
+
+  @override
   Future<LocalBatch> setScanExaminee({
     required String batchId,
     required String scanId,

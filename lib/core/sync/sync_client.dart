@@ -380,6 +380,10 @@ abstract class SyncClient {
     required bool rectified,
   });
 
+  /// Removes one scan's cloud row and its Storage image objects (original and
+  /// rectified). Idempotent: a row or object that is already gone is success.
+  Future<SyncOutcome> deleteScan(String batchId, String scanId);
+
   Future<SyncOutcome> deleteBatch(String batchId);
   Future<SyncOutcome> deleteStoragePrefix(String batchId);
 

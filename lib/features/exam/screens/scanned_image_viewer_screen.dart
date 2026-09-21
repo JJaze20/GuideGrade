@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
+import '../../../core/omr/exam_score.dart';
 import '../../../core/omr/omr_mesh_correction.dart';
 import '../../../core/omr/omr_scorer.dart';
 import '../../../core/omr/omr_templates.dart';
@@ -104,6 +105,19 @@ class _ScannedImageViewerScreenState extends State<ScannedImageViewerScreen> {
     final scan = _scan;
     if (e == null || scan == null) return widget.scoredItems;
     return scoreOmrResult(scan.effectiveDecoded, e.answerKey).items;
+  }
+
+  /// The sheet's total as it reads NOW, through the same exam-specific rules
+  /// that produce the saved result (AT/QTM one point per correct answer, TAT
+  /// Test I x 2 and Tests II/III max(0, correct - wrong)). Recomputed from
+  /// [items] on every build, so it moves the moment a correction is saved and
+  /// always equals what [rescoreScan] persisted. Null when there is nothing
+  /// to score.
+  ExamScore? _currentScore(List<ScoredItem> items) {
+    if (items.isEmpty) return null;
+    final examCode = template?.examCode ?? _scan?.decoded.examCode;
+    if (examCode == null) return null;
+    return computeExamScoreForCode(ScoredResult(examCode: examCode, items: items));
   }
 
   /// A correction never moves the bubbles, so the mesh readings the scan was
@@ -233,6 +247,7 @@ class _ScannedImageViewerScreenState extends State<ScannedImageViewerScreen> {
       body: SafeArea(
         child: Column(
           children: [
+            if (_currentScore(items) != null) _ScoreBanner(score: _currentScore(items)!),
             if (_hasOverlay) _GradedOverlayLegend(editable: _canEdit),
             Expanded(
               child: InteractiveViewer(
@@ -269,6 +284,50 @@ class _ScannedImageViewerScreenState extends State<ScannedImageViewerScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// The sheet's total score, always visible above the image. A plain
+/// [ExamScore] in, so it re-renders with whatever the screen just recomputed.
+class _ScoreBanner extends StatelessWidget {
+  final ExamScore score;
+  const _ScoreBanner({required this.score});
+
+  @override
+  Widget build(BuildContext context) {
+    final graded = score.isGraded;
+    final tat = score.isTat;
+    final detail = !graded
+        ? 'No answer key — not graded'
+        : tat
+            ? 'Test I ${score.tatTest1Score} · Test II ${score.tatTest2Score} · Test III ${score.tatTest3Score}'
+            : score.hasOfficialPercentage
+                ? '${score.percentage.toStringAsFixed(1)}%'
+                : '${score.rawScore} of ${score.totalItems} correct';
+    return Container(
+      key: const ValueKey('viewer-total-score'),
+      width: double.infinity,
+      color: const Color(0xFF0B1220),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: Row(
+        children: [
+          const Text('TOTAL SCORE',
+              style: TextStyle(color: Colors.white54, fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 0.5)),
+          const SizedBox(width: 10),
+          Text(
+            graded ? '${score.rawScore} / ${score.maxScore}' : '—',
+            style: const TextStyle(
+                color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800, fontFamily: 'monospace'),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(detail,
+                style: const TextStyle(color: Colors.white70, fontSize: 10.5, fontWeight: FontWeight.w600),
+                overflow: TextOverflow.ellipsis),
+          ),
+        ],
       ),
     );
   }

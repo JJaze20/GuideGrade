@@ -1534,6 +1534,33 @@ class SupabaseSyncClient implements SyncClient {
   }
 
   // ---------------------------------------------------------------------------
+  // G0. deleteScan
+  // ---------------------------------------------------------------------------
+
+  /// Deletes one `scans` row, then its original and rectified Storage
+  /// objects. Row first: a failure after it leaves only unreferenced objects,
+  /// and the job retries the (idempotent) whole thing. Zero rows / missing
+  /// objects are success.
+  @override
+  Future<SyncOutcome> deleteScan(String batchId, String scanId) async {
+    final rowOutcome = await _guardPostgrest(() async {
+      await _client.from('scans').delete().eq('batch_id', batchId).eq('id', scanId);
+      return const SyncOutcome.success();
+    });
+    if (!rowOutcome.isSuccess) return rowOutcome;
+    final storageOutcome = await _guardStorage(StorageOp.delete, () async {
+      await _client.storage.from(storageBucket).remove([
+        originalImageKey(batchId, scanId),
+        rectifiedImageKey(batchId, scanId),
+      ]);
+      return const SyncOutcome.success();
+    });
+    if (!storageOutcome.isSuccess) return storageOutcome;
+    syncState.forget(SyncState.scanKey(batchId, scanId));
+    return const SyncOutcome.success();
+  }
+
+  // ---------------------------------------------------------------------------
   // G. deleteBatch
   // ---------------------------------------------------------------------------
 

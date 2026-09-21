@@ -202,6 +202,16 @@ class _FakeLocal implements LocalBatchRepository {
   }
 
   @override
+  Future<LocalBatch> deleteScan({
+    required String batchId,
+    required String scanId,
+  }) async {
+    calls.add('deleteScan:$batchId/$scanId');
+    _maybeThrow('deleteScan');
+    return batchResult;
+  }
+
+  @override
   Future<LocalBatch> setScanExaminee({
     required String batchId,
     required String scanId,
@@ -331,6 +341,8 @@ class _NeverSyncClient implements SyncClient {
 
   @override
   Future<SyncOutcome> deleteBatch(String batchId) => _rec('deleteBatch');
+  @override
+  Future<SyncOutcome> deleteScan(String batchId, String scanId) => _rec('deleteScan');
   @override
   Future<SyncOutcome> deleteStoragePrefix(String batchId) =>
       _rec('deleteStoragePrefix');
@@ -794,6 +806,54 @@ void main() {
 
     expect(jobLabels(), ['deleteBatch', 'deleteStoragePrefix']);
     expect(queue.jobs.every((j) => j.batchId == 'b1'), isTrue);
+    expectNoNetworkOrDrain();
+  });
+
+  test('11b. deleteScan success cancels that scan\'s pending pushes and '
+      'enqueues DELETE_SCAN then PUSH_BATCH', () async {
+    await queue.enqueue(SyncJob.create(
+      type: SyncJobType.pushScan,
+      entityId: 's1',
+      batchId: 'b1',
+      scanId: 's1',
+    ));
+    await queue.enqueue(SyncJob.create(
+      type: SyncJobType.uploadImage,
+      entityId: 's1',
+      batchId: 'b1',
+      scanId: 's1',
+      meta: const {'variant': 'original'},
+    ));
+    await queue.enqueue(SyncJob.create(
+      type: SyncJobType.pushScan,
+      entityId: 's2',
+      batchId: 'b1',
+      scanId: 's2',
+    ));
+
+    await repo.deleteScan(batchId: 'b1', scanId: 's1');
+    await waitForJobs(3);
+
+    expect(jobLabels(), ['pushScan', 'deleteScan', 'pushBatch']);
+    final survivor = queue.jobs.firstWhere((j) => j.type == SyncJobType.pushScan);
+    expect(survivor.scanId, 's2'); // an unrelated scan's push is untouched
+    expect(
+      queue.jobs.firstWhere((j) => j.type == SyncJobType.deleteScan).scanId,
+      's1',
+    );
+    expectNoNetworkOrDrain();
+  });
+
+  test('11c. deleteScan local failure enqueues nothing', () async {
+    fakeLocal.failWith['deleteScan'] = const FileSystemException('nope');
+
+    await expectLater(
+      repo.deleteScan(batchId: 'b1', scanId: 's1'),
+      throwsA(isA<FileSystemException>()),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    expect(queue.jobs, isEmpty);
     expectNoNetworkOrDrain();
   });
 

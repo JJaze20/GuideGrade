@@ -118,6 +118,19 @@ abstract class BatchRepository {
     required LocalScanResult result,
   });
 
+  /// Permanently removes one scan from [batchId] — its manifest entry
+  /// (answers, corrections, result, student tag) and its stored images
+  /// (original, rectified overlay copy, name crops). Nothing else in the
+  /// batch changes; counts, averages and review flags are all derived from
+  /// the remaining scans. The batch keeps an Archived status: removing a
+  /// sheet is a correction to an archived record, not a reason to reopen it.
+  /// Returns the updated batch; throws (leaving the batch untouched) when the
+  /// batch or scan doesn't exist or the manifest can't be written.
+  Future<LocalBatch> deleteScan({
+    required String batchId,
+    required String scanId,
+  });
+
   /// Sets (or clears, when [examinee] is null) which student one stored
   /// scan belongs to. Returns the updated batch.
   Future<LocalBatch> setScanExaminee({

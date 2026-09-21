@@ -138,6 +138,9 @@ class CloudRestoreService {
         // CRITICAL v1 rule: an existing local scan is never overwritten or
         // merged, regardless of which side is newer.
         if (localScanIds.contains(cloudScan.id)) continue;
+        // A sheet deleted on this device whose cloud delete hasn't landed yet
+        // must not be pulled back in by a restore.
+        if (_hasPendingScanDelete(cloudBatch.id, cloudScan.id)) continue;
 
         await repository.upsertScanFromCloud(
           batchId: cloudBatch.id,
@@ -167,6 +170,13 @@ class CloudRestoreService {
       scansRestored: scansRestored,
       batchesSkippedPendingDelete: batchesSkippedPendingDelete,
     );
+  }
+
+  bool _hasPendingScanDelete(String batchId, String scanId) {
+    return syncQueue.jobs.any((j) =>
+        j.type == SyncJobType.deleteScan &&
+        j.batchId == batchId &&
+        j.scanId == scanId);
   }
 
   /// True when a `DELETE_BATCH`/`DELETE_STORAGE_PREFIX` job for [batchId]

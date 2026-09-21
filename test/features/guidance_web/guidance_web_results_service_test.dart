@@ -60,6 +60,8 @@ class _FakeSyncClient implements SyncClient {
   @override
   Future<SyncOutcome> deleteBatch(String batchId) => _no('deleteBatch');
   @override
+  Future<SyncOutcome> deleteScan(String batchId, String scanId) => _no('deleteScan');
+  @override
   Future<SyncOutcome> deleteStoragePrefix(String batchId) => _no('deleteStoragePrefix');
   @override
   Future<CloudExamineesRead> readCloudExaminees() => _no('readCloudExaminees');

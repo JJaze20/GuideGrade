@@ -301,6 +301,23 @@ class SyncingBatchRepository implements BatchRepository {
       local.confirmBatchArchived(batchId, confirmedUpdatedAt);
 
   // ---------------------------------------------------------------------------
+  // G3. deleteScan
+  // ---------------------------------------------------------------------------
+
+  @override
+  Future<LocalBatch> deleteScan({
+    required String batchId,
+    required String scanId,
+  }) async {
+    // Local first: if it throws, nothing is enqueued and the caller sees the
+    // failure — the sheet is still there. The queue drops this scan's pending
+    // row/image pushes when the delete job lands (see SyncQueue.enqueue).
+    final batch = await local.deleteScan(batchId: batchId, scanId: scanId);
+    _fireEnqueue([_deleteScan(batchId, scanId), _pushBatch(batchId)]);
+    return batch;
+  }
+
+  // ---------------------------------------------------------------------------
   // H. setScanExaminee
   // ---------------------------------------------------------------------------
 
@@ -409,6 +426,13 @@ class SyncingBatchRepository implements BatchRepository {
 
   SyncJob _patchImageStatus(String batchId, String scanId) => SyncJob.create(
         type: SyncJobType.patchImageStatus,
+        entityId: scanId,
+        batchId: batchId,
+        scanId: scanId,
+      );
+
+  SyncJob _deleteScan(String batchId, String scanId) => SyncJob.create(
+        type: SyncJobType.deleteScan,
         entityId: scanId,
         batchId: batchId,
         scanId: scanId,
