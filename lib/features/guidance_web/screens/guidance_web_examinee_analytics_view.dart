@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
-import '../../../core/omr/cluster_analysis.dart';
 import '../../../models/examinee_record.dart';
 import '../services/guidance_web_examinee_records_service.dart';
 import '../services/guidance_web_results_service.dart';
@@ -12,8 +11,11 @@ import 'guidance_web_result_detail_view.dart';
 /// AT / QTM results to see Examinee Information, Result Summary, the scanned
 /// sheet and the Cluster Analysis table. It reuses
 /// [GuidanceWebResultDetailView] (in its cluster mode) rather than a second
-/// result implementation. TAT results are not listed — TAT has no cluster
-/// analysis yet.
+/// result implementation. AT and QTM show the cluster analysis and category;
+/// TAT shows the category only.
+///
+/// A Tagged / Untagged / All switch chooses what the list shows: examinee
+/// records (tagged), or scans not yet linked to any examinee (untagged).
 class GuidanceWebExamineeAnalyticsView extends StatefulWidget {
   const GuidanceWebExamineeAnalyticsView({
     super.key,
@@ -30,6 +32,8 @@ class GuidanceWebExamineeAnalyticsView extends StatefulWidget {
       _GuidanceWebExamineeAnalyticsViewState();
 }
 
+enum _ListMode { tagged, untagged, all }
+
 class _GuidanceWebExamineeAnalyticsViewState
     extends State<GuidanceWebExamineeAnalyticsView> {
   late final GuidanceWebExamineeRecordsService _records =
@@ -41,6 +45,13 @@ class _GuidanceWebExamineeAnalyticsViewState
   bool _loading = true;
   String? _error;
   List<ExamineeRecord> _examinees = [];
+
+  /// Scans with no examinee link ("untagged"). Loaded alongside the
+  /// examinees; a failure here only affects the Untagged / All views.
+  List<ExamineeHistoryItem> _untagged = [];
+  String? _untaggedError;
+
+  _ListMode _mode = _ListMode.tagged;
 
   ExamineeRecord? _selected;
   bool _loadingHistory = false;
@@ -68,9 +79,20 @@ class _GuidanceWebExamineeAnalyticsViewState
     });
     try {
       final list = await _records.loadExaminees();
+      List<ExamineeHistoryItem> untagged = const [];
+      String? untaggedError;
+      try {
+        untagged = await _records.loadUnlinkedScans();
+      } on GuidanceWebExamineeRecordsException catch (e) {
+        untaggedError = e.message;
+      } catch (_) {
+        untaggedError = 'Could not load untagged scans. Please try again.';
+      }
       if (!mounted) return;
       setState(() {
         _examinees = list;
+        _untagged = untagged;
+        _untaggedError = untaggedError;
         _loading = false;
       });
     } on GuidanceWebExamineeRecordsException catch (e) {
@@ -100,10 +122,7 @@ class _GuidanceWebExamineeAnalyticsViewState
       final all = await _records.loadHistoryFor(examinee);
       if (!mounted) return;
       setState(() {
-        _history = [
-          for (final h in all)
-            if (clusterDefsFor(h.examCode) != null) h,
-        ];
+        _history = all;
         _loadingHistory = false;
       });
     } catch (_) {
@@ -127,6 +146,19 @@ class _GuidanceWebExamineeAnalyticsViewState
         .toList();
   }
 
+  List<ExamineeHistoryItem> get _filteredUntagged {
+    final term = _search.text.trim().toLowerCase();
+    if (term.isEmpty) return _untagged;
+    return _untagged
+        .where(
+          (h) =>
+              h.batch.batchCode.toLowerCase().contains(term) ||
+              h.examCode.toLowerCase().contains(term) ||
+              'untagged'.contains(term),
+        )
+        .toList();
+  }
+
   @override
   Widget build(BuildContext context) {
     final viewing = _viewing;
@@ -136,7 +168,7 @@ class _GuidanceWebExamineeAnalyticsViewState
         batch: viewing.batch,
         service: _results,
         showClusterAnalysis: true,
-        backLabel: 'Back to Examinee',
+        backLabel: _selected != null ? 'Back to Examinee' : 'Back to List',
         onBack: () => setState(() => _viewing = null),
       );
     }
@@ -160,23 +192,73 @@ class _GuidanceWebExamineeAnalyticsViewState
     ),
   );
 
+  Widget _modeSwitch() {
+    return SegmentedButton<_ListMode>(
+      key: const Key('examineeModeSwitch'),
+      showSelectedIcon: false,
+      style: ButtonStyle(
+        visualDensity: VisualDensity.compact,
+        textStyle: WidgetStatePropertyAll(
+          AppTextStyles.body(size: 12, weight: FontWeight.w700),
+        ),
+        backgroundColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.selected)
+              ? AppColors.emerald100
+              : Colors.white,
+        ),
+        foregroundColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.selected)
+              ? AppColors.primaryGreen
+              : AppColors.textDark,
+        ),
+      ),
+      segments: const [
+        ButtonSegment(value: _ListMode.tagged, label: Text('Tagged')),
+        ButtonSegment(value: _ListMode.untagged, label: Text('Untagged')),
+        ButtonSegment(value: _ListMode.all, label: Text('All')),
+      ],
+      selected: {_mode},
+      onSelectionChanged: (v) => setState(() => _mode = v.first),
+    );
+  }
+
   Widget _buildPicker() {
-    final list = _filtered;
+    final showTagged = _mode != _ListMode.untagged;
+    final showUntagged = _mode != _ListMode.tagged;
+    final tagged = showTagged ? _filtered : const <ExamineeRecord>[];
+    final untagged = showUntagged
+        ? _filteredUntagged
+        : const <ExamineeHistoryItem>[];
+    final count = tagged.length + untagged.length;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Container(
           padding: const EdgeInsets.all(16),
           decoration: _cardDecoration,
-          child: TextField(
-            key: const Key('examineeAnalyticsSearch'),
-            controller: _search,
-            decoration: InputDecoration(
-              hintText: 'Search name or Temporary Examinee ID...',
-              isDense: true,
-              prefixIcon: const Icon(Icons.search, size: 18),
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-            ),
+          child: Row(
+            children: [
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 380),
+                child: SizedBox(
+                  width: 380,
+                  child: TextField(
+                    key: const Key('examineeAnalyticsSearch'),
+                    controller: _search,
+                    decoration: InputDecoration(
+                      hintText: 'Search name or ID...',
+                      isDense: true,
+                      prefixIcon: const Icon(Icons.search, size: 18),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 16),
+              _modeSwitch(),
+            ],
           ),
         ),
         const SizedBox(height: 16),
@@ -185,39 +267,73 @@ class _GuidanceWebExamineeAnalyticsViewState
               ? _message('Loading examinees...')
               : _error != null
               ? _message(_error!, isError: true)
-              : list.isEmpty
-              ? _message('No examinees found.')
+              : (showUntagged && !showTagged && _untaggedError != null)
+              ? _message(_untaggedError!, isError: true)
+              : count == 0
+              ? _message(
+                  _mode == _ListMode.untagged
+                      ? 'No untagged scans.'
+                      : 'No examinees found.',
+                )
               : Container(
                   decoration: _cardDecoration,
-                  child: ListView.separated(
-                    itemCount: list.length,
-                    separatorBuilder: (_, _) =>
+                  child: ListView(
+                    children: [
+                      for (final e in tagged) ...[
+                        _taggedRow(e),
                         const Divider(height: 1, color: AppColors.cardBorder),
-                    itemBuilder: (_, i) => ListTile(
-                      key: Key('examineeAnalyticsRow_${list[i].id}'),
-                      dense: true,
-                      title: Text(
-                        list[i].displayName,
-                        style: AppTextStyles.body(
-                          size: 12,
-                          weight: FontWeight.w700,
-                        ),
-                      ),
-                      subtitle: Text(
-                        list[i].temporaryExamineeId,
-                        style: AppTextStyles.body(
-                          size: 11,
-                          color: AppColors.textGray,
-                        ),
-                      ),
-                      trailing: const Icon(Icons.chevron_right, size: 18),
-                      onTap: () => _select(list[i]),
-                    ),
+                      ],
+                      for (final h in untagged) ...[
+                        _untaggedRow(h),
+                        const Divider(height: 1, color: AppColors.cardBorder),
+                      ],
+                    ],
                   ),
                 ),
         ),
       ],
     );
+  }
+
+  Widget _taggedRow(ExamineeRecord e) => ListTile(
+    key: Key('examineeAnalyticsRow_${e.id}'),
+    dense: true,
+    title: Text(
+      e.displayName,
+      style: AppTextStyles.body(size: 12, weight: FontWeight.w700),
+    ),
+    subtitle: Text(
+      e.temporaryExamineeId,
+      style: AppTextStyles.body(size: 11, color: AppColors.textGray),
+    ),
+    trailing: const Icon(Icons.chevron_right, size: 18),
+    onTap: () => _select(e),
+  );
+
+  Widget _untaggedRow(ExamineeHistoryItem item) => ListTile(
+    key: Key('untaggedAnalyticsRow_${item.scan.id}'),
+    dense: true,
+    title: Text(
+      'Untagged — ${item.examCode} · ${item.batch.batchCode}',
+      style: AppTextStyles.body(size: 12, weight: FontWeight.w700),
+    ),
+    subtitle: Text(
+      _scoreText(item),
+      style: AppTextStyles.body(size: 11, color: AppColors.textGray),
+    ),
+    trailing: const Icon(Icons.chevron_right, size: 18),
+    onTap: () => setState(() {
+      _selected = null;
+      _viewing = item;
+    }),
+  );
+
+  String _scoreText(ExamineeHistoryItem item) {
+    final result = item.result;
+    if (result == null) return '—';
+    final denominator = item.examCode == 'TAT' ? 160 : result.totalItems;
+    return '${result.rawScore} / $denominator '
+        '(${result.percentage.toStringAsFixed(1)}%)';
   }
 
   Widget _buildExamineeResults(ExamineeRecord examinee) {
@@ -258,7 +374,7 @@ class _GuidanceWebExamineeAnalyticsViewState
               : _historyError != null
               ? _message(_historyError!, isError: true)
               : _history.isEmpty
-              ? _message('No AT or QTM results for this examinee yet.')
+              ? _message('No results for this examinee yet.')
               : Container(
                   decoration: _cardDecoration,
                   child: ListView.separated(
@@ -274,11 +390,7 @@ class _GuidanceWebExamineeAnalyticsViewState
   }
 
   Widget _historyRow(ExamineeHistoryItem item) {
-    final result = item.result;
-    final score = result == null
-        ? '—'
-        : '${result.rawScore} / ${result.totalItems} '
-              '(${result.percentage.toStringAsFixed(1)}%)';
+    final score = _scoreText(item);
     return ListTile(
       dense: true,
       title: Text(

@@ -13,6 +13,8 @@ import '../../../core/omr/omr_scorer.dart';
 import '../../../core/omr/omr_templates.dart';
 import '../../../core/omr/qtm_category.dart';
 import '../../../core/omr/qtm_result.dart';
+import '../../../core/omr/tat_category.dart';
+import '../../../core/omr/tat_result.dart';
 import '../../../models/answer_key.dart';
 import '../../../models/local_batch.dart';
 import '../services/guidance_web_results_service.dart';
@@ -510,10 +512,11 @@ class _GuidanceWebResultDetailViewState
           const SizedBox(height: 16),
           _buildScannedSheetCard(),
           const SizedBox(height: 16),
-          if (widget.showClusterAnalysis &&
-              clusterDefsFor(widget.batch.examCode) != null) ...[
-            _buildClusterAnalysisCard(),
-            const SizedBox(height: 16),
+          if (widget.showClusterAnalysis) ...[
+            if (clusterDefsFor(widget.batch.examCode) != null) ...[
+              _buildClusterAnalysisCard(),
+              const SizedBox(height: 16),
+            ],
             _buildCategoryCard(),
           ] else
             _buildAnswerDetailsCard(),
@@ -936,7 +939,14 @@ class _GuidanceWebResultDetailViewState
   /// (letter, color, score range, optional percent label) per exam, lowest
   /// band first - mirrors the Guidance Council's category templates.
   List<(String, Color, String, String?)> get _categoryBands =>
-      widget.batch.examCode == 'QTM'
+      widget.batch.examCode == 'TAT'
+      ? const [
+          ('A', _catA, '0 – 121', '76% and below'),
+          ('B', _catB, '128 – 135', '80% – 84%'),
+          ('C', _catC, '136 – 143', '85% – 89%'),
+          ('D', _catD, '144 – 160', '90% and above'),
+        ]
+      : widget.batch.examCode == 'QTM'
       ? const [
           ('A', _catA, '0 – 45', '76% and below'),
           ('B', _catB, '48 – 50', '80% – 84%'),
@@ -956,6 +966,9 @@ class _GuidanceWebResultDetailViewState
     if (widget.batch.examCode == 'QTM') {
       return qtmCategory(raw)?.name.toUpperCase();
     }
+    if (widget.batch.examCode == 'TAT') {
+      return tatCategory(raw)?.name.toUpperCase();
+    }
     return admissionCategory(raw)?.name.toUpperCase();
   }
 
@@ -968,12 +981,15 @@ class _GuidanceWebResultDetailViewState
         )
         .$2;
     final isQtm = widget.batch.examCode == 'QTM';
+    // TAT has no cluster analysis (yet): Category only, no radar or insights.
     final allRows = computeClusterRows(
       widget.batch.examCode,
       _scored.items,
       averages: _clusterAverages,
-    )!;
-    final rows = allRows.where((r) => !r.def.isGroup).toList();
+    );
+    final rows = (allRows ?? const <ClusterRow>[])
+        .where((r) => !r.def.isGroup)
+        .toList();
 
     List<double?> fractions(double? Function(ClusterRow r) value) => [
       for (final r in rows)
@@ -985,6 +1001,10 @@ class _GuidanceWebResultDetailViewState
 
     final raw = widget.scan.result?.rawScore;
     final eligibility = (isQtm && raw != null) ? qtmEligibility(raw) : null;
+    final tatMeets =
+        widget.batch.examCode == 'TAT' &&
+        raw != null &&
+        tatEligibility(raw) == TatEligibility.meetsRequirement;
 
     return _card('CATEGORY', [
       Wrap(
@@ -992,6 +1012,7 @@ class _GuidanceWebResultDetailViewState
         runSpacing: 24,
         crossAxisAlignment: WrapCrossAlignment.start,
         children: [
+          if (allRows != null)
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -1052,14 +1073,15 @@ class _GuidanceWebResultDetailViewState
                     ),
                   ),
                 const SizedBox(height: 12),
-                _categoryLegend(letter, isQtm, eligibility),
+                _categoryLegend(letter, isQtm, eligibility, tatMeets),
               ],
             ),
           ),
-          ConstrainedBox(
-            constraints: const BoxConstraints(minWidth: 240, maxWidth: 340),
-            child: _buildInsightsPanel(allRows),
-          ),
+          if (allRows != null)
+            ConstrainedBox(
+              constraints: const BoxConstraints(minWidth: 240, maxWidth: 340),
+              child: _buildInsightsPanel(allRows),
+            ),
         ],
       ),
     ]);
@@ -1130,9 +1152,17 @@ class _GuidanceWebResultDetailViewState
     ],
   );
 
-  Widget _categoryLegend(String? letter, bool isQtm, QtmEligibility? elig) {
+  Widget _categoryLegend(
+    String? letter,
+    bool isQtm,
+    QtmEligibility? elig,
+    bool tatMeets,
+  ) {
+    final isTat = widget.batch.examCode == 'TAT';
     final title = isQtm
         ? 'Qualifying Test for Mathematics (QTM)'
+        : isTat
+        ? 'Teaching Aptitude Test (TAT)'
         : 'Admission Test (AT)';
     return Container(
       padding: const EdgeInsets.all(12),
@@ -1181,6 +1211,15 @@ class _GuidanceWebResultDetailViewState
                 ],
               ),
             ),
+          if (isTat) ...[
+            const Divider(height: 16, color: AppColors.cardBorder),
+            _eligibilityRow(
+              'C.2',
+              _catC,
+              '30% (48) for English, Filipino, Mathematics, Science, Social Studies and Religious Education',
+              tatMeets,
+            ),
+          ],
           if (isQtm) ...[
             const Divider(height: 16, color: AppColors.cardBorder),
             _eligibilityRow(
