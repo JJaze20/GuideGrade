@@ -6,6 +6,7 @@ import '../../../core/constants/app_text_styles.dart';
 import '../../../core/routes/app_routes.dart';
 import '../../../core/state/app_state.dart';
 import '../../../models/local_batch.dart';
+import '../../../shared/widgets/form_field_decoration.dart';
 import '../widgets/batch_list_item.dart';
 
 /// Batch Management screen for Guidance Council users.
@@ -195,8 +196,9 @@ class _BatchManagementScreenState extends State<BatchManagementScreen> {
         children: [
           TextField(
             controller: _searchController,
-            decoration: InputDecoration(
-              hintText: 'Search by description, batch code, or exam...',
+            decoration: FormFieldStyle.outlined(
+              hint: 'Search by description, batch code, or exam...',
+              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               prefixIcon: const Icon(Icons.search, size: 20),
               suffixIcon: _searchController.text.isNotEmpty
                   ? IconButton(
@@ -206,19 +208,6 @@ class _BatchManagementScreenState extends State<BatchManagementScreen> {
                       },
                     )
                   : null,
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide(color: AppColors.cardBorder),
-              ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide(color: AppColors.cardBorder),
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide(color: AppColors.primaryGreen),
-              ),
-              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             ),
           ),
           const SizedBox(height: 12),

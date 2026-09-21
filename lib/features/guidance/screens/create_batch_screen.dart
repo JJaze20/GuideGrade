@@ -5,6 +5,7 @@ import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
 import '../../../core/constants/exam_catalog.dart';
 import '../../../core/state/app_state.dart';
+import '../../../shared/widgets/form_field_decoration.dart';
 import '../../../shared/widgets/primary_button.dart';
 
 /// Create Batch screen for Guidance Council users.
@@ -229,28 +230,7 @@ class _CreateBatchScreenState extends State<CreateBatchScreen> {
         TextField(
           controller: controller,
           enabled: enabled,
-          decoration: InputDecoration(
-            hintText: hint,
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: AppColors.cardBorder),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: AppColors.cardBorder),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: AppColors.primaryGreen),
-            ),
-            disabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: AppColors.cardBorder.withOpacity(0.5)),
-            ),
-            filled: !enabled,
-            fillColor: AppColors.lightBg.withOpacity(0.5),
-            contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          ),
+          decoration: FormFieldStyle.outlined(hint: hint, enabled: enabled),
         ),
       ],
     );
@@ -275,21 +255,7 @@ class _CreateBatchScreenState extends State<CreateBatchScreen> {
         TextFormField(
           controller: controller,
           keyboardType: TextInputType.number,
-          decoration: InputDecoration(
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: AppColors.cardBorder),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: AppColors.cardBorder),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: AppColors.primaryGreen),
-            ),
-            contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          ),
+          decoration: FormFieldStyle.outlined(),
           validator: required
               ? (value) {
                   if (value == null || value.trim().isEmpty) {
@@ -322,27 +288,8 @@ class _CreateBatchScreenState extends State<CreateBatchScreen> {
         const SizedBox(height: 6),
         DropdownButtonFormField<ExamCatalogEntry>(
           value: _selectedExam,
-          decoration: InputDecoration(
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: AppColors.cardBorder),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: AppColors.cardBorder),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: AppColors.primaryGreen),
-            ),
-            disabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: AppColors.cardBorder.withOpacity(0.5)),
-            ),
-            filled: _examLocked,
-            fillColor: AppColors.lightBg.withOpacity(0.5),
-            contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          ),
+          isExpanded: true,
+          decoration: FormFieldStyle.outlined(enabled: !_examLocked),
           hint: Text('Select an exam type', style: AppTextStyles.body(size: 11)),
           items: examCatalog.map((exam) {
             return DropdownMenuItem(
