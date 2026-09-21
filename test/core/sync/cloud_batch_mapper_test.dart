@@ -91,15 +91,15 @@ void main() {
       expect(scan.rectifiedImageFileName, isNull);
     });
 
-    test('OCR guesses are always null; middleName defaults to blank when the cloud row has none', () {
+    test('name crops are always null; middleName defaults to blank when the cloud row has none', () {
       final scan = mapCloudScan(_scanRow(
         firstName: 'Juan',
         lastName: 'Dela Cruz',
         examineeNumber: 'X-1',
       ));
-      expect(scan.ocrLastNameGuess, isNull);
-      expect(scan.ocrFirstNameGuess, isNull);
-      expect(scan.ocrMiddleNameGuess, isNull);
+      expect(scan.nameCropLastFileName, isNull);
+      expect(scan.nameCropFirstFileName, isNull);
+      expect(scan.nameCropMiddleFileName, isNull);
       expect(scan.examinee!.middleName, '');
     });
 

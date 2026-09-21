@@ -57,10 +57,10 @@ void main() {
     test('current AT/QTM and TAT retain their existing template geometry', () {
       expect(at.templateVersion, equals('AT-redesign-v1'));
       expect(qtm.templateVersion, equals('QTM-redesign-v1'));
-      expect(tat.templateVersion, equals('TAT-v1'));
+      expect(tat.templateVersion, equals('TAT-portrait-v5'));
       expect(at.interiorFiducials, hasLength(5));
       expect(qtm.interiorFiducials, hasLength(5));
-      expect(tat.interiorFiducials, isEmpty);
+      expect(tat.interiorFiducials, hasLength(10));
     });
 
     test(
@@ -224,7 +224,7 @@ void main() {
         ],
         lastNameFieldRect: const OmrFieldRect(0, 0, 1, 1),
         firstNameFieldRect: const OmrFieldRect(0, 0, 1, 1),
-        middleInitialFieldRect: const OmrFieldRect(0, 0, 1, 1),
+        middleNameFieldRect: const OmrFieldRect(0, 0, 1, 1),
       );
 
       final result = bubblesForOverlayItem(synthetic, 'Not A Real Section', 5);

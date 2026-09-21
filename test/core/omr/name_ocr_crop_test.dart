@@ -4,7 +4,7 @@ import 'package:guidegrade/core/omr/omr_templates.dart';
 /// Asserts [rect] is a real, independently croppable rectangle wholly
 /// within the page (non-negative origin, positive size, right/bottom edges
 /// not past the page bounds) — true for every template regardless of
-/// layout, redesigned or legacy.
+/// layout.
 void _expectValidFieldRect(OmrFieldRect rect, String label) {
   expect(rect.xFrac, greaterThanOrEqualTo(0), reason: '$label.xFrac');
   expect(rect.yFrac, greaterThanOrEqualTo(0), reason: '$label.yFrac');
@@ -18,63 +18,32 @@ void _expectValidFieldRect(OmrFieldRect rect, String label) {
 
 void main() {
   test(
-      'every template\'s Last/First/Middle Initial name fields are valid, '
-      'independently croppable rectangles, consistently ~44pt from the left '
-      'margin (unaffected by the AT/QTM redesign — OmrDecoder.cropNameFields '
-      'crops each field independently, with no same-row assumption)', () {
+      'every template\'s Last/First/Middle Name fields are valid, '
+      'independently croppable rectangles laid out as one contiguous row '
+      '(AT/QTM start 44 pt from the left margin, portrait TAT v5 at 48 pt)',
+      () {
     for (final template in omrTemplates.values) {
       final last = template.lastNameFieldRect;
       final first = template.firstNameFieldRect;
-      final mi = template.middleInitialFieldRect;
+      final mi = template.middleNameFieldRect;
 
       _expectValidFieldRect(last, 'lastNameFieldRect');
       _expectValidFieldRect(first, 'firstNameFieldRect');
-      _expectValidFieldRect(mi, 'middleInitialFieldRect');
+      _expectValidFieldRect(mi, 'middleNameFieldRect');
 
-      expect(last.xFrac * template.pageWidthPt, closeTo(44, 0.01));
-    }
-  });
+      // AT and QTM start their name row at 44 pt; portrait TAT v5 at 48 pt.
+      expect(last.xFrac * template.pageWidthPt,
+          closeTo(template.examCode == 'TAT' ? 48 : 44, 0.01));
 
-  test(
-      'First Name and Middle Initial remain on the same row, contiguous, '
-      'on every template — this relationship was NOT changed by the AT/QTM '
-      'redesign', () {
-    for (final template in omrTemplates.values) {
-      final first = template.firstNameFieldRect;
-      final mi = template.middleInitialFieldRect;
-
+      // Last -> First -> Middle touch edge to edge...
+      expect(last.xFrac + last.widthFrac, closeTo(first.xFrac, 0.00002));
       expect(first.xFrac + first.widthFrac, closeTo(mi.xFrac, 0.00006));
+
+      // ...on the same row.
+      expect(last.yFrac, first.yFrac);
+      expect(last.heightFrac, first.heightFrac);
       expect(first.yFrac, mi.yFrac);
       expect(first.heightFrac, mi.heightFrac);
     }
-  });
-
-  test(
-      'AT/QTM (redesigned 9-fiducial sheets): Last Name is now on its own '
-      'row, directly ABOVE First Name/Middle Initial — not contiguous with '
-      'them on the same row anymore', () {
-    for (final examCode in ['AT', 'QTM']) {
-      final template = omrTemplates[examCode]!;
-      final last = template.lastNameFieldRect;
-      final first = template.firstNameFieldRect;
-
-      // Same left margin as the First Name/MI row below it, but its own row.
-      expect(last.xFrac, closeTo(first.xFrac, 0.00002));
-      expect(last.yFrac, lessThan(first.yFrac));
-      // Last Name's row does not overlap the First Name/MI row beneath it.
-      expect(last.yFrac + last.heightFrac, lessThanOrEqualTo(first.yFrac + 0.00002));
-    }
-  });
-
-  test(
-      'TAT (legacy sheet, untouched by the redesign): Last Name is still '
-      'contiguous with First Name on the SAME row, exactly as before', () {
-    final template = omrTemplates['TAT']!;
-    final last = template.lastNameFieldRect;
-    final first = template.firstNameFieldRect;
-
-    expect(last.xFrac + last.widthFrac, closeTo(first.xFrac, 0.00002));
-    expect(last.yFrac, first.yFrac);
-    expect(last.heightFrac, first.heightFrac);
   });
 }

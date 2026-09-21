@@ -15,7 +15,9 @@ import '../../../core/sync/sync_job.dart';
 import '../../../core/sync/sync_manager.dart';
 import '../../../models/local_batch.dart';
 import '../../../shared/widgets/examinee_dialog.dart';
+import '../../../shared/widgets/name_crop_strip.dart';
 import '../../exam/screens/scanned_image_viewer_screen.dart';
+import '../../exam/widgets/scan_editing_factory.dart';
 import '../../exam/widgets/scan_result_summary.dart';
 
 /// Opens one archived batch: its info, exam type, every scanned image it
@@ -465,26 +467,14 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
         if (s.id != scan.id) (s.examinee?.examineeNumber.trim() ?? ''),
     }..removeWhere((e) => e.isEmpty);
 
-    // Only offered when there's no confirmed tag yet — see
-    // showExamineeDialog's doc comment.
-    final ocrLast = scan.ocrLastNameGuess;
-    final ocrFirst = scan.ocrFirstNameGuess;
-    final ocrMiddle = scan.ocrMiddleNameGuess;
-    final ocrSuggestion = scan.examinee == null && (ocrLast != null || ocrFirst != null || ocrMiddle != null)
-        ? ExamineeInfo(
-            lastName: ocrLast ?? '',
-            firstName: ocrFirst ?? '',
-            middleName: ocrMiddle ?? '',
-            examineeNumber: '',
-          )
-        : null;
-
     final res = await showExamineeDialog(
       context,
       initial: scan.examinee,
-      ocrSuggestion: ocrSuggestion,
       sheetLabel: 'Sheet ${index + 1}',
       otherNumbers: others,
+      batchId: batch.id,
+      scan: scan,
+      repository: AppStateScope.of(context).batchRepository,
     );
     if (res == null || !mounted) return;
     await AppStateScope.of(context).batchRepository.setScanExaminee(
@@ -532,13 +522,16 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
 
   Widget _buildScanCard(LocalBatch batch, int index, AppState appState) {
     final scan = batch.scans[index];
-    final scored = scoreOmrResult(scan.decoded, appState.answerKeys[batch.examCode]);
+    final scored = scoreOmrResult(scan.effectiveDecoded, appState.answerKeys[batch.examCode]);
     final result = scan.result;
     final examinee = scan.examinee;
     final tagged = examinee != null && !examinee.isEmpty;
 
     final blankCount = scored.items.where((i) => i.isBlank).length;
     final ambiguousCount = scored.items.where((i) => i.isAmbiguous).length;
+    final hasName = tagged && (examinee.firstName.trim().isNotEmpty || examinee.lastName.trim().isNotEmpty);
+    final hasNumber = tagged && examinee.examineeNumber.trim().isNotEmpty;
+    final cardTitle = hasName ? examinee.displayName : 'Unnamed examinee';
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -564,7 +557,7 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  tagged ? examinee.displayName : 'Sheet ${index + 1}',
+                  cardTitle,
                   style: AppTextStyles.heading(size: 12),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -572,16 +565,22 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
                 const SizedBox(height: 4),
                 Text(
                   tagged
-                      ? (examinee.isComplete
+                      // A tag can be partial in either direction now that
+                      // name entry is manual-only and the name fields
+                      // aren't required — name it whichever piece is
+                      // actually still missing rather than assuming it's
+                      // always the number.
+                      ? (hasNumber
                           ? 'Sheet ${index + 1} · Examinee ${examinee.examineeNumber}'
-                          // A name with no examinee number means OCR
-                          // auto-filled it at scan time (see
-                          // AppState.persistCapturedSessionToBatch) —
-                          // staff still need to open Edit student to add
-                          // the number.
                           : 'Sheet ${index + 1} · needs examinee #')
-                      : '${scored.items.length} items · $blankCount blank · $ambiguousCount flagged',
+                      : 'Sheet ${index + 1} · ${scored.items.length} items · $blankCount blank · $ambiguousCount flagged',
                   style: AppTextStyles.body(size: 9, color: AppColors.textGray),
+                ),
+                const SizedBox(height: 8),
+                NameCropStrip(
+                  batchId: batch.id,
+                  scan: scan,
+                  repository: appState.batchRepository,
                 ),
                 const SizedBox(height: 8),
                 ScanResultSummary(
@@ -688,7 +687,7 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
       rectifiedBytes = await repo.resolveScanRectifiedImage(batch.id, scan);
     }
     if (!mounted) return;
-    Navigator.of(context).push(
+    await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => ScannedImageViewerScreen(
           imageBytes: bytes,
@@ -697,10 +696,12 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
           rectifiedImageBytes: rectifiedBytes,
           template: omrTemplates[scored.examCode],
           scanTemplateVersion: scored.templateVersion,
+          editing: scanEditingFor(appState, batch.id, scan),
           meshInteriorMeasuredFrac: scored.meshInteriorMeasuredFrac,
         ),
       ),
     );
+    if (mounted) await _load(); // pick up any corrections made in the viewer
   }
 
   static const _months = [

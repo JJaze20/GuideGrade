@@ -11,7 +11,9 @@ import '../../../core/constants/app_colors.dart';
 import '../../../core/omr/duplicate_scan_detector.dart';
 import '../../../core/omr/fiducial_coordinate_mapping.dart';
 import '../../../core/omr/fiducial_search_tuning.dart';
+import '../../../core/omr/exam_score.dart';
 import '../../../core/omr/omr_decoder.dart';
+import '../../../core/omr/omr_scorer.dart';
 import '../../../core/omr/omr_templates.dart';
 import '../../../core/routes/app_routes.dart';
 import '../../../core/state/app_state.dart';
@@ -393,7 +395,11 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
     if (found == null) return 'Align the 4 black corner squares inside the guides';
     switch (_liveVerdict!) {
       case AlignmentVerdict.green:
-        return _readyToCapture ? 'Ready to scan' : 'Hold steady…';
+        return _readyToCapture
+            ? (_appState.activeExamCode == 'TAT'
+                ? 'Corners found — full alignment checked after capture'
+                : 'Ready to scan')
+            : 'Hold steady…';
       case AlignmentVerdict.yellow:
         final worst = found.indexWhere((c) => c != CornerConfidence.confident);
         final name = worst >= 0 ? _cornerNames[worst] : 'one corner';
@@ -450,33 +456,10 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
     // itself throws, since the widget isn't fully attached to the tree
     // yet at that point.
     _appState = AppStateScope.of(context);
-    final template = omrTemplates[_appState.activeExamCode];
-    _isLandscapeExam =
-        template != null && template.pageWidthPt > template.pageHeightPt;
-    // A landscape-page exam (TAT) unlocks landscape device rotation for
-    // this screen only — a user photographing a landscape sheet naturally
-    // turns the phone sideways to fill the frame with it, the same way
-    // they'd hold any camera for a wide subject. Restored to portrait-only
-    // the moment this screen closes (see dispose()), so it never leaks
-    // into the rest of the app, which stays portrait-only throughout (see
-    // main.dart).
-    if (_isLandscapeExam) {
-      SystemChrome.setPreferredOrientations([
-        DeviceOrientation.landscapeLeft,
-        DeviceOrientation.landscapeRight,
-      ]);
-      // Allowing the sensor to pick between landscapeLeft/landscapeRight
-      // means holding the phone near the boundary between the two can flip
-      // the device's actual orientation back and forth, and each flip can
-      // cycle this Activity through pause/resume with no real backgrounding
-      // involved (confirmed: AppLockGate's own resumed handler was
-      // re-locking and re-prompting on every one of those flips, producing
-      // an infinite biometric/PIN prompt loop for exactly as long as the
-      // phone stayed in landscape). Suppressed for this screen's whole
-      // lifetime, not just around the orientation call, since a flip can
-      // happen at any point while scanning; restored in dispose().
-      _appState.suppressAppLock = true;
-    }
+    // All exams use the portrait camera UI. TAT's printed page is rotated
+    // into canonical coordinates by measured fiducials after capture.
+    _isLandscapeExam = false;
+    SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
     _initializeFuture = _setUpCamera();
   }
 
@@ -1178,7 +1161,56 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
         }
       }
       if (!mounted) return;
-      appState.addCapturedPage(file);
+      final decoded = await appState.previewCapturedPage(file);
+      if (!mounted) return;
+      final scored = scoreOmrResult(
+        decoded, appState.answerKeys[decoded.examCode],
+      );
+      final score = computeExamScoreForCode(scored);
+      // Hold the shutter lock while the score is visible. Rearm automatic
+      // capture only after the user removes or repositions this sheet.
+      _autoCaptureArmed = false;
+      final endSession = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => PopScope(
+          canPop: false,
+          child: AlertDialog(
+            title: Text('Sheet ${appState.currentScannedPage}'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  score != null && score.isGraded
+                      ? '${score.rawScore} / ${score.isTat ? 160 : score.totalItems}'
+                      : 'No answer key available',
+                  style: Theme.of(context).textTheme.headlineLarge,
+                  textAlign: TextAlign.center,
+                ),
+                if (score != null && score.isGraded && score.totalGraded < score.totalItems)
+                  const Text('Partial answer key'),
+                if (scored.items.any((item) => item.isAmbiguous))
+                  const Text('Preliminary score — some answers need review.'),
+              ],
+            ),
+            actions: [
+              if (appState.rescanScanId == null)
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(true),
+                  child: const Text('End Session'),
+                ),
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: Text(appState.rescanScanId != null
+                    ? 'Save Rescan'
+                    : appState.scanLimitBlockMessage != null
+                        ? 'Continue' : 'Next Sheet'),
+              ),
+            ],
+          ),
+        ),
+      );
+      if (!mounted) return;
       if (captureSw != null) {
         omrPerfLog(
           'capture pageIndex=${appState.currentScannedPage} takePicture=${takePictureMs}ms '
@@ -1192,7 +1224,7 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
       // "Save Rescan" button. _compileData already handles the full
       // decode → finishRescan → pop-back-to-archive sequence and all its
       // own error/mounted handling.
-      if (appState.rescanScanId != null) {
+      if (appState.rescanScanId != null || endSession == true) {
         await _compileData(appState);
       }
     } on CameraException catch (e) {
@@ -1392,9 +1424,17 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
   Widget build(BuildContext context) {
     final appState = AppStateScope.of(context);
     final activeTemplate = omrTemplates[appState.activeExamCode];
+    // Only the old landscape TAT sheet (TAT-redesign-v*) was printed sideways;
+    // the current portrait TAT and AT/QTM use their corner marks as printed.
+    final rotatedSheet = activeTemplate != null &&
+        activeTemplate.pageWidthPt > activeTemplate.pageHeightPt;
     final cornerFractions = activeTemplate == null
         ? _defaultCornerFractions
-        : activeTemplate.cornerMarkers.map((c) => (c.xFrac, c.yFrac)).toList();
+        : rotatedSheet
+            ? [for (final i in [2, 0, 3, 1])
+                (1 - activeTemplate.cornerMarkers[i].yFrac,
+                 activeTemplate.cornerMarkers[i].xFrac)]
+            : activeTemplate.cornerMarkers.map((c) => (c.xFrac, c.yFrac)).toList();
 
     // The 4 corner marks aren't necessarily near the page's literal
     // (0,0)-(1,1) edges (a narrow bubble grid leaves them well inside the
@@ -1402,8 +1442,8 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
     // guide box's real-world aspect ratio has to come from the marks'
     // actual bounding box, not the full page's aspect ratio, or the guide
     // rectangle drawn on screen won't match the marks' true proportions.
-    final pageWidthPt = activeTemplate?.pageWidthPt ?? 595.28;
-    final pageHeightPt = activeTemplate?.pageHeightPt ?? 841.89;
+    final pageWidthPt = (rotatedSheet ? activeTemplate.pageHeightPt : activeTemplate?.pageWidthPt) ?? 595.28;
+    final pageHeightPt = (rotatedSheet ? activeTemplate.pageWidthPt : activeTemplate?.pageHeightPt) ?? 841.89;
     final markerXs = [for (final c in cornerFractions) c.$1];
     final markerYs = [for (final c in cornerFractions) c.$2];
     final markerAspectRatio =
@@ -1535,7 +1575,10 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
                 Padding(
                   padding: const EdgeInsets.only(right: 8),
                   child: InkWell(
-                    onTap: () => setState(() => _diagnosticsEnabled = !_diagnosticsEnabled),
+                    onTap: () => setState(() {
+                      _diagnosticsEnabled = !_diagnosticsEnabled;
+                      _appState.diagnosticsEnabled = _diagnosticsEnabled;
+                    }),
                     child: Container(
                       width: 32,
                       height: 32,
@@ -1695,6 +1738,19 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
                 letterSpacing: 0.5,
               ),
             ),
+            if (appState.activeExamCode == 'TAT') ...[
+              const SizedBox(height: 4),
+              const Text(
+                'Hold the sheet upright: name fields at the top, title on the '
+                'right edge. Keep the small squares above each test visible.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.white70,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
             const SizedBox(height: 12),
             Row(
               children: [

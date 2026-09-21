@@ -18,6 +18,7 @@ import '../omr/exam_score.dart';
 import '../omr/omr_scorer.dart';
 import '../omr/qtm_result.dart';
 import '../omr/tat_result.dart';
+import 'scan_cloud_extensions.dart';
 import 'sync_client.dart';
 
 /// The Admission Test's fixed itemization -- the denominator of its
@@ -51,47 +52,66 @@ LocalBatch mapCloudBatch(CloudBatchRow row) => LocalBatch(
 /// comment for the accepted limitation this implies when the answer key has
 /// changed since the scan was originally graded.
 ///
-/// `ocrLastNameGuess` / `ocrFirstNameGuess` / `ocrMiddleNameGuess` are
-/// always null (never pushed to the cloud, so never recoverable). A
-/// restored `ExamineeInfo.middleName` reflects the cloud's own
-/// `middle_name` column for a completed tag (see [_mapExaminee]), or `''`
-/// when the scan was untagged/OCR-only (no examinee at all) or the
-/// original tag genuinely had no middle name -- never invented here.
+/// `nameCropLastFileName` / `nameCropFirstFileName` / `nameCropMiddleFileName`
+/// are always null: the name-crop images are a device-local convenience,
+/// never uploaded, so they are not restored from the cloud and a restored
+/// scan simply has no crop to show -- same as any other older scan that
+/// predates the feature. A restored `ExamineeInfo.middleName` comes from the
+/// cloud's own `middle_name` column when the row has one (see
+/// [_mapExaminee]), or `''` when it does not -- no middle name is ever
+/// invented here.
 LocalScan mapCloudScan(CloudScanRow row, {AnswerKey? answerKey}) {
   final decoded = OmrScanResult.fromJson(row.decoded);
-  return LocalScan(
+  // Manual corrections and optional student details, when the row has them
+  // (see ScanCloudExtensions) — absent on every row written before they
+  // existed, which restores exactly as before.
+  final manual = ScanCloudExtensions.parse(row.decoded);
+  final scan = LocalScan(
     id: row.id,
     imageFileName: 'images/${row.id}.enc',
     rectifiedImageFileName:
         row.rectifiedImagePath != null ? 'images/${row.id}_rectified.enc' : null,
     capturedAt: row.capturedAt,
     decoded: decoded,
-    result: row.resultStatus == null
-        ? null
-        : _buildRestoredResult(row, decoded, answerKey),
-    examinee: _mapExaminee(row),
+    examinee: _mapExaminee(row, manual.details),
+    captureRevision: manual.captureRevision,
+    corrections: manual.corrections,
   );
+  return row.resultStatus == null
+      ? scan
+      // The TAT breakdown is recomputed from what the scan currently READS
+      // as (corrections applied), so it agrees with the restored raw score.
+      : scan.copyWith(result: _buildRestoredResult(row, scan.effectiveDecoded, answerKey));
 }
 
-/// Reconstructs [ExamineeInfo] whenever the cloud row carries a generated
-/// `examinee_number` -- the one field every scan is expected to always
-/// have (see `AppState.buildAutoExaminee`/`resolveRescanExaminee`), used
-/// here as the sole signal that "this scan has cloud identity data worth
-/// restoring". `firstName`/`middleName`/`lastName` are independently
-/// restored as-is (blank when the cloud column is null, e.g. OCR never
-/// read that field) -- never invented, and no longer required together
-/// with the number (see `scanIdentityColumns`'s doc comment for why the
-/// old all-or-nothing trio check no longer applies). A row with no
-/// `examinee_number` at all (pushed before this feature existed, or
-/// explicitly cleared) maps to `null`, same as before.
-ExamineeInfo? _mapExaminee(CloudScanRow row) {
+/// Reconstructs [ExamineeInfo] from the cloud row's identity columns and the
+/// optional student details.
+///
+/// `examinee_number` is the generated identity signal (see
+/// `AppState.buildAutoExaminee`/`resolveRescanExaminee`): whenever it is
+/// present, `firstName`/`middleName`/`lastName` are each restored as-is
+/// (blank when the cloud column is null) -- never invented, and no longer
+/// required together with the number (see `scanIdentityColumns`'s doc
+/// comment for why the old all-or-nothing trio check no longer applies).
+///
+/// The optional details ([details], from the `manual` block) attach
+/// independently of the number: a scan with only a birth date or school
+/// still restores it, as an examinee with no name and no number. When the
+/// number is blank and there are no details, the result is `null`.
+ExamineeInfo? _mapExaminee(CloudScanRow row, ExamineeDetails? details) {
   final number = row.examineeNumber;
-  if (number == null || number.trim().isEmpty) return null;
+  final hasNumber = number != null && number.trim().isNotEmpty;
+  final hasDetails = details != null && !details.isEmpty;
+  if (!hasNumber && !hasDetails) return null;
+
   return ExamineeInfo(
-    firstName: row.firstName ?? '',
-    lastName: row.lastName ?? '',
-    middleName: row.middleName ?? '',
-    examineeNumber: number,
+    firstName: hasNumber ? (row.firstName ?? '') : '',
+    lastName: hasNumber ? (row.lastName ?? '') : '',
+    middleName: hasNumber ? (row.middleName ?? '') : '',
+    examineeNumber: hasNumber ? number : '',
+    birthDate: details?.birthDate,
+    manualAge: details?.manualAge,
+    lastSchool: details?.lastSchool ?? '',
   );
 }
 

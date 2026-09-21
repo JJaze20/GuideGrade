@@ -4,6 +4,9 @@
 // pageHeightPt), matching the printed PDFs in /answer_sheets.
 // Regenerate with: cd tool && dart run generate_sheets.dart
 
+import 'omr_template_registry.dart';
+import 'omr_template_tat_v5.dart';
+
 class BubblePos {
   final String choice;
   final double xFrac;
@@ -41,6 +44,20 @@ enum OmrFiducialRole {
   centerAboveAnswers,
   centerAtDivider,
   centerBelowAnswers,
+  tatAboveI,
+  tatBelowI,
+  tatAboveII,
+  tatBelowII,
+  tatAboveIII,
+  tatBelowIII,
+  // Portrait TAT v5: the 7 small marks above the answer groups.
+  tatAboveI1,
+  tatAboveI11,
+  tatAboveI21,
+  tatAboveII21,
+  tatAboveII41,
+  tatAboveIII6,
+  tatAboveIII11,
 }
 
 class OmrFiducial {
@@ -54,6 +71,19 @@ class OmrFiducial {
   /// assuming one fixed size for every fiducial on the page.
   final double halfSizePt;
   const OmrFiducial(this.role, this.xFrac, this.yFrac, this.halfSizePt);
+}
+
+/// A printed square that looks exactly like a corner mark but is NOT one --
+/// e.g. TAT's second edge pair (between Test II and Test III), same size as
+/// the corner squares and on the same left/right edges. The sheet prints it
+/// on purpose, but it is not used for registration. The decoder knows where
+/// these are so it can tell a corner from a decoy: a decoy always has the
+/// real corner further along the same edge. See [OmrExamTemplate.decoyMarkers].
+class OmrDecoyMark {
+  final double xFrac;
+  final double yFrac;
+  final double halfSizePt;
+  const OmrDecoyMark(this.xFrac, this.yFrac, this.halfSizePt);
 }
 
 /// A fractional bounding box (0.0-1.0 of the page, top-left origin — same
@@ -101,13 +131,26 @@ class OmrExamTemplate {
   /// skipped entirely for those, falling back to the single global
   /// homography exactly as before this field existed.
   final List<OmrFiducial> interiorFiducials;
+  /// Printed corner-lookalikes that are not registration marks -- see
+  /// [OmrDecoyMark]. Empty for every sheet except portrait TAT.
+  final List<OmrDecoyMark> decoyMarkers;
   final List<OmrSection> sections;
 
   /// Where the printed, hand-written Last Name / First Name / MI boxes are
   /// on the sheet — see [OmrFieldRect].
   final OmrFieldRect lastNameFieldRect;
   final OmrFieldRect firstNameFieldRect;
-  final OmrFieldRect middleInitialFieldRect;
+  final OmrFieldRect middleNameFieldRect;
+  /// How many individual letter cells each field is subdivided into (see
+  /// generate_sheets.dart's kAtLastNameBoxes/kQtmLastNameBoxes etc. — same
+  /// source of truth as what's actually drawn). 0 for a template whose name
+  /// fields are a single undivided box with no internal letter cells (TAT,
+  /// and any legacy sheet) — the OCR crop's grid-line suppression is a
+  /// no-op whenever the relevant count is 0, since there's no internal grid
+  /// to suppress.
+  final int lastNameBoxCount;
+  final int firstNameBoxCount;
+  final int middleNameBoxCount;
   const OmrExamTemplate({
     required this.examCode,
     required this.templateVersion,
@@ -117,578 +160,180 @@ class OmrExamTemplate {
     required this.bubbleRadiusYPt,
     required this.cornerMarkers,
     this.interiorFiducials = const [],
+    this.decoyMarkers = const [],
     required this.sections,
     required this.lastNameFieldRect,
     required this.firstNameFieldRect,
-    required this.middleInitialFieldRect,
+    required this.middleNameFieldRect,
+    this.lastNameBoxCount = 0,
+    this.firstNameBoxCount = 0,
+    this.middleNameBoxCount = 0,
   });
 }
 
 final OmrExamTemplate _omrTAT = OmrExamTemplate(
   examCode: "TAT",
-  templateVersion: "TAT-v1",
-  pageWidthPt: 936.0,
-  pageHeightPt: 612.0,
+  templateVersion: "TAT-portrait-v1",
+  pageWidthPt: 612.0,
+  pageHeightPt: 936.0,
   bubbleRadiusPt: 8.0,
   bubbleRadiusYPt: 6.4,
-  cornerMarkers: const [
-    OmrCorner(0.02564, 0.03922),
-    OmrCorner(0.91880, 0.03922),
-    OmrCorner(0.02564, 0.90196),
-    OmrCorner(0.91880, 0.90196),
-  ],
-  interiorFiducials: const [],
-  lastNameFieldRect: const OmrFieldRect(0.04701, 0.13889, 0.29808, 0.02451),
-  firstNameFieldRect: const OmrFieldRect(0.34509, 0.13889, 0.26496, 0.02451),
-  middleInitialFieldRect: const OmrFieldRect(
-    0.61004,
-    0.13889,
-    0.09936,
-    0.02451,
-  ),
+  cornerMarkers: const [OmrCorner(0.05229, 0.03419), OmrCorner(0.94771, 0.03419), OmrCorner(0.05229, 0.96581), OmrCorner(0.94771, 0.96581)],
+  interiorFiducials: const [OmrFiducial(OmrFiducialRole.dividerLeft, 0.05229, 0.43643, 7.0), OmrFiducial(OmrFiducialRole.dividerRight, 0.94771, 0.43643, 7.0), OmrFiducial(OmrFiducialRole.tatAboveI, 0.38235, 0.20726, 4.5), OmrFiducial(OmrFiducialRole.tatBelowI, 0.31699, 0.43643, 4.5), OmrFiducial(OmrFiducialRole.tatAboveII, 0.52451, 0.43643, 4.5), OmrFiducial(OmrFiducialRole.tatBelowII, 0.31699, 0.83173, 4.5), OmrFiducial(OmrFiducialRole.tatAboveIII, 0.52451, 0.83173, 4.5), OmrFiducial(OmrFiducialRole.tatBelowIII, 0.38235, 0.96581, 4.5)],
+  decoyMarkers: const [OmrDecoyMark(0.05229, 0.83173, 7.0), OmrDecoyMark(0.94771, 0.83173, 7.0)],
+  lastNameFieldRect: const OmrFieldRect(0.07190, 0.10897, 0.24072, 0.02137),
+  firstNameFieldRect: const OmrFieldRect(0.31261, 0.10897, 0.24570, 0.02137),
+  middleNameFieldRect: const OmrFieldRect(0.55831, 0.10897, 0.05810, 0.02137),
+  lastNameBoxCount: 0,
+  firstNameBoxCount: 0,
+  middleNameBoxCount: 0,
   sections: const [
     OmrSection(
       name: "Test I",
       itemCount: 30,
       items: {
-        1: [
-          BubblePos("A", 0.06838, 0.30392),
-          BubblePos("B", 0.09615, 0.30392),
-          BubblePos("C", 0.12393, 0.30392),
-          BubblePos("D", 0.15171, 0.30392),
-        ],
-        2: [
-          BubblePos("A", 0.06838, 0.34477),
-          BubblePos("B", 0.09615, 0.34477),
-          BubblePos("C", 0.12393, 0.34477),
-          BubblePos("D", 0.15171, 0.34477),
-        ],
-        3: [
-          BubblePos("A", 0.06838, 0.38562),
-          BubblePos("B", 0.09615, 0.38562),
-          BubblePos("C", 0.12393, 0.38562),
-          BubblePos("D", 0.15171, 0.38562),
-        ],
-        4: [
-          BubblePos("A", 0.06838, 0.42647),
-          BubblePos("B", 0.09615, 0.42647),
-          BubblePos("C", 0.12393, 0.42647),
-          BubblePos("D", 0.15171, 0.42647),
-        ],
-        5: [
-          BubblePos("A", 0.06838, 0.46732),
-          BubblePos("B", 0.09615, 0.46732),
-          BubblePos("C", 0.12393, 0.46732),
-          BubblePos("D", 0.15171, 0.46732),
-        ],
-        6: [
-          BubblePos("A", 0.06838, 0.50817),
-          BubblePos("B", 0.09615, 0.50817),
-          BubblePos("C", 0.12393, 0.50817),
-          BubblePos("D", 0.15171, 0.50817),
-        ],
-        7: [
-          BubblePos("A", 0.06838, 0.54902),
-          BubblePos("B", 0.09615, 0.54902),
-          BubblePos("C", 0.12393, 0.54902),
-          BubblePos("D", 0.15171, 0.54902),
-        ],
-        8: [
-          BubblePos("A", 0.06838, 0.58987),
-          BubblePos("B", 0.09615, 0.58987),
-          BubblePos("C", 0.12393, 0.58987),
-          BubblePos("D", 0.15171, 0.58987),
-        ],
-        9: [
-          BubblePos("A", 0.06838, 0.63072),
-          BubblePos("B", 0.09615, 0.63072),
-          BubblePos("C", 0.12393, 0.63072),
-          BubblePos("D", 0.15171, 0.63072),
-        ],
-        10: [
-          BubblePos("A", 0.06838, 0.67157),
-          BubblePos("B", 0.09615, 0.67157),
-          BubblePos("C", 0.12393, 0.67157),
-          BubblePos("D", 0.15171, 0.67157),
-        ],
-        11: [
-          BubblePos("A", 0.06838, 0.71242),
-          BubblePos("B", 0.09615, 0.71242),
-          BubblePos("C", 0.12393, 0.71242),
-          BubblePos("D", 0.15171, 0.71242),
-        ],
-        12: [
-          BubblePos("A", 0.06838, 0.75327),
-          BubblePos("B", 0.09615, 0.75327),
-          BubblePos("C", 0.12393, 0.75327),
-          BubblePos("D", 0.15171, 0.75327),
-        ],
-        13: [
-          BubblePos("A", 0.06838, 0.79412),
-          BubblePos("B", 0.09615, 0.79412),
-          BubblePos("C", 0.12393, 0.79412),
-          BubblePos("D", 0.15171, 0.79412),
-        ],
-        14: [
-          BubblePos("A", 0.06838, 0.83497),
-          BubblePos("B", 0.09615, 0.83497),
-          BubblePos("C", 0.12393, 0.83497),
-          BubblePos("D", 0.15171, 0.83497),
-        ],
-        15: [
-          BubblePos("A", 0.06838, 0.87582),
-          BubblePos("B", 0.09615, 0.87582),
-          BubblePos("C", 0.12393, 0.87582),
-          BubblePos("D", 0.15171, 0.87582),
-        ],
-        16: [
-          BubblePos("A", 0.19872, 0.30392),
-          BubblePos("B", 0.22650, 0.30392),
-          BubblePos("C", 0.25427, 0.30392),
-          BubblePos("D", 0.28205, 0.30392),
-        ],
-        17: [
-          BubblePos("A", 0.19872, 0.34477),
-          BubblePos("B", 0.22650, 0.34477),
-          BubblePos("C", 0.25427, 0.34477),
-          BubblePos("D", 0.28205, 0.34477),
-        ],
-        18: [
-          BubblePos("A", 0.19872, 0.38562),
-          BubblePos("B", 0.22650, 0.38562),
-          BubblePos("C", 0.25427, 0.38562),
-          BubblePos("D", 0.28205, 0.38562),
-        ],
-        19: [
-          BubblePos("A", 0.19872, 0.42647),
-          BubblePos("B", 0.22650, 0.42647),
-          BubblePos("C", 0.25427, 0.42647),
-          BubblePos("D", 0.28205, 0.42647),
-        ],
-        20: [
-          BubblePos("A", 0.19872, 0.46732),
-          BubblePos("B", 0.22650, 0.46732),
-          BubblePos("C", 0.25427, 0.46732),
-          BubblePos("D", 0.28205, 0.46732),
-        ],
-        21: [
-          BubblePos("A", 0.19872, 0.50817),
-          BubblePos("B", 0.22650, 0.50817),
-          BubblePos("C", 0.25427, 0.50817),
-          BubblePos("D", 0.28205, 0.50817),
-        ],
-        22: [
-          BubblePos("A", 0.19872, 0.54902),
-          BubblePos("B", 0.22650, 0.54902),
-          BubblePos("C", 0.25427, 0.54902),
-          BubblePos("D", 0.28205, 0.54902),
-        ],
-        23: [
-          BubblePos("A", 0.19872, 0.58987),
-          BubblePos("B", 0.22650, 0.58987),
-          BubblePos("C", 0.25427, 0.58987),
-          BubblePos("D", 0.28205, 0.58987),
-        ],
-        24: [
-          BubblePos("A", 0.19872, 0.63072),
-          BubblePos("B", 0.22650, 0.63072),
-          BubblePos("C", 0.25427, 0.63072),
-          BubblePos("D", 0.28205, 0.63072),
-        ],
-        25: [
-          BubblePos("A", 0.19872, 0.67157),
-          BubblePos("B", 0.22650, 0.67157),
-          BubblePos("C", 0.25427, 0.67157),
-          BubblePos("D", 0.28205, 0.67157),
-        ],
-        26: [
-          BubblePos("A", 0.19872, 0.71242),
-          BubblePos("B", 0.22650, 0.71242),
-          BubblePos("C", 0.25427, 0.71242),
-          BubblePos("D", 0.28205, 0.71242),
-        ],
-        27: [
-          BubblePos("A", 0.19872, 0.75327),
-          BubblePos("B", 0.22650, 0.75327),
-          BubblePos("C", 0.25427, 0.75327),
-          BubblePos("D", 0.28205, 0.75327),
-        ],
-        28: [
-          BubblePos("A", 0.19872, 0.79412),
-          BubblePos("B", 0.22650, 0.79412),
-          BubblePos("C", 0.25427, 0.79412),
-          BubblePos("D", 0.28205, 0.79412),
-        ],
-        29: [
-          BubblePos("A", 0.19872, 0.83497),
-          BubblePos("B", 0.22650, 0.83497),
-          BubblePos("C", 0.25427, 0.83497),
-          BubblePos("D", 0.28205, 0.83497),
-        ],
-        30: [
-          BubblePos("A", 0.19872, 0.87582),
-          BubblePos("B", 0.22650, 0.87582),
-          BubblePos("C", 0.25427, 0.87582),
-          BubblePos("D", 0.28205, 0.87582),
-        ],
+        1: [BubblePos("A", 0.14706, 0.22863), BubblePos("B", 0.18954, 0.22863), BubblePos("C", 0.23203, 0.22863), BubblePos("D", 0.27451, 0.22863)],
+        2: [BubblePos("A", 0.14706, 0.24893), BubblePos("B", 0.18954, 0.24893), BubblePos("C", 0.23203, 0.24893), BubblePos("D", 0.27451, 0.24893)],
+        3: [BubblePos("A", 0.14706, 0.26923), BubblePos("B", 0.18954, 0.26923), BubblePos("C", 0.23203, 0.26923), BubblePos("D", 0.27451, 0.26923)],
+        4: [BubblePos("A", 0.14706, 0.28953), BubblePos("B", 0.18954, 0.28953), BubblePos("C", 0.23203, 0.28953), BubblePos("D", 0.27451, 0.28953)],
+        5: [BubblePos("A", 0.14706, 0.30983), BubblePos("B", 0.18954, 0.30983), BubblePos("C", 0.23203, 0.30983), BubblePos("D", 0.27451, 0.30983)],
+        6: [BubblePos("A", 0.14706, 0.33013), BubblePos("B", 0.18954, 0.33013), BubblePos("C", 0.23203, 0.33013), BubblePos("D", 0.27451, 0.33013)],
+        7: [BubblePos("A", 0.14706, 0.35043), BubblePos("B", 0.18954, 0.35043), BubblePos("C", 0.23203, 0.35043), BubblePos("D", 0.27451, 0.35043)],
+        8: [BubblePos("A", 0.14706, 0.37073), BubblePos("B", 0.18954, 0.37073), BubblePos("C", 0.23203, 0.37073), BubblePos("D", 0.27451, 0.37073)],
+        9: [BubblePos("A", 0.14706, 0.39103), BubblePos("B", 0.18954, 0.39103), BubblePos("C", 0.23203, 0.39103), BubblePos("D", 0.27451, 0.39103)],
+        10: [BubblePos("A", 0.14706, 0.41132), BubblePos("B", 0.18954, 0.41132), BubblePos("C", 0.23203, 0.41132), BubblePos("D", 0.27451, 0.41132)],
+        11: [BubblePos("A", 0.42647, 0.22863), BubblePos("B", 0.46895, 0.22863), BubblePos("C", 0.51144, 0.22863), BubblePos("D", 0.55392, 0.22863)],
+        12: [BubblePos("A", 0.42647, 0.24893), BubblePos("B", 0.46895, 0.24893), BubblePos("C", 0.51144, 0.24893), BubblePos("D", 0.55392, 0.24893)],
+        13: [BubblePos("A", 0.42647, 0.26923), BubblePos("B", 0.46895, 0.26923), BubblePos("C", 0.51144, 0.26923), BubblePos("D", 0.55392, 0.26923)],
+        14: [BubblePos("A", 0.42647, 0.28953), BubblePos("B", 0.46895, 0.28953), BubblePos("C", 0.51144, 0.28953), BubblePos("D", 0.55392, 0.28953)],
+        15: [BubblePos("A", 0.42647, 0.30983), BubblePos("B", 0.46895, 0.30983), BubblePos("C", 0.51144, 0.30983), BubblePos("D", 0.55392, 0.30983)],
+        16: [BubblePos("A", 0.42647, 0.33013), BubblePos("B", 0.46895, 0.33013), BubblePos("C", 0.51144, 0.33013), BubblePos("D", 0.55392, 0.33013)],
+        17: [BubblePos("A", 0.42647, 0.35043), BubblePos("B", 0.46895, 0.35043), BubblePos("C", 0.51144, 0.35043), BubblePos("D", 0.55392, 0.35043)],
+        18: [BubblePos("A", 0.42647, 0.37073), BubblePos("B", 0.46895, 0.37073), BubblePos("C", 0.51144, 0.37073), BubblePos("D", 0.55392, 0.37073)],
+        19: [BubblePos("A", 0.42647, 0.39103), BubblePos("B", 0.46895, 0.39103), BubblePos("C", 0.51144, 0.39103), BubblePos("D", 0.55392, 0.39103)],
+        20: [BubblePos("A", 0.42647, 0.41132), BubblePos("B", 0.46895, 0.41132), BubblePos("C", 0.51144, 0.41132), BubblePos("D", 0.55392, 0.41132)],
+        21: [BubblePos("A", 0.70588, 0.22863), BubblePos("B", 0.74837, 0.22863), BubblePos("C", 0.79085, 0.22863), BubblePos("D", 0.83333, 0.22863)],
+        22: [BubblePos("A", 0.70588, 0.24893), BubblePos("B", 0.74837, 0.24893), BubblePos("C", 0.79085, 0.24893), BubblePos("D", 0.83333, 0.24893)],
+        23: [BubblePos("A", 0.70588, 0.26923), BubblePos("B", 0.74837, 0.26923), BubblePos("C", 0.79085, 0.26923), BubblePos("D", 0.83333, 0.26923)],
+        24: [BubblePos("A", 0.70588, 0.28953), BubblePos("B", 0.74837, 0.28953), BubblePos("C", 0.79085, 0.28953), BubblePos("D", 0.83333, 0.28953)],
+        25: [BubblePos("A", 0.70588, 0.30983), BubblePos("B", 0.74837, 0.30983), BubblePos("C", 0.79085, 0.30983), BubblePos("D", 0.83333, 0.30983)],
+        26: [BubblePos("A", 0.70588, 0.33013), BubblePos("B", 0.74837, 0.33013), BubblePos("C", 0.79085, 0.33013), BubblePos("D", 0.83333, 0.33013)],
+        27: [BubblePos("A", 0.70588, 0.35043), BubblePos("B", 0.74837, 0.35043), BubblePos("C", 0.79085, 0.35043), BubblePos("D", 0.83333, 0.35043)],
+        28: [BubblePos("A", 0.70588, 0.37073), BubblePos("B", 0.74837, 0.37073), BubblePos("C", 0.79085, 0.37073), BubblePos("D", 0.83333, 0.37073)],
+        29: [BubblePos("A", 0.70588, 0.39103), BubblePos("B", 0.74837, 0.39103), BubblePos("C", 0.79085, 0.39103), BubblePos("D", 0.83333, 0.39103)],
+        30: [BubblePos("A", 0.70588, 0.41132), BubblePos("B", 0.74837, 0.41132), BubblePos("C", 0.79085, 0.41132), BubblePos("D", 0.83333, 0.41132)],
       },
     ),
     OmrSection(
       name: "Test II",
       itemCount: 80,
       items: {
-        1: [BubblePos("T", 0.33761, 0.30392), BubblePos("F", 0.36538, 0.30392)],
-        2: [BubblePos("T", 0.33761, 0.34477), BubblePos("F", 0.36538, 0.34477)],
-        3: [BubblePos("T", 0.33761, 0.38562), BubblePos("F", 0.36538, 0.38562)],
-        4: [BubblePos("T", 0.33761, 0.42647), BubblePos("F", 0.36538, 0.42647)],
-        5: [BubblePos("T", 0.33761, 0.46732), BubblePos("F", 0.36538, 0.46732)],
-        6: [BubblePos("T", 0.33761, 0.50817), BubblePos("F", 0.36538, 0.50817)],
-        7: [BubblePos("T", 0.33761, 0.54902), BubblePos("F", 0.36538, 0.54902)],
-        8: [BubblePos("T", 0.33761, 0.58987), BubblePos("F", 0.36538, 0.58987)],
-        9: [BubblePos("T", 0.33761, 0.63072), BubblePos("F", 0.36538, 0.63072)],
-        10: [
-          BubblePos("T", 0.33761, 0.67157),
-          BubblePos("F", 0.36538, 0.67157),
-        ],
-        11: [
-          BubblePos("T", 0.33761, 0.71242),
-          BubblePos("F", 0.36538, 0.71242),
-        ],
-        12: [
-          BubblePos("T", 0.33761, 0.75327),
-          BubblePos("F", 0.36538, 0.75327),
-        ],
-        13: [
-          BubblePos("T", 0.33761, 0.79412),
-          BubblePos("F", 0.36538, 0.79412),
-        ],
-        14: [
-          BubblePos("T", 0.33761, 0.83497),
-          BubblePos("F", 0.36538, 0.83497),
-        ],
-        15: [
-          BubblePos("T", 0.33761, 0.87582),
-          BubblePos("F", 0.36538, 0.87582),
-        ],
-        16: [
-          BubblePos("T", 0.41239, 0.30392),
-          BubblePos("F", 0.44017, 0.30392),
-        ],
-        17: [
-          BubblePos("T", 0.41239, 0.34477),
-          BubblePos("F", 0.44017, 0.34477),
-        ],
-        18: [
-          BubblePos("T", 0.41239, 0.38562),
-          BubblePos("F", 0.44017, 0.38562),
-        ],
-        19: [
-          BubblePos("T", 0.41239, 0.42647),
-          BubblePos("F", 0.44017, 0.42647),
-        ],
-        20: [
-          BubblePos("T", 0.41239, 0.46732),
-          BubblePos("F", 0.44017, 0.46732),
-        ],
-        21: [
-          BubblePos("T", 0.41239, 0.50817),
-          BubblePos("F", 0.44017, 0.50817),
-        ],
-        22: [
-          BubblePos("T", 0.41239, 0.54902),
-          BubblePos("F", 0.44017, 0.54902),
-        ],
-        23: [
-          BubblePos("T", 0.41239, 0.58987),
-          BubblePos("F", 0.44017, 0.58987),
-        ],
-        24: [
-          BubblePos("T", 0.41239, 0.63072),
-          BubblePos("F", 0.44017, 0.63072),
-        ],
-        25: [
-          BubblePos("T", 0.41239, 0.67157),
-          BubblePos("F", 0.44017, 0.67157),
-        ],
-        26: [
-          BubblePos("T", 0.41239, 0.71242),
-          BubblePos("F", 0.44017, 0.71242),
-        ],
-        27: [
-          BubblePos("T", 0.41239, 0.75327),
-          BubblePos("F", 0.44017, 0.75327),
-        ],
-        28: [
-          BubblePos("T", 0.41239, 0.79412),
-          BubblePos("F", 0.44017, 0.79412),
-        ],
-        29: [
-          BubblePos("T", 0.41239, 0.83497),
-          BubblePos("F", 0.44017, 0.83497),
-        ],
-        30: [
-          BubblePos("T", 0.41239, 0.87582),
-          BubblePos("F", 0.44017, 0.87582),
-        ],
-        31: [
-          BubblePos("T", 0.48718, 0.30392),
-          BubblePos("F", 0.51496, 0.30392),
-        ],
-        32: [
-          BubblePos("T", 0.48718, 0.34477),
-          BubblePos("F", 0.51496, 0.34477),
-        ],
-        33: [
-          BubblePos("T", 0.48718, 0.38562),
-          BubblePos("F", 0.51496, 0.38562),
-        ],
-        34: [
-          BubblePos("T", 0.48718, 0.42647),
-          BubblePos("F", 0.51496, 0.42647),
-        ],
-        35: [
-          BubblePos("T", 0.48718, 0.46732),
-          BubblePos("F", 0.51496, 0.46732),
-        ],
-        36: [
-          BubblePos("T", 0.48718, 0.50817),
-          BubblePos("F", 0.51496, 0.50817),
-        ],
-        37: [
-          BubblePos("T", 0.48718, 0.54902),
-          BubblePos("F", 0.51496, 0.54902),
-        ],
-        38: [
-          BubblePos("T", 0.48718, 0.58987),
-          BubblePos("F", 0.51496, 0.58987),
-        ],
-        39: [
-          BubblePos("T", 0.48718, 0.63072),
-          BubblePos("F", 0.51496, 0.63072),
-        ],
-        40: [
-          BubblePos("T", 0.48718, 0.67157),
-          BubblePos("F", 0.51496, 0.67157),
-        ],
-        41: [
-          BubblePos("T", 0.48718, 0.71242),
-          BubblePos("F", 0.51496, 0.71242),
-        ],
-        42: [
-          BubblePos("T", 0.48718, 0.75327),
-          BubblePos("F", 0.51496, 0.75327),
-        ],
-        43: [
-          BubblePos("T", 0.48718, 0.79412),
-          BubblePos("F", 0.51496, 0.79412),
-        ],
-        44: [
-          BubblePos("T", 0.48718, 0.83497),
-          BubblePos("F", 0.51496, 0.83497),
-        ],
-        45: [
-          BubblePos("T", 0.48718, 0.87582),
-          BubblePos("F", 0.51496, 0.87582),
-        ],
-        46: [
-          BubblePos("T", 0.56197, 0.30392),
-          BubblePos("F", 0.58974, 0.30392),
-        ],
-        47: [
-          BubblePos("T", 0.56197, 0.34477),
-          BubblePos("F", 0.58974, 0.34477),
-        ],
-        48: [
-          BubblePos("T", 0.56197, 0.38562),
-          BubblePos("F", 0.58974, 0.38562),
-        ],
-        49: [
-          BubblePos("T", 0.56197, 0.42647),
-          BubblePos("F", 0.58974, 0.42647),
-        ],
-        50: [
-          BubblePos("T", 0.56197, 0.46732),
-          BubblePos("F", 0.58974, 0.46732),
-        ],
-        51: [
-          BubblePos("T", 0.56197, 0.50817),
-          BubblePos("F", 0.58974, 0.50817),
-        ],
-        52: [
-          BubblePos("T", 0.56197, 0.54902),
-          BubblePos("F", 0.58974, 0.54902),
-        ],
-        53: [
-          BubblePos("T", 0.56197, 0.58987),
-          BubblePos("F", 0.58974, 0.58987),
-        ],
-        54: [
-          BubblePos("T", 0.56197, 0.63072),
-          BubblePos("F", 0.58974, 0.63072),
-        ],
-        55: [
-          BubblePos("T", 0.56197, 0.67157),
-          BubblePos("F", 0.58974, 0.67157),
-        ],
-        56: [
-          BubblePos("T", 0.56197, 0.71242),
-          BubblePos("F", 0.58974, 0.71242),
-        ],
-        57: [
-          BubblePos("T", 0.56197, 0.75327),
-          BubblePos("F", 0.58974, 0.75327),
-        ],
-        58: [
-          BubblePos("T", 0.56197, 0.79412),
-          BubblePos("F", 0.58974, 0.79412),
-        ],
-        59: [
-          BubblePos("T", 0.56197, 0.83497),
-          BubblePos("F", 0.58974, 0.83497),
-        ],
-        60: [
-          BubblePos("T", 0.56197, 0.87582),
-          BubblePos("F", 0.58974, 0.87582),
-        ],
-        61: [
-          BubblePos("T", 0.63675, 0.30392),
-          BubblePos("F", 0.66453, 0.30392),
-        ],
-        62: [
-          BubblePos("T", 0.63675, 0.34477),
-          BubblePos("F", 0.66453, 0.34477),
-        ],
-        63: [
-          BubblePos("T", 0.63675, 0.38562),
-          BubblePos("F", 0.66453, 0.38562),
-        ],
-        64: [
-          BubblePos("T", 0.63675, 0.42647),
-          BubblePos("F", 0.66453, 0.42647),
-        ],
-        65: [
-          BubblePos("T", 0.63675, 0.46732),
-          BubblePos("F", 0.66453, 0.46732),
-        ],
-        66: [
-          BubblePos("T", 0.63675, 0.50817),
-          BubblePos("F", 0.66453, 0.50817),
-        ],
-        67: [
-          BubblePos("T", 0.63675, 0.54902),
-          BubblePos("F", 0.66453, 0.54902),
-        ],
-        68: [
-          BubblePos("T", 0.63675, 0.58987),
-          BubblePos("F", 0.66453, 0.58987),
-        ],
-        69: [
-          BubblePos("T", 0.63675, 0.63072),
-          BubblePos("F", 0.66453, 0.63072),
-        ],
-        70: [
-          BubblePos("T", 0.63675, 0.67157),
-          BubblePos("F", 0.66453, 0.67157),
-        ],
-        71: [
-          BubblePos("T", 0.63675, 0.71242),
-          BubblePos("F", 0.66453, 0.71242),
-        ],
-        72: [
-          BubblePos("T", 0.63675, 0.75327),
-          BubblePos("F", 0.66453, 0.75327),
-        ],
-        73: [
-          BubblePos("T", 0.63675, 0.79412),
-          BubblePos("F", 0.66453, 0.79412),
-        ],
-        74: [
-          BubblePos("T", 0.63675, 0.83497),
-          BubblePos("F", 0.66453, 0.83497),
-        ],
-        75: [
-          BubblePos("T", 0.63675, 0.87582),
-          BubblePos("F", 0.66453, 0.87582),
-        ],
-        76: [
-          BubblePos("T", 0.71154, 0.30392),
-          BubblePos("F", 0.73932, 0.30392),
-        ],
-        77: [
-          BubblePos("T", 0.71154, 0.34477),
-          BubblePos("F", 0.73932, 0.34477),
-        ],
-        78: [
-          BubblePos("T", 0.71154, 0.38562),
-          BubblePos("F", 0.73932, 0.38562),
-        ],
-        79: [
-          BubblePos("T", 0.71154, 0.42647),
-          BubblePos("F", 0.73932, 0.42647),
-        ],
-        80: [
-          BubblePos("T", 0.71154, 0.46732),
-          BubblePos("F", 0.73932, 0.46732),
-        ],
+        1: [BubblePos("T", 0.14706, 0.46154), BubblePos("F", 0.18954, 0.46154)],
+        2: [BubblePos("T", 0.14706, 0.47970), BubblePos("F", 0.18954, 0.47970)],
+        3: [BubblePos("T", 0.14706, 0.49786), BubblePos("F", 0.18954, 0.49786)],
+        4: [BubblePos("T", 0.14706, 0.51603), BubblePos("F", 0.18954, 0.51603)],
+        5: [BubblePos("T", 0.14706, 0.53419), BubblePos("F", 0.18954, 0.53419)],
+        6: [BubblePos("T", 0.14706, 0.55235), BubblePos("F", 0.18954, 0.55235)],
+        7: [BubblePos("T", 0.14706, 0.57051), BubblePos("F", 0.18954, 0.57051)],
+        8: [BubblePos("T", 0.14706, 0.58868), BubblePos("F", 0.18954, 0.58868)],
+        9: [BubblePos("T", 0.14706, 0.60684), BubblePos("F", 0.18954, 0.60684)],
+        10: [BubblePos("T", 0.14706, 0.62500), BubblePos("F", 0.18954, 0.62500)],
+        11: [BubblePos("T", 0.14706, 0.64316), BubblePos("F", 0.18954, 0.64316)],
+        12: [BubblePos("T", 0.14706, 0.66132), BubblePos("F", 0.18954, 0.66132)],
+        13: [BubblePos("T", 0.14706, 0.67949), BubblePos("F", 0.18954, 0.67949)],
+        14: [BubblePos("T", 0.14706, 0.69765), BubblePos("F", 0.18954, 0.69765)],
+        15: [BubblePos("T", 0.14706, 0.71581), BubblePos("F", 0.18954, 0.71581)],
+        16: [BubblePos("T", 0.14706, 0.73397), BubblePos("F", 0.18954, 0.73397)],
+        17: [BubblePos("T", 0.14706, 0.75214), BubblePos("F", 0.18954, 0.75214)],
+        18: [BubblePos("T", 0.14706, 0.77030), BubblePos("F", 0.18954, 0.77030)],
+        19: [BubblePos("T", 0.14706, 0.78846), BubblePos("F", 0.18954, 0.78846)],
+        20: [BubblePos("T", 0.14706, 0.80662), BubblePos("F", 0.18954, 0.80662)],
+        21: [BubblePos("T", 0.36166, 0.46154), BubblePos("F", 0.40414, 0.46154)],
+        22: [BubblePos("T", 0.36166, 0.47970), BubblePos("F", 0.40414, 0.47970)],
+        23: [BubblePos("T", 0.36166, 0.49786), BubblePos("F", 0.40414, 0.49786)],
+        24: [BubblePos("T", 0.36166, 0.51603), BubblePos("F", 0.40414, 0.51603)],
+        25: [BubblePos("T", 0.36166, 0.53419), BubblePos("F", 0.40414, 0.53419)],
+        26: [BubblePos("T", 0.36166, 0.55235), BubblePos("F", 0.40414, 0.55235)],
+        27: [BubblePos("T", 0.36166, 0.57051), BubblePos("F", 0.40414, 0.57051)],
+        28: [BubblePos("T", 0.36166, 0.58868), BubblePos("F", 0.40414, 0.58868)],
+        29: [BubblePos("T", 0.36166, 0.60684), BubblePos("F", 0.40414, 0.60684)],
+        30: [BubblePos("T", 0.36166, 0.62500), BubblePos("F", 0.40414, 0.62500)],
+        31: [BubblePos("T", 0.36166, 0.64316), BubblePos("F", 0.40414, 0.64316)],
+        32: [BubblePos("T", 0.36166, 0.66132), BubblePos("F", 0.40414, 0.66132)],
+        33: [BubblePos("T", 0.36166, 0.67949), BubblePos("F", 0.40414, 0.67949)],
+        34: [BubblePos("T", 0.36166, 0.69765), BubblePos("F", 0.40414, 0.69765)],
+        35: [BubblePos("T", 0.36166, 0.71581), BubblePos("F", 0.40414, 0.71581)],
+        36: [BubblePos("T", 0.36166, 0.73397), BubblePos("F", 0.40414, 0.73397)],
+        37: [BubblePos("T", 0.36166, 0.75214), BubblePos("F", 0.40414, 0.75214)],
+        38: [BubblePos("T", 0.36166, 0.77030), BubblePos("F", 0.40414, 0.77030)],
+        39: [BubblePos("T", 0.36166, 0.78846), BubblePos("F", 0.40414, 0.78846)],
+        40: [BubblePos("T", 0.36166, 0.80662), BubblePos("F", 0.40414, 0.80662)],
+        41: [BubblePos("T", 0.57625, 0.46154), BubblePos("F", 0.61874, 0.46154)],
+        42: [BubblePos("T", 0.57625, 0.47970), BubblePos("F", 0.61874, 0.47970)],
+        43: [BubblePos("T", 0.57625, 0.49786), BubblePos("F", 0.61874, 0.49786)],
+        44: [BubblePos("T", 0.57625, 0.51603), BubblePos("F", 0.61874, 0.51603)],
+        45: [BubblePos("T", 0.57625, 0.53419), BubblePos("F", 0.61874, 0.53419)],
+        46: [BubblePos("T", 0.57625, 0.55235), BubblePos("F", 0.61874, 0.55235)],
+        47: [BubblePos("T", 0.57625, 0.57051), BubblePos("F", 0.61874, 0.57051)],
+        48: [BubblePos("T", 0.57625, 0.58868), BubblePos("F", 0.61874, 0.58868)],
+        49: [BubblePos("T", 0.57625, 0.60684), BubblePos("F", 0.61874, 0.60684)],
+        50: [BubblePos("T", 0.57625, 0.62500), BubblePos("F", 0.61874, 0.62500)],
+        51: [BubblePos("T", 0.57625, 0.64316), BubblePos("F", 0.61874, 0.64316)],
+        52: [BubblePos("T", 0.57625, 0.66132), BubblePos("F", 0.61874, 0.66132)],
+        53: [BubblePos("T", 0.57625, 0.67949), BubblePos("F", 0.61874, 0.67949)],
+        54: [BubblePos("T", 0.57625, 0.69765), BubblePos("F", 0.61874, 0.69765)],
+        55: [BubblePos("T", 0.57625, 0.71581), BubblePos("F", 0.61874, 0.71581)],
+        56: [BubblePos("T", 0.57625, 0.73397), BubblePos("F", 0.61874, 0.73397)],
+        57: [BubblePos("T", 0.57625, 0.75214), BubblePos("F", 0.61874, 0.75214)],
+        58: [BubblePos("T", 0.57625, 0.77030), BubblePos("F", 0.61874, 0.77030)],
+        59: [BubblePos("T", 0.57625, 0.78846), BubblePos("F", 0.61874, 0.78846)],
+        60: [BubblePos("T", 0.57625, 0.80662), BubblePos("F", 0.61874, 0.80662)],
+        61: [BubblePos("T", 0.79085, 0.46154), BubblePos("F", 0.83333, 0.46154)],
+        62: [BubblePos("T", 0.79085, 0.47970), BubblePos("F", 0.83333, 0.47970)],
+        63: [BubblePos("T", 0.79085, 0.49786), BubblePos("F", 0.83333, 0.49786)],
+        64: [BubblePos("T", 0.79085, 0.51603), BubblePos("F", 0.83333, 0.51603)],
+        65: [BubblePos("T", 0.79085, 0.53419), BubblePos("F", 0.83333, 0.53419)],
+        66: [BubblePos("T", 0.79085, 0.55235), BubblePos("F", 0.83333, 0.55235)],
+        67: [BubblePos("T", 0.79085, 0.57051), BubblePos("F", 0.83333, 0.57051)],
+        68: [BubblePos("T", 0.79085, 0.58868), BubblePos("F", 0.83333, 0.58868)],
+        69: [BubblePos("T", 0.79085, 0.60684), BubblePos("F", 0.83333, 0.60684)],
+        70: [BubblePos("T", 0.79085, 0.62500), BubblePos("F", 0.83333, 0.62500)],
+        71: [BubblePos("T", 0.79085, 0.64316), BubblePos("F", 0.83333, 0.64316)],
+        72: [BubblePos("T", 0.79085, 0.66132), BubblePos("F", 0.83333, 0.66132)],
+        73: [BubblePos("T", 0.79085, 0.67949), BubblePos("F", 0.83333, 0.67949)],
+        74: [BubblePos("T", 0.79085, 0.69765), BubblePos("F", 0.83333, 0.69765)],
+        75: [BubblePos("T", 0.79085, 0.71581), BubblePos("F", 0.83333, 0.71581)],
+        76: [BubblePos("T", 0.79085, 0.73397), BubblePos("F", 0.83333, 0.73397)],
+        77: [BubblePos("T", 0.79085, 0.75214), BubblePos("F", 0.83333, 0.75214)],
+        78: [BubblePos("T", 0.79085, 0.77030), BubblePos("F", 0.83333, 0.77030)],
+        79: [BubblePos("T", 0.79085, 0.78846), BubblePos("F", 0.83333, 0.78846)],
+        80: [BubblePos("T", 0.79085, 0.80662), BubblePos("F", 0.83333, 0.80662)],
       },
     ),
     OmrSection(
       name: "Test III",
       itemCount: 20,
       items: {
-        1: [BubblePos("T", 0.79487, 0.30392), BubblePos("F", 0.82265, 0.30392)],
-        2: [BubblePos("T", 0.79487, 0.34477), BubblePos("F", 0.82265, 0.34477)],
-        3: [BubblePos("T", 0.79487, 0.38562), BubblePos("F", 0.82265, 0.38562)],
-        4: [BubblePos("T", 0.79487, 0.42647), BubblePos("F", 0.82265, 0.42647)],
-        5: [BubblePos("T", 0.79487, 0.46732), BubblePos("F", 0.82265, 0.46732)],
-        6: [BubblePos("T", 0.79487, 0.50817), BubblePos("F", 0.82265, 0.50817)],
-        7: [BubblePos("T", 0.79487, 0.54902), BubblePos("F", 0.82265, 0.54902)],
-        8: [BubblePos("T", 0.79487, 0.58987), BubblePos("F", 0.82265, 0.58987)],
-        9: [BubblePos("T", 0.79487, 0.63072), BubblePos("F", 0.82265, 0.63072)],
-        10: [
-          BubblePos("T", 0.79487, 0.67157),
-          BubblePos("F", 0.82265, 0.67157),
-        ],
-        11: [
-          BubblePos("T", 0.79487, 0.71242),
-          BubblePos("F", 0.82265, 0.71242),
-        ],
-        12: [
-          BubblePos("T", 0.79487, 0.75327),
-          BubblePos("F", 0.82265, 0.75327),
-        ],
-        13: [
-          BubblePos("T", 0.79487, 0.79412),
-          BubblePos("F", 0.82265, 0.79412),
-        ],
-        14: [
-          BubblePos("T", 0.79487, 0.83497),
-          BubblePos("F", 0.82265, 0.83497),
-        ],
-        15: [
-          BubblePos("T", 0.79487, 0.87582),
-          BubblePos("F", 0.82265, 0.87582),
-        ],
-        16: [
-          BubblePos("T", 0.86966, 0.30392),
-          BubblePos("F", 0.89744, 0.30392),
-        ],
-        17: [
-          BubblePos("T", 0.86966, 0.34477),
-          BubblePos("F", 0.89744, 0.34477),
-        ],
-        18: [
-          BubblePos("T", 0.86966, 0.38562),
-          BubblePos("F", 0.89744, 0.38562),
-        ],
-        19: [
-          BubblePos("T", 0.86966, 0.42647),
-          BubblePos("F", 0.89744, 0.42647),
-        ],
-        20: [
-          BubblePos("T", 0.86966, 0.46732),
-          BubblePos("F", 0.89744, 0.46732),
-        ],
+        1: [BubblePos("T", 0.14706, 0.85684), BubblePos("F", 0.18954, 0.85684)],
+        2: [BubblePos("T", 0.14706, 0.87500), BubblePos("F", 0.18954, 0.87500)],
+        3: [BubblePos("T", 0.14706, 0.89316), BubblePos("F", 0.18954, 0.89316)],
+        4: [BubblePos("T", 0.14706, 0.91132), BubblePos("F", 0.18954, 0.91132)],
+        5: [BubblePos("T", 0.14706, 0.92949), BubblePos("F", 0.18954, 0.92949)],
+        6: [BubblePos("T", 0.36166, 0.85684), BubblePos("F", 0.40414, 0.85684)],
+        7: [BubblePos("T", 0.36166, 0.87500), BubblePos("F", 0.40414, 0.87500)],
+        8: [BubblePos("T", 0.36166, 0.89316), BubblePos("F", 0.40414, 0.89316)],
+        9: [BubblePos("T", 0.36166, 0.91132), BubblePos("F", 0.40414, 0.91132)],
+        10: [BubblePos("T", 0.36166, 0.92949), BubblePos("F", 0.40414, 0.92949)],
+        11: [BubblePos("T", 0.57625, 0.85684), BubblePos("F", 0.61874, 0.85684)],
+        12: [BubblePos("T", 0.57625, 0.87500), BubblePos("F", 0.61874, 0.87500)],
+        13: [BubblePos("T", 0.57625, 0.89316), BubblePos("F", 0.61874, 0.89316)],
+        14: [BubblePos("T", 0.57625, 0.91132), BubblePos("F", 0.61874, 0.91132)],
+        15: [BubblePos("T", 0.57625, 0.92949), BubblePos("F", 0.61874, 0.92949)],
+        16: [BubblePos("T", 0.79085, 0.85684), BubblePos("F", 0.83333, 0.85684)],
+        17: [BubblePos("T", 0.79085, 0.87500), BubblePos("F", 0.83333, 0.87500)],
+        18: [BubblePos("T", 0.79085, 0.89316), BubblePos("F", 0.83333, 0.89316)],
+        19: [BubblePos("T", 0.79085, 0.91132), BubblePos("F", 0.83333, 0.91132)],
+        20: [BubblePos("T", 0.79085, 0.92949), BubblePos("F", 0.83333, 0.92949)],
       },
     ),
   ],
@@ -701,27 +346,14 @@ final OmrExamTemplate _omrQTM = OmrExamTemplate(
   pageHeightPt: 936.0,
   bubbleRadiusPt: 8.0,
   bubbleRadiusYPt: 6.4,
-  cornerMarkers: const [
-    OmrCorner(0.03922, 0.02564),
-    OmrCorner(0.86275, 0.02564),
-    OmrCorner(0.03922, 0.96154),
-    OmrCorner(0.86275, 0.96154),
-  ],
-  interiorFiducials: const [
-    OmrFiducial(OmrFiducialRole.dividerLeft, 0.03922, 0.58761, 7.0),
-    OmrFiducial(OmrFiducialRole.dividerRight, 0.86275, 0.58761, 7.0),
-    OmrFiducial(OmrFiducialRole.centerAboveAnswers, 0.45098, 0.21368, 4.5),
-    OmrFiducial(OmrFiducialRole.centerAtDivider, 0.45098, 0.58761, 4.5),
-    OmrFiducial(OmrFiducialRole.centerBelowAnswers, 0.45098, 0.95085, 4.5),
-  ],
-  lastNameFieldRect: const OmrFieldRect(0.07190, 0.11752, 0.75817, 0.02137),
-  firstNameFieldRect: const OmrFieldRect(0.07190, 0.15598, 0.64444, 0.02137),
-  middleInitialFieldRect: const OmrFieldRect(
-    0.71634,
-    0.15598,
-    0.11373,
-    0.02137,
-  ),
+  cornerMarkers: const [OmrCorner(0.03922, 0.02564), OmrCorner(0.86275, 0.02564), OmrCorner(0.03922, 0.96154), OmrCorner(0.86275, 0.96154)],
+  interiorFiducials: const [OmrFiducial(OmrFiducialRole.dividerLeft, 0.03922, 0.58761, 7.0), OmrFiducial(OmrFiducialRole.dividerRight, 0.86275, 0.58761, 7.0), OmrFiducial(OmrFiducialRole.centerAboveAnswers, 0.45098, 0.21368, 4.5), OmrFiducial(OmrFiducialRole.centerAtDivider, 0.45098, 0.58761, 4.5), OmrFiducial(OmrFiducialRole.centerBelowAnswers, 0.45098, 0.95085, 4.5)],
+  lastNameFieldRect: const OmrFieldRect(0.07190, 0.11752, 0.31085, 0.02137),
+  firstNameFieldRect: const OmrFieldRect(0.38275, 0.11752, 0.31085, 0.02137),
+  middleNameFieldRect: const OmrFieldRect(0.69359, 0.11752, 0.13647, 0.02137),
+  lastNameBoxCount: 0,
+  firstNameBoxCount: 0,
+  middleNameBoxCount: 0,
   sections: const [
     OmrSection(
       name: "Section 1",
@@ -1129,27 +761,14 @@ final OmrExamTemplate _omrAT = OmrExamTemplate(
   pageHeightPt: 841.89,
   bubbleRadiusPt: 8.0,
   bubbleRadiusYPt: 8.0,
-  cornerMarkers: const [
-    OmrCorner(0.04032, 0.02851),
-    OmrCorner(0.86682, 0.02851),
-    OmrCorner(0.04032, 0.95499),
-    OmrCorner(0.86682, 0.95499),
-  ],
-  interiorFiducials: const [
-    OmrFiducial(OmrFiducialRole.dividerLeft, 0.04032, 0.59034, 7.0),
-    OmrFiducial(OmrFiducialRole.dividerRight, 0.86682, 0.59034, 7.0),
-    OmrFiducial(OmrFiducialRole.centerAboveAnswers, 0.45357, 0.22568, 4.5),
-    OmrFiducial(OmrFiducialRole.centerAtDivider, 0.45357, 0.59034, 4.5),
-    OmrFiducial(OmrFiducialRole.centerBelowAnswers, 0.45357, 0.94312, 4.5),
-  ],
-  lastNameFieldRect: const OmrFieldRect(0.07391, 0.12353, 0.75931, 0.02376),
-  firstNameFieldRect: const OmrFieldRect(0.07391, 0.16629, 0.64541, 0.02376),
-  middleInitialFieldRect: const OmrFieldRect(
-    0.71933,
-    0.16629,
-    0.11390,
-    0.02376,
-  ),
+  cornerMarkers: const [OmrCorner(0.04032, 0.02851), OmrCorner(0.86682, 0.02851), OmrCorner(0.04032, 0.95499), OmrCorner(0.86682, 0.95499)],
+  interiorFiducials: const [OmrFiducial(OmrFiducialRole.dividerLeft, 0.04032, 0.59034, 7.0), OmrFiducial(OmrFiducialRole.dividerRight, 0.86682, 0.59034, 7.0), OmrFiducial(OmrFiducialRole.centerAboveAnswers, 0.45357, 0.22568, 4.5), OmrFiducial(OmrFiducialRole.centerAtDivider, 0.45357, 0.59034, 4.5), OmrFiducial(OmrFiducialRole.centerBelowAnswers, 0.45357, 0.94312, 4.5)],
+  lastNameFieldRect: const OmrFieldRect(0.07391, 0.12353, 0.31132, 0.02376),
+  firstNameFieldRect: const OmrFieldRect(0.38523, 0.12353, 0.31132, 0.02376),
+  middleNameFieldRect: const OmrFieldRect(0.69655, 0.12353, 0.13668, 0.02376),
+  lastNameBoxCount: 0,
+  firstNameBoxCount: 0,
+  middleNameBoxCount: 0,
   sections: const [
     OmrSection(
       name: "Section 1",
@@ -1695,10 +1314,15 @@ final OmrExamTemplate _omrAT = OmrExamTemplate(
 );
 
 final Map<String, OmrExamTemplate> omrTemplates = {
-  "TAT": _omrTAT,
+  "TAT": omrTATPortraitV5,
   "QTM": _omrQTM,
   "AT": _omrAT,
 };
+
+/// The earlier portrait TAT layout (version TAT-portrait-v1), kept so scans made
+/// with it still read with their own geometry. The current TAT is v5, imported
+/// from its geometry JSON (tool/import_tat_v5_geometry.dart).
+final OmrExamTemplate omrTATPortraitV1 = _omrTAT;
 
 final Map<String, OmrExamTemplate> _legacyOmrTemplates = {
   "QTM": OmrExamTemplate(
@@ -2084,7 +1708,7 @@ final Map<String, OmrExamTemplate> _legacyOmrTemplates = {
     ],
     lastNameFieldRect: const OmrFieldRect(0.07190, 0.10256, 0.37647, 0.02350),
     firstNameFieldRect: const OmrFieldRect(0.44837, 0.10256, 0.33464, 0.02350),
-    middleInitialFieldRect: const OmrFieldRect(
+    middleNameFieldRect: const OmrFieldRect(
       0.78301,
       0.10256,
       0.12549,
@@ -2618,7 +2242,7 @@ final Map<String, OmrExamTemplate> _legacyOmrTemplates = {
     ],
     lastNameFieldRect: const OmrFieldRect(0.07391, 0.12353, 0.18223, 0.02376),
     firstNameFieldRect: const OmrFieldRect(0.25615, 0.12353, 0.16705, 0.02376),
-    middleInitialFieldRect: const OmrFieldRect(
+    middleNameFieldRect: const OmrFieldRect(
       0.42320,
       0.12353,
       0.06074,
@@ -2639,6 +2263,14 @@ OmrExamTemplate? overlayTemplateForScan(
   String? scanTemplateVersion,
   String? sectionName,
 }) {
+  // TAT: the layout history (v5 current, portrait-v1, redesign-v1) is owned by
+  // the registry. No recorded version means the scan predates version tracking
+  // and uses the current template; an unknown version fails closed.
+  if (currentTemplate.examCode == 'TAT') {
+    if (scanTemplateVersion == null) return currentTemplate;
+    return omrTemplateFor('TAT', scanTemplateVersion);
+  }
+
   final legacy = _legacyOmrTemplates[currentTemplate.examCode];
   if (legacy == null) return currentTemplate;
 
