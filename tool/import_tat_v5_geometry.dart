@@ -9,7 +9,7 @@
 import 'dart:convert';
 import 'dart:io';
 
-const _defaultJson = 'output/pdf/TAT-portrait-proposed-v5.geometry.json';
+const _defaultJson = 'tool/data/TAT-portrait-v5.geometry.json';
 const _outPath = 'lib/core/omr/omr_template_tat_v5.dart';
 
 /// JSON fiducial role -> (OmrFiducialRole name or null for a corner).

@@ -3144,7 +3144,9 @@ class OmrDecoder {
     OmrExamTemplate template,
   ) {
     if (template.pageWidthPt <= template.pageHeightPt) {
-      return (gray, _findCaptureCorners(gray, template), null);
+      final upright = _findCaptureCorners(gray, template);
+      if (template.templateVersion != 'TAT-portrait-v5') return (gray, upright, null);
+      return _resolveTatPortraitDirection(gray, upright, template);
     }
     // Cache each candidate's full corner-search result (2026-09-19) —
     // `_RefineResult` is plain value data (Point2f/Rect/enums/doubles, no
@@ -3368,6 +3370,107 @@ class OmrDecoder {
   static double _interiorSearchHalfExtentPx(double halfSizePt) =>
       math.max(14.0, halfSizePt * _canonicalPxPerPt * 2.5);
 
+  /// How well the small marks of a portrait TAT v5 sheet line up in [image]
+  /// warped by [refine]'s corners: how many were found within 12pt of their
+  /// printed position, and their summed closeness. The side pair and centre
+  /// mark look the same turned around, so they say nothing about direction and
+  /// are skipped.
+  ({int count, double score}) _tatSmallMarkEvidence(
+    cv.Mat image,
+    _RefineResult refine,
+    OmrExamTemplate template,
+  ) {
+    final width = (template.pageWidthPt * _canonicalPxPerPt).round();
+    final height = (template.pageHeightPt * _canonicalPxPerPt).round();
+    final src = cv.VecPoint2f.fromList(refine.corners);
+    final dst = cv.VecPoint2f.fromList([
+      for (final c in template.cornerMarkers) cv.Point2f(c.xFrac * width, c.yFrac * height),
+    ]);
+    try {
+      final transform = cv.getPerspectiveTransform2f(src, dst);
+      try {
+        final warped = cv.warpPerspective(image, transform, (width, height));
+        try {
+          final small = [for (final f in template.interiorFiducials) if (f.halfSizePt < 4) f];
+          final measured = _detectInteriorFiducials(warped, template, width, height, only: small);
+          var count = 0;
+          var score = 0.0;
+          for (final f in small) {
+            final point = measured[f.role];
+            if (point == null) continue;
+            final dx = (point.$1 - f.xFrac * width) * template.pageWidthPt / width;
+            final dy = (point.$2 - f.yFrac * height) * template.pageHeightPt / height;
+            final error = math.sqrt(dx * dx + dy * dy);
+            if (error > 12) continue;
+            count++;
+            score += 1 - error / 48;
+          }
+          return (count: count, score: score);
+        } finally {
+          warped.dispose();
+        }
+      } finally {
+        transform.dispose();
+      }
+    } finally {
+      src.dispose();
+      dst.dispose();
+    }
+  }
+
+  /// Portrait TAT v5 is held upright in the portrait-locked camera, so only
+  /// two states are possible: the sheet as shot, or turned 180 degrees. The
+  /// four corner squares look identical either way, so direction comes from
+  /// the seven small marks. A sheet already the right way up is accepted after
+  /// one look (4+ small marks); the 180 degree search only runs when that
+  /// look is weak, keeping the common case cheap on older phones.
+  (cv.Mat, _RefineResult, int?) _resolveTatPortraitDirection(
+    cv.Mat gray,
+    _RefineResult upright,
+    OmrExamTemplate template,
+  ) {
+    final asShot = _tatSmallMarkEvidence(gray, upright, template);
+    if (asShot.count >= 4) return (gray, upright, null);
+
+    var turnedEvidence = (count: 0, score: 0.0);
+    final turned = cv.rotate(gray, cv.ROTATE_180);
+    try {
+      _RefineResult? turnedRefine;
+      try {
+        turnedRefine = _findCaptureCorners(turned, template);
+        turnedEvidence = _tatSmallMarkEvidence(turned, turnedRefine, template);
+      } on StateError {
+        // Turned reading has no usable corners: as shot is the only candidate.
+      }
+      final selected = selectTatPortraitDirection(
+        asShotCount: asShot.count,
+        asShotScore: asShot.score,
+        turnedCount: turnedEvidence.count,
+        turnedScore: turnedEvidence.score,
+      );
+      if (_kFiducialDebug) {
+        _fidLog('TAT portrait direction asShot=$asShot turned=$turnedEvidence selected=$selected');
+      }
+      if (selected == 0) {
+        turned.dispose();
+        return (gray, upright, null);
+      }
+      if (selected == 1 && turnedRefine != null) return (turned, turnedRefine, cv.ROTATE_180);
+    } catch (_) {
+      turned.dispose();
+      rethrow;
+    }
+    turned.dispose();
+    throw StateError(
+      asShot.count == 0 && turnedEvidence.count == 0
+          ? 'Could not match the small alignment squares on the TAT sheet, so its '
+              'direction is unknown. Hold the phone upright with the whole sheet in '
+              'frame (title on the right edge), use even lighting, tap to focus, and retake.'
+          : 'The TAT sheet direction is unclear. Keep every small square above the '
+              'answer sections visible, hold the phone steady and upright, and retake.',
+    );
+  }
+
   /// Independently re-detects every one of [template]'s
   /// [OmrExamTemplate.interiorFiducials] directly on the already
   /// (4-corner-)warped [warpedGray] — the exact same "search a box around
@@ -3383,15 +3486,16 @@ class OmrDecoder {
     cv.Mat warpedGray,
     OmrExamTemplate template,
     int canonicalWidth,
-    int canonicalHeight,
-  ) {
+    int canonicalHeight, {
+    Iterable<OmrFiducial>? only,
+  }) {
     if (template.interiorFiducials.isEmpty) return const {};
     final found = <OmrFiducialRole, (double, double)>{};
     final tat = template.examCode == 'TAT';
     final scale = canonicalWidth / template.pageWidthPt;
     cv.Mat? normalizedGray;
     try {
-      for (final fiducial in template.interiorFiducials) {
+      for (final fiducial in only ?? template.interiorFiducials) {
         final ex = fiducial.xFrac * canonicalWidth;
         final ey = fiducial.yFrac * canonicalHeight;
         final halfExtent = tat

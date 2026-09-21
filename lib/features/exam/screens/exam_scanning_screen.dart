@@ -1424,10 +1424,13 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
   Widget build(BuildContext context) {
     final appState = AppStateScope.of(context);
     final activeTemplate = omrTemplates[appState.activeExamCode];
-    final portraitTat = activeTemplate?.examCode == 'TAT';
+    // Only the old landscape TAT sheet (TAT-redesign-v*) was printed sideways;
+    // the current portrait TAT and AT/QTM use their corner marks as printed.
+    final rotatedSheet = activeTemplate != null &&
+        activeTemplate.pageWidthPt > activeTemplate.pageHeightPt;
     final cornerFractions = activeTemplate == null
         ? _defaultCornerFractions
-        : portraitTat
+        : rotatedSheet
             ? [for (final i in [2, 0, 3, 1])
                 (1 - activeTemplate.cornerMarkers[i].yFrac,
                  activeTemplate.cornerMarkers[i].xFrac)]
@@ -1439,8 +1442,8 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
     // guide box's real-world aspect ratio has to come from the marks'
     // actual bounding box, not the full page's aspect ratio, or the guide
     // rectangle drawn on screen won't match the marks' true proportions.
-    final pageWidthPt = (portraitTat ? activeTemplate?.pageHeightPt : activeTemplate?.pageWidthPt) ?? 595.28;
-    final pageHeightPt = (portraitTat ? activeTemplate?.pageWidthPt : activeTemplate?.pageHeightPt) ?? 841.89;
+    final pageWidthPt = (rotatedSheet ? activeTemplate.pageHeightPt : activeTemplate?.pageWidthPt) ?? 595.28;
+    final pageHeightPt = (rotatedSheet ? activeTemplate.pageWidthPt : activeTemplate?.pageHeightPt) ?? 841.89;
     final markerXs = [for (final c in cornerFractions) c.$1];
     final markerYs = [for (final c in cornerFractions) c.$2];
     final markerAspectRatio =
@@ -1738,8 +1741,8 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
             if (appState.activeExamCode == 'TAT') ...[
               const SizedBox(height: 4),
               const Text(
-                'Turn the sheet so the title reads normally at the top and '
-                'name fields are on the left',
+                'Hold the sheet upright: name fields at the top, title on the '
+                'right edge. Keep the small squares above each test visible.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: Colors.white70,
