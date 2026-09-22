@@ -7,6 +7,7 @@ import 'package:guidegrade/core/sync/sync_job.dart';
 import 'package:guidegrade/core/sync/sync_outcome.dart';
 import 'package:guidegrade/features/guidance_web/screens/guidance_web_result_detail_view.dart';
 import 'package:guidegrade/features/guidance_web/services/guidance_web_results_service.dart';
+import 'package:guidegrade/models/examinee_record.dart';
 import 'package:guidegrade/models/local_batch.dart';
 import 'package:guidegrade/models/omr_scan_result.dart';
 
@@ -154,6 +155,26 @@ LocalScan _scan({
       ),
       result: result,
       examinee: examinee,
+    );
+
+/// A canonical examinees row as the Examinee Records page holds it.
+ExamineeRecord _canonical({
+  String temporaryId = 'EX-000004',
+  String firstName = 'Merch',
+  String? middleName = 'Valdez',
+  String lastName = 'Andulana',
+}) =>
+    ExamineeRecord(
+      id: 'fa445fcc-a59e-4b58-86ae-0ddac56138ac',
+      temporaryExamineeId: temporaryId,
+      firstName: firstName,
+      middleName: middleName,
+      lastName: lastName,
+      status: 'active',
+      createdAt: DateTime.utc(2026, 1, 1),
+      createdByUid: 'uid',
+      updatedAt: DateTime.utc(2026, 1, 1),
+      updatedByUid: 'uid',
     );
 
 void main() {
@@ -341,6 +362,84 @@ void main() {
     });
   });
 
+  group('resolveWebExamineeIdentity (pure)', () {
+    // The scan as the mobile app pushed it: generated number, blank names.
+    final autoTaggedScan = _scan(
+      examinee: const ExamineeInfo(firstName: '', lastName: '', examineeNumber: 'EX-1790006562335-3'),
+    );
+
+    test('1. linked scan + canonical names -> the canonical Examinee ID and names', () {
+      final id = resolveWebExamineeIdentity(scan: autoTaggedScan, linkedExaminee: _canonical());
+      expect(id.fromCanonicalExaminee, isTrue);
+      expect(id.examineeId, 'EX-000004');
+      expect(id.firstName, 'Merch');
+      expect(id.middleName, 'Valdez');
+      expect(id.lastName, 'Andulana');
+    });
+
+    test("2. linked scan + blank canonical names -> falls back to the scan's own tag", () {
+      final scan = _scan(
+        examinee: const ExamineeInfo(firstName: 'Juan', lastName: 'Cruz', examineeNumber: 'EX-9'),
+      );
+      final id = resolveWebExamineeIdentity(
+        scan: scan,
+        linkedExaminee: _canonical(firstName: '', middleName: null, lastName: ''),
+      );
+      expect(id.fromCanonicalExaminee, isFalse);
+      expect(id.examineeId, 'EX-9');
+      expect(id.firstName, 'Juan');
+      expect(id.lastName, 'Cruz');
+      expect(id.scanId, isNull, reason: 'nothing to keep separate when the scan is the only source');
+    });
+
+    test('3. unlinked / legacy scan (no linked examinee) -> the scan tag, unchanged', () {
+      final scan = _scan(
+        examinee: const ExamineeInfo(firstName: 'Ana', middleName: 'Reyes', lastName: 'Lim', examineeNumber: 'OLD-7'),
+      );
+      final id = resolveWebExamineeIdentity(scan: scan);
+      expect(id.fromCanonicalExaminee, isFalse);
+      expect(id.examineeId, 'OLD-7');
+      expect(id.firstName, 'Ana');
+      expect(id.middleName, 'Reyes');
+      expect(id.lastName, 'Lim');
+    });
+
+    test('4. no usable canonical or scan identity -> every field null (the card shows its dash)', () {
+      final id = resolveWebExamineeIdentity(
+        scan: _scan(examinee: null),
+        linkedExaminee: _canonical(firstName: '  ', middleName: null, lastName: ''),
+      );
+      expect(id.fromCanonicalExaminee, isFalse);
+      expect(id.examineeId, isNull);
+      expect(id.firstName, isNull);
+      expect(id.middleName, isNull);
+      expect(id.lastName, isNull);
+    });
+
+    test("5. the scan's own number stays separate from the canonical Examinee ID", () {
+      final id = resolveWebExamineeIdentity(scan: autoTaggedScan, linkedExaminee: _canonical());
+      expect(id.examineeId, 'EX-000004');
+      expect(id.scanId, 'EX-1790006562335-3');
+      expect(id.examineeId, isNot(id.scanId));
+      // ...and the scan itself was not modified.
+      expect(autoTaggedScan.examinee!.examineeNumber, 'EX-1790006562335-3');
+      expect(autoTaggedScan.examinee!.firstName, '');
+    });
+
+    test('6. never mixes two sources: a canonical record with only a last name does not borrow the scan first name', () {
+      final scan = _scan(
+        examinee: const ExamineeInfo(firstName: 'Juan', lastName: 'Cruz', examineeNumber: 'EX-9'),
+      );
+      final id = resolveWebExamineeIdentity(
+        scan: scan,
+        linkedExaminee: _canonical(firstName: '', middleName: null, lastName: 'Andulana'),
+      );
+      expect(id.fromCanonicalExaminee, isTrue);
+      expect(id.lastName, 'Andulana');
+      expect(id.firstName, '', reason: "not the scan's 'Juan'");
+    });
+  });
+
   group('GuidanceWebResultDetailView (widget)', () {
     late _FakeSyncClient client;
     late GuidanceWebResultsService service;
@@ -350,11 +449,22 @@ void main() {
       service = GuidanceWebResultsService(client: client);
     });
 
-    Future<void> pump(WidgetTester tester, {required LocalScan scan, required LocalBatch batch}) async {
+    Future<void> pump(
+      WidgetTester tester, {
+      required LocalScan scan,
+      required LocalBatch batch,
+      ExamineeRecord? linkedExaminee,
+    }) async {
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
-            body: GuidanceWebResultDetailView(scan: scan, batch: batch, service: service, onBack: () {}),
+            body: GuidanceWebResultDetailView(
+              scan: scan,
+              batch: batch,
+              service: service,
+              onBack: () {},
+              linkedExaminee: linkedExaminee,
+            ),
           ),
         ),
       );
@@ -459,6 +569,96 @@ void main() {
       expect(find.text('100.00%'), findsOneWidget);
       // Examinee ID / First / Middle / Last Name all blank -> four dashes.
       expect(find.text('—'), findsNWidgets(4));
+    });
+
+    Future<void> pumpIdentity(
+      WidgetTester tester, {
+      ExamineeInfo? scanTag,
+      ExamineeRecord? linkedExaminee,
+    }) async {
+      client.answerKeyToReturn = CloudAnswerKeyRead.found(
+        version: 1,
+        answers: {'Answer Document|1': 'A'},
+        updatedByName: 'Officer',
+        updatedAt: '2026-01-01T00:00:00Z',
+      );
+      final scan = _scan(
+        examinee: scanTag,
+        result: LocalScanResult(
+          rawScore: 1,
+          totalGraded: 1,
+          totalItems: 1,
+          percentage: 100,
+          status: 'Graded',
+          scannedAt: DateTime.utc(2026, 1, 1),
+          processedByUid: 'uid',
+          processedByName: 'Officer',
+        ),
+        items: const [OmrItemResult(sectionName: 'Answer Document', itemNumber: 1, markedChoice: 'A')],
+      );
+      await pump(tester, scan: scan, batch: _batch(), linkedExaminee: linkedExaminee);
+    }
+
+    testWidgets('a linked scan shows the canonical applicant, with the scan number as a separate Scan ID '
+        '(the verified Merch / Valdez / Andulana example)', (tester) async {
+      await pumpIdentity(
+        tester,
+        // What the database holds for that scan: blank names, generated number.
+        scanTag: const ExamineeInfo(firstName: '', lastName: '', examineeNumber: 'EX-1790006562335-3'),
+        linkedExaminee: _canonical(),
+      );
+
+      expect(find.text('Examinee ID'), findsOneWidget);
+      expect(find.text('EX-000004'), findsOneWidget);
+      expect(find.text('Merch'), findsOneWidget);
+      expect(find.text('Valdez'), findsOneWidget);
+      expect(find.text('Andulana'), findsOneWidget);
+      expect(find.text('Scan ID'), findsOneWidget);
+      expect(find.text('EX-1790006562335-3'), findsOneWidget);
+      // Pure display: the fake client throws on any link/unlink/create/push, so an
+      // exception here would mean this view tried to write something.
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets("a linked scan whose canonical record has no usable name falls back to the scan's own tag",
+        (tester) async {
+      await pumpIdentity(
+        tester,
+        scanTag: const ExamineeInfo(firstName: 'Juan', lastName: 'Cruz', examineeNumber: 'EX-9'),
+        linkedExaminee: _canonical(firstName: '', middleName: null, lastName: ''),
+      );
+
+      expect(find.text('EX-9'), findsOneWidget);
+      expect(find.text('Juan'), findsOneWidget);
+      expect(find.text('Cruz'), findsOneWidget);
+      expect(find.text('EX-000004'), findsNothing);
+      expect(find.text('Scan ID'), findsNothing);
+    });
+
+    testWidgets('an unlinked/legacy scan keeps showing its own tag, with no Scan ID row', (tester) async {
+      await pumpIdentity(
+        tester,
+        scanTag: const ExamineeInfo(firstName: 'Ana', middleName: 'Reyes', lastName: 'Lim', examineeNumber: 'OLD-7'),
+      );
+
+      expect(find.text('OLD-7'), findsOneWidget);
+      expect(find.text('Ana'), findsOneWidget);
+      expect(find.text('Reyes'), findsOneWidget);
+      expect(find.text('Lim'), findsOneWidget);
+      expect(find.text('Scan ID'), findsNothing);
+    });
+
+    testWidgets('no usable canonical or scan identity keeps the existing dashes', (tester) async {
+      await pumpIdentity(
+        tester,
+        scanTag: null,
+        linkedExaminee: _canonical(firstName: '', middleName: null, lastName: ''),
+      );
+
+      expect(tester.takeException(), isNull);
+      // Examinee ID / First / Middle / Last Name -> four dashes, no Scan ID row.
+      expect(find.text('—'), findsNWidgets(4));
+      expect(find.text('Scan ID'), findsNothing);
     });
 
     testWidgets('2. a missing answer key does not crash; marked answers are still shown, '

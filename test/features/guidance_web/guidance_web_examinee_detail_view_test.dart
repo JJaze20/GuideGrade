@@ -177,6 +177,9 @@ CloudScanRow _scanRow({
   required String id,
   required String batchId,
   required String examCode,
+  String? firstName = 'Juan',
+  String? lastName = 'Dela Cruz',
+  String? examineeNumber = 'EX-1',
 }) =>
     CloudScanRow(
       id: id,
@@ -191,9 +194,9 @@ CloudScanRow _scanRow({
       scannedAt: DateTime.utc(2026, 1, 1),
       processedByUid: 'uid',
       processedByName: 'Officer',
-      firstName: 'Juan',
-      lastName: 'Dela Cruz',
-      examineeNumber: 'EX-1',
+      firstName: firstName,
+      lastName: lastName,
+      examineeNumber: examineeNumber,
     );
 
 ExamineeRecord _examinee({String status = 'active'}) => ExamineeRecord(
@@ -282,6 +285,49 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Detailed Result'), findsOneWidget);
+  });
+
+  testWidgets(
+      "opening a linked exam shows the canonical applicant (not the scan's blank tag) and keeps the scan number as Scan ID",
+      (tester) async {
+    client.batchesToReturn = CloudBatchesRead.found([_batchRow(id: 'b-qtm', examCode: 'QTM')]);
+    // The verified data shape: scan-level names NULL, generated scan number.
+    client.scansByExamineeId['e1'] = CloudScansRead.found([
+      _scanRow(
+        id: 's1',
+        batchId: 'b-qtm',
+        examCode: 'QTM',
+        firstName: null,
+        lastName: null,
+        examineeNumber: 'EX-1790006562335-3',
+      ),
+    ]);
+    await pumpDetail(
+      tester,
+      examinee: ExamineeRecord(
+        id: 'e1',
+        temporaryExamineeId: 'EX-000004',
+        firstName: 'Merch',
+        middleName: 'Valdez',
+        lastName: 'Andulana',
+        status: 'active',
+        createdAt: DateTime.utc(2026, 1, 1),
+        createdByUid: 'uid1',
+        updatedAt: DateTime.utc(2026, 1, 1),
+        updatedByUid: 'uid1',
+      ),
+    );
+
+    await tester.tap(find.widgetWithText(TextButton, 'View'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Detailed Result'), findsOneWidget);
+    expect(find.text('EX-000004'), findsOneWidget);
+    expect(find.text('Merch'), findsOneWidget);
+    expect(find.text('Valdez'), findsOneWidget);
+    expect(find.text('Andulana'), findsOneWidget);
+    expect(find.text('Scan ID'), findsOneWidget);
+    expect(find.text('EX-1790006562335-3'), findsOneWidget);
   });
 
   testWidgets('9/10. Editing saves canonical fields but the Temporary Examinee ID never changes', (tester) async {

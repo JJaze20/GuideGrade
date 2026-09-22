@@ -12,6 +12,7 @@ import '../../../core/omr/omr_scorer.dart';
 import '../../../core/omr/omr_templates.dart';
 import '../../../core/omr/qtm_result.dart';
 import '../../../models/answer_key.dart';
+import '../../../models/examinee_record.dart';
 import '../../../models/local_batch.dart';
 import '../services/guidance_web_results_service.dart';
 
@@ -230,6 +231,73 @@ Offset correctedBubbleCenter({
   return Offset(cx / canonicalW * size.width, cy / canonicalH * size.height);
 }
 
+/// The applicant identity the Detailed Result's Examinee Information card
+/// shows, resolved from ONE source at a time -- never a mix of fields from
+/// two sources.
+///
+///  * The linked canonical [ExamineeRecord] (`examinees`) when the scan is
+///    linked to one AND that record has a usable name -- first or last name
+///    non-blank, the same test [ExamineeRecord.displayName] uses.
+///    [examineeId] is then the canonical `temporary_examinee_id`, and
+///    [scanId] keeps the scan's own generated number (`scans.examinee_number`)
+///    separate from it.
+///  * Otherwise the scan's own tag (`scans.first_name` etc.): this covers an
+///    unlinked/legacy scan (`examinee_id` NULL), and a linked scan whose
+///    canonical record has no usable name. [examineeId] is then the scan's own
+///    number exactly as before, and [scanId] is null (nothing to separate).
+///  * With no usable source every field is null and the card falls back to its
+///    existing "—" convention.
+class WebExamineeIdentity {
+  const WebExamineeIdentity({
+    this.examineeId,
+    this.firstName,
+    this.middleName,
+    this.lastName,
+    this.scanId,
+    required this.fromCanonicalExaminee,
+  });
+
+  final String? examineeId;
+  final String? firstName;
+  final String? middleName;
+  final String? lastName;
+
+  /// The scan's own generated number; set only when [fromCanonicalExaminee],
+  /// so the canonical ID and the scan's number are never conflated.
+  final String? scanId;
+  final bool fromCanonicalExaminee;
+}
+
+/// Pure, read-only. Never writes or copies anything into [scan]; the
+/// canonical record stays the authoritative applicant identity and the scan's
+/// own tag stays scan-level data.
+WebExamineeIdentity resolveWebExamineeIdentity({
+  required LocalScan scan,
+  ExamineeRecord? linkedExaminee,
+}) {
+  final tag = scan.examinee;
+  final canonical = linkedExaminee;
+  if (canonical != null &&
+      (canonical.firstName.trim().isNotEmpty ||
+          canonical.lastName.trim().isNotEmpty)) {
+    return WebExamineeIdentity(
+      examineeId: canonical.temporaryExamineeId,
+      firstName: canonical.firstName,
+      middleName: canonical.middleName,
+      lastName: canonical.lastName,
+      scanId: tag?.examineeNumber,
+      fromCanonicalExaminee: true,
+    );
+  }
+  return WebExamineeIdentity(
+    examineeId: tag?.examineeNumber,
+    firstName: tag?.firstName,
+    middleName: tag?.middleName,
+    lastName: tag?.lastName,
+    fromCanonicalExaminee: false,
+  );
+}
+
 /// Read-only Detailed Result view for one examinee's scan, opened from
 /// [GuidanceWebResultsView]'s View button.
 ///
@@ -272,12 +340,19 @@ class GuidanceWebResultDetailView extends StatefulWidget {
     required this.batch,
     required this.service,
     required this.onBack,
+    this.linkedExaminee,
   });
 
   final LocalScan scan;
   final LocalBatch batch;
   final GuidanceWebResultsService service;
   final VoidCallback onBack;
+
+  /// The canonical applicant this scan is linked to, when the caller already
+  /// has it (the Examinee Records detail page does). Null for the Results
+  /// page and for legacy/unlinked scans, which keep showing the scan's own
+  /// tag -- see [resolveWebExamineeIdentity].
+  final ExamineeRecord? linkedExaminee;
 
   @override
   State<GuidanceWebResultDetailView> createState() =>
@@ -544,12 +619,19 @@ class _GuidanceWebResultDetailViewState
   // --- Examinee Information -------------------------------------------------
 
   Widget _buildExamineeCard() {
-    final examinee = widget.scan.examinee;
+    final identity = resolveWebExamineeIdentity(
+      scan: widget.scan,
+      linkedExaminee: widget.linkedExaminee,
+    );
     return _card('EXAMINEE INFORMATION', [
-      _infoRow('Examinee ID', _dash(examinee?.examineeNumber)),
-      _infoRow('First Name', _dash(examinee?.firstName)),
-      _infoRow('Middle Name', _dash(examinee?.middleName)),
-      _infoRow('Last Name', _dash(examinee?.lastName)),
+      _infoRow('Examinee ID', _dash(identity.examineeId)),
+      _infoRow('First Name', _dash(identity.firstName)),
+      _infoRow('Middle Name', _dash(identity.middleName)),
+      _infoRow('Last Name', _dash(identity.lastName)),
+      // The scan's own generated number, kept apart from the canonical
+      // Examinee ID above (only shown when the canonical record is the source).
+      if (identity.fromCanonicalExaminee)
+        _infoRow('Scan ID', _dash(identity.scanId)),
       _infoRow('Exam Type', _examTitle()),
       _infoRow('Batch', widget.batch.batchCode),
       _infoRow('Scan Date', _fmtDateTime(widget.scan.capturedAt)),
