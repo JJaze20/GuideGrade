@@ -11,6 +11,7 @@ import '../../../core/omr/qtm_result.dart';
 import '../../../core/omr/tat_result.dart';
 import '../../../models/local_batch.dart';
 import '../services/guidance_web_analytics_service.dart';
+import 'guidance_web_examinee_analytics_view.dart';
 
 /// The Guidance Council Web Console's Analytics page — READ-ONLY.
 ///
@@ -19,14 +20,14 @@ import '../services/guidance_web_analytics_service.dart';
 /// over each scan's STORED result. Web-archived batches are included and are
 /// identified by `batch_archives` markers only. See
 /// [GuidanceWebAnalyticsService] for the retrieval and Answer Key rules.
-class GuidanceWebAnalyticsView extends StatefulWidget {
-  const GuidanceWebAnalyticsView({super.key, GuidanceWebAnalyticsService? service})
+class GuidanceWebBatchAnalyticsView extends StatefulWidget {
+  const GuidanceWebBatchAnalyticsView({super.key, GuidanceWebAnalyticsService? service})
       : _service = service;
 
   final GuidanceWebAnalyticsService? _service;
 
   @override
-  State<GuidanceWebAnalyticsView> createState() => _GuidanceWebAnalyticsViewState();
+  State<GuidanceWebBatchAnalyticsView> createState() => _GuidanceWebBatchAnalyticsViewState();
 }
 
 const List<(String, String)> _examTypes = [
@@ -35,7 +36,7 @@ const List<(String, String)> _examTypes = [
   ('TAT', 'Teaching Aptitude Test (TAT)'),
 ];
 
-class _GuidanceWebAnalyticsViewState extends State<GuidanceWebAnalyticsView> {
+class _GuidanceWebBatchAnalyticsViewState extends State<GuidanceWebBatchAnalyticsView> {
   late final GuidanceWebAnalyticsService _service =
       widget._service ?? GuidanceWebAnalyticsService();
 
@@ -752,5 +753,79 @@ class _GuidanceWebAnalyticsViewState extends State<GuidanceWebAnalyticsView> {
       ],
     );
     return height == null ? Center(child: content) : SizedBox(height: height, child: Center(child: content));
+  }
+}
+
+/// Analytics page: a Batch Analytics tab (the original page, unchanged) and
+/// an Examinee Analytics tab for per-examinee cluster analysis.
+class GuidanceWebAnalyticsView extends StatefulWidget {
+  const GuidanceWebAnalyticsView({super.key, GuidanceWebAnalyticsService? service})
+    : _service = service;
+
+  final GuidanceWebAnalyticsService? _service;
+
+  @override
+  State<GuidanceWebAnalyticsView> createState() =>
+      _GuidanceWebAnalyticsViewState();
+}
+
+class _GuidanceWebAnalyticsViewState extends State<GuidanceWebAnalyticsView> {
+  bool _examineeTab = false;
+
+  Widget _tab(String label, bool selected, VoidCallback onTap) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(20),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(
+          color: selected ? AppColors.emerald100 : Colors.transparent,
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Text(
+          label,
+          style: AppTextStyles.body(
+            size: 12,
+            weight: FontWeight.w700,
+            color: selected ? AppColors.primaryGreen : AppColors.textDark,
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
+          child: Row(
+            children: [
+              _tab(
+                'Batch Analytics',
+                !_examineeTab,
+                () => setState(() => _examineeTab = false),
+              ),
+              const SizedBox(width: 8),
+              _tab(
+                'Examinee Analytics',
+                _examineeTab,
+                () => setState(() => _examineeTab = true),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: _examineeTab
+              ? const Padding(
+                  padding: EdgeInsets.all(24),
+                  child: GuidanceWebExamineeAnalyticsView(),
+                )
+              : GuidanceWebBatchAnalyticsView(service: widget._service),
+        ),
+      ],
+    );
   }
 }

@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
@@ -92,8 +91,20 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.darkNavy,
-      body: Center(
+      backgroundColor: AppColors.primaryGreen,
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          // NDMU banner, faded so the green base shows through.
+          Opacity(
+            opacity: 0.28,
+            child: Image.asset(
+              'assets/images/NDMU BANNER.png',
+              fit: BoxFit.cover,
+              alignment: Alignment.center,
+            ),
+          ),
+          Center(
         child: Container(
           constraints: const BoxConstraints(maxWidth: 450),
           padding: const EdgeInsets.all(48),
@@ -105,26 +116,11 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Container(
-                    width: 60,
-                    height: 60,
-                    decoration: BoxDecoration(
-                      gradient: const LinearGradient(
-                        colors: [
-                          AppColors.warmRedOrange,
-                          AppColors.accentYellowGreen,
-                          Color(0xFF1565C0),
-                        ],
-                      ),
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: const FaIcon(
-                      FontAwesomeIcons.shieldHalved,
-                      color: Colors.white,
-                      size: 28,
-                    ),
+                  Image.asset(
+                    'assets/images/guidegrade logo1 trimmed.png',
+                    height: 72,
                   ),
-                  const SizedBox(width: 16),
+                  const SizedBox(width: 14),
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -155,10 +151,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
               const SizedBox(height: 8),
               Text(
                 'Guidance automated test diagnostic checking system',
-                style: AppTextStyles.body(
-                  size: 12,
-                  color: Colors.grey.shade400,
-                ),
+                style: AppTextStyles.body(size: 12, color: Colors.white70),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 48),
@@ -271,15 +264,14 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
               // Footer info
               Text(
                 'NDMU Guidance Council System',
-                style: AppTextStyles.body(
-                  size: 11,
-                  color: Colors.grey.shade500,
-                ),
+                style: AppTextStyles.body(size: 11, color: Colors.white70),
                 textAlign: TextAlign.center,
               ),
             ],
           ),
         ),
+      ),
+        ],
       ),
     );
   }

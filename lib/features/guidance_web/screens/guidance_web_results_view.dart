@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
@@ -24,16 +26,12 @@ import 'guidance_web_result_detail_view.dart';
 /// list in memory — selecting a different batch is the only thing that
 /// issues a new Supabase request.
 ///
-/// Batch selection is presented as three exam-specific dropdowns (AT/TAT/
-/// QTM) rather than one combined list — all three are filtered in memory
-/// from the SAME single [GuidanceWebResultsService.loadBatches] call (see
-/// [_batchesFor]); picking a batch never triggers a second batch-list
-/// request. There is only ever ONE selected/active batch across all three
-/// dropdowns at a time (see [_activeBatch]) — picking a batch in one
-/// dropdown implicitly clears whatever was showing in the other two,
-/// since each dropdown's displayed value is derived from [_activeBatch]
-/// itself (`_activeBatch?.examCode == examCode`), not from any per-exam
-/// memory.
+/// Batch selection is presented as three exam tabs (AT/TAT/QTM), with one
+/// batch dropdown below showing only the selected tab's batches. All tabs are
+/// filtered in memory from the SAME single [GuidanceWebResultsService.loadBatches]
+/// call (see [_batchesFor]); picking a batch never triggers a second
+/// batch-list request. There is only ever ONE active batch at a time (see
+/// [_activeBatch]); switching to a different exam tab clears it.
 class GuidanceWebResultsView extends StatefulWidget {
   const GuidanceWebResultsView({
     super.key,
@@ -41,6 +39,7 @@ class GuidanceWebResultsView extends StatefulWidget {
     GuidanceWebArchiveService? archiveService,
     this.archivedBatch,
     this.onBackToArchive,
+    this.refreshInterval = const Duration(seconds: 30),
   }) : _service = service,
        _archiveService = archiveService;
 
@@ -56,6 +55,10 @@ class GuidanceWebResultsView extends StatefulWidget {
   /// shown in this mode; [onBackToArchive] returns to the Archive list.
   final LocalBatch? archivedBatch;
   final VoidCallback? onBackToArchive;
+
+  /// How often the batch list is re-checked while the page is open, to flag
+  /// newly arrived batches with a red dot. `null` disables the re-check.
+  final Duration? refreshInterval;
 
   @override
   State<GuidanceWebResultsView> createState() => _GuidanceWebResultsViewState();
@@ -111,6 +114,20 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
   /// there is no separate per-exam memory to clear.
   LocalBatch? _activeBatch;
 
+  /// The exam tab (AT/TAT/QTM) currently shown. Only the selected tab's
+  /// batch dropdown is visible; switching tabs clears [_activeBatch] when it
+  /// belongs to a different exam, so the table never shows results under the
+  /// wrong tab.
+  String _selectedExam = _examGroups.first.$1;
+
+  /// Batch ids that were present when the page loaded or that have been
+  /// opened since. A batch outside this set arrived while the page was open
+  /// and puts a red dot on its exam tab until it is opened. `null` until the
+  /// first successful load, so no dots show before then.
+  Set<String>? _seenBatchIds;
+
+  Timer? _refreshTimer;
+
   bool _loadingScans = false;
   List<LocalScan> _scans = [];
   String? _scansError;
@@ -146,11 +163,16 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
       });
     } else {
       _loadBatches();
+      final interval = widget.refreshInterval;
+      if (interval != null) {
+        _refreshTimer = Timer.periodic(interval, (_) => _refreshBatches());
+      }
     }
   }
 
   @override
   void dispose() {
+    _refreshTimer?.cancel();
     _searchController.dispose();
     super.dispose();
   }
@@ -176,6 +198,7 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
       if (!mounted) return;
       setState(() {
         _batches = batches;
+        _seenBatchIds = {for (final b in batches) b.id};
         _loadingBatches = false;
       });
     } on GuidanceWebResultsException catch (e) {
@@ -193,6 +216,38 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
     }
   }
 
+  /// Quietly re-reads the batch list; failures are ignored and leave the
+  /// current list untouched. Unopened new batches stay outside
+  /// [_seenBatchIds], which is what lights the red dot.
+  Future<void> _refreshBatches() async {
+    if (_loadingBatches || _batchesError != null) return;
+    try {
+      final all = await _service.loadBatches();
+      var archivedIds = <String>{};
+      try {
+        archivedIds = await _service.loadArchivedBatchIds();
+      } catch (_) {}
+      final batches = [
+        for (final b in all)
+          if (!archivedIds.contains(b.id)) b,
+      ]..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+      if (!mounted) return;
+      setState(() => _batches = batches);
+    } catch (_) {}
+  }
+
+  void _markBatchSeen(LocalBatch batch) {
+    final seen = _seenBatchIds;
+    if (seen == null || seen.contains(batch.id)) return;
+    setState(() => _seenBatchIds = {...seen, batch.id});
+  }
+
+  bool _hasNewBatches(String examCode) {
+    final seen = _seenBatchIds;
+    if (seen == null) return false;
+    return _batchesFor(examCode).any((b) => !seen.contains(b.id));
+  }
+
   /// Batches for one exam code, filtered in memory from the single
   /// [_batches] list already loaded — never a new Supabase request. Order
   /// is preserved from [_loadBatches]'s own `updatedAt`-descending sort, so
@@ -200,8 +255,25 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
   List<LocalBatch> _batchesFor(String examCode) =>
       _batches.where((b) => b.examCode == examCode).toList(growable: false);
 
+  void _selectExamTab(String examCode) {
+    if (examCode == _selectedExam) return;
+    setState(() {
+      _selectedExam = examCode;
+      if (_activeBatch?.examCode != examCode) {
+        _activeBatch = null;
+        _scans = [];
+        _scansError = null;
+        _loadingScans = false;
+        _statusFilter = 'All';
+        _searchController.clear();
+        _viewingScan = null;
+      }
+    });
+  }
+
   Future<void> _selectExamBatch(String examCode, LocalBatch? batch) async {
     if (batch == null) return;
+    _markBatchSeen(batch);
     setState(() {
       _activeBatch = batch;
       _scans = [];
@@ -292,18 +364,15 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
           if (widget.archivedBatch != null)
             _buildArchivedHeader(widget.archivedBatch!)
           else
-            Row(
+            Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                for (var i = 0; i < _examGroups.length; i++) ...[
-                  if (i > 0) const SizedBox(width: 16),
-                  Expanded(
-                    child: _buildExamDropdown(
-                      _examGroups[i].$1,
-                      _examGroups[i].$2,
-                    ),
-                  ),
-                ],
+                _buildExamTabs(),
+                const SizedBox(height: 14),
+                _buildExamDropdown(
+                  _selectedExam,
+                  _examGroups.firstWhere((g) => g.$1 == _selectedExam).$2,
+                ),
               ],
             ),
           if (_activeBatch != null) ...[
@@ -328,6 +397,28 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
           ],
         ],
       ),
+    );
+  }
+
+  /// Exam-type tabs (AT / TAT / QTM). Selecting one swaps the batch dropdown
+  /// below it to that exam's batches.
+  Widget _buildExamTabs() {
+    return Row(
+      children: [
+        for (var i = 0; i < _examGroups.length; i++) ...[
+          if (i > 0) const SizedBox(width: 12),
+          Expanded(
+            child: _ExamTab(
+              key: Key('examTab_${_examGroups[i].$1}'),
+              label: _examGroups[i].$2,
+              count: _batchesFor(_examGroups[i].$1).length,
+              hasNew: _hasNewBatches(_examGroups[i].$1),
+              selected: _selectedExam == _examGroups[i].$1,
+              onTap: () => _selectExamTab(_examGroups[i].$1),
+            ),
+          ),
+        ],
+      ],
     );
   }
 
@@ -478,7 +569,7 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
           DropdownButtonFormField<LocalBatch>(
             value: _activeBatch?.examCode == examCode ? _activeBatch : null,
             isExpanded: true,
-            decoration: _fieldDecoration(hint: 'Select a $examCode batch'),
+            decoration: _fieldDecoration(hint: 'Select batch'),
             items: options
                 .map(
                   (b) => DropdownMenuItem(
@@ -849,4 +940,86 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
   ];
 
   String _fmtDate(DateTime d) => '${_months[d.month - 1]} ${d.day}, ${d.year}';
+}
+
+class _ExamTab extends StatelessWidget {
+  const _ExamTab({
+    super.key,
+    required this.label,
+    required this.count,
+    required this.hasNew,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final int count;
+  final bool hasNew;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: selected ? const Color(0xFFD1FAE5) : Colors.white,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: selected ? AppColors.primaryGreen : AppColors.cardBorder,
+            width: selected ? 1.5 : 1,
+          ),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                label,
+                overflow: TextOverflow.ellipsis,
+                style: AppTextStyles.body(
+                  size: 12,
+                  weight: selected ? FontWeight.w700 : FontWeight.w600,
+                  color: selected ? AppColors.primaryGreen : AppColors.textDark,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Text(
+                  '$count',
+                  style: AppTextStyles.body(
+                    size: 13,
+                    weight: FontWeight.w800,
+                    color: selected
+                        ? AppColors.primaryGreen
+                        : AppColors.textDark,
+                  ),
+                ),
+                if (hasNew)
+                  Positioned(
+                    key: const Key('newBatchDot'),
+                    top: -4,
+                    right: -6,
+                    child: Container(
+                      width: 8,
+                      height: 8,
+                      decoration: BoxDecoration(
+                        color: Colors.red,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 1),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }

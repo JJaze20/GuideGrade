@@ -6,6 +6,7 @@ import '../../../core/constants/app_text_styles.dart';
 import '../../../core/state/app_state.dart';
 import '../../../shared/utils/logout_helper.dart';
 import 'guidance_web_analytics_view.dart';
+import 'guidance_web_export_view.dart';
 import 'guidance_web_archive_view.dart';
 import 'guidance_web_examinee_records_view.dart';
 import 'guidance_web_results_view.dart';
@@ -32,7 +33,8 @@ import 'guidance_web_results_view.dart';
 /// still read-only, still no local write, no `CloudRestoreService`, no
 /// image download (see that class's own doc comment). Examinee Records,
 /// Archive ([GuidanceWebArchiveView]) and Analytics
-/// ([GuidanceWebAnalyticsView]) are built; Export remains a placeholder.
+/// ([GuidanceWebAnalyticsView]) are built; Export ([GuidanceWebExportView]) lists
+/// batches, with its `export` and `view` actions still to come.
 class GuidanceWebHomeScreen extends StatefulWidget {
   const GuidanceWebHomeScreen({super.key});
 
@@ -104,11 +106,7 @@ class _GuidanceWebHomeScreenState extends State<GuidanceWebHomeScreen> {
       case _GuidanceWebDestination.analytics:
         return const GuidanceWebAnalyticsView();
       case _GuidanceWebDestination.export:
-        return const _PlaceholderBody(
-          icon: FontAwesomeIcons.fileExport,
-          title: 'Export',
-          message: 'Data export will be available in a later phase.',
-        );
+        return const GuidanceWebExportView();
     }
   }
 }
@@ -141,6 +139,8 @@ class _Sidebar extends StatelessWidget {
               children: [
                 Row(
                   children: [
+                    Image.asset('assets/images/guidegrade logo1 trimmed.png', height: 30),
+                    const SizedBox(width: 8),
                     Text('Guide', style: AppTextStyles.logo(size: 20, color: AppColors.warmRedOrange)),
                     Text('Grade', style: AppTextStyles.logo(size: 20, color: AppColors.primaryGreen)),
                   ],
@@ -287,40 +287,9 @@ class _DashboardBody extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           Text(
-            'This is the Guidance Council Web Console. Export will be built '
-            'out in an upcoming phase.',
+            'This is the Guidance Council Web Console. Use the sidebar to open '
+            'Results, Analytics or Export.',
             style: AppTextStyles.body(size: 11, color: AppColors.textGray),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _PlaceholderBody extends StatelessWidget {
-  final FaIconData icon;
-  final String title;
-  final String message;
-
-  const _PlaceholderBody({required this.icon, required this.title, required this.message});
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          FaIcon(icon, size: 40, color: AppColors.textGray),
-          const SizedBox(height: 16),
-          Text(title, style: AppTextStyles.heading(size: 14)),
-          const SizedBox(height: 8),
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 340),
-            child: Text(
-              message,
-              textAlign: TextAlign.center,
-              style: AppTextStyles.body(size: 11, color: AppColors.textGray),
-            ),
           ),
         ],
       ),
