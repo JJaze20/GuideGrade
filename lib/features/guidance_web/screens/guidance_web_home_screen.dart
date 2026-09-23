@@ -139,6 +139,8 @@ class _Sidebar extends StatelessWidget {
               children: [
                 Row(
                   children: [
+                    Image.asset('assets/images/guidegrade logo1 trimmed.png', height: 30),
+                    const SizedBox(width: 8),
                     Text('Guide', style: AppTextStyles.logo(size: 20, color: AppColors.warmRedOrange)),
                     Text('Grade', style: AppTextStyles.logo(size: 20, color: AppColors.primaryGreen)),
                   ],
