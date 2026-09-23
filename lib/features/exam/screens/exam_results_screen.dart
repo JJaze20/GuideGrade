@@ -339,6 +339,7 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
                       template: omrTemplates[scored.examCode],
                       scanTemplateVersion: scored.templateVersion,
                       meshInteriorMeasuredFrac: scored.meshInteriorMeasuredFrac,
+                      geometryWarning: scored.geometryWarning,
                     ),
                   ),
                 ),

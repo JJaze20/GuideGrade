@@ -55,6 +55,15 @@ class ScannedImageViewerScreen extends StatelessWidget {
   final String? scanTemplateVersion;
   final Map<String, (double, double)>? meshInteriorMeasuredFrac;
 
+  /// A retake hint when this capture's geometry was never trustworthy --
+  /// see [ScoredResult.geometryWarning]. Null hides the banner entirely.
+  ///
+  /// Worth showing precisely here: a misregistered sheet produces a full
+  /// page of confident-looking red rings that is indistinguishable, at a
+  /// glance, from a student who simply answered badly. Staff had no way to
+  /// tell those apart.
+  final String? geometryWarning;
+
   const ScannedImageViewerScreen({
     super.key,
     this.imagePath,
@@ -66,6 +75,7 @@ class ScannedImageViewerScreen extends StatelessWidget {
     this.template,
     this.scanTemplateVersion,
     this.meshInteriorMeasuredFrac,
+    this.geometryWarning,
   }) : assert(
           imagePath != null || imageBytes != null,
           'ScannedImageViewerScreen needs either imagePath or imageBytes.',
@@ -127,6 +137,8 @@ class ScannedImageViewerScreen extends StatelessWidget {
       body: SafeArea(
         child: Column(
           children: [
+            if (geometryWarning != null)
+              _GeometryWarningBanner(message: geometryWarning!),
             if (_hasOverlay) const _GradedOverlayLegend(),
             Expanded(
               child: InteractiveViewer(
@@ -154,6 +166,44 @@ class ScannedImageViewerScreen extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Sits above the legend when the decode's own mesh verdict says the
+/// capture's geometry could not be trusted.
+///
+/// Amber rather than red, and non-blocking: the scan is still shown and
+/// still usable. The point is only that staff can tell a misregistered
+/// sheet from a genuinely low score, which the overlay alone cannot.
+class _GeometryWarningBanner extends StatelessWidget {
+  final String message;
+  const _GeometryWarningBanner({required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      color: const Color(0xFF78350F),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.warning_amber_rounded,
+              color: Color(0xFFFCD34D), size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              message,
+              style: const TextStyle(
+                color: Color(0xFFFEF3C7),
+                fontSize: 12.5,
+                height: 1.35,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

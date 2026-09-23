@@ -1905,6 +1905,7 @@ class OmrDecoder {
                           meshInteriorMeasuredFrac: mesh.verdict == OmrMeshVerdict.notApplicable
                               ? null
                               : mesh.toMeasuredFractions(canonicalWidth, canonicalHeight),
+                          meshVerdict: mesh.verdict.name,
                         );
                       } finally {
                         inkMap.dispose();
