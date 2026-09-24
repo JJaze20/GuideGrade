@@ -324,6 +324,10 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
               ],
             ),
           if (_activeBatch != null) ...[
+            if (_activeBatch!.description.trim().isNotEmpty) ...[
+              const SizedBox(height: 14),
+              _buildBatchDescription(_activeBatch!),
+            ],
             const SizedBox(height: 14),
             Row(
               crossAxisAlignment: CrossAxisAlignment.end,
@@ -463,6 +467,62 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
     }
   }
 
+  /// One batch's "name" line: code, exam title (or code) and created date.
+  /// Shown smaller than the description wherever both appear.
+  String _batchOptionLabel(LocalBatch b) =>
+      '${b.batchCode} — ${b.examTitle.isNotEmpty ? b.examTitle : b.examCode}'
+      ' (${_fmtDate(b.createdAt)})';
+
+  // Batch identification hierarchy (Results batch selection/display area):
+  // the DESCRIPTION is the main focus -- larger and bold -- while the batch
+  // name/code line stays clearly readable but smaller.
+  static const double _descriptionSize = 13;
+  static const double _batchNameSize = 10.5;
+  static const double _descriptionHeadingSize = 16;
+
+  /// The selected batch's own description (the existing
+  /// `batches.description` the Guidance Council typed when creating it),
+  /// shown under the dropdowns as the main visual focus so batches with
+  /// similar names are easy to tell apart. Only built for a non-blank
+  /// description, so a batch without one leaves the layout exactly as it was.
+  /// Capped at three lines; the full text is in the tooltip.
+  Widget _buildBatchDescription(LocalBatch batch) {
+    final description = batch.description.trim();
+    return Container(
+      key: const Key('batchDescription'),
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: AppColors.lightBg,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppColors.cardBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Batch Description',
+            style: AppTextStyles.body(
+              size: 9.5,
+              weight: FontWeight.w600,
+              color: AppColors.textGray,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Tooltip(
+            message: description,
+            child: Text(
+              description,
+              style: AppTextStyles.heading(size: _descriptionHeadingSize),
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// One exam-specific batch dropdown, populated ONLY with [_batchesFor]
   /// that [examCode] — never batches from another exam type. Shows a
   /// harmless disabled placeholder instead of an empty dropdown when this
@@ -496,19 +556,80 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
             value: _activeBatch?.examCode == examCode ? _activeBatch : null,
             isExpanded: true,
             decoration: _fieldDecoration(hint: 'Select a $examCode batch'),
-            items: options
-                .map(
-                  (b) => DropdownMenuItem(
-                    value: b,
-                    child: Text(
-                      '${b.batchCode} — ${b.examTitle.isNotEmpty ? b.examTitle : b.examCode}'
-                      ' (${_fmtDate(b.createdAt)})',
-                      style: AppTextStyles.body(size: 11),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                )
-                .toList(),
+            // With a description, the description leads (larger, bold) and the
+            // batch name follows smaller. A batch with no description keeps
+            // the original single name line exactly as before. The closed
+            // field stays a single line.
+            selectedItemBuilder: (context) => [
+              for (final b in options)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: b.description.trim().isEmpty
+                      ? Text(
+                          _batchOptionLabel(b),
+                          style: AppTextStyles.body(size: 11),
+                          overflow: TextOverflow.ellipsis,
+                        )
+                      : Text.rich(
+                          TextSpan(
+                            children: [
+                              TextSpan(
+                                text: b.description.trim(),
+                                style: AppTextStyles.body(
+                                  size: _descriptionSize,
+                                  weight: FontWeight.w700,
+                                ),
+                              ),
+                              TextSpan(
+                                text: '   ·   ${_batchOptionLabel(b)}',
+                                style: AppTextStyles.body(
+                                  size: _batchNameSize,
+                                  color: AppColors.textGray,
+                                ),
+                              ),
+                            ],
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                ),
+            ],
+            items: options.map((b) {
+              final description = b.description.trim();
+              return DropdownMenuItem(
+                value: b,
+                child: description.isEmpty
+                    ? Text(
+                        _batchOptionLabel(b),
+                        style: AppTextStyles.body(size: 11),
+                        overflow: TextOverflow.ellipsis,
+                      )
+                    : Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            description,
+                            style: AppTextStyles.body(
+                              size: _descriptionSize,
+                              weight: FontWeight.w700,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          Text(
+                            _batchOptionLabel(b),
+                            style: AppTextStyles.body(
+                              size: _batchNameSize,
+                              color: AppColors.textGray,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+              );
+            }).toList(),
             onChanged: _loadingBatches
                 ? null
                 : (batch) => _selectExamBatch(examCode, batch),

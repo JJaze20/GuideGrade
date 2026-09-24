@@ -115,12 +115,12 @@ class _FakeSyncClient implements SyncClient {
   Future<CloudScansRead> readUnlinkedScans() => _no('readUnlinkedScans');
 }
 
-CloudBatchRow _batchRow() => CloudBatchRow(
+CloudBatchRow _batchRow({String description = ''}) => CloudBatchRow(
       id: 'b1',
       batchCode: 'B-1',
       examCode: 'AT',
       examTitle: 'Admission Test',
-      description: '',
+      description: description,
       expectedCount: 2,
       status: 'Active',
       createdByUid: 'uid',
@@ -215,6 +215,140 @@ void main() {
     await tester.tap(find.text('B-1 — Admission Test (Jan 1, 2026)').last);
     await tester.pumpAndSettle();
   }
+
+  group('Batch Description', () {
+    const description = 'Morning session, Room 204 - BSED applicants';
+
+    void seedBatchWith(String value) {
+      client.batchesToReturn = CloudBatchesRead.found([_batchRow(description: value)]);
+    }
+
+    testWidgets('a selected batch shows its own description under the dropdowns, results unaffected',
+        (tester) async {
+      seedBatchWith(description);
+      await pumpResultsView(tester);
+      expect(find.byKey(const Key('batchDescription')), findsNothing, reason: 'nothing selected yet');
+
+      await selectTheOnlyBatch(tester);
+
+      expect(find.byKey(const Key('batchDescription')), findsOneWidget);
+      expect(find.text('Batch Description'), findsOneWidget);
+      expect(find.text(description), findsOneWidget);
+      // The existing table, search and filter are all still there.
+      expect(find.widgetWithText(TextButton, 'View'), findsNWidgets(2));
+      expect(find.byKey(const Key('archiveBatchButton')), findsOneWidget);
+    });
+
+    testWidgets('the open dropdown lists the description under each batch, so similar batches are distinguishable',
+        (tester) async {
+      seedBatchWith(description);
+      await pumpResultsView(tester);
+      expect(find.text(description), findsNothing);
+
+      await tester.tap(find.byType(DropdownButtonFormField<LocalBatch>).first);
+      await tester.pumpAndSettle();
+
+      expect(find.text('B-1 — Admission Test (Jan 1, 2026)'), findsWidgets);
+      expect(find.text(description), findsOneWidget, reason: 'shown as the option\'s second line');
+    });
+
+    testWidgets('the description is the visual focus: larger and bolder than the batch name, in the open menu, '
+        'the closed field and the strip', (tester) async {
+      seedBatchWith(description);
+      await pumpResultsView(tester);
+      const nameLine = 'B-1 — Admission Test (Jan 1, 2026)';
+
+      // Open menu: description on top, batch name below it and smaller.
+      await tester.tap(find.byType(DropdownButtonFormField<LocalBatch>).first);
+      await tester.pumpAndSettle();
+      final menuDescription = tester.widget<Text>(find.text(description)).style!;
+      final menuName = tester.widget<Text>(find.text(nameLine).last).style!;
+      expect(menuDescription.fontWeight, FontWeight.w700);
+      expect(menuDescription.fontSize!, greaterThan(menuName.fontSize!));
+      expect(menuName.fontSize!, greaterThanOrEqualTo(10), reason: 'the batch name stays clearly readable');
+
+      await tester.tap(find.text(nameLine).last);
+      await tester.pumpAndSettle();
+
+      // Closed field: one line, description first (larger, bold), name after it (smaller).
+      final closed = tester.widget<Text>(find.byWidgetPredicate(
+        (w) => w is Text && w.textSpan != null && w.textSpan!.toPlainText().contains(description),
+      ));
+      expect(closed.maxLines, 1);
+      final spans = (closed.textSpan! as TextSpan).children!.cast<TextSpan>();
+      expect(spans.first.text, description);
+      expect(spans.first.style!.fontWeight, FontWeight.w700);
+      expect(spans.first.style!.fontSize!, greaterThan(spans.last.style!.fontSize!));
+      expect(spans.last.text, contains(nameLine), reason: 'the batch name is still shown');
+
+      // Strip under the dropdowns: the largest, boldest text in the batch area.
+      final strip = find.byKey(const Key('batchDescription'));
+      final stripDescription =
+          tester.widget<Text>(find.descendant(of: strip, matching: find.text(description))).style!;
+      expect(stripDescription.fontWeight, FontWeight.w800);
+      expect(stripDescription.fontSize!, greaterThanOrEqualTo(16));
+      expect(stripDescription.fontSize!, greaterThan(menuDescription.fontSize!));
+      final caption = tester.widget<Text>(find.descendant(of: strip, matching: find.text('Batch Description'))).style!;
+      expect(stripDescription.fontSize!, greaterThan(caption.fontSize!));
+    });
+
+    testWidgets('a batch with no description keeps the original single name line (no size change)', (tester) async {
+      seedBatchWith('');
+      await pumpResultsView(tester);
+      await tester.tap(find.byType(DropdownButtonFormField<LocalBatch>).first);
+      await tester.pumpAndSettle();
+      final name = tester.widget<Text>(find.text('B-1 — Admission Test (Jan 1, 2026)').last).style!;
+      expect(name.fontSize, 11, reason: 'unchanged from before the description was added');
+    });
+
+    testWidgets('a batch with no description (or only spaces) adds nothing to the layout', (tester) async {
+      for (final blank in ['', '   ']) {
+        seedBatchWith(blank);
+        await pumpResultsView(tester);
+        await selectTheOnlyBatch(tester);
+
+        expect(find.byKey(const Key('batchDescription')), findsNothing);
+        expect(find.text('Batch Description'), findsNothing);
+        expect(find.widgetWithText(TextButton, 'View'), findsNWidgets(2));
+      }
+    });
+
+    testWidgets('an archived batch opened from the Web Archive shows its description too', (tester) async {
+      tester.view.physicalSize = const Size(1400, 1600);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final batch = LocalBatch(
+        id: 'b1',
+        batchCode: 'B-1',
+        examCode: 'AT',
+        examTitle: 'Admission Test',
+        description: description,
+        expectedCount: 2,
+        status: 'Completed',
+        createdByUid: 'uid',
+        createdByName: 'Officer',
+        createdAt: DateTime.utc(2026, 1, 1),
+        updatedAt: DateTime.utc(2026, 1, 1),
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: GuidanceWebResultsView(
+              service: GuidanceWebResultsService(client: client),
+              archivedBatch: batch,
+              onBackToArchive: () {},
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('(Archived)'), findsOneWidget);
+      expect(find.byKey(const Key('batchDescription')), findsOneWidget);
+      expect(find.text(description), findsOneWidget);
+    });
+  });
 
   testWidgets(
       '11. View opens the Detailed Result for the EXACT row clicked, never a different scan',
