@@ -801,10 +801,14 @@ class _LinkExistingExamineeDialogState extends State<_LinkExistingExamineeDialog
     super.dispose();
   }
 
+  /// Only ACTIVE examinees can receive a scan; an archived one must be
+  /// restored first, so it is never offered here. (The page's own
+  /// All/Active/Archived filter is separate and unaffected.)
   List<ExamineeRecord> get _candidates {
     final term = _search.text.trim().toLowerCase();
-    if (term.isEmpty) return widget.examinees;
-    return widget.examinees
+    final active = widget.examinees.where((e) => e.isActive);
+    if (term.isEmpty) return active.toList();
+    return active
         .where((e) =>
             e.displayName.toLowerCase().contains(term) ||
             e.temporaryExamineeId.toLowerCase().contains(term))
@@ -877,6 +881,12 @@ class _LinkExistingExamineeDialogState extends State<_LinkExistingExamineeDialog
                 labelText: 'Search name or Temporary Examinee ID',
                 prefixIcon: Icon(Icons.search, size: 18),
               ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Only active examinees can be linked to a scan. Restore an archived examinee first.',
+              key: const Key('linkPickerActiveOnlyHint'),
+              style: AppTextStyles.body(size: 10, color: AppColors.textGray),
             ),
             const SizedBox(height: 10),
             Expanded(

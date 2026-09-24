@@ -22,6 +22,11 @@ class GuidanceWebExamineeRecordsException implements Exception {
   String toString() => message;
 }
 
+/// Shown wherever linking a scan to an archived examinee is refused (the
+/// service rule and the Examinee Detail hint), so both say the same thing.
+const String archivedExamineeLinkMessage =
+    'Archived examinees cannot be linked to new scans. Restore the examinee first.';
+
 /// Supabase access for the Guidance Council Web Console's Examinee Records
 /// page — the canonical applicant/examinee record (`examinees`) and the
 /// examination history built from it.
@@ -203,12 +208,19 @@ class GuidanceWebExamineeRecordsService {
   /// protection against races, and its violation (23505) is translated to
   /// the same friendly message — a raw database error is never shown. On
   /// any rejection the scan is left untouched (still unlinked).
+  ///
+  /// Only an ACTIVE examinee can receive a scan; an archived one must be
+  /// restored first. That is checked before anything is written, against the
+  /// examinee's CURRENT status (not just the possibly-stale [examinee] the UI
+  /// is holding), so the rule holds even if the page is out of date.
   Future<void> linkScanToExaminee({
     required String batchId,
     required LocalScan scan,
     required ExamineeRecord examinee,
     required String examCode,
   }) async {
+    await _requireActiveExaminee(examinee);
+
     final existing = await _client.readCloudScansForExaminee(examinee.id);
     if (!existing.isSuccess) {
       throw GuidanceWebExamineeRecordsException(_messageFor(existing.error));
@@ -276,6 +288,31 @@ class GuidanceWebExamineeRecordsService {
     throw GuidanceWebExamineeRecordsException(
       'Could not remove this link. Please try again.',
     );
+  }
+
+  /// Throws unless [examinee] exists and is currently active. A held copy
+  /// that is already archived is rejected without any read; otherwise the
+  /// current row is looked up (one `examinees` read, the same one the page
+  /// itself uses) because the copy may be stale -- e.g. archived in another
+  /// session after this page loaded. Nothing is written here.
+  Future<void> _requireActiveExaminee(ExamineeRecord examinee) async {
+    if (examinee.isArchived) {
+      throw GuidanceWebExamineeRecordsException(archivedExamineeLinkMessage);
+    }
+    final read = await _client.readCloudExaminees();
+    if (!read.isSuccess) {
+      throw GuidanceWebExamineeRecordsException(_messageFor(read.error));
+    }
+    final current = read.examinees.where((e) => e.id == examinee.id).firstOrNull;
+    if (current == null) {
+      throw GuidanceWebExamineeRecordsException(
+        'This examinee record is no longer available. '
+        'Refresh Examinee Records and try again.',
+      );
+    }
+    if (_toExamineeRecord(current).isArchived) {
+      throw GuidanceWebExamineeRecordsException(archivedExamineeLinkMessage);
+    }
   }
 
   String _duplicateExamMessage(String examCode) {

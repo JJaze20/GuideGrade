@@ -355,6 +355,13 @@ void main() {
 
   setUp(() {
     client = _FakeSyncClient();
+    // The examinees the link tests use are ACTIVE rows in the database --
+    // linkScanToExaminee now checks the examinee's current status.
+    client.examineesToReturn = CloudExamineesRead.found([
+      _examineeRow(id: 'e1'),
+      _examineeRow(id: 'e2', temporaryExamineeId: 'EX-2'),
+      _examineeRow(id: 'e5', temporaryExamineeId: 'EX-000005'),
+    ]);
     service = GuidanceWebExamineeRecordsService(client: client);
   });
 
@@ -542,6 +549,145 @@ void main() {
         ),
         throwsA(isA<GuidanceWebExamineeRecordsException>()),
       );
+    });
+  });
+
+  group('Archived examinees cannot receive a new scan', () {
+    void seedUnlinkedScan() {
+      client.unlinkedScansToReturn =
+          CloudScansRead.found([_scanRow(id: 's1', batchId: 'b1', examCode: 'AT')]);
+    }
+
+    void expectNothingLinked() {
+      expect(client.calls.where((c) => c.startsWith('linkScanToExaminee')), isEmpty);
+      expect(client.lastLinkArgs, isNull);
+      // The scan is still in the unlinked queue and nobody gained a scan.
+      expect(client.unlinkedScansToReturn.scans.map((s) => s.id), ['s1']);
+      expect(client.scansByExamineeId, isEmpty);
+    }
+
+    test('an active examinee is linked through the existing flow', () async {
+      seedUnlinkedScan();
+      await service.linkScanToExaminee(
+        batchId: 'b1',
+        scan: _localScan(id: 's1'),
+        examinee: _examinee(id: 'e1'),
+        examCode: 'AT',
+      );
+      expect(client.lastLinkArgs, {'batchId': 'b1', 'scanId': 's1', 'examineeId': 'e1'});
+      expect(client.unlinkedScansToReturn.scans, isEmpty);
+    });
+
+    test('an examinee held as archived is rejected before any read or write', () async {
+      seedUnlinkedScan();
+      await expectLater(
+        service.linkScanToExaminee(
+          batchId: 'b1',
+          scan: _localScan(id: 's1'),
+          examinee: _examinee(id: 'e1', status: 'archived'),
+          examCode: 'AT',
+        ),
+        throwsA(isA<GuidanceWebExamineeRecordsException>().having(
+          (e) => e.message,
+          'message',
+          'Archived examinees cannot be linked to new scans. Restore the examinee first.',
+        )),
+      );
+      expect(client.calls, isEmpty);
+      expectNothingLinked();
+    });
+
+    test('a stale active copy is rejected when the database row is now archived', () async {
+      seedUnlinkedScan();
+      client.examineesToReturn = CloudExamineesRead.found([
+        _examineeRow(id: 'e1', status: 'archived'),
+      ]);
+      await expectLater(
+        service.linkScanToExaminee(
+          batchId: 'b1',
+          scan: _localScan(id: 's1'),
+          examinee: _examinee(id: 'e1'), // the page still thinks it is active
+          examCode: 'AT',
+        ),
+        throwsA(isA<GuidanceWebExamineeRecordsException>().having(
+          (e) => e.message,
+          'message',
+          contains('Restore the examinee first'),
+        )),
+      );
+      expectNothingLinked();
+    });
+
+    test('an examinee that no longer exists is rejected without linking', () async {
+      seedUnlinkedScan();
+      client.examineesToReturn = CloudExamineesRead.found(const []);
+      await expectLater(
+        service.linkScanToExaminee(
+          batchId: 'b1',
+          scan: _localScan(id: 's1'),
+          examinee: _examinee(id: 'e1'),
+          examCode: 'AT',
+        ),
+        throwsA(isA<GuidanceWebExamineeRecordsException>().having(
+          (e) => e.message,
+          'message',
+          contains('no longer available'),
+        )),
+      );
+      expectNothingLinked();
+    });
+
+    test('a failed status lookup blocks the link instead of guessing', () async {
+      seedUnlinkedScan();
+      client.examineesToReturn = CloudExamineesRead.failed(const SyncOutcome.transient('network'));
+      await expectLater(
+        service.linkScanToExaminee(
+          batchId: 'b1',
+          scan: _localScan(id: 's1'),
+          examinee: _examinee(id: 'e1'),
+          examCode: 'AT',
+        ),
+        throwsA(isA<GuidanceWebExamineeRecordsException>()),
+      );
+      expectNothingLinked();
+    });
+
+    test('after Restore the same examinee can be linked again', () async {
+      seedUnlinkedScan();
+      client.examineesToReturn = CloudExamineesRead.found([
+        _examineeRow(id: 'e1', status: 'archived'),
+      ]);
+      await expectLater(
+        service.linkScanToExaminee(
+          batchId: 'b1',
+          scan: _localScan(id: 's1'),
+          examinee: _examinee(id: 'e1', status: 'archived'),
+          examCode: 'AT',
+        ),
+        throwsA(isA<GuidanceWebExamineeRecordsException>()),
+      );
+
+      final restored = await service.restoreExaminee(_examinee(id: 'e1', status: 'archived'));
+      expect(restored.isActive, isTrue);
+      client.examineesToReturn = CloudExamineesRead.found([_examineeRow(id: 'e1')]);
+
+      await service.linkScanToExaminee(
+        batchId: 'b1',
+        scan: _localScan(id: 's1'),
+        examinee: restored,
+        examCode: 'AT',
+      );
+      expect(client.lastLinkArgs, {'batchId': 'b1', 'scanId': 's1', 'examineeId': 'e1'});
+    });
+
+    test('archiving keeps existing linked scans linked (only the status call is made)', () async {
+      client.scansByExamineeId['e1'] = CloudScansRead.found([
+        _scanRow(id: 's-old', batchId: 'b1', examCode: 'TAT'),
+      ]);
+      final archived = await service.archiveExaminee(_examinee(id: 'e1'));
+      expect(archived.isArchived, isTrue);
+      expect(client.calls, ['setExamineeArchived:e1/true']);
+      expect(client.scansByExamineeId['e1']!.scans.map((s) => s.id), ['s-old']);
     });
   });
 

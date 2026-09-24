@@ -457,6 +457,40 @@ void main() {
   });
 
   group('3. Link to Existing Examinee', () {
+    testWidgets('the picker lists only ACTIVE examinees and says archived ones must be restored first',
+        (tester) async {
+      client.examineesToReturn = CloudExamineesRead.found([
+        _row(id: 'e1', temporaryExamineeId: 'EX-000001', firstName: 'Juan', lastName: 'Dela Cruz'),
+        _row(id: 'e2', temporaryExamineeId: 'EX-000002', firstName: 'Maria', lastName: 'Santos', status: 'archived'),
+      ]);
+      client.batchesToReturn = CloudBatchesRead.found([_batchRow(id: 'b1', examCode: 'TAT')]);
+      client.unlinkedScansToReturn = CloudScansRead.found([
+        _scanRow(id: 's1', batchId: 'b1', examCode: 'TAT', firstName: null, lastName: null),
+      ]);
+      await pumpView(tester);
+      await tester.tap(find.textContaining('Unlinked Scans'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(TextButton, 'Link to Existing'));
+      await tester.pumpAndSettle();
+
+      expect(find.widgetWithText(ListTile, 'Dela Cruz, Juan'), findsOneWidget);
+      expect(find.widgetWithText(ListTile, 'Santos, Maria'), findsNothing);
+      expect(find.byKey(const Key('linkPickerActiveOnlyHint')), findsOneWidget);
+      expect(
+        find.text('Only active examinees can be linked to a scan. Restore an archived examinee first.'),
+        findsOneWidget,
+      );
+
+      // Searching for the archived examinee's name / ID still does not offer it.
+      await tester.enterText(find.byType(TextField), 'Santos');
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(ListTile, 'Santos, Maria'), findsNothing);
+      expect(find.text('No matching Examinee Records.'), findsOneWidget);
+      await tester.enterText(find.byType(TextField), 'EX-000002');
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(ListTile, 'Santos, Maria'), findsNothing);
+    });
+
     testWidgets('never links without an explicit selection and a final confirmation', (tester) async {
       client.examineesToReturn = CloudExamineesRead.found([
         _row(id: 'e1', temporaryExamineeId: 'EX-000001', firstName: 'Juan', lastName: 'Dela Cruz'),
