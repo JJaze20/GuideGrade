@@ -17,6 +17,8 @@ class _FakeSyncClient implements SyncClient {
   CloudBatchesRead batchesToReturn = CloudBatchesRead.found(const []);
   final Map<String, CloudScansRead> scansByBatchId = {};
   CloudAnswerKeyRead answerKeyToReturn = const CloudAnswerKeyRead.absent();
+  CloudExamineesRead examineesToReturn = CloudExamineesRead.found(const []);
+  int examineeReads = 0;
 
   Never _no(String label) => throw StateError('must never call $label');
 
@@ -53,7 +55,10 @@ class _FakeSyncClient implements SyncClient {
   @override
   Future<SyncOutcome> deleteStoragePrefix(String batchId) => _no('deleteStoragePrefix');
   @override
-  Future<CloudExamineesRead> readCloudExaminees() => _no('readCloudExaminees');
+  Future<CloudExamineesRead> readCloudExaminees() async {
+    examineeReads++;
+    return examineesToReturn;
+  }
   @override
   Future<CloudExamineeWrite> createExamineeFromScan({
     required String batchId,
@@ -135,6 +140,7 @@ CloudScanRow _scanRow({
   // cloud_batch_mapper.dart), so this must stay nullable rather than the
   // string 'Ungraded' (which still produces a real, zero-percent result).
   String? resultStatus = 'Graded',
+  String? examineeId,
 }) =>
     CloudScanRow(
       id: id,
@@ -152,6 +158,27 @@ CloudScanRow _scanRow({
       firstName: firstName,
       lastName: lastName,
       examineeNumber: number,
+      examineeId: examineeId,
+    );
+
+CloudExamineeRow _examineeRow({
+  required String id,
+  required String temporaryId,
+  required String first,
+  String? middle,
+  required String last,
+}) =>
+    CloudExamineeRow(
+      id: id,
+      temporaryExamineeId: temporaryId,
+      firstName: first,
+      middleName: middle,
+      lastName: last,
+      status: 'active',
+      createdAt: DateTime.utc(2026, 1, 1),
+      createdByUid: 'uid',
+      updatedAt: DateTime.utc(2026, 1, 1),
+      updatedByUid: 'uid',
     );
 
 void main() {
@@ -320,4 +347,104 @@ void main() {
       expect(yOf(tester, 'Cruz, Juan'), lessThan(yOf(tester, 'Santos, Maria')));
     });
   });
+  group('linked examinees (scans.examinee_id -> examinees)', () {
+    // The verified data shape: a linked scan keeps its OWN blank tag (the
+    // mobile app auto-tags with a generated number and no names); the name
+    // lives on the examinees row.
+    void seedLinkedBatch() {
+      client.scansByBatchId['b1'] = CloudScansRead.found([
+        _scanRow(id: 's1', firstName: '', lastName: '', number: 'EX-1790006562335-3', examineeId: 'e1'),
+        _scanRow(id: 's2', firstName: '', lastName: '', number: 'EX-1790006562335-4', examineeId: 'e2'),
+        _scanRow(id: 's3', firstName: 'Juan', lastName: 'Cruz', number: 'OLD-7'),
+      ]);
+      client.examineesToReturn = CloudExamineesRead.found([
+        _examineeRow(id: 'e1', temporaryId: 'EX-000004', first: 'Merch', middle: 'Valdez', last: 'Andulana'),
+        _examineeRow(id: 'e2', temporaryId: 'EX-000005', first: 'Maria', last: 'Santos'),
+      ]);
+    }
+
+    testWidgets('a scan linked to an existing examinee, and one created with Confirm and Create, '
+        'show the examinee\'s name instead of Unnamed; an unlinked scan keeps its tag', (tester) async {
+      seedLinkedBatch();
+      await pumpResultsView(tester);
+      await selectTheOnlyBatch(tester);
+
+      expect(find.text('Andulana, Merch V.'), findsOneWidget);
+      expect(find.text('Santos, Maria'), findsOneWidget);
+      expect(find.text('Cruz, Juan'), findsOneWidget, reason: 'the unlinked scan is unchanged');
+      expect(find.text('Unnamed'), findsNothing);
+    });
+
+    testWidgets('without the link (same scan data) the row is still Unnamed -- the name comes from the relationship',
+        (tester) async {
+      client.scansByBatchId['b1'] = CloudScansRead.found([
+        _scanRow(id: 's1', firstName: '', lastName: '', number: 'EX-1790006562335-3'),
+      ]);
+      await pumpResultsView(tester);
+      await selectTheOnlyBatch(tester);
+
+      expect(find.text('Unnamed'), findsOneWidget);
+      expect(client.examineeReads, 0, reason: 'nothing linked -> no examinees request');
+    });
+
+    testWidgets('search matches the linked examinee\'s name and Temporary Examinee ID', (tester) async {
+      seedLinkedBatch();
+      await pumpResultsView(tester);
+      await selectTheOnlyBatch(tester);
+
+      await tester.enterText(find.byType(TextField), 'andulana');
+      await tester.pumpAndSettle();
+      expect(find.text('Andulana, Merch V.'), findsOneWidget);
+      expect(find.text('Santos, Maria'), findsNothing);
+
+      await tester.enterText(find.byType(TextField), 'EX-000005');
+      await tester.pumpAndSettle();
+      expect(find.text('Santos, Maria'), findsOneWidget);
+      expect(find.text('Andulana, Merch V.'), findsNothing);
+    });
+
+    testWidgets('View opens the Detailed Result with the canonical examinee and the scan number as Scan ID',
+        (tester) async {
+      seedLinkedBatch();
+      await pumpResultsView(tester);
+      await selectTheOnlyBatch(tester);
+
+      await tester.tap(find.widgetWithText(TextButton, 'View').first);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Detailed Result'), findsOneWidget);
+      expect(find.text('EX-000004'), findsOneWidget);
+      expect(find.text('Merch'), findsOneWidget);
+      expect(find.text('Valdez'), findsOneWidget);
+      expect(find.text('Andulana'), findsOneWidget);
+      expect(find.text('Scan ID'), findsOneWidget);
+      expect(find.text('EX-1790006562335-3'), findsOneWidget);
+    });
+
+    testWidgets('a linked examinee whose record has no usable name falls back to the scan\'s own tag',
+        (tester) async {
+      client.scansByBatchId['b1'] = CloudScansRead.found([
+        _scanRow(id: 's1', firstName: 'Juan', lastName: 'Cruz', number: 'EX-9', examineeId: 'e1'),
+      ]);
+      client.examineesToReturn = CloudExamineesRead.found([
+        _examineeRow(id: 'e1', temporaryId: 'EX-000004', first: '', last: ''),
+      ]);
+      await pumpResultsView(tester);
+      await selectTheOnlyBatch(tester);
+
+      expect(find.text('Cruz, Juan'), findsOneWidget);
+    });
+
+    testWidgets('if the examinee lookup fails the page reports it instead of showing linked scans as Unnamed',
+        (tester) async {
+      seedLinkedBatch();
+      client.examineesToReturn = const CloudExamineesRead.failed(SyncOutcome.transient('network'));
+      await pumpResultsView(tester);
+      await selectTheOnlyBatch(tester);
+
+      expect(find.textContaining('Could not reach Supabase'), findsOneWidget);
+      expect(find.text('Unnamed'), findsNothing);
+    });
+  });
+
 }

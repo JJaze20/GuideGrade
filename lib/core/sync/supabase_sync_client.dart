@@ -956,6 +956,7 @@ class SupabaseSyncClient implements SyncClient {
         lastName: row['last_name'] as String?,
         middleName: row['middle_name'] as String?,
         examineeNumber: row['examinee_number'] as String?,
+        examineeId: row['examinee_id'] as String?,
         imagePath: row['image_path'] as String?,
         rectifiedImagePath: row['rectified_image_path'] as String?,
         imageUploaded: row['image_uploaded'] == true,
@@ -1010,8 +1011,8 @@ class SupabaseSyncClient implements SyncClient {
               'id, batch_id, exam_code, captured_at, decoded, raw_score, '
               'total_graded, total_items, result_status, scanned_at, '
               'processed_by_uid, processed_by_name, first_name, last_name, '
-              'middle_name, examinee_number, image_path, image_uploaded, '
-              'rectified_image_path, rectified_image_uploaded',
+              'middle_name, examinee_number, examinee_id, image_path, '
+              'image_uploaded, rectified_image_path, rectified_image_uploaded',
             )
             .eq('batch_id', batchId);
         return CloudScansRead.found(

@@ -285,23 +285,8 @@ class GuidanceWebExamineeRecordsService {
         'This examinee already has $article $code examination record.';
   }
 
-  ExamineeRecord _toExamineeRecord(CloudExamineeRow row) => ExamineeRecord(
-        id: row.id,
-        temporaryExamineeId: row.temporaryExamineeId,
-        officialStudentId: row.officialStudentId,
-        firstName: row.firstName,
-        middleName: row.middleName,
-        lastName: row.lastName,
-        birthDate: row.birthDate,
-        lastAttendedSchool: row.lastAttendedSchool,
-        status: row.status,
-        archivedAt: row.archivedAt,
-        archivedByUid: row.archivedByUid,
-        createdAt: row.createdAt,
-        createdByUid: row.createdByUid,
-        updatedAt: row.updatedAt,
-        updatedByUid: row.updatedByUid,
-      );
+  ExamineeRecord _toExamineeRecord(CloudExamineeRow row) =>
+      examineeRecordFromCloudRow(row);
 
   String _messageFor(SyncOutcome? outcome) {
     if (outcome != null && outcome.isTransient) {
@@ -329,3 +314,24 @@ class _WebSyncIdentity implements SyncIdentity {
     return true;
   }
 }
+
+/// One `examinees` row as the canonical [ExamineeRecord]. Shared by the
+/// Examinee Records page and the Results page, which resolves each scan's
+/// linked examinee through it, so both read the same fields the same way.
+ExamineeRecord examineeRecordFromCloudRow(CloudExamineeRow row) => ExamineeRecord(
+      id: row.id,
+      temporaryExamineeId: row.temporaryExamineeId,
+      officialStudentId: row.officialStudentId,
+      firstName: row.firstName,
+      middleName: row.middleName,
+      lastName: row.lastName,
+      birthDate: row.birthDate,
+      lastAttendedSchool: row.lastAttendedSchool,
+      status: row.status,
+      archivedAt: row.archivedAt,
+      archivedByUid: row.archivedByUid,
+      createdAt: row.createdAt,
+      createdByUid: row.createdByUid,
+      updatedAt: row.updatedAt,
+      updatedByUid: row.updatedByUid,
+    );

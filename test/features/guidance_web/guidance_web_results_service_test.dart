@@ -12,6 +12,7 @@ class _FakeSyncClient implements SyncClient {
   final Map<String, CloudScansRead> scansByBatchId = {};
   CloudAnswerKeyRead answerKeyToReturn = const CloudAnswerKeyRead.absent();
   CloudImageRead imageToReturn = const CloudImageRead.absent();
+  CloudExamineesRead examineesToReturn = CloudExamineesRead.found(const []);
   final List<String> calls = [];
 
   Never _no(String label) {
@@ -64,7 +65,10 @@ class _FakeSyncClient implements SyncClient {
   @override
   Future<SyncOutcome> deleteStoragePrefix(String batchId) => _no('deleteStoragePrefix');
   @override
-  Future<CloudExamineesRead> readCloudExaminees() => _no('readCloudExaminees');
+  Future<CloudExamineesRead> readCloudExaminees() async {
+    calls.add('readCloudExaminees');
+    return examineesToReturn;
+  }
   @override
   Future<CloudExamineeWrite> createExamineeFromScan({
     required String batchId,
@@ -150,6 +154,7 @@ CloudScanRow _scanRow({
   String? firstName,
   String? lastName,
   String? examineeNumber,
+  String? examineeId,
 }) =>
     CloudScanRow(
       id: id,
@@ -167,6 +172,27 @@ CloudScanRow _scanRow({
       firstName: firstName,
       lastName: lastName,
       examineeNumber: examineeNumber,
+      examineeId: examineeId,
+    );
+
+CloudExamineeRow _examineeRow({
+  required String id,
+  required String temporaryId,
+  required String first,
+  String? middle,
+  required String last,
+}) =>
+    CloudExamineeRow(
+      id: id,
+      temporaryExamineeId: temporaryId,
+      firstName: first,
+      middleName: middle,
+      lastName: last,
+      status: 'active',
+      createdAt: DateTime.utc(2026, 1, 1),
+      createdByUid: 'uid',
+      updatedAt: DateTime.utc(2026, 1, 1),
+      updatedByUid: 'uid',
     );
 
 void main() {
@@ -346,4 +372,76 @@ void main() {
 
     expect(client.calls, ['readCloudBatches', 'readCloudScans:b1']);
   });
+  group('loadResultsForBatch -- resolves each scan\'s examinee through scans.examinee_id', () {
+    final batch = mapCloudBatch(_batchRow());
+
+    test('a linked scan gets the canonical examinee (link-to-existing and confirm-and-create alike); '
+        'the scan itself is not modified', () async {
+      client.scansByBatchId['b1'] = CloudScansRead.found([
+        // The verified data shape: scan-level names NULL, generated scan number.
+        _scanRow(id: 's_linked', batchId: 'b1', examineeNumber: 'EX-1790006562335-3', examineeId: 'e1'),
+        _scanRow(id: 's_created', batchId: 'b1', examineeNumber: 'EX-1790006562335-4', examineeId: 'e2'),
+        _scanRow(id: 's_unlinked', batchId: 'b1', firstName: 'Ana', lastName: 'Lim', examineeNumber: 'OLD-7'),
+      ]);
+      client.examineesToReturn = CloudExamineesRead.found([
+        _examineeRow(id: 'e1', temporaryId: 'EX-000004', first: 'Merch', middle: 'Valdez', last: 'Andulana'),
+        _examineeRow(id: 'e2', temporaryId: 'EX-000005', first: 'Maria', last: 'Santos'),
+        _examineeRow(id: 'e_other', temporaryId: 'EX-000009', first: 'Nobody', last: 'Linked'),
+      ]);
+
+      final results = await service.loadResultsForBatch(batch);
+
+      expect(results.scans, hasLength(3));
+      expect(results.linkedExamineeByScanId.keys, unorderedEquals(['s_linked', 's_created']));
+      final linked = results.linkedExamineeByScanId['s_linked']!;
+      expect(linked.temporaryExamineeId, 'EX-000004');
+      expect(linked.firstName, 'Merch');
+      expect(linked.middleName, 'Valdez');
+      expect(linked.lastName, 'Andulana');
+      expect(results.linkedExamineeByScanId['s_created']!.displayName, 'Santos, Maria');
+      // The unlinked / legacy scan simply has no entry and keeps its own tag.
+      expect(results.linkedExamineeByScanId.containsKey('s_unlinked'), isFalse);
+      // Reference only: the scan's own tag is exactly what the row held.
+      final linkedScan = results.scans.firstWhere((s) => s.id == 's_linked');
+      expect(linkedScan.examinee?.examineeNumber, 'EX-1790006562335-3');
+      expect(linkedScan.examinee?.firstName, '');
+    });
+
+    test('a batch with no linked scans never reads the examinees table', () async {
+      client.scansByBatchId['b1'] = CloudScansRead.found([
+        _scanRow(id: 's1', batchId: 'b1', firstName: 'Ana', lastName: 'Lim', examineeNumber: 'OLD-7'),
+      ]);
+
+      final results = await service.loadResultsForBatch(batch);
+
+      expect(results.linkedExamineeByScanId, isEmpty);
+      expect(client.calls, isNot(contains('readCloudExaminees')));
+    });
+
+    test('a scan pointing at an examinee that cannot be found falls back to its own tag', () async {
+      client.scansByBatchId['b1'] = CloudScansRead.found([
+        _scanRow(id: 's1', batchId: 'b1', examineeNumber: 'EX-1', examineeId: 'e_gone'),
+      ]);
+      client.examineesToReturn = CloudExamineesRead.found([
+        _examineeRow(id: 'e1', temporaryId: 'EX-000004', first: 'Merch', last: 'Andulana'),
+      ]);
+
+      final results = await service.loadResultsForBatch(batch);
+
+      expect(results.linkedExamineeByScanId, isEmpty);
+    });
+
+    test('a failed examinee lookup fails loudly instead of silently showing linked scans as Unnamed', () async {
+      client.scansByBatchId['b1'] = CloudScansRead.found([
+        _scanRow(id: 's1', batchId: 'b1', examineeNumber: 'EX-1', examineeId: 'e1'),
+      ]);
+      client.examineesToReturn = const CloudExamineesRead.failed(SyncOutcome.transient('network'));
+
+      await expectLater(
+        service.loadResultsForBatch(batch),
+        throwsA(isA<GuidanceWebResultsException>().having((e) => e.message, 'message', contains('Supabase'))),
+      );
+    });
+  });
+
 }

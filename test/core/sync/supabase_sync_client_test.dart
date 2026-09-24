@@ -331,6 +331,27 @@ void main() {
     });
   });
 
+  group('parseCloudScanRow -- scans.examinee_id (the Results page relies on it)', () {
+    test('reads the linked examinee id from the row', () {
+      final row = SupabaseSyncClient.parseCloudScanRow({
+        'id': 's1',
+        'examinee_id': 'fa445fcc-a59e-4b58-86ae-0ddac56138ac',
+        'first_name': null,
+        'last_name': null,
+        'examinee_number': 'EX-1790006562335-3',
+      });
+      expect(row.examineeId, 'fa445fcc-a59e-4b58-86ae-0ddac56138ac');
+      // The scan's own tag columns are read separately and untouched.
+      expect(row.examineeNumber, 'EX-1790006562335-3');
+      expect(row.firstName, isNull);
+    });
+
+    test('an unlinked / legacy row (null or absent examinee_id) has no examinee id', () {
+      expect(SupabaseSyncClient.parseCloudScanRow({'id': 's1', 'examinee_id': null}).examineeId, isNull);
+      expect(SupabaseSyncClient.parseCloudScanRow({'id': 's1'}).examineeId, isNull);
+    });
+  });
+
   group('SyncOutcome', () {
     test('value equality holds for identical kind + code', () {
       expect(const SyncOutcome.permanent('42501'),
