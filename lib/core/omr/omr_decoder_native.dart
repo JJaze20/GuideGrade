@@ -540,7 +540,7 @@ class OmrDecoder {
   /// path (this runs on every `locateCorners`/`decode` call, not just the
   /// live preview). Flip back to `true` only if fiducial detection needs
   /// this level of diagnosis again.
-  static const bool _kFiducialDebug = true;
+  static const bool _kFiducialDebug = false;
 
   /// TEMPORARY. Synchronous stdout (not debugPrint, whose throttle can drop
   /// the tail when the decode isolate tears down) — every line reaches
@@ -568,7 +568,7 @@ class OmrDecoder {
   /// per item and a full sheet is 60+ items. Purely observational — no
   /// threshold or classification decision reads these numbers. Remove once
   /// the combined score is confirmed/tuned.
-  static const bool _kBubbleDebug = true;
+  static const bool _kBubbleDebug = false;
   static const String _kBubbleDebugExamCode = 'QTM';
 
   // ignore: avoid_print
