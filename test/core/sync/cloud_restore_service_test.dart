@@ -78,7 +78,64 @@ class _FakeCloudSyncClient implements SyncClient {
   @override
   Future<SyncOutcome> deleteBatch(String batchId) => _no();
   @override
+  Future<SyncOutcome> deleteScan(String batchId, String scanId) => _no();
+  @override
   Future<SyncOutcome> deleteStoragePrefix(String batchId) => _no();
+  @override
+  Future<CloudExamineesRead> readCloudExaminees() => _no();
+  @override
+  Future<CloudExamineeWrite> createExamineeFromScan({
+    required String batchId,
+    required String scanId,
+    required String firstName,
+    String? middleName,
+    required String lastName,
+  }) =>
+      _no();
+  @override
+  Future<CloudExamineeWrite> updateCloudExaminee({
+    required String id,
+    required String firstName,
+    String? middleName,
+    required String lastName,
+  }) =>
+      _no();
+  @override
+  Future<CloudExamineeWrite> setExamineeArchived(String id, bool archived) => _no();
+  @override
+  Future<SyncOutcome> linkScanToExaminee({
+    required String batchId,
+    required String scanId,
+    required String? examineeId,
+  }) =>
+      _no();
+  @override
+  Future<SyncOutcome> unlinkScanFromExaminee({
+    required String batchId,
+    required String scanId,
+    required String examineeId,
+  }) =>
+      _no();
+
+  @override
+  Future<CloudBatchArchivesRead> readBatchArchives() =>
+      _no();
+
+  @override
+  Future<SyncOutcome> archiveBatch({
+    required String batchId,
+    String? reason,
+  }) =>
+      _no();
+
+  @override
+  Future<CloudScanCountsRead> readScanCounts(List<String> batchIds) =>
+      _no();
+
+  @override
+  Future<CloudScansRead> readCloudScansForExaminee(String examineeId) => _no();
+  @override
+  Future<CloudScansRead> readUnlinkedScans() => _no();
 }
 
 CloudBatchRow _cloudBatchRow({

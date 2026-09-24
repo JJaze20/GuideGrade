@@ -33,6 +33,7 @@ CloudScanRow _scanRow({
   String? resultStatus,
   String? firstName,
   String? lastName,
+  String? middleName,
   String? examineeNumber,
   String? rectifiedImagePath,
 }) =>
@@ -51,6 +52,7 @@ CloudScanRow _scanRow({
       processedByName: resultStatus == null ? null : 'Officer',
       firstName: firstName,
       lastName: lastName,
+      middleName: middleName,
       examineeNumber: examineeNumber,
       rectifiedImagePath: rectifiedImagePath,
     );
@@ -89,7 +91,7 @@ void main() {
       expect(scan.rectifiedImageFileName, isNull);
     });
 
-    test('name crops are always null; middleName is always blank', () {
+    test('name crops are always null; middleName defaults to blank when the cloud row has none', () {
       final scan = mapCloudScan(_scanRow(
         firstName: 'Juan',
         lastName: 'Dela Cruz',
@@ -101,9 +103,61 @@ void main() {
       expect(scan.examinee!.middleName, '');
     });
 
-    test('examinee trio is all-or-nothing: a partial trio maps to null, never invented', () {
-      final scan = mapCloudScan(_scanRow(firstName: 'Juan', lastName: null, examineeNumber: 'X-1'));
+    test('APPROVED FIX — TEST 3 (cloud read): a complete tag restores middleName from '
+        'the cloud row, not just the trio', () {
+      final scan = mapCloudScan(_scanRow(
+        firstName: 'John',
+        middleName: 'Michael',
+        lastName: 'Doe',
+        examineeNumber: '12345',
+      ));
+      expect(scan.examinee, isNotNull);
+      expect(scan.examinee!.firstName, 'John');
+      expect(scan.examinee!.middleName, 'Michael');
+      expect(scan.examinee!.lastName, 'Doe');
+      expect(scan.examinee!.examineeNumber, '12345');
+    });
+
+    test('a blank examinee_number means no cloud identity at all -> null examinee,'
+        ' even if names are present', () {
+      final scan = mapCloudScan(_scanRow(
+        firstName: 'Juan',
+        lastName: 'Dela Cruz',
+        middleName: 'Santos',
+        examineeNumber: '', // blank number -> no examinee record was ever saved
+      ));
       expect(scan.examinee, isNull);
+    });
+
+    test('AUTOMATIC ID FEATURE — a generated examinee_number alone (no OCR name at'
+        ' all) reconstructs an examinee with independently blank names, never null', () {
+      final scan = mapCloudScan(_scanRow(examineeNumber: 'EX-1700000000000-0'));
+      expect(scan.examinee, isNotNull);
+      expect(scan.examinee!.examineeNumber, 'EX-1700000000000-0');
+      expect(scan.examinee!.firstName, '');
+      expect(scan.examinee!.lastName, '');
+      expect(scan.examinee!.middleName, '');
+    });
+
+    test('AUTOMATIC ID FEATURE — a generated number with only a partial OCR read'
+        ' (last name only): last name restored, first/middle independently blank', () {
+      final scan = mapCloudScan(_scanRow(
+        lastName: 'Dela Cruz',
+        examineeNumber: 'EX-1700000000000-1',
+      ));
+      expect(scan.examinee, isNotNull);
+      expect(scan.examinee!.lastName, 'Dela Cruz');
+      expect(scan.examinee!.firstName, '');
+      expect(scan.examinee!.examineeNumber, 'EX-1700000000000-1');
+    });
+
+    test('a number with only a first name (no last name) still reconstructs the'
+        ' examinee -- number alone is now the identity signal, not the trio', () {
+      final scan = mapCloudScan(_scanRow(firstName: 'Juan', lastName: null, examineeNumber: 'X-1'));
+      expect(scan.examinee, isNotNull);
+      expect(scan.examinee!.firstName, 'Juan');
+      expect(scan.examinee!.lastName, '');
+      expect(scan.examinee!.examineeNumber, 'X-1');
     });
 
     test('an ungraded row (no resultStatus) has no result', () {

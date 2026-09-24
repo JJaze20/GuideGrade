@@ -1,0 +1,168 @@
+// Exercises the REAL SupabaseSyncClient Web Archive methods against a fake
+// HTTP layer, asserting the exact PostgREST requests: the archive only ever
+// INSERTs into `batch_archives` -- it never touches `batches` or `scans`.
+import 'dart:convert';
+
+import 'package:flutter_test/flutter_test.dart';
+import 'package:guidegrade/core/services/local_batch_repository.dart';
+import 'package:guidegrade/core/services/local_storage_service.dart';
+import 'package:guidegrade/core/sync/supabase_sync_client.dart';
+import 'package:guidegrade/core/sync/sync_client.dart';
+import 'package:guidegrade/core/sync/sync_queue.dart' show SyncState;
+// ignore: depend_on_referenced_packages
+import 'package:http/http.dart' as http;
+import 'package:supabase_flutter/supabase_flutter.dart';
+
+class _Recorded {
+  _Recorded(this.method, this.url, this.body);
+  final String method;
+  final Uri url;
+  final String body;
+}
+
+class _FakeHttp extends http.BaseClient {
+  int status = 200;
+  String responseBody = '[]';
+  Map<String, String> extraHeaders = const {};
+  final List<_Recorded> requests = [];
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    requests.add(_Recorded(request.method, request.url, request is http.Request ? request.body : ''));
+    return http.StreamedResponse(
+      Stream.value(utf8.encode(responseBody)),
+      status,
+      headers: {'content-type': 'application/json; charset=utf-8', ...extraHeaders},
+      request: request,
+    );
+  }
+}
+
+class _Identity implements SyncIdentity {
+  _Identity({this.uid = 'firebase-uid-1', this.displayName = 'Council Member'});
+  @override
+  final String? uid;
+  @override
+  final String? displayName;
+  @override
+  Future<bool> refreshToken() async => false;
+}
+
+SyncClient _client(_FakeHttp fake, {SyncIdentity? identity}) => SupabaseSyncClient(
+      batches: LocalBatchRepository(),
+      localStorage: LocalStorageService(),
+      identity: identity ?? _Identity(),
+      getSyncState: () => SyncState(),
+      client: SupabaseClient('https://example.supabase.co', 'anon-key', httpClient: fake),
+    );
+
+void main() {
+  group('archiveBatch', () {
+    test('INSERTs only into batch_archives with the actor and reason -- never touches batches or scans',
+        () async {
+      final fake = _FakeHttp()..status = 201;
+      final outcome = await _client(fake).archiveBatch(batchId: 'b1', reason: '  Batch processed  ');
+
+      expect(outcome.isSuccess, isTrue);
+      expect(fake.requests, hasLength(1));
+      final r = fake.requests.single;
+      expect(r.method, 'POST');
+      expect(r.url.path, '/rest/v1/batch_archives');
+      expect(jsonDecode(r.body), {
+        'batch_id': 'b1',
+        'archived_by_uid': 'firebase-uid-1',
+        'archived_by_name': 'Council Member',
+        'reason': 'Batch processed',
+      });
+      // No archived_at (server default) and nothing aimed at batches/scans.
+      expect((jsonDecode(r.body) as Map).containsKey('archived_at'), isFalse);
+      expect(fake.requests.where((q) => q.url.path.contains('/batches')), isEmpty);
+      expect(fake.requests.where((q) => q.url.path.contains('/scans')), isEmpty);
+    });
+
+    test('a blank reason and blank name are sent as null', () async {
+      final fake = _FakeHttp()..status = 201;
+      await _client(fake, identity: _Identity(displayName: '  ')).archiveBatch(batchId: 'b1', reason: '   ');
+      final body = jsonDecode(fake.requests.single.body) as Map;
+      expect(body['reason'], isNull);
+      expect(body['archived_by_name'], isNull);
+    });
+
+    test('a duplicate archive (23505) is a permanent 23505 outcome', () async {
+      final fake = _FakeHttp()
+        ..status = 409
+        ..responseBody = jsonEncode({'code': '23505', 'message': 'duplicate key', 'details': null, 'hint': null});
+      final outcome = await _client(fake).archiveBatch(batchId: 'b1');
+      expect(outcome.isSuccess, isFalse);
+      expect(outcome.isPermanent, isTrue);
+      expect(outcome.code, '23505');
+    });
+
+    test('an RLS rejection (e.g. batch not Completed) is a permanent 42501 outcome', () async {
+      final fake = _FakeHttp()
+        ..status = 403
+        ..responseBody = jsonEncode({'code': '42501', 'message': 'new row violates row-level security policy'});
+      final outcome = await _client(fake).archiveBatch(batchId: 'b1');
+      expect(outcome.isPermanent, isTrue);
+      expect(outcome.code, '42501');
+    });
+
+    test('no signed-in uid fails without sending any request', () async {
+      final fake = _FakeHttp();
+      final outcome = await _client(fake, identity: _Identity(uid: null)).archiveBatch(batchId: 'b1');
+      expect(outcome.isSuccess, isFalse);
+      expect(fake.requests, isEmpty);
+    });
+
+    test('the only write method the archive uses is POST -- never PATCH/DELETE (no restore, no batch update)',
+        () async {
+      final fake = _FakeHttp()..status = 201;
+      await _client(fake).archiveBatch(batchId: 'b1');
+      expect(fake.requests.map((r) => r.method), everyElement('POST'));
+    });
+  });
+
+  group('readBatchArchives', () {
+    test('GETs batch_archives and parses the rows', () async {
+      final fake = _FakeHttp()
+        ..responseBody = jsonEncode([
+          {
+            'batch_id': 'b1',
+            'archived_at': '2026-03-01T08:00:00+00:00',
+            'archived_by_uid': 'u1',
+            'archived_by_name': 'Council Member',
+            'reason': 'done',
+          }
+        ]);
+      final read = await _client(fake).readBatchArchives();
+      expect(read.isSuccess, isTrue);
+      expect(read.archives.single.batchId, 'b1');
+      expect(read.archives.single.archivedByName, 'Council Member');
+      expect(read.archives.single.reason, 'done');
+      expect(fake.requests.single.method, 'GET');
+      expect(fake.requests.single.url.path, '/rest/v1/batch_archives');
+    });
+
+    test('a failure is a sanitized failed read, never a thrown error', () async {
+      final fake = _FakeHttp()
+        ..status = 404
+        ..responseBody = jsonEncode({'code': 'PGRST205', 'message': 'table missing'});
+      final read = await _client(fake).readBatchArchives();
+      expect(read.isSuccess, isFalse);
+      expect(read.archives, isEmpty);
+    });
+  });
+
+  group('readScanCounts', () {
+    test('reads an exact count per batch from the scans table (read-only)', () async {
+      final fake = _FakeHttp()
+        ..responseBody = '[{"id":"s1"}]'
+        ..extraHeaders = {'content-range': '0-0/7'};
+      final read = await _client(fake).readScanCounts(['b1']);
+      expect(read.isSuccess, isTrue);
+      expect(read.counts['b1'], 7);
+      expect(fake.requests.single.method, 'GET');
+      expect(fake.requests.single.url.queryParameters['batch_id'], 'eq.b1');
+    });
+  });
+}

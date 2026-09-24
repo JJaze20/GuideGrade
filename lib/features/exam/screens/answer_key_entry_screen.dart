@@ -69,6 +69,9 @@ class _AnswerKeyEntryScreenState extends State<AnswerKeyEntryScreen> {
         foregroundColor: AppColors.textDark,
         elevation: 0.5,
         title: Text('Answer Key — ${appState.activeExamCode}', style: AppTextStyles.heading(size: 13)),
+        actions: [
+          if (appState.syncManager != null) _buildLoadFromCloudButton(appState),
+        ],
       ),
       body: SafeArea(
         child: Column(
@@ -202,6 +205,62 @@ class _AnswerKeyEntryScreenState extends State<AnswerKeyEntryScreen> {
     );
   }
 
+  /// Fixed app-bar button (not draggable): a white circle with a soft shadow
+  /// holding the cloud-key icon. Lets a device with no local key — or one
+  /// that just wants the shared key — pull the cloud answer key directly.
+  Widget _buildLoadFromCloudButton(AppState appState) {
+    final enabled = appState.isOnline && !_cloudBusy;
+    return Padding(
+      padding: const EdgeInsets.only(right: 12),
+      child: Center(
+        child: Tooltip(
+          message: appState.isOnline
+              ? 'Load answer key from cloud'
+              : 'Offline — cloud answer key unavailable',
+          child: Material(
+            key: const Key('loadCloudAnswerKeyButton'),
+            color: Colors.white,
+            shape: const CircleBorder(),
+            elevation: enabled ? 3 : 0,
+            shadowColor: Colors.black54,
+            child: InkWell(
+              customBorder: const CircleBorder(),
+              onTap: enabled ? () => _onLoadFromCloud(appState) : null,
+              child: Padding(
+                padding: const EdgeInsets.all(8),
+                child: Opacity(
+                  opacity: enabled ? 1 : 0.35,
+                  child: ColorFiltered(
+                    colorFilter: enabled
+                        ? const ColorFilter.mode(Colors.transparent, BlendMode.dst)
+                        : const ColorFilter.mode(Colors.grey, BlendMode.saturation),
+                    child: Image.asset(
+                      'assets/images/cloud key.png',
+                      width: 24,
+                      height: 24,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Button entry point: reads the cloud key, then reuses the same
+  /// confirm-and-adopt path as "Keep cloud" (which also covers overwriting
+  /// any local selections after an explicit confirmation).
+  Future<void> _onLoadFromCloud(AppState appState) async {
+    final cloud = await _readCloudOrShowError(
+      appState,
+      absentMessage: 'No cloud answer key for ${appState.activeExamCode} yet.',
+    );
+    if (cloud == null || !mounted) return;
+    await _confirmAndKeepCloud(appState, cloud);
+  }
+
   Widget _buildSyncChip(String label, AnswerKeySyncStatus status) {
     late final Color bg;
     late final Color fg;
@@ -237,7 +296,10 @@ class _AnswerKeyEntryScreenState extends State<AnswerKeyEntryScreen> {
   /// [CloudAnswerKeyRead] only when a row was actually found; otherwise
   /// shows a sanitized message and returns null, having touched neither the
   /// local key nor the parked conflict job.
-  Future<CloudAnswerKeyRead?> _readCloudOrShowError(AppState appState) async {
+  Future<CloudAnswerKeyRead?> _readCloudOrShowError(
+    AppState appState, {
+    String absentMessage = 'The cloud answer key is no longer available.',
+  }) async {
     if (_cloudBusy) return null;
     setState(() => _cloudBusy = true);
 
@@ -257,7 +319,7 @@ class _AnswerKeyEntryScreenState extends State<AnswerKeyEntryScreen> {
     if (!read.exists) {
       _snack(read.error != null
           ? 'Could not load the cloud answer key. Check your connection and try again.'
-          : 'The cloud answer key is no longer available.');
+          : absentMessage);
       return null;
     }
     return read;

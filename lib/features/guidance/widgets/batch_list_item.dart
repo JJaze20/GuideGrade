@@ -4,6 +4,7 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
 import '../../../models/local_batch.dart';
+import '../../../shared/widgets/needs_review_badge.dart';
 
 /// Reusable widget for displaying a single local batch in the list.
 class BatchListItem extends StatelessWidget {
@@ -79,6 +80,7 @@ class BatchListItem extends StatelessWidget {
                 ),
                 if (batch.isFull) _buildInfoChip('FULL', emphasized: true),
                 if (batch.resultsAvailable) _buildInfoChip('Results ✓'),
+                if (batch.needsReview) NeedsReviewChip(count: batch.needsReviewCount),
               ],
             ),
           ],

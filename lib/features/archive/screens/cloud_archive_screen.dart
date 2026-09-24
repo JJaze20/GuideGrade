@@ -8,6 +8,7 @@ import '../../../core/state/app_state.dart';
 import '../../../core/sync/cloud_restore_service.dart';
 import '../../../models/local_batch.dart';
 import '../../../shared/widgets/app_bottom_nav.dart';
+import '../../../shared/widgets/needs_review_badge.dart';
 import '../../../shared/widgets/app_header_bar.dart';
 
 /// Archive — every locally saved batch, organized around the batch rather
@@ -207,6 +208,10 @@ class _CloudArchiveScreenState extends State<CloudArchiveScreen> {
                   _statusChip(batch.status),
                 ],
               ),
+              if (batch.needsReview) ...[
+                const SizedBox(height: 8),
+                NeedsReviewChip(count: batch.needsReviewCount),
+              ],
               const SizedBox(height: 10),
               _line(FontAwesomeIcons.fileLines, 'Exam Type: ${batch.examTitle} (${batch.examCode})'),
               const SizedBox(height: 4),

@@ -7,6 +7,7 @@ import '../../../core/routes/app_routes.dart';
 import '../../../core/state/app_state.dart';
 import '../../../models/local_batch.dart';
 import '../../../shared/widgets/app_bottom_nav.dart';
+import '../../../shared/widgets/needs_review_badge.dart';
 
 /// Staff Home / Dashboard. Shows the welcome card, the Exam/Batch
 /// management entry points, and the batch registry — every local batch,
@@ -45,9 +46,12 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
 
   void _openBatch(LocalBatch batch) {
     final appState = AppStateScope.of(context);
-    if (batch.canScan) {
+    if (batch.canScan && !batch.isArchived) {
       appState.setActiveExamCode(batch.examCode);
-      Navigator.of(context).pushNamed(AppRoutes.examSetup).then((_) => _load());
+      // Pass the pressed batch so Select Batch opens with it already chosen.
+      Navigator.of(context)
+          .pushNamed(AppRoutes.examSetup, arguments: batch.id)
+          .then((_) => _load());
     } else {
       Navigator.of(context)
           .pushNamed(AppRoutes.batchArchiveDetail, arguments: batch.id)
@@ -267,6 +271,10 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
                     '${batch.resultsAvailable ? ' · results ready' : ''}',
                     style: AppTextStyles.body(size: 9, color: AppColors.textGray),
                   ),
+                  if (batch.needsReview) ...[
+                    const SizedBox(height: 6),
+                    NeedsReviewChip(count: batch.needsReviewCount),
+                  ],
                 ],
               ),
             ),

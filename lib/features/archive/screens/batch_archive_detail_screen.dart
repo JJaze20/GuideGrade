@@ -16,7 +16,9 @@ import '../../../core/sync/sync_manager.dart';
 import '../../../models/local_batch.dart';
 import '../../../shared/widgets/examinee_dialog.dart';
 import '../../../shared/widgets/name_crop_strip.dart';
+import '../../../shared/widgets/needs_review_badge.dart';
 import '../../exam/screens/scanned_image_viewer_screen.dart';
+import '../../exam/widgets/scan_editing_factory.dart';
 import '../../exam/widgets/scan_result_summary.dart';
 
 /// Opens one archived batch: its info, exam type, every scanned image it
@@ -35,6 +37,7 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
   bool _didInit = false;
   bool _loading = true;
   bool _syncing = false;
+  bool _deleting = false;
   LocalBatch? _batch;
 
   @override
@@ -114,6 +117,12 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
         _buildHeader(batch),
         const SizedBox(height: 14),
         _buildSummary(batch),
+        if (batch.needsReview) ...[
+          const SizedBox(height: 10),
+          NeedsReviewBanner(
+            sheetLabels: [for (final s in batch.scansNeedingReview) _scanLabel(batch, s)],
+          ),
+        ],
         if (batch.scans.isNotEmpty && batch.untaggedScanCount > 0) ...[
           const SizedBox(height: 8),
           Row(
@@ -519,9 +528,56 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
     await _load();
   }
 
+  /// Deletes one scanned sheet after a confirmation that names it. Only that
+  /// sheet (and its stored images) goes; the header counts, average, review
+  /// banner and the batch's Archived status are all derived from what's left.
+  /// A failure keeps the sheet on screen and says so — success is only shown
+  /// once the repository has actually removed it.
+  Future<void> _deleteSheet(LocalBatch batch, LocalScan scan, int index) async {
+    final label = _scanLabel(batch, scan);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete This Sheet?'),
+        content: Text(
+          'Sheet ${index + 1}${label == 'Sheet ${index + 1}' ? '' : ' — $label'} will be permanently '
+          'deleted from ${batch.batchCode}, together with its photo, answers and score. '
+          'The rest of the batch is not affected. This can\'t be undone.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: TextButton.styleFrom(foregroundColor: const Color(0xFF991B1B)),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    final repo = AppStateScope.of(context).batchRepository;
+    setState(() => _deleting = true);
+    try {
+      final updated = await repo.deleteScan(batchId: batch.id, scanId: scan.id);
+      if (!mounted) return;
+      setState(() => _batch = updated);
+      messenger.showSnackBar(SnackBar(content: Text('Sheet ${index + 1} deleted.')));
+    } catch (_) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Could not delete this sheet. Nothing was changed — please try again.')),
+      );
+      await _load(); // show whatever is actually on disk
+    } finally {
+      if (mounted) setState(() => _deleting = false);
+    }
+  }
+
   Widget _buildScanCard(LocalBatch batch, int index, AppState appState) {
     final scan = batch.scans[index];
-    final scored = scoreOmrResult(scan.decoded, appState.answerKeys[batch.examCode]);
+    final scored = scoreOmrResult(scan.effectiveDecoded, appState.answerKeys[batch.examCode]);
     final result = scan.result;
     final examinee = scan.examinee;
     final tagged = examinee != null && !examinee.isEmpty;
@@ -561,6 +617,10 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
+                if (scan.needsReview) ...[
+                  const SizedBox(height: 4),
+                  NeedsReviewChip(count: scan.unresolvedFlaggedItems.length),
+                ],
                 const SizedBox(height: 4),
                 Text(
                   tagged
@@ -613,6 +673,19 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
                       style: OutlinedButton.styleFrom(
                         foregroundColor: AppColors.darkNavy,
                         side: const BorderSide(color: Color(0xFFCBD5E1)),
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                    ),
+                    OutlinedButton.icon(
+                      key: ValueKey('delete-scan-${scan.id}'),
+                      onPressed: _deleting ? null : () => _deleteSheet(batch, scan, index),
+                      icon: const FaIcon(FontAwesomeIcons.trashCan, size: 10, color: Color(0xFF991B1B)),
+                      label: const Text('Delete', style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w700)),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFF991B1B),
+                        side: const BorderSide(color: Color(0xFFFCA5A5)),
                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                         minimumSize: Size.zero,
                         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -686,7 +759,7 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
       rectifiedBytes = await repo.resolveScanRectifiedImage(batch.id, scan);
     }
     if (!mounted) return;
-    Navigator.of(context).push(
+    await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => ScannedImageViewerScreen(
           imageBytes: bytes,
@@ -695,10 +768,12 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
           rectifiedImageBytes: rectifiedBytes,
           template: omrTemplates[scored.examCode],
           scanTemplateVersion: scored.templateVersion,
+          editing: scanEditingFor(appState, batch.id, scan),
           meshInteriorMeasuredFrac: scored.meshInteriorMeasuredFrac,
         ),
       ),
     );
+    if (mounted) await _load(); // pick up any corrections made in the viewer
   }
 
   static const _months = [

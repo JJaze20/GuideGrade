@@ -12,6 +12,7 @@ import '../../../models/omr_scan_result.dart';
 import '../../../shared/widgets/examinee_dialog.dart';
 import '../../../shared/widgets/name_crop_strip.dart';
 import '../../../shared/widgets/primary_button.dart';
+import '../widgets/scan_editing_factory.dart';
 import '../widgets/scan_result_summary.dart';
 import 'omr_debug_viewer_screen.dart';
 import 'scanned_image_viewer_screen.dart';
@@ -34,7 +35,6 @@ class ExamResultsScreen extends StatefulWidget {
 
 class _ExamResultsScreenState extends State<ExamResultsScreen> {
   bool _persistTriggered = false;
-  bool _completionPrompted = false;
 
   @override
   void didChangeDependencies() {
@@ -48,41 +48,6 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
     if (!mounted) return;
     final appState = AppStateScope.of(context);
     await appState.persistCapturedSessionToBatch();
-    if (!mounted) return;
-    await _maybePromptBatchCompletion(appState);
-  }
-
-  /// After the session is saved, if the batch has now reached its expected
-  /// sheet count, offer to mark it Completed — never flips it automatically,
-  /// since expectedCount is only a staff estimate.
-  Future<void> _maybePromptBatchCompletion(AppState appState) async {
-    if (_completionPrompted) return;
-    final batch = appState.scanBatch;
-    if (batch == null || !appState.sessionPersistedToBatch) return;
-    if (!(batch.isActive && batch.expectedCount > 0 && batch.scanCount >= batch.expectedCount)) {
-      return;
-    }
-    _completionPrompted = true;
-    final untagged = batch.untaggedScanCount;
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Batch Complete?'),
-        content: Text(
-          'All expected sheets (${batch.expectedCount}) have been scanned for '
-          '${batch.batchCode}. Mark this batch as Completed?'
-          '${untagged > 0 ? '\n\nNote: $untagged sheet${untagged == 1 ? '' : 's'} '
-              'still ${untagged == 1 ? 'has' : 'have'} no student assigned.' : ''}',
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(dialogContext).pop(false), child: const Text('Not Yet')),
-          TextButton(onPressed: () => Navigator.of(dialogContext).pop(true), child: const Text('Mark Completed')),
-        ],
-      ),
-    );
-    if (confirm == true) {
-      await appState.batchRepository.updateBatch(batch.copyWith(status: 'Completed'));
-    }
   }
 
   @override
@@ -202,8 +167,6 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
       padding: const EdgeInsets.all(16),
       itemCount: results.length,
       itemBuilder: (context, sheetIndex) {
-        final result = results[sheetIndex];
-        final scored = scoreOmrResult(result, appState.answerKeys[result.examCode]);
         final imagePath = sheetIndex < appState.capturedPages.length
             ? appState.capturedPages[sheetIndex].path
             : null;
@@ -221,6 +184,10 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
                 scanIndex < batch.scans.length)
             ? batch.scans[scanIndex]
             : null;
+        // What the sheet reads as NOW: the detected answers with any manual
+        // corrections applied, once the scan is saved.
+        final result = results[sheetIndex];
+        final scored = scoreOmrResult(scan?.effectiveDecoded ?? result, appState.answerKeys[result.examCode]);
         return _buildSheetCard(context, appState, sheetIndex, scored, imagePath, scan);
       },
     );
@@ -250,9 +217,47 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
       batchId: batch.id,
       scan: scan,
       repository: appState.batchRepository,
+      onReviewAnswers: scan == null ? null : () => _openViewer(context, appState, sheetIndex, scan),
     );
     if (res == null) return;
     await appState.tagSessionScanExaminee(sheetIndex, res.cleared ? null : res.info);
+  }
+
+  /// Opens View Scan for a sheet. When the sheet has been saved to the batch
+  /// ([scan] non-null) answers can be corrected from there.
+  Future<void> _openViewer(
+    BuildContext context,
+    AppState appState,
+    int sheetIndex,
+    LocalScan? scan,
+  ) {
+    final results = appState.scannedResults;
+    final result = results[sheetIndex];
+    final imagePath = sheetIndex < appState.capturedPages.length ? appState.capturedPages[sheetIndex].path : null;
+    // The latest saved copy, so corrections made earlier are already in it.
+    final batch = appState.scanBatch;
+    final scanIndex = appState.sessionScanOffset + sheetIndex;
+    final fresh = (batch != null && scan != null && scanIndex < batch.scans.length) ? batch.scans[scanIndex] : scan;
+    final scored = scoreOmrResult(fresh?.effectiveDecoded ?? result, appState.answerKeys[result.examCode]);
+    final examinee = fresh?.examinee;
+    final tagged = examinee != null && !examinee.isEmpty;
+    final title = tagged ? 'Sheet ${sheetIndex + 1} — ${examinee.displayName}' : 'Sheet ${sheetIndex + 1}';
+    return Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ScannedImageViewerScreen(
+          imagePath: imagePath,
+          title: title,
+          scoredItems: scored.items,
+          rectifiedImagePath:
+              sheetIndex < appState.rectifiedImagePaths.length ? appState.rectifiedImagePaths[sheetIndex] : null,
+          template: omrTemplates[scored.examCode],
+          scanTemplateVersion: scored.templateVersion,
+          meshInteriorMeasuredFrac: scored.meshInteriorMeasuredFrac,
+          geometryWarning: scored.geometryWarning,
+          editing: (fresh != null && batch != null) ? scanEditingFor(appState, batch.id, fresh) : null,
+        ),
+      ),
+    );
   }
 
   Widget _buildSheetCard(
@@ -268,7 +273,6 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
     final examinee = scan?.examinee;
     final tagged = examinee != null && !examinee.isEmpty;
     final cardTitle = tagged ? examinee.displayName : 'Unnamed examinee';
-    final viewerTitle = tagged ? 'Sheet ${sheetIndex + 1} — ${examinee.displayName}' : 'Sheet ${sheetIndex + 1}';
 
     final bySection = <String, List<ScoredItem>>{};
     for (final item in scored.items) {
@@ -328,22 +332,7 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
             Align(
               alignment: Alignment.centerLeft,
               child: TextButton.icon(
-                onPressed: () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => ScannedImageViewerScreen(
-                      imagePath: imagePath,
-                      title: viewerTitle,
-                      scoredItems: scored.items,
-                      rectifiedImagePath: sheetIndex < appState.rectifiedImagePaths.length
-                          ? appState.rectifiedImagePaths[sheetIndex]
-                          : null,
-                      template: omrTemplates[scored.examCode],
-                      scanTemplateVersion: scored.templateVersion,
-                      meshInteriorMeasuredFrac: scored.meshInteriorMeasuredFrac,
-                      geometryWarning: scored.geometryWarning,
-                    ),
-                  ),
-                ),
+                onPressed: () => _openViewer(context, appState, sheetIndex, scan),
                 icon: const FaIcon(FontAwesomeIcons.image, size: 12, color: AppColors.primaryGreen),
                 label: const Text('View Scan', style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700)),
                 style: TextButton.styleFrom(
@@ -366,7 +355,7 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
                       debugDir: appState.lastDebugImagesDir!,
                       // The decoder numbers pages from 1; this list is 0-based.
                       pageIndex: sheetIndex + 1,
-                      title: 'How it was read — $viewerTitle',
+                      title: 'How it was read — Sheet ${sheetIndex + 1}',
                     ),
                   ),
                 ),
@@ -427,18 +416,23 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
     }
 
     if (tagged) {
-      // A tag can now be genuinely partial in either direction — name typed
-      // in before the number is known, or (with the name fields no longer
-      // required) a number entered before a name — so the "needs X" label
-      // names whichever piece is actually still missing, rather than
-      // always assuming it's the number.
+      // Every saved scan receives a generated Examinee ID (see
+      // AppState.persistCapturedSessionToBatch), so an incomplete tag here
+      // normally means the NAME is missing (or only partly filled in), not
+      // the number. The number can still be absent if staff explicitly
+      // cleared it, so the label names whichever piece is actually missing
+      // rather than always assuming one of them.
       final complete = examinee!.isComplete;
       final hasName = examinee.firstName.trim().isNotEmpty || examinee.lastName.trim().isNotEmpty;
       final hasNumber = examinee.examineeNumber.trim().isNotEmpty;
       final displayName = hasName ? examinee.displayName : 'Unnamed examinee';
       final icon = complete ? FontAwesomeIcons.userCheck : FontAwesomeIcons.userPen;
       final color = complete ? AppColors.primaryGreen : AppColors.amber800;
-      final label = hasNumber ? '$displayName · #${examinee.examineeNumber}' : '$displayName — needs examinee #';
+      final label = complete
+          ? '$displayName · #${examinee.examineeNumber}'
+          : hasNumber
+              ? '$displayName · #${examinee.examineeNumber} — needs name'
+              : '$displayName — needs examinee #';
       return Row(
         children: [
           FaIcon(icon, size: 11, color: color),

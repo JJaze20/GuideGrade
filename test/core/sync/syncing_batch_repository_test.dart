@@ -11,6 +11,7 @@ import 'package:guidegrade/core/sync/sync_manager.dart';
 import 'package:guidegrade/core/sync/sync_outcome.dart';
 import 'package:guidegrade/core/sync/sync_queue.dart';
 import 'package:guidegrade/core/sync/syncing_batch_repository.dart';
+import 'package:guidegrade/models/answer_correction.dart';
 import 'package:guidegrade/models/answer_key.dart';
 import 'package:guidegrade/models/local_batch.dart';
 import 'package:guidegrade/models/omr_scan_result.dart';
@@ -201,6 +202,16 @@ class _FakeLocal implements LocalBatchRepository {
   }
 
   @override
+  Future<LocalBatch> deleteScan({
+    required String batchId,
+    required String scanId,
+  }) async {
+    calls.add('deleteScan:$batchId/$scanId');
+    _maybeThrow('deleteScan');
+    return batchResult;
+  }
+
+  @override
   Future<LocalBatch> setScanExaminee({
     required String batchId,
     required String scanId,
@@ -209,6 +220,33 @@ class _FakeLocal implements LocalBatchRepository {
     calls.add('setScanExaminee:$batchId/$scanId');
     _maybeThrow('setScanExaminee');
     return batchResult;
+  }
+
+  /// Whether the fake treats updateScanCorrections as a real change (moves
+  /// the batch revision) or a no-op (a repeated request).
+  bool correctionsChangeBatch = true;
+
+  @override
+  Future<LocalBatch> updateScanCorrections({
+    required String batchId,
+    required String scanId,
+    required List<AnswerCorrection> corrections,
+    LocalScanResult? result,
+  }) async {
+    calls.add('updateScanCorrections:$batchId/$scanId');
+    _maybeThrow('updateScanCorrections');
+    if (correctionsChangeBatch) {
+      batchResult = batchResult.copyWith(
+        updatedAt: batchResult.updatedAt.add(const Duration(milliseconds: 1)),
+      );
+    }
+    return batchResult;
+  }
+
+  @override
+  Future<bool> confirmBatchArchived(String batchId, DateTime confirmedUpdatedAt) async {
+    calls.add('confirmBatchArchived:$batchId');
+    return true;
   }
 
   @override
@@ -304,8 +342,96 @@ class _NeverSyncClient implements SyncClient {
   @override
   Future<SyncOutcome> deleteBatch(String batchId) => _rec('deleteBatch');
   @override
+  Future<SyncOutcome> deleteScan(String batchId, String scanId) => _rec('deleteScan');
+  @override
   Future<SyncOutcome> deleteStoragePrefix(String batchId) =>
       _rec('deleteStoragePrefix');
+
+  @override
+  Future<CloudExamineesRead> readCloudExaminees() async {
+    calls.add('readCloudExaminees');
+    throw StateError('SyncingBatchRepository must not call the network client');
+  }
+
+  @override
+  Future<CloudExamineeWrite> createExamineeFromScan({
+    required String batchId,
+    required String scanId,
+    required String firstName,
+    String? middleName,
+    required String lastName,
+  }) async {
+    calls.add('createExamineeFromScan');
+    throw StateError('SyncingBatchRepository must not call the network client');
+  }
+
+  @override
+  Future<CloudExamineeWrite> updateCloudExaminee({
+    required String id,
+    required String firstName,
+    String? middleName,
+    required String lastName,
+  }) async {
+    calls.add('updateCloudExaminee');
+    throw StateError('SyncingBatchRepository must not call the network client');
+  }
+
+  @override
+  Future<CloudExamineeWrite> setExamineeArchived(String id, bool archived) async {
+    calls.add('setExamineeArchived');
+    throw StateError('SyncingBatchRepository must not call the network client');
+  }
+
+  @override
+  Future<SyncOutcome> linkScanToExaminee({
+    required String batchId,
+    required String scanId,
+    required String? examineeId,
+  }) =>
+      _rec('linkScanToExaminee');
+
+  @override
+  Future<SyncOutcome> unlinkScanFromExaminee({
+    required String batchId,
+    required String scanId,
+    required String examineeId,
+  }) async {
+    calls.add('unlinkScanFromExaminee');
+    throw StateError('SyncingBatchRepository must not call the network client');
+  }
+
+  @override
+  Future<CloudBatchArchivesRead> readBatchArchives() async {
+    calls.add('readBatchArchives');
+    throw StateError('SyncingBatchRepository must not call the network client');
+  }
+
+  @override
+  Future<SyncOutcome> archiveBatch({
+    required String batchId,
+    String? reason,
+  }) async {
+    calls.add('archiveBatch');
+    throw StateError('SyncingBatchRepository must not call the network client');
+  }
+
+  @override
+  Future<CloudScanCountsRead> readScanCounts(List<String> batchIds) async {
+    calls.add('readScanCounts');
+    throw StateError('SyncingBatchRepository must not call the network client');
+  }
+
+  @override
+  Future<CloudScansRead> readCloudScansForExaminee(String examineeId) async {
+    calls.add('readCloudScansForExaminee');
+    throw StateError('SyncingBatchRepository must not call the network client');
+  }
+
+  @override
+  Future<CloudScansRead> readUnlinkedScans() async {
+    calls.add('readUnlinkedScans');
+    throw StateError('SyncingBatchRepository must not call the network client');
+  }
 }
 
 /// Real [SyncQueue] under the hood, but every drain entry point is stubbed
@@ -612,6 +738,40 @@ void main() {
     expectNoNetworkOrDrain();
   });
 
+  test('9b. a real answer correction enqueues PUSH_SCAN then PUSH_BATCH',
+      () async {
+    await repo.updateScanCorrections(
+      batchId: 'b1',
+      scanId: 's1',
+      corrections: const [],
+    );
+    await waitForJobs(2);
+
+    expect(jobLabels(), ['pushScan', 'pushBatch']);
+    expectNoNetworkOrDrain();
+  });
+
+  test('9c. a repeated correction (no change) enqueues nothing', () async {
+    fakeLocal.correctionsChangeBatch = false;
+    await repo.updateScanCorrections(
+      batchId: 'b1',
+      scanId: 's1',
+      corrections: const [],
+    );
+
+    expect(queue.jobs, isEmpty);
+    expect(fakeLocal.calls, contains('updateScanCorrections:b1/s1'));
+  });
+
+  test('9d. confirming an archive is a pure delegation and never queues a job',
+      () async {
+    final ok = await repo.confirmBatchArchived('b1', DateTime.utc(2026));
+
+    expect(ok, isTrue);
+    expect(queue.jobs, isEmpty);
+    expect(fakeLocal.calls, contains('confirmBatchArchived:b1'));
+  });
+
   test('10. deleteBatch cancels pending content pushes before the local '
       'delete runs', () async {
     // Seed a pending content push for b1.
@@ -646,6 +806,54 @@ void main() {
 
     expect(jobLabels(), ['deleteBatch', 'deleteStoragePrefix']);
     expect(queue.jobs.every((j) => j.batchId == 'b1'), isTrue);
+    expectNoNetworkOrDrain();
+  });
+
+  test('11b. deleteScan success cancels that scan\'s pending pushes and '
+      'enqueues DELETE_SCAN then PUSH_BATCH', () async {
+    await queue.enqueue(SyncJob.create(
+      type: SyncJobType.pushScan,
+      entityId: 's1',
+      batchId: 'b1',
+      scanId: 's1',
+    ));
+    await queue.enqueue(SyncJob.create(
+      type: SyncJobType.uploadImage,
+      entityId: 's1',
+      batchId: 'b1',
+      scanId: 's1',
+      meta: const {'variant': 'original'},
+    ));
+    await queue.enqueue(SyncJob.create(
+      type: SyncJobType.pushScan,
+      entityId: 's2',
+      batchId: 'b1',
+      scanId: 's2',
+    ));
+
+    await repo.deleteScan(batchId: 'b1', scanId: 's1');
+    await waitForJobs(3);
+
+    expect(jobLabels(), ['pushScan', 'deleteScan', 'pushBatch']);
+    final survivor = queue.jobs.firstWhere((j) => j.type == SyncJobType.pushScan);
+    expect(survivor.scanId, 's2'); // an unrelated scan's push is untouched
+    expect(
+      queue.jobs.firstWhere((j) => j.type == SyncJobType.deleteScan).scanId,
+      's1',
+    );
+    expectNoNetworkOrDrain();
+  });
+
+  test('11c. deleteScan local failure enqueues nothing', () async {
+    fakeLocal.failWith['deleteScan'] = const FileSystemException('nope');
+
+    await expectLater(
+      repo.deleteScan(batchId: 'b1', scanId: 's1'),
+      throwsA(isA<FileSystemException>()),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    expect(queue.jobs, isEmpty);
     expectNoNetworkOrDrain();
   });
 

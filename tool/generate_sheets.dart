@@ -310,14 +310,54 @@ const double kTatHeaderHeight =
     kTatInstructionHeight +
     kTatGapBeforeGrid;
 
+// ---------------------------------------------------------------------------
+// TAT (portrait, 612x936pt long bond) geometry -- see _layoutTatPortrait.
+// Three stacked bands, per the v1 design: Test I (3 columns x 10 rows, A-D),
+// Test II (4 columns x 20 rows, T/F), Test III (4 columns x 5 rows, T/F),
+// with left/right edge markers in the gaps between bands. All y values are
+// page points from the top; band Y is each band's FIRST ROW center.
+// ---------------------------------------------------------------------------
+
+/// What headerHeightFor returns for TAT (and its "TAT_..." mini-specs).
+/// Band positions are absolute (kTatPortraitBandY): _layoutTatPortrait pins
+/// each band via contentTopOverride = y - this, so _layoutExam (which adds
+/// it back) lands every band's first row exactly on its y.
+const double kTatPortraitHeaderHeight = 166;
+const double kTatPortraitContentWidth = 508;
+const double kTatPortraitLetterheadHeight = 44;
+const double kTatPortraitIdRowHeight = 30;
+const double kTatPortraitIdRowGap = 4;
+
+/// Where each band's row labels start (first bubble sits rowLabelWidth
+/// further right), and the x of every band's outermost bubble center -- the
+/// last column's last choice -- so the three bands share one right edge.
+const double kTatPortraitZoneLeft = 70;
+const double kTatPortraitZoneRight = 510;
+const List<double> kTatPortraitBandY = [214, 432, 802];
+const List<int> kTatPortraitBandRows = [10, 20, 5];
+const List<int> kTatPortraitBandCols = [3, 4, 4];
+const List<double> kTatPortraitBandPitch = [19, 17, 17];
+
+/// Column widths of the ID rows, as fractions of kTatPortraitContentWidth
+/// (each row sums to 1). Row 1's first three are the Last Name/First Name/MI
+/// OCR crops -- shared with _tatLandscapeNameFieldBoxes.
+const List<double> kTatPortraitRow1Fractions = [0.29, 0.296, 0.07, 0.088, 0.256];
+const List<double> kTatPortraitRow2Fractions = [0.286, 0.339, 0.187, 0.188];
+
+/// x of the rotated title's baseline, and the y its text starts at.
+const double kTatPortraitTitleX = 580;
+const double kTatPortraitTitleStartY = 100;
+
 double headerHeightFor(ExamSpec exam) {
   // Matches both "QTM"/"TAT" themselves and the "QTM_Section N"/
   // "TAT_Test N" mini-ExamSpecs _layoutQtmGrid/_layoutTatLandscape build
   // internally (see their comments on why those need this exact value,
   // not the generic kNdmuHeaderHeight/kCompactNdmuHeaderHeight their
-  // headerKind would otherwise resolve to).
+  // headerKind would otherwise resolve to). "TATL" (the landscape variant)
+  // must be checked before the plain "TAT" (portrait) prefix.
+  if (exam.code.startsWith('TATL')) return kTatHeaderHeight;
   if (exam.code.startsWith('QTM')) return kQtmHeaderHeight;
-  if (exam.code.startsWith('TAT')) return kTatHeaderHeight;
+  if (exam.code.startsWith('TAT')) return kTatPortraitHeaderHeight;
   return switch (exam.headerKind) {
     HeaderKind.simple => kSimpleHeaderHeight,
     HeaderKind.ndmu => exam.compactNdmuHeader ? kCompactNdmuHeaderHeight : kNdmuHeaderHeight,
@@ -506,47 +546,30 @@ final List<ExamSpec> kExams = [
   ExamSpec(
     'TAT',
     'Teaching Aptitude Test (TAT)',
-    [
-      SectionSpec('Test I', 30, (n) => _abcd),
-      SectionSpec('Test II', 80, (n) => _tf),
-      SectionSpec('Test III', 20, (n) => _tf),
-    ],
+    _tatSections,
     headerKind: HeaderKind.ndmu,
-    // Landscape long-bond, swapped from the paper's usual portrait
-    // orientation (kLongWidth x kLongHeight) -- see _layoutTatLandscape
-    // below for why: this is the one exam whose 3 sections all sit on a
-    // single physical page side by side rather than one page per section,
-    // and doing that needs the wider dimension as the page's width.
-    pageWidthPt: kLongHeight,
-    pageHeightPt: kLongWidth,
-    letterheadLines: const [
-      'Guidance, Honors, and Scholarship Center',
-      'Notre Dame of Marbel University',
-      'City of Koronadal, South Cotabato',
-    ],
-    // compactNdmuHeader is vestigial now -- _paintTatLandscapePage calls
-    // its own dedicated _paintTatHeader (see kTatHeaderHeight), not
-    // _paintNdmuHeader, so this flag no longer selects anything for TAT.
-    // Left set anyway since headerHeightFor's "TAT"-prefix special case
-    // takes priority over it regardless, and clearing it isn't needed for
-    // correctness.
-    //
-    // rowPitch/rowsPerColumn/bubbleRadius/choicePitch/columnGap are
-    // UNCHANGED from before this redesign -- only the header (single wide
-    // ID row instead of 3 rows + inline Date/Birth/Age + a scores panel;
-    // Scores is dropped entirely) and the extra fiducials/rotated title
-    // changed. Item numbering per section (Test I: 1-30, Test II: 1-80,
-    // Test III: 1-20) is likewise untouched.
+    // Portrait long bond (8.5x13in), three stacked bands -- see
+    // _layoutTatPortrait. Corners sit 32pt from each page edge, content
+    // 12pt inside that (x=44, the same name-row left edge AT/QTM use). compactNdmuHeader is vestigial (the portrait sheet
+    // draws its own header, _paintTatPortraitHeader); rowPitch/
+    // rowsPerColumn are per-band in _tatBands, so the values here are only
+    // placeholders. The previous landscape design lives on as
+    // _tatLandscapeSpec.
+    pageWidthPt: kLongWidth,
+    pageHeightPt: kLongHeight,
+    pageMargin: 32,
+    markerPad: 12,
+    letterheadLines: _tatLetterheadLines,
     compactNdmuHeader: true,
     bubbleRadius: 8,
     choicePitch: 26,
-    rowPitch: 25,
-    rowsPerColumn: 15,
+    rowPitch: 17,
+    rowsPerColumn: 20,
     columnGap: 24,
     labelGapPt: 6,
     titleInRightMargin: true,
     cornerMarkersOverride: _tatCornerMarkers,
-    templateVersion: 'TAT-redesign-v2',
+    templateVersion: 'TAT-portrait-v1',
   ),
   ExamSpec(
     'QTM',
@@ -881,7 +904,7 @@ ExamLayout _layoutTatLandscape(ExamSpec exam) {
 /// [_paintTatHeader]). Only Last/First/MI get a [_FieldBox] since those
 /// are the only fields OCR'd from a scan; the other 4 columns are
 /// positioned directly in [_paintTatHeader] without needing one.
-({_FieldBox lastName, _FieldBox firstName, _FieldBox middleInitial}) _tatNameFieldBoxes(ExamLayout layout) {
+({_FieldBox lastName, _FieldBox firstName, _FieldBox middleName}) _tatLandscapeNameFieldBoxes(ExamLayout layout) {
   final exam = layout.exam;
   final y = exam.contentTop + kCompactLetterheadHeight + kCompactGapAfterLetterhead;
   final width = layout.contentWidth;
@@ -891,7 +914,7 @@ ExamLayout _layoutTatLandscape(ExamSpec exam) {
   return (
     lastName: (x: exam.contentLeft, y: y, width: lastWidth, height: kTatIdRowHeight),
     firstName: (x: exam.contentLeft + lastWidth, y: y, width: firstWidth, height: kTatIdRowHeight),
-    middleInitial: (x: exam.contentLeft + lastWidth + firstWidth, y: y, width: miWidth, height: kTatIdRowHeight),
+    middleName: (x: exam.contentLeft + lastWidth + firstWidth, y: y, width: miWidth, height: kTatIdRowHeight),
   );
 }
 
@@ -1038,9 +1061,9 @@ void _paintTatHeader(
   y += kCompactLetterheadHeight + kCompactGapAfterLetterhead;
 
   // Single wide ID row. Last Name/First Name/MI widths come from
-  // _tatNameFieldBoxes (shared with _emitTemplate's OCR crop rect) rather
+  // _tatLandscapeNameFieldBoxes (shared with _emitTemplate's OCR crop rect) rather
   // than being hardcoded here a second time.
-  final nameBoxes = _tatNameFieldBoxes(layout);
+  final nameBoxes = _tatLandscapeNameFieldBoxes(layout);
   final schoolWidth = width * 0.19;
   final addressWidth = width * 0.20;
   final dateWidth = width * 0.09;
@@ -1049,7 +1072,7 @@ void _paintTatHeader(
   final birthWidth = width -
       nameBoxes.lastName.width -
       nameBoxes.firstName.width -
-      nameBoxes.middleInitial.width -
+      nameBoxes.middleName.width -
       schoolWidth -
       addressWidth -
       dateWidth -
@@ -1058,7 +1081,7 @@ void _paintTatHeader(
   final columns = [
     ('Last Name', nameBoxes.lastName.width),
     ('First Name', nameBoxes.firstName.width),
-    ('M.I', nameBoxes.middleInitial.width),
+    ('M.I', nameBoxes.middleName.width),
     ('School Last Attended', schoolWidth),
     ('Address of School Last Attended', addressWidth),
     ('Date Today', dateWidth),
@@ -1172,6 +1195,284 @@ void _paintTatLandscapePage(PdfGraphics canvas, ExamSpec exam, ExamLayout layout
     canvas.drawString(bold, 7, page.section.name.toUpperCase(), zoneLeft, flip(headerBottom + 9));
     _paintItems(canvas, page.items, exam, regular, bold, flip);
   }
+}
+
+// ---------------------------------------------------------------------------
+// TAT portrait -- the shipped TAT sheet. Bubble size, choice pitch, and each
+// test's own 1-30 / 1-80 / 1-20 numbering are unchanged from the landscape
+// sheet; only the row pitch differs per band (19/17/17) so all three bands
+// fit portrait's height. The previous landscape sheet is still available via
+// `--tat-landscape` (TAT_landscape.pdf; never written to omr_templates.dart).
+// ---------------------------------------------------------------------------
+
+final List<SectionSpec> _tatSections = [
+  SectionSpec('Test I', 30, (n) => _abcd),
+  SectionSpec('Test II', 80, (n) => _tf),
+  SectionSpec('Test III', 20, (n) => _tf),
+];
+
+const List<String> _tatLetterheadLines = [
+  'Guidance, Honors, and Scholarship Center',
+  'Notre Dame of Marbel University',
+  'City of Koronadal, South Cotabato',
+];
+
+/// The previous (landscape, single-band-row) TAT sheet, kept reachable via
+/// `--tat-landscape`. Code "TATL" so headerHeightFor gives its mini-specs
+/// the landscape header height.
+ExamSpec _tatLandscapeSpec() => ExamSpec(
+      'TATL',
+      'Teaching Aptitude Test (TAT)',
+      _tatSections,
+      headerKind: HeaderKind.ndmu,
+      pageWidthPt: kLongHeight,
+      pageHeightPt: kLongWidth,
+      letterheadLines: _tatLetterheadLines,
+      compactNdmuHeader: true,
+      bubbleRadius: 8,
+      choicePitch: 26,
+      rowPitch: 25,
+      rowsPerColumn: 15,
+      columnGap: 24,
+      labelGapPt: 6,
+      titleInRightMargin: true,
+      cornerMarkersOverride: _tatCornerMarkers,
+      templateVersion: 'TAT-redesign-v2',
+    );
+
+typedef _TatBand = ({SectionSpec section, int rows, int cols, double pitch, double gap, double y});
+
+List<_TatBand> _tatBands(ExamSpec exam) {
+  final firstBubbleX = kTatPortraitZoneLeft + exam.rowLabelWidth;
+  final bands = <_TatBand>[];
+  for (var i = 0; i < 3; i++) {
+    final section = exam.sections[i];
+    final cols = kTatPortraitBandCols[i];
+    final choices = section.choicesForItem(1).length;
+    final colSpan = (choices - 1) * exam.choicePitch; // first to last choice
+    // Column stride that lands the last column's last choice on
+    // kTatPortraitZoneRight; the gap is whatever that leaves beyond the
+    // column's own width.
+    final stride = (kTatPortraitZoneRight - firstBubbleX - colSpan) / (cols - 1);
+    final gap = stride - _columnWidth(choices, exam.rowLabelWidth, exam.choicePitch);
+    bands.add((
+      section: section,
+      rows: kTatPortraitBandRows[i],
+      cols: cols,
+      pitch: kTatPortraitBandPitch[i],
+      gap: gap,
+      y: kTatPortraitBandY[i],
+    ));
+  }
+  return bands;
+}
+
+ExamLayout _layoutTatPortrait(ExamSpec exam) {
+  final pages = <PagePlacement>[];
+  for (final b in _tatBands(exam)) {
+    final mini = ExamSpec(
+      '${exam.code}_${b.section.name}',
+      b.section.name,
+      [b.section],
+      headerKind: exam.headerKind,
+      compactNdmuHeader: true,
+      pageWidthPt: exam.pageWidthPt,
+      pageHeightPt: exam.pageHeightPt,
+      pageMargin: exam.pageMargin,
+      markerPad: exam.markerPad,
+      choicePitch: exam.choicePitch,
+      rowPitch: b.pitch,
+      columnGap: b.gap,
+      rowLabelWidth: exam.rowLabelWidth,
+      bubbleRadius: exam.bubbleRadius,
+      rowsPerColumn: b.rows,
+      contentLeftOverride: kTatPortraitZoneLeft,
+      // _layoutExam adds headerHeightFor(mini) (= kTatPortraitHeaderHeight)
+      // itself, so this lands the band's first row exactly on b.y.
+      contentTopOverride: b.y - kTatPortraitHeaderHeight,
+      templateVersion: exam.templateVersion,
+    );
+    final placed = _layoutExam(mini).pages;
+    if (placed.length != 1) {
+      throw StateError('TAT band ${b.section.name} spilled onto ${placed.length} pages');
+    }
+    pages.addAll(placed);
+  }
+  return ExamLayout(exam, pages, kTatPortraitContentWidth);
+}
+
+/// y midway between band [gap]'s last row and band [gap]+1's first row.
+double _tatPortraitGapY(int gap) {
+  final lastRow = kTatPortraitBandY[gap] + (kTatPortraitBandRows[gap] - 1) * kTatPortraitBandPitch[gap];
+  return (lastRow + kTatPortraitBandY[gap + 1]) / 2;
+}
+
+/// The left/right edge markers (big, in line with the corners) in the two
+/// gaps between the bands: [left0, right0, left1, right1].
+List<(double, double)> _tatPortraitEdgeMarkers(ExamSpec exam) {
+  final left = exam.pageMargin;
+  final right = exam.pageWidthPt - exam.pageMargin;
+  return [
+    for (var g = 0; g < 2; g++) ...[(left, _tatPortraitGapY(g)), (right, _tatPortraitGapY(g))],
+  ];
+}
+
+/// The small decorative marks (role, x, y): one above Test I, two in each
+/// gap between bands (the design), plus tatBelowIII on the bottom corner
+/// row -- the design has none there, but the scanner's mesh (see
+/// omr_mesh_correction.dart's _tatTriangles) is built on all six section
+/// roles, and sitting ON the corners' row keeps it out of a sliver triangle
+/// against the bottom edge.
+List<(String, double, double)> _tatPortraitDecorMarkers(ExamSpec exam) => [
+      ('tatAboveI', 234, kTatPortraitBandY[0] - 20),
+      ('tatBelowI', 194, _tatPortraitGapY(0)),
+      ('tatAboveII', 321, _tatPortraitGapY(0)),
+      ('tatBelowII', 194, _tatPortraitGapY(1)),
+      ('tatAboveIII', 321, _tatPortraitGapY(1)),
+      ('tatBelowIII', 234, exam.pageHeightPt - exam.pageMargin),
+    ];
+
+/// Last Name/First Name/MI boxes (row 1's first three columns) -- the OCR
+/// crop rects _emitTemplate records, shared with _paintTatPortraitHeader so
+/// the printed cells and the crops can't drift apart.
+({_FieldBox lastName, _FieldBox firstName, _FieldBox middleName}) _tatNameFieldBoxes(ExamLayout layout) {
+  final exam = layout.exam;
+  final y = exam.contentTop + kTatPortraitLetterheadHeight + kTatPortraitIdRowGap;
+  const w = kTatPortraitContentWidth;
+  final lastW = w * kTatPortraitRow1Fractions[0];
+  final firstW = w * kTatPortraitRow1Fractions[1];
+  final miW = w * kTatPortraitRow1Fractions[2];
+  return (
+    lastName: (x: exam.contentLeft, y: y, width: lastW, height: kTatPortraitIdRowHeight),
+    firstName: (x: exam.contentLeft + lastW, y: y, width: firstW, height: kTatPortraitIdRowHeight),
+    middleName: (x: exam.contentLeft + lastW + firstW, y: y, width: miW, height: kTatPortraitIdRowHeight),
+  );
+}
+
+void _paintTatPortraitHeader(
+  PdfGraphics canvas,
+  ExamSpec exam,
+  PdfFont regular,
+  PdfFont bold,
+  double Function(double) flip,
+) {
+  const w = kTatPortraitContentWidth;
+  final x0 = exam.contentLeft;
+  var y = exam.contentTop;
+
+  canvas.setColor(kBlack);
+  canvas.setLineWidth(1);
+  canvas.drawRect(x0, flip(y + kTatPortraitLetterheadHeight), w, kTatPortraitLetterheadHeight);
+  canvas.strokePath();
+  var ly = y + 12;
+  for (var i = 0; i < exam.letterheadLines.length; i++) {
+    final line = exam.letterheadLines[i];
+    final size = i == 1 ? 11.0 : 8.0; // the university name stands out
+    final font = i == 1 ? bold : regular;
+    final metrics = font.stringMetrics(line) * size;
+    canvas.setColor(i == 1 ? kNavy : kGray);
+    canvas.drawString(font, size, line, x0 + (w - metrics.advanceWidth) / 2, flip(ly));
+    ly += size + 2;
+  }
+  y += kTatPortraitLetterheadHeight + kTatPortraitIdRowGap;
+
+  void drawRow(double rowY, List<String> labels, List<double> fractions) {
+    canvas.setColor(kBlack);
+    canvas.setLineWidth(1);
+    canvas.drawRect(x0, flip(rowY + kTatPortraitIdRowHeight), w, kTatPortraitIdRowHeight);
+    canvas.strokePath();
+    // Label strip / writing space divider, across the whole row.
+    canvas.setLineWidth(0.75);
+    canvas.drawLine(x0, flip(rowY + kTatNameCaptionHeight), x0 + w, flip(rowY + kTatNameCaptionHeight));
+    canvas.strokePath();
+    var colX = x0;
+    for (var i = 0; i < labels.length; i++) {
+      if (i > 0) {
+        canvas.setLineWidth(1);
+        canvas.drawLine(colX, flip(rowY), colX, flip(rowY + kTatPortraitIdRowHeight));
+        canvas.strokePath();
+      }
+      canvas.setColor(kGray);
+      canvas.drawString(regular, 7, labels[i], colX + 3, flip(rowY + 8));
+      // Sex's writing space holds the M/F choices themselves, to circle.
+      if (labels[i] == 'Sex') {
+        canvas.drawString(regular, 8, 'M ( )   F ( )', colX + 3, flip(rowY + kTatNameCaptionHeight + 13));
+      }
+      colX += w * fractions[i];
+    }
+  }
+
+  drawRow(y, const ['Last Name', 'First Name', 'M.I', 'Age', 'Sex'], kTatPortraitRow1Fractions);
+  y += kTatPortraitIdRowHeight + kTatPortraitIdRowGap;
+  drawRow(
+    y,
+    const ['School Last Attended', 'Address of School Last Attended', 'Date Today', 'Birth Date'],
+    kTatPortraitRow2Fractions,
+  );
+  y += kTatPortraitIdRowHeight + 12;
+
+  canvas.setColor(kGray);
+  canvas.drawString(regular, 7, 'Use a No. 2 pencil. Fill the circle completely.', x0, flip(y));
+}
+
+void _paintTatPortraitPage(PdfGraphics canvas, ExamSpec exam, ExamLayout layout, PdfFont regular, PdfFont bold) {
+  double flip(double topLeftY) => exam.pageHeightPt - topLeftY;
+
+  void drawMarker((double, double) point, double half) {
+    canvas.drawRect(point.$1 - half, flip(point.$2) - half, half * 2, half * 2);
+    canvas.fillPath();
+  }
+
+  canvas.setColor(kBlack);
+  for (final corner in _cornerMarkers(layout)) {
+    drawMarker(corner, kAtEdgeMarkerHalf);
+  }
+  for (final marker in _tatPortraitEdgeMarkers(exam)) {
+    drawMarker(marker, kAtEdgeMarkerHalf);
+  }
+  for (final (_, x, y) in _tatPortraitDecorMarkers(exam)) {
+    drawMarker((x, y), kAtCenterMarkerHalf);
+  }
+
+  _paintTatPortraitHeader(canvas, exam, regular, bold, flip);
+
+  // Title rotated -90 degrees in the right margin, reading downward.
+  canvas.setColor(kNavy);
+  canvas.saveContext();
+  canvas.setTransform(Matrix4.identity()
+    ..translateByDouble(kTatPortraitTitleX, flip(kTatPortraitTitleStartY), 0, 1)
+    ..rotateZ(-math.pi / 2));
+  canvas.drawString(bold, 11, exam.title.toUpperCase(), 0, 0);
+  canvas.restoreContext();
+
+  for (final page in layout.pages) {
+    canvas.setColor(kNavy);
+    final first = page.items.first.bubbles.first;
+    canvas.drawString(bold, 7, page.section.name.toUpperCase(), first.x - exam.rowLabelWidth, flip(first.y - 11));
+    _paintItems(canvas, page.items, exam, regular, bold, flip);
+  }
+}
+
+/// Writes the previous landscape TAT sheet to answer_sheets/TAT_landscape.pdf
+/// only -- never touches omr_templates.dart.
+Future<void> _writeTatLandscape(Directory answerSheetsDir) async {
+  final exam = _tatLandscapeSpec();
+  final layout = _layoutTatLandscape(exam);
+  final pdf = pw.Document();
+  final regular = PdfFont.helvetica(pdf.document);
+  final bold = PdfFont.helveticaBold(pdf.document);
+  pdf.addPage(
+    pw.Page(
+      pageFormat: PdfPageFormat(exam.pageWidthPt, exam.pageHeightPt),
+      margin: pw.EdgeInsets.zero,
+      build: (context) => pw.CustomPaint(
+        size: PdfPoint(exam.pageWidthPt, exam.pageHeightPt),
+        painter: (canvas, size) => _paintTatLandscapePage(canvas, exam, layout, regular, bold),
+      ),
+    ),
+  );
+  File('${answerSheetsDir.path}/TAT_landscape.pdf').writeAsBytesSync(await pdf.save());
+  stdout.writeln('Wrote answer_sheets/TAT_landscape.pdf (landscape; omr_templates.dart untouched)');
 }
 
 /// Paints AT's combined 2x3-section-grid page: corner markers + extra
@@ -1308,12 +1609,15 @@ void _paintQtmHeader(
     }
   }
 
-  drawBoxedRow(y, [('Last Name', nameBoxes.lastName.width, kQtmLastNameBoxes)]);
-  y += kTableHeight + kQtmGapBetweenIdRows;
+  // One row: Last Name, First Name and a Middle Name long enough for a full
+  // name (no per-letter cells). The second name row is gone, but its height is
+  // still reserved so nothing below it moves (see the AT header).
   drawBoxedRow(y, [
-    ('First Name', nameBoxes.firstName.width, kQtmFirstNameBoxes),
-    ('MI', nameBoxes.middleInitial.width, kQtmMiBoxes),
+    ('Last Name', nameBoxes.lastName.width, 1),
+    ('First Name', nameBoxes.firstName.width, 1),
+    ('Middle Name', nameBoxes.middleName.width, 1),
   ]);
+  y += kTableHeight + kQtmGapBetweenIdRows;
   y += kTableHeight + kGapAfterIdTable;
 
   // Title (+ page indicator). Skipped here when titleInRightMargin is set
@@ -1716,17 +2020,17 @@ ExamLayout _layoutQtmGrid(ExamSpec exam) {
 /// separately since QTM's header (letterhead + these two rows only, no
 /// School/Address/Date/Scores) no longer matches the generic
 /// HeaderKind.ndmu layout the shared [_nameFieldBoxes] assumes.
-({_FieldBox lastName, _FieldBox firstName, _FieldBox middleInitial}) _qtmNameFieldBoxes(ExamLayout layout) {
+({_FieldBox lastName, _FieldBox firstName, _FieldBox middleName}) _qtmNameFieldBoxes(ExamLayout layout) {
   final exam = layout.exam;
-  final lastY = exam.contentTop + kLetterheadHeight + kGapAfterLetterhead;
-  final firstMiY = lastY + kTableHeight + kQtmGapBetweenIdRows;
+  final rowY = exam.contentTop + kLetterheadHeight + kGapAfterLetterhead;
   final tableWidth = layout.contentWidth;
-  final firstWidth = tableWidth * 0.85;
-  final miWidth = tableWidth * 0.15;
+  final lastWidth = tableWidth * 0.41;
+  final firstWidth = tableWidth * 0.41;
+  final middleWidth = tableWidth - lastWidth - firstWidth;
   return (
-    lastName: (x: exam.contentLeft, y: lastY, width: tableWidth, height: kTableHeight),
-    firstName: (x: exam.contentLeft, y: firstMiY, width: firstWidth, height: kTableHeight),
-    middleInitial: (x: exam.contentLeft + firstWidth, y: firstMiY, width: miWidth, height: kTableHeight),
+    lastName: (x: exam.contentLeft, y: rowY, width: lastWidth, height: kTableHeight),
+    firstName: (x: exam.contentLeft + lastWidth, y: rowY, width: firstWidth, height: kTableHeight),
+    middleName: (x: exam.contentLeft + lastWidth + firstWidth, y: rowY, width: middleWidth, height: kTableHeight),
   );
 }
 
@@ -1764,6 +2068,17 @@ List<(double, double)> _qtmCenterFiducials(ExamSpec exam) {
   return [(center, topY), (center, midY), (center, bottomY)];
 }
 
+/// Printed marks that look like corner squares but are not registration marks
+/// (x, y in page points, half size): portrait TAT's second edge pair, in the
+/// gap between Test II and Test III. See OmrDecoyMark.
+List<(double, double, double)> _decoyMarkersFor(ExamSpec exam) {
+  if (exam.code != 'TAT') return const [];
+  final edges = _tatPortraitEdgeMarkers(exam);
+  return [
+    for (final e in edges.sublist(2)) (e.$1, e.$2, kAtEdgeMarkerHalf),
+  ];
+}
+
 /// The extra interior registration marks emitted into
 /// [OmrExamTemplate.interiorFiducials] for exams that print them — reuses
 /// the exact same position functions the PDF painters draw from
@@ -1780,15 +2095,14 @@ List<(double, double)> _qtmCenterFiducials(ExamSpec exam) {
 /// above is only ever emitted as generated text, never compiled here.
 List<(String, double, double, double)> _interiorFiducialsFor(ExamSpec exam) {
   if (exam.code == 'TAT') {
-    final edges = _tatEdgeFiducials(exam);
-    final centers = _tatCenterFiducials(exam);
-    const roles = ['tatAboveI', 'tatBelowI', 'tatAboveII',
-      'tatBelowII', 'tatAboveIII', 'tatBelowIII'];
+    // Portrait TAT: the first gap's edge pair are the registered dividers;
+    // the second gap's pair is printed too but unregistered (one role
+    // each), as are tatBelowIII (the design has no mark there).
+    final edges = _tatPortraitEdgeMarkers(exam);
     return [
       ('dividerLeft', edges[0].$1, edges[0].$2, kAtEdgeMarkerHalf),
       ('dividerRight', edges[1].$1, edges[1].$2, kAtEdgeMarkerHalf),
-      for (var i = 0; i < centers.length; i++)
-        (roles[i], centers[i].$1, centers[i].$2, kAtCenterMarkerHalf),
+      for (final (role, x, y) in _tatPortraitDecorMarkers(exam)) (role, x, y, kAtCenterMarkerHalf),
     ];
   }
   List<(double, double)> edges;
@@ -1898,7 +2212,7 @@ void _paintItems(
 /// OCR step reads from a scan can never drift apart.
 typedef _FieldBox = ({double x, double y, double width, double height});
 
-({_FieldBox lastName, _FieldBox firstName, _FieldBox middleInitial}) _nameFieldBoxes(ExamLayout layout) {
+({_FieldBox lastName, _FieldBox firstName, _FieldBox middleName}) _nameFieldBoxes(ExamLayout layout) {
   final exam = layout.exam;
   switch (exam.headerKind) {
     case HeaderKind.simple:
@@ -1906,15 +2220,15 @@ typedef _FieldBox = ({double x, double y, double width, double height});
       // below it (Exam Code/Batch/Date were removed entirely -- see
       // _paintSimpleHeader). MI only ever holds 1-2 letters, so it gets a
       // narrow slice of that second row; the rest goes to First Name.
-      final lastY = exam.contentTop + kBrandRowHeight + kSubtitleRowHeight + kGapAfterSubtitle;
-      final firstMiY = lastY + kTableHeight + kAtGapBetweenIdRows;
+      final rowY = exam.contentTop + kBrandRowHeight + kSubtitleRowHeight + kGapAfterSubtitle;
       final tableWidth = layout.contentWidth;
-      final firstWidth = tableWidth * 0.85;
-      final miWidth = tableWidth * 0.15;
+      final lastWidth = tableWidth * 0.41;
+      final firstWidth = tableWidth * 0.41;
+      final middleWidth = tableWidth - lastWidth - firstWidth;
       return (
-        lastName: (x: exam.contentLeft, y: lastY, width: tableWidth, height: kTableHeight),
-        firstName: (x: exam.contentLeft, y: firstMiY, width: firstWidth, height: kTableHeight),
-        middleInitial: (x: exam.contentLeft + firstWidth, y: firstMiY, width: miWidth, height: kTableHeight),
+        lastName: (x: exam.contentLeft, y: rowY, width: lastWidth, height: kTableHeight),
+        firstName: (x: exam.contentLeft + lastWidth, y: rowY, width: firstWidth, height: kTableHeight),
+        middleName: (x: exam.contentLeft + lastWidth + firstWidth, y: rowY, width: middleWidth, height: kTableHeight),
       );
     case HeaderKind.ndmu:
       final compact = exam.compactNdmuHeader;
@@ -1929,7 +2243,7 @@ typedef _FieldBox = ({double x, double y, double width, double height});
       return (
         lastName: (x: exam.contentLeft, y: y, width: lastWidth, height: idRowHeight),
         firstName: (x: exam.contentLeft + lastWidth, y: y, width: firstWidth, height: idRowHeight),
-        middleInitial: (x: exam.contentLeft + lastWidth + firstWidth, y: y, width: miWidth, height: idRowHeight),
+        middleName: (x: exam.contentLeft + lastWidth + firstWidth, y: y, width: miWidth, height: idRowHeight),
       );
   }
 }
@@ -2017,12 +2331,16 @@ void _paintSimpleHeader(
     }
   }
 
-  drawBoxedRow(y, [('Last Name', nameBoxes.lastName.width, kAtLastNameBoxes)]);
-  y += kTableHeight + kAtGapBetweenIdRows;
+  // One row: Last Name, First Name and a Middle Name long enough for a full
+  // name (no per-letter cells). The second name row is gone, but its height is
+  // still reserved so nothing below it moves: the bubble grid and fiducials
+  // must stay exactly where they are on sheets already printed.
   drawBoxedRow(y, [
-    ('First Name', nameBoxes.firstName.width, kAtFirstNameBoxes),
-    ('MI', nameBoxes.middleInitial.width, kAtMiBoxes),
+    ('Last Name', nameBoxes.lastName.width, 1),
+    ('First Name', nameBoxes.firstName.width, 1),
+    ('Middle Name', nameBoxes.middleName.width, 1),
   ]);
+  y += kTableHeight + kAtGapBetweenIdRows;
   y += kTableHeight + kGapAfterTable;
 
   // Title (+ page indicator for multi-page sections). Skipped here when
@@ -2120,7 +2438,7 @@ void _paintNdmuHeader(
   final nameCols = [
     ('Last Name', nameBoxes.lastName.width),
     ('First Name', nameBoxes.firstName.width),
-    ('MI', nameBoxes.middleInitial.width),
+    ('MI', nameBoxes.middleName.width),
   ];
   var colX = kContentLeft;
   for (final (label, w) in nameCols) {
@@ -2479,6 +2797,14 @@ enum OmrFiducialRole {
   tatBelowII,
   tatAboveIII,
   tatBelowIII,
+  // Portrait TAT v5: the 7 small marks above the answer groups.
+  tatAboveI1,
+  tatAboveI11,
+  tatAboveI21,
+  tatAboveII21,
+  tatAboveII41,
+  tatAboveIII6,
+  tatAboveIII11,
 }
 
 class OmrFiducial {
@@ -2491,6 +2817,19 @@ class OmrFiducial {
   /// assuming one fixed size for every fiducial on the page.
   final double halfSizePt;
   const OmrFiducial(this.role, this.xFrac, this.yFrac, this.halfSizePt);
+}
+
+/// A printed square that looks exactly like a corner mark but is NOT one --
+/// e.g. TAT's second edge pair (between Test II and Test III), same size as
+/// the corner squares and on the same left/right edges. The sheet prints it
+/// on purpose, but it is not used for registration. The decoder knows where
+/// these are so it can tell a corner from a decoy: a decoy always has the
+/// real corner further along the same edge. See [OmrExamTemplate.decoyMarkers].
+class OmrDecoyMark {
+  final double xFrac;
+  final double yFrac;
+  final double halfSizePt;
+  const OmrDecoyMark(this.xFrac, this.yFrac, this.halfSizePt);
 }
 
 /// A fractional bounding box (0.0-1.0 of the page, top-left origin — same
@@ -2534,12 +2873,15 @@ class OmrExamTemplate {
   /// skipped entirely for those, falling back to the single global
   /// homography exactly as before this field existed.
   final List<OmrFiducial> interiorFiducials;
+  /// Printed corner-lookalikes that are not registration marks -- see
+  /// [OmrDecoyMark]. Empty for every sheet except portrait TAT.
+  final List<OmrDecoyMark> decoyMarkers;
   final List<OmrSection> sections;
   /// Where the printed, hand-written Last Name / First Name / MI boxes are
   /// on the sheet — see [OmrFieldRect].
   final OmrFieldRect lastNameFieldRect;
   final OmrFieldRect firstNameFieldRect;
-  final OmrFieldRect middleInitialFieldRect;
+  final OmrFieldRect middleNameFieldRect;
   /// How many individual letter cells each field is subdivided into (see
   /// generate_sheets.dart's kAtLastNameBoxes/kQtmLastNameBoxes etc. — same
   /// source of truth as what's actually drawn). 0 for a template whose name
@@ -2549,7 +2891,7 @@ class OmrExamTemplate {
   /// to suppress.
   final int lastNameBoxCount;
   final int firstNameBoxCount;
-  final int middleInitialBoxCount;
+  final int middleNameBoxCount;
   const OmrExamTemplate({
     required this.examCode,
     required this.templateVersion,
@@ -2559,13 +2901,14 @@ class OmrExamTemplate {
     required this.bubbleRadiusYPt,
     required this.cornerMarkers,
     this.interiorFiducials = const [],
+    this.decoyMarkers = const [],
     required this.sections,
     required this.lastNameFieldRect,
     required this.firstNameFieldRect,
-    required this.middleInitialFieldRect,
+    required this.middleNameFieldRect,
     this.lastNameBoxCount = 0,
     this.firstNameBoxCount = 0,
-    this.middleInitialBoxCount = 0,
+    this.middleNameBoxCount = 0,
   });
 }
 ''';
@@ -2596,8 +2939,7 @@ String _emitTemplate(ExamLayout layout) {
   // (TAT), whose name fields are a single undivided box with no internal
   // letter-cell dividers for the OCR crop to worry about.
   final (int lastNameBoxCount, int firstNameBoxCount, int miBoxCount) = switch (exam.code) {
-    'AT' => (kAtLastNameBoxes, kAtFirstNameBoxes, kAtMiBoxes),
-    'QTM' => (kQtmLastNameBoxes, kQtmFirstNameBoxes, kQtmMiBoxes),
+    // AT and QTM no longer subdivide their name fields into letter cells.
     _ => (0, 0, 0),
   };
   String fieldRectDart(_FieldBox box) =>
@@ -2644,12 +2986,19 @@ String _emitTemplate(ExamLayout layout) {
   buffer.writeln('  bubbleRadiusYPt: ${bubbleRadiusYFor(exam)},');
   buffer.writeln('  cornerMarkers: const [$cornersDart],');
   buffer.writeln('  interiorFiducials: const [$interiorFiducialsDart],');
+  final decoys = _decoyMarkersFor(exam);
+  if (decoys.isNotEmpty) {
+    final decoysDart = decoys
+        .map((d) => 'OmrDecoyMark(${_formatFrac(d.$1 / exam.pageWidthPt)}, ${_formatFrac(d.$2 / exam.pageHeightPt)}, ${d.$3})')
+        .join(', ');
+    buffer.writeln('  decoyMarkers: const [$decoysDart],');
+  }
   buffer.writeln('  lastNameFieldRect: const ${fieldRectDart(clipCaptionTop(nameBoxes.lastName))},');
   buffer.writeln('  firstNameFieldRect: const ${fieldRectDart(clipCaptionTop(nameBoxes.firstName))},');
-  buffer.writeln('  middleInitialFieldRect: const ${fieldRectDart(clipCaptionTop(nameBoxes.middleInitial))},');
+  buffer.writeln('  middleNameFieldRect: const ${fieldRectDart(clipCaptionTop(nameBoxes.middleName))},');
   buffer.writeln('  lastNameBoxCount: $lastNameBoxCount,');
   buffer.writeln('  firstNameBoxCount: $firstNameBoxCount,');
-  buffer.writeln('  middleInitialBoxCount: $miBoxCount,');
+  buffer.writeln('  middleNameBoxCount: $miBoxCount,');
   buffer.writeln('  sections: const [');
   for (final section in exam.sections) {
     buffer.writeln('    OmrSection(');
@@ -2683,12 +3032,19 @@ Future<void> main(List<String> args) async {
   // deliberately kept out of the main app's dependency graph.
   final answerSheetsDir = Directory('../answer_sheets')..createSync(recursive: true);
 
+  if (args.contains('--tat-landscape')) {
+    await _writeTatLandscape(answerSheetsDir);
+    return;
+  }
+
   final dartFile = StringBuffer();
   dartFile.writeln('// GENERATED by tool/generate_sheets.dart — do not hand-edit.');
   dartFile.writeln('// Bubble positions are fractions of the page (0.0-1.0), top-left origin —');
   dartFile.writeln('// page size varies per exam (see each OmrExamTemplate\'s pageWidthPt/');
   dartFile.writeln('// pageHeightPt), matching the printed PDFs in /answer_sheets.');
   dartFile.writeln('// Regenerate with: cd tool && dart run generate_sheets.dart');
+  dartFile.writeln();
+  dartFile.writeln("import 'omr_template_tat_v5.dart';");
   dartFile.writeln();
   dartFile.writeln(_schema);
 
@@ -2699,11 +3055,11 @@ Future<void> main(List<String> args) async {
     // each getting its own — see _layoutTatLandscape's comment. AT/QTM:
     // all 6 sections share one physical page in a 3x2 grid — see
     // _layoutAtGrid's/_layoutQtmGrid's comments.
-    final isTatLandscape = exam.code == 'TAT';
+    final isTatPortrait = exam.code == 'TAT';
     final isAtGrid = exam.code == 'AT';
     final isQtmGrid = exam.code == 'QTM';
-    final layout = isTatLandscape
-        ? _layoutTatLandscape(exam)
+    final layout = isTatPortrait
+        ? _layoutTatPortrait(exam)
         : isAtGrid
             ? _layoutAtGrid(exam)
             : isQtmGrid
@@ -2714,14 +3070,14 @@ Future<void> main(List<String> args) async {
     final regular = PdfFont.helvetica(pdf.document);
     final bold = PdfFont.helveticaBold(pdf.document);
 
-    if (isTatLandscape) {
+    if (isTatPortrait) {
       pdf.addPage(
         pw.Page(
           pageFormat: PdfPageFormat(exam.pageWidthPt, exam.pageHeightPt),
           margin: pw.EdgeInsets.zero,
           build: (context) => pw.CustomPaint(
             size: PdfPoint(exam.pageWidthPt, exam.pageHeightPt),
-            painter: (canvas, size) => _paintTatLandscapePage(canvas, exam, layout, regular, bold),
+            painter: (canvas, size) => _paintTatPortraitPage(canvas, exam, layout, regular, bold),
           ),
         ),
       );
@@ -2803,13 +3159,13 @@ Future<void> main(List<String> args) async {
       final bytes = await pdf.save();
       File('${answerSheetsDir.path}/${exam.code}.pdf').writeAsBytesSync(bytes);
     }
-    final physicalPageCount = isTatLandscape || isAtGrid || isQtmGrid ? 1 : layout.pages.length;
+    final physicalPageCount = isTatPortrait || isAtGrid || isQtmGrid ? 1 : layout.pages.length;
     if (!args.contains('--templates-only')) {
       stdout.writeln('Wrote answer_sheets/${exam.code}.pdf ($physicalPageCount page(s), content width ${layout.contentWidth.toStringAsFixed(1)}pt)');
     }
 
     dartFile.writeln(_emitTemplate(layout));
-    mapEntries.add('"${exam.code}": _omr${exam.code}');
+    mapEntries.add(exam.code == 'TAT' ? '"TAT": omrTATPortraitV5' : '"${exam.code}": _omr${exam.code}');
   }
 
   dartFile.writeln('final Map<String, OmrExamTemplate> omrTemplates = {');
@@ -2817,6 +3173,11 @@ Future<void> main(List<String> args) async {
     dartFile.writeln('  $entry,');
   }
   dartFile.writeln('};');
+  dartFile.writeln();
+  dartFile.writeln('/// The earlier portrait TAT layout (version TAT-portrait-v1), kept so scans made');
+  dartFile.writeln('/// with it still read with their own geometry. The current TAT is v5, imported');
+  dartFile.writeln('/// from its geometry JSON (tool/import_tat_v5_geometry.dart).');
+  dartFile.writeln('final OmrExamTemplate omrTATPortraitV1 = _omrTAT;');
 
   File('../lib/core/omr/omr_templates.dart').writeAsStringSync(dartFile.toString());
   stdout.writeln('Wrote lib/core/omr/omr_templates.dart');

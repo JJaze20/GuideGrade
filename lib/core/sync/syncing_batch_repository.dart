@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import '../../models/answer_correction.dart';
 import '../../models/local_batch.dart';
 import '../../models/omr_scan_result.dart';
 import '../services/batch_repository.dart';
@@ -265,6 +266,58 @@ class SyncingBatchRepository implements BatchRepository {
   }
 
   // ---------------------------------------------------------------------------
+  // G2. updateScanCorrections / confirmBatchArchived
+  // ---------------------------------------------------------------------------
+
+  @override
+  Future<LocalBatch> updateScanCorrections({
+    required String batchId,
+    required String scanId,
+    required List<AnswerCorrection> corrections,
+    LocalScanResult? result,
+  }) async {
+    final before = await local.getBatchById(batchId);
+    final batch = await local.updateScanCorrections(
+      batchId: batchId,
+      scanId: scanId,
+      corrections: corrections,
+      result: result,
+    );
+    // A repeated/no-op request stores nothing and leaves the revision alone
+    // — nothing new to push, so a duplicate tap can't queue duplicate jobs.
+    if (before != null && batch.updatedAt == before.updatedAt) return batch;
+    // The corrections, the recalculated score and the student's details all
+    // ride the one scan row (see SupabaseSyncClient.pushScan); the batch row
+    // follows so its revision reaches the cloud too.
+    _fireEnqueue([_pushScan(batchId, scanId), _pushBatch(batchId)]);
+    return batch;
+  }
+
+  /// Pure delegation, no job: archiving records that the cloud already has
+  /// this revision; pushing it again would be a pointless round trip and,
+  /// worse, could look like a new change.
+  @override
+  Future<bool> confirmBatchArchived(String batchId, DateTime confirmedUpdatedAt) =>
+      local.confirmBatchArchived(batchId, confirmedUpdatedAt);
+
+  // ---------------------------------------------------------------------------
+  // G3. deleteScan
+  // ---------------------------------------------------------------------------
+
+  @override
+  Future<LocalBatch> deleteScan({
+    required String batchId,
+    required String scanId,
+  }) async {
+    // Local first: if it throws, nothing is enqueued and the caller sees the
+    // failure — the sheet is still there. The queue drops this scan's pending
+    // row/image pushes when the delete job lands (see SyncQueue.enqueue).
+    final batch = await local.deleteScan(batchId: batchId, scanId: scanId);
+    _fireEnqueue([_deleteScan(batchId, scanId), _pushBatch(batchId)]);
+    return batch;
+  }
+
+  // ---------------------------------------------------------------------------
   // H. setScanExaminee
   // ---------------------------------------------------------------------------
 
@@ -373,6 +426,13 @@ class SyncingBatchRepository implements BatchRepository {
 
   SyncJob _patchImageStatus(String batchId, String scanId) => SyncJob.create(
         type: SyncJobType.patchImageStatus,
+        entityId: scanId,
+        batchId: batchId,
+        scanId: scanId,
+      );
+
+  SyncJob _deleteScan(String batchId, String scanId) => SyncJob.create(
+        type: SyncJobType.deleteScan,
         entityId: scanId,
         batchId: batchId,
         scanId: scanId,

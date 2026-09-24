@@ -1,15 +1,20 @@
 "use strict";
 
 /**
- * One-time backfill for Phase 3.
+ * One-time / recovery backfill.
  *
- * Applies the SAME claim policy as index.js's syncSupabaseAuthClaim to every
- * EXISTING users/{uid} document, so accounts that were provisioned before the
- * trigger was deployed also get (or correctly lack) the `role: "authenticated"`
- * Firebase custom claim.
+ * Applies the SAME claim policy as index.js's syncSupabaseAuthClaim (shared
+ * via claims.js) to every EXISTING users/{uid} document: active Guidance
+ * Council users get role="authenticated" + user_role="guidance_council";
+ * everyone else has those two claims removed. Unrelated custom claims are
+ * preserved (merge, never replace).
  *
- * Safe to re-run: it is idempotent (skips users whose claim already matches)
- * and never writes Firestore.
+ * Safe to re-run: idempotent (skips users already correct) and never writes
+ * Firestore. NOTE: this WRITES Firebase custom claims -- it is a manual
+ * migration/recovery tool; do not run it against production unless intended.
+ *
+ * (The separate tools/firebase-claims/backfill-auth-claim.js remains
+ * available too; it has a dry-run mode and --revoke-stale.)
  *
  * RUN:
  *   cd functions
@@ -23,51 +28,31 @@
  */
 
 const admin = require("firebase-admin");
+const { syncUserClaims, readCurrentUserData } = require("./claims");
 
 admin.initializeApp();
 
-function desiredRoleClaim(userData) {
-  const isActiveGuidance =
-    userData != null &&
-    userData.role === "guidance_council" &&
-    userData.isActive === true;
-  return isActiveGuidance ? "authenticated" : null;
-}
-
 (async () => {
-  const snap = await admin.firestore().collection("users").get();
-  let changed = 0;
-  let unchanged = 0;
-  let noAuthUser = 0;
+  const db = admin.firestore();
+  const snap = await db.collection("users").get();
+  const tally = { updated: 0, unchanged: 0, "no-auth-user": 0 };
 
   for (const doc of snap.docs) {
     const uid = doc.id;
-    const wanted = desiredRoleClaim(doc.data());
-
-    let userRecord;
-    try {
-      userRecord = await admin.auth().getUser(uid);
-    } catch (err) {
-      noAuthUser++;
-      console.warn(`skip users/${uid}: no Firebase Auth user (${err.code || err.message})`);
-      continue;
-    }
-
-    const current =
-      (userRecord.customClaims && userRecord.customClaims.role) || null;
-
-    if (current === wanted) {
-      unchanged++;
-      continue;
-    }
-
-    await admin.auth().setCustomUserClaims(uid, wanted ? { role: wanted } : null);
-    changed++;
-    console.log(`users/${uid}: "${current || "none"}" -> "${wanted || "none"}"`);
+    // Same shared logic as the trigger: re-reads the live doc per user.
+    const result = await syncUserClaims({
+      auth: admin.auth(),
+      uid,
+      readUserData: () => readCurrentUserData(db, uid),
+      logger: console,
+    });
+    tally[result]++;
+    if (result === "updated") console.log(`users/${uid}: claims updated`);
   }
 
   console.log(
-    `\nbackfill complete — changed=${changed} unchanged=${unchanged} noAuthUser=${noAuthUser} total=${snap.size}`
+    `\nbackfill complete — updated=${tally.updated} unchanged=${tally.unchanged} ` +
+      `noAuthUser=${tally["no-auth-user"]} total=${snap.size}`
   );
   process.exit(0);
 })().catch((err) => {

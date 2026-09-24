@@ -105,13 +105,35 @@ void main() {
     int sum(OmrExamTemplate t) =>
         t.sections.fold<int>(0, (s, sec) => s + sec.itemCount);
 
-    test('Admission Test = 72 items in one section', () {
-      expect(_atTemplate.sections, hasLength(1));
+    test('Admission Test = 6 sections of 12 items each = 72 '
+        '(post-redesign: 2 rows x 3 columns aligned to the 9-fiducial mesh)',
+        () {
+      expect(_atTemplate.sections.map((s) => s.name).toList(), [
+        'Section 1',
+        'Section 2',
+        'Section 3',
+        'Section 4',
+        'Section 5',
+        'Section 6',
+      ]);
+      expect(_atTemplate.sections.map((s) => s.itemCount).toList(),
+          [12, 12, 12, 12, 12, 12]);
       expect(sum(_atTemplate), 72);
     });
 
-    test('QTM = 60 items in one section', () {
-      expect(_qtmTemplate.sections, hasLength(1));
+    test('QTM = 6 sections of 10 items each = 60 '
+        '(post-redesign: 2 rows x 3 columns aligned to the 9-fiducial mesh)',
+        () {
+      expect(_qtmTemplate.sections.map((s) => s.name).toList(), [
+        'Section 1',
+        'Section 2',
+        'Section 3',
+        'Section 4',
+        'Section 5',
+        'Section 6',
+      ]);
+      expect(_qtmTemplate.sections.map((s) => s.itemCount).toList(),
+          [10, 10, 10, 10, 10, 10]);
       expect(sum(_qtmTemplate), 60);
     });
 

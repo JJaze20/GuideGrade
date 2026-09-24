@@ -1,12 +1,18 @@
 import 'dart:async';
 import 'dart:io';
 
+// buildLocalScanResult moved to scan_rescoring.dart (pure Dart) and is
+// re-exported so existing `app_state.dart` imports keep working.
+export '../omr/scan_rescoring.dart' show buildLocalScanResult;
+
 import 'package:camera/camera.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
+
+import '../../models/answer_correction.dart';
 import '../../models/answer_key.dart';
 import '../../models/local_batch.dart';
 import '../../models/omr_scan_result.dart';
@@ -14,10 +20,12 @@ import '../../models/user.dart';
 import '../omr/exam_score.dart';
 import '../omr/omr_decoder.dart';
 import '../omr/omr_scorer.dart';
+import '../omr/scan_rescoring.dart';
 import '../omr/omr_templates.dart';
 import '../services/batch_repository.dart';
 import '../services/local_batch_repository.dart';
 import '../services/local_storage_service.dart';
+import '../sync/batch_archive_coordinator.dart';
 import '../sync/cloud_restore_service.dart';
 import '../sync/sync_client.dart';
 import '../sync/sync_job.dart';
@@ -28,10 +36,16 @@ class _OmrDecodeRequest {
   final String imagePath;
   final OmrExamTemplate template;
   final String? rectifiedOutputPath;
-  const _OmrDecodeRequest(this.imagePath, this.template, {this.rectifiedOutputPath});
+  final bool diagnosticsEnabled;
+  const _OmrDecodeRequest(this.imagePath, this.template,
+      {this.rectifiedOutputPath, this.diagnosticsEnabled = false});
 }
 
 OmrScanResult _decodeOmrPage(_OmrDecodeRequest request) {
+  // Each compute() call gets its own isolate memory, so the diagnostic
+  // flag has to be set fresh here, every call — see
+  // OmrDecoder.setDiagnosticsEnabled's doc comment.
+  OmrDecoder.setDiagnosticsEnabled(request.diagnosticsEnabled);
   return const OmrDecoder().decode(request.imagePath, request.template,
       rectifiedOutputPath: request.rectifiedOutputPath);
 }
@@ -45,36 +59,34 @@ class _DebugVizRequest {
 }
 
 void _saveDebugVisualization(_DebugVizRequest request) {
+  // Only ever called (see processCapturedPages) when diagnostics are on,
+  // but set explicitly anyway rather than assuming that -- this isolate
+  // has no memory of what the calling isolate's flag was.
+  OmrDecoder.setDiagnosticsEnabled(true);
   const OmrDecoder().saveDebugVisualization(request.imagePath, request.template, request.outputDir, request.pageIndex);
 }
 
-class _RectifyRequest {
-  final String imagePath;
-  final OmrExamTemplate template;
-  final String outputPath;
-  const _RectifyRequest(this.imagePath, this.template, this.outputPath);
-}
-
-/// Runs [OmrDecoder.rectifyForOverlay] — entirely separate from
-/// [_decodeOmrPage]/`decode()`, see that method's doc comment. Used only to
-/// get a display-quality perspective-corrected image for the graded overlay
-/// in ScannedImageViewerScreen; never feeds back into scoring.
-String? _rectifyOmrPage(_RectifyRequest request) {
-  return const OmrDecoder().rectifyForOverlay(request.imagePath, request.template, request.outputPath);
-}
+// _rectifyOmrPage/_RectifyRequest (a separate isolate call into
+// OmrDecoder.rectifyForOverlay) removed 2026-09-19 -- decode() now writes
+// the review/overlay image itself, for every exam type, reusing its own
+// already-fitted registration instead of a second independent corner
+// search (see decode()'s doc comment and processCapturedPages' reviewOutput
+// local). rectifyForOverlay itself is left defined in
+// omr_decoder_native.dart in case something else needs a standalone
+// rectify later; nothing in this app calls it any more.
 
 class _CropNameFieldsRequest {
   final String imagePath;
   final OmrExamTemplate template;
   final String lastNameOutPath;
   final String firstNameOutPath;
-  final String middleInitialOutPath;
+  final String middleNameOutPath;
   const _CropNameFieldsRequest(
     this.imagePath,
     this.template,
     this.lastNameOutPath,
     this.firstNameOutPath,
-    this.middleInitialOutPath,
+    this.middleNameOutPath,
   );
 }
 
@@ -82,13 +94,13 @@ class _CropNameFieldsRequest {
 /// pixel work, safe off the main isolate. Takes the original captured
 /// photo, not the (much lower-resolution) rectified display copy — see
 /// cropNameFields' doc comment for why.
-({String lastName, String firstName, String middleInitial})? _cropNameFields(_CropNameFieldsRequest request) {
+({String lastName, String firstName, String middleName})? _cropNameFields(_CropNameFieldsRequest request) {
   return const OmrDecoder().cropNameFields(
     request.imagePath,
     request.template,
     lastNameOutPath: request.lastNameOutPath,
     firstNameOutPath: request.firstNameOutPath,
-    middleInitialOutPath: request.middleInitialOutPath,
+    middleNameOutPath: request.middleNameOutPath,
   );
 }
 
@@ -109,80 +121,119 @@ enum AnswerKeySyncStatus {
   conflict,
 }
 
-/// Builds the [LocalScanResult] persisted for one scanned sheet from the
-/// exam-aware [ExamScore] the official scoring layer produces.
-///
-/// Used by BOTH persistence paths ([AppState.persistCapturedSessionToBatch]
-/// for a fresh capture and [AppState.finishRescan] for a retake) so the two
-/// always persist an identically-computed result — there is no path left on
-/// the old generic scorer.
-///
-///  * [examScore] is `computeExamScoreForCode(scored)`. It is null only
-///    when no exam template is registered for `scored.examCode`; in that
-///    case the pre-exam-aware generic values are kept so an unrecognised
-///    exam still persists something.
-///  * `rawScore` / `totalItems` / the `tat*` breakdown come straight from
-///    [ExamScore]. For TAT, `rawScore` is the 160-point total and
-///    `totalItems` is 130; for AT / QTM `rawScore` is the correct-answer
-///    count and `totalItems` is the fixed 72 / 60.
-///  * `percentage` is the Admission Test's official `rawScore / 72 * 100`
-///    when [ExamScore.hasOfficialPercentage]. QTM and TAT have no official
-///    percentage, so to avoid changing the meaning of the non-nullable
-///    `LocalScanResult.percentage` field (and its result-screen / archive /
-///    batch-average consumers) in this local-persistence-only phase, they
-///    keep the existing generic `scored.percentage`. This is a documented
-///    compatibility shim, not an invented rule; per-exam percentage
-///    semantics are for the Result UI / Supabase phases.
-///  * `status` keeps the existing answer-key-availability rule
-///    ([ExamScore.isGraded] is `totalGraded > 0`).
-@visibleForTesting
-LocalScanResult buildLocalScanResult(
-  ScoredResult scored,
-  ExamScore? examScore, {
-  required String processedByUid,
-  required String processedByName,
-  DateTime? scannedAt,
-}) {
-  final now = scannedAt ?? DateTime.now();
+/// What [AppState.correctScanAnswer] / [AppState.resetScanAnswer] did.
+class ScanCorrectionOutcome {
+  final LocalBatch batch;
 
-  if (examScore == null) {
-    final graded = scored.totalGraded > 0;
-    return LocalScanResult(
-      rawScore: scored.rawScore,
-      totalGraded: scored.totalGraded,
-      totalItems: scored.items.length,
-      percentage: scored.percentage,
-      status: graded ? 'Graded' : 'Ungraded',
-      scannedAt: now,
-      processedByUid: processedByUid,
-      processedByName: processedByName,
+  /// The scan after the change (or unchanged when [changed] is false).
+  final LocalScan scan;
+
+  /// False for a repeated or no-op request: nothing was recorded, the
+  /// revision did not move and nothing was queued to sync.
+  final bool changed;
+
+  /// False when the exam has no answer key loaded, so the correction was
+  /// recorded but there is no score to recalculate yet.
+  final bool scoreRecalculated;
+
+  const ScanCorrectionOutcome({
+    required this.batch,
+    required this.scan,
+    required this.changed,
+    this.scoreRecalculated = true,
+  });
+}
+
+/// Monotonic counter backing [generateExamineeId] — mirrors the same
+/// millis+counter pattern [SyncJob.newId] already uses elsewhere in this
+/// codebase as its "sufficiently unique ID" convention (no UUID package is
+/// a dependency of this project).
+int _examineeIdCounter = 0;
+
+/// A fresh, sufficiently-unique generated Examinee ID for one scan record.
+///
+/// This is **Option A**: an identifier for this one scan/examination
+/// record, never a permanent cross-exam applicant identity, and never the
+/// scan's own database primary key (a caller must not treat it as such).
+/// [now] is injectable for deterministic tests; production callers always
+/// omit it.
+@visibleForTesting
+String generateExamineeId([DateTime? now]) {
+  final millis = (now ?? DateTime.now()).millisecondsSinceEpoch;
+  final n = _examineeIdCounter++;
+  return 'EX-$millis-$n';
+}
+
+/// Builds the automatic [ExamineeInfo] for a freshly-captured scan —
+/// always non-null, always carrying a freshly [generateId]d Examinee ID,
+/// with each OCR-guessed name field independently present or blank (never
+/// a placeholder like `"UNKNOWN"`). Used by
+/// [AppState.persistCapturedSessionToBatch] for every new scan, regardless
+/// of whether OCR read any name field at all — the generated ID no longer
+/// depends on OCR succeeding.
+@visibleForTesting
+ExamineeInfo buildAutoExaminee({
+  String? ocrLastNameGuess,
+  String? ocrFirstNameGuess,
+  String? ocrMiddleNameGuess,
+  required String Function() generateId,
+}) {
+  return ExamineeInfo(
+    lastName: ocrLastNameGuess ?? '',
+    firstName: ocrFirstNameGuess ?? '',
+    middleName: ocrMiddleNameGuess ?? '',
+    examineeNumber: generateId(),
+  );
+}
+
+/// Resolves what [AppState.finishRescan] should pass as the rescanned
+/// sheet's `examinee` (contract: `null` means "keep the existing tag
+/// exactly as-is" — see [BatchRepository.replaceScan]).
+///
+///  * No generated ID yet on [existingExaminee] (a legacy scan predating
+///    this feature, or `existingExaminee == null`): always returns a fresh
+///    [ExamineeInfo] carrying a newly [generateId]d Examinee ID — a rescan
+///    must never leave a record permanently id-less — refreshing names
+///    from this pass's OCR where available and otherwise falling back to
+///    whatever [existingExaminee] already had.
+///  * An existing generated ID is already present and the tag is not yet
+///    fully complete (see [ExamineeInfo.isComplete]) and this pass's OCR
+///    produced at least one fresh guess: returns a refreshed name using
+///    the SAME existing Examinee ID (never a new one merely because of a
+///    rescan).
+///  * Otherwise (a fully-tagged existing record, or no fresh OCR to
+///    refresh with): returns `null` — the existing tag is left untouched.
+@visibleForTesting
+ExamineeInfo? resolveRescanExaminee({
+  required ExamineeInfo? existingExaminee,
+  String? ocrLastNameGuess,
+  String? ocrFirstNameGuess,
+  String? ocrMiddleNameGuess,
+  required String Function() generateId,
+}) {
+  final hasId = existingExaminee != null && existingExaminee.examineeNumber.trim().isNotEmpty;
+  final hasFreshOcr =
+      ocrLastNameGuess != null || ocrFirstNameGuess != null || ocrMiddleNameGuess != null;
+
+  if (!hasId) {
+    return ExamineeInfo(
+      lastName: ocrLastNameGuess ?? existingExaminee?.lastName ?? '',
+      firstName: ocrFirstNameGuess ?? existingExaminee?.firstName ?? '',
+      middleName: ocrMiddleNameGuess ?? existingExaminee?.middleName ?? '',
+      examineeNumber: generateId(),
     );
   }
 
-  final percentage = examScore.hasOfficialPercentage
-      ? examScore.percentage
-      : scored.percentage;
+  if (!existingExaminee.isComplete && hasFreshOcr) {
+    return ExamineeInfo(
+      lastName: ocrLastNameGuess ?? '',
+      firstName: ocrFirstNameGuess ?? '',
+      middleName: ocrMiddleNameGuess ?? '',
+      examineeNumber: existingExaminee.examineeNumber,
+    );
+  }
 
-  return LocalScanResult(
-    rawScore: examScore.rawScore,
-    totalGraded: examScore.totalGraded,
-    totalItems: examScore.totalItems,
-    percentage: percentage,
-    status: examScore.isGraded ? 'Graded' : 'Ungraded',
-    scannedAt: now,
-    processedByUid: processedByUid,
-    processedByName: processedByName,
-    tatTest1Correct: examScore.tatTest1Correct,
-    tatTest1Wrong: examScore.tatTest1Wrong,
-    tatTest1Score: examScore.tatTest1Score,
-    tatTest2Correct: examScore.tatTest2Correct,
-    tatTest2Wrong: examScore.tatTest2Wrong,
-    tatTest2Score: examScore.tatTest2Score,
-    tatTest3Correct: examScore.tatTest3Correct,
-    tatTest3Wrong: examScore.tatTest3Wrong,
-    tatTest3Score: examScore.tatTest3Score,
-    tatTotal: examScore.tatTotal,
-  );
+  return null;
 }
 
 /// A lightweight in-memory app state shared across screens via
@@ -203,6 +254,53 @@ class AppState extends ChangeNotifier {
   })  : batchRepository = batchRepository ?? LocalBatchRepository(),
         _localStorage = localStorage ?? LocalStorageService() {
     _wireReconnectSync(connectivityStream);
+    _wireArchiveCoordinator();
+  }
+
+  // --- batch Archived status ------------------------------------------------
+  //
+  // A batch becomes Archived only when the cloud has confirmed its current
+  // saved revision (see BatchLifecycle / BatchArchiveCoordinator). This
+  // listens to the sync manager and re-checks after each change to the queue;
+  // it never starts, retries or cancels an upload itself, so upload progress
+  // and failures stay separate from the batch's lifecycle status. Not wired
+  // (and nothing is ever archived) when there is no cloud data plane.
+
+  BatchArchiveCoordinator? _archiveCoordinator;
+
+  void _wireArchiveCoordinator() {
+    final manager = syncManager;
+    if (manager == null) return;
+    _archiveCoordinator = BatchArchiveCoordinator(
+      cloudConfigured: true,
+      loadBatches: () => batchRepository.getBatches(),
+      outstandingJobsFor: (batchId) =>
+          manager.queue.jobs.where((j) => j.batchId == batchId).length,
+      lastPushedUpdatedAt: (batchId) =>
+          manager.queue.state.batchLastPushedUpdatedAt(batchId),
+      confirmArchived: (batchId, updatedAt) =>
+          batchRepository.confirmBatchArchived(batchId, updatedAt),
+    );
+    manager.addListener(_onSyncStateChanged);
+  }
+
+  void _onSyncStateChanged() {
+    if (_reconnectDisposed) return;
+    unawaited(refreshBatchArchiveStatus());
+  }
+
+  /// Re-checks every batch against the sync layer's records and archives any
+  /// whose current revision the cloud has confirmed. Also useful after a
+  /// cloud restore. Never throws; a failure just leaves batches as they were.
+  Future<void> refreshBatchArchiveStatus() async {
+    final coordinator = _archiveCoordinator;
+    if (coordinator == null) return;
+    try {
+      final archived = await coordinator.evaluateAll();
+      if (archived.isNotEmpty && !_reconnectDisposed) notifyListeners();
+    } catch (error) {
+      _logSyncFailure(error);
+    }
   }
 
   /// The offline sync coordinator, or null when the cloud data plane is not
@@ -280,6 +378,11 @@ class AppState extends ChangeNotifier {
   /// (not the first event on an already-online device) triggers a drain.
   bool _wasOnline = true;
 
+  /// Best-effort "device has a network" flag for UI (e.g. greying out the
+  /// load-from-cloud button). Only updated from connectivity events, so it
+  /// assumes online until the first change is reported.
+  bool get isOnline => _wasOnline;
+
   void _wireReconnectSync(Stream<List<ConnectivityResult>>? stream) {
     // No cloud data plane -> nothing to drain, so never subscribe.
     if (stream == null || syncManager == null) return;
@@ -303,6 +406,7 @@ class AppState extends ChangeNotifier {
     final online = results.any((r) => r != ConnectivityResult.none);
     final wasOnline = _wasOnline;
     _wasOnline = online;
+    if (online != wasOnline) notifyListeners();
 
     if (online && !wasOnline) {
       // Disconnected -> connected: (re)arm a one-shot debounce so rapid
@@ -337,6 +441,7 @@ class AppState extends ChangeNotifier {
   void dispose() {
     if (_reconnectDisposed) return; // idempotent
     _reconnectDisposed = true;
+    syncManager?.removeListener(_onSyncStateChanged);
     _reconnectSyncTimer?.cancel();
     _reconnectSyncTimer = null;
     unawaited(_connectivitySub?.cancel());
@@ -496,9 +601,18 @@ class AppState extends ChangeNotifier {
       // Crop the name fields out of the retaken photo so staff have an
       // up-to-date image to read if they open "Edit student" — pure pixel
       // work, never blocks saving the rescan itself if it fails. The
-      // existing examinee tag is deliberately left untouched (see this
-      // method's own doc comment); replaceScan's default (omitted
-      // [examinee]) already keeps it as-is.
+      // existing examinee tag (names and all) is preserved; the only change
+      // that can happen is that a legacy scan with no generated Examinee ID
+      // is given one — see [resolveRescanExaminee] for the exact rule (an
+      // existing ID is never replaced merely because a rescan happened).
+      LocalScan? existingScan;
+      for (final s in batch.scans) {
+        if (s.id == scanId) {
+          existingScan = s;
+          break;
+        }
+      }
+      final existingExaminee = existingScan?.examinee;
       final template = omrTemplates[batch.examCode];
       final nameCropDir = await _prepareNameCropDir();
       String? nameCropLastPath;
@@ -518,13 +632,20 @@ class AppState extends ChangeNotifier {
           );
           nameCropLastPath = crops?.lastName;
           nameCropFirstPath = crops?.firstName;
-          nameCropMiddlePath = crops?.middleInitial;
+          nameCropMiddlePath = crops?.middleName;
         } catch (e, st) {
           // Leave all three crop paths null -- a bad crop call must never
           // block saving the rescan itself.
           debugPrint('finishRescan: cropNameFields threw: $e\n$st');
         }
       }
+
+      // No OCR, hence no fresh name guesses: null (keep the tag as-is) when an
+      // Examinee ID already exists, otherwise the existing tag plus a new ID.
+      final refreshedExaminee = resolveRescanExaminee(
+        existingExaminee: existingExaminee,
+        generateId: generateExamineeId,
+      );
 
       final updated = await batchRepository.replaceScan(
         batchId: batch.id,
@@ -533,6 +654,7 @@ class AppState extends ChangeNotifier {
         sourceImage: File(capturedPages.last.path),
         rectifiedImage: rectifiedPath == null ? null : File(rectifiedPath),
         result: result,
+        examinee: refreshedExaminee,
         nameCropLastImage: nameCropLastPath == null ? null : File(nameCropLastPath),
         nameCropFirstImage: nameCropFirstPath == null ? null : File(nameCropFirstPath),
         nameCropMiddleImage: nameCropMiddlePath == null ? null : File(nameCropMiddlePath),
@@ -567,6 +689,29 @@ class AppState extends ChangeNotifier {
   /// page, in capture order. Cleared by [resetScanProgress].
   final List<XFile> capturedPages = [];
 
+  final Map<String, ({OmrScanResult result, String? reviewPath})>
+      _capturePreviews = {};
+
+  /// Decode before accepting the photo, so the score can be shown right
+  /// after the capture. The result and review image are reused when the
+  /// session is compiled, so the sheet is only decoded once.
+  Future<OmrScanResult> previewCapturedPage(XFile file) async {
+    final template = omrTemplates[activeExamCode];
+    if (template == null) throw StateError('No sheet layout is available.');
+    final directory = await _prepareRectifiedImagesDir();
+    final reviewPath = directory == null ? null
+        : '$directory/preview_${DateTime.now().microsecondsSinceEpoch}.jpg';
+    final result = await compute(_decodeOmrPage, _OmrDecodeRequest(
+      file.path, template, rectifiedOutputPath: reviewPath,
+      diagnosticsEnabled: diagnosticsEnabled,
+    ));
+    final savedReview = reviewPath != null && await File(reviewPath).exists()
+        ? reviewPath : null;
+    addCapturedPage(file);
+    _capturePreviews[file.path] = (result: result, reviewPath: savedReview);
+    return result;
+  }
+
   /// Decoded bubble results for the in-progress scan session, one per
   /// captured page, populated by [processCapturedPages]. Cleared by
   /// [resetScanProgress].
@@ -576,13 +721,29 @@ class AppState extends ChangeNotifier {
   /// index as [scannedResults]), used only to draw the per-item graded
   /// overlay in ScannedImageViewerScreen — null for a page where
   /// rectification failed (the sheet still scores normally; this is
-  /// display-only and best-effort). Populated by [processCapturedPages] via
-  /// a call entirely separate from the real decode — see
-  /// [OmrDecoder.rectifyForOverlay]. Cleared by [resetScanProgress].
+  /// display-only and best-effort). Populated by [processCapturedPages]:
+  /// `decode()` itself writes this image (see its `rectifiedOutputPath`
+  /// param), reusing the exact registration it scored bubbles with, rather
+  /// than a separate call re-detecting corners independently (that used to
+  /// be true for every exam except TAT — see git history 2026-09-19).
+  /// Cleared by [resetScanProgress].
   final List<String?> rectifiedImagePaths = [];
 
   bool isProcessingScans = false;
   String? scanProcessingError;
+
+  /// Opt-in troubleshooting mode (2026-09-19): off by default, matching
+  /// ordinary scanning never generating full diagnostic images or verbose
+  /// per-bubble/per-candidate logs. When true, [processCapturedPages]
+  /// additionally writes [lastDebugImagesDir]'s annotated debug images for
+  /// every page and enables verbose fiducial/bubble logging in the decode
+  /// isolate (see [OmrDecoder.setDiagnosticsEnabled]). Recognition,
+  /// validation, and scoring are identical either way — this only ever
+  /// gates extra output, never an input to decoding. Mirrored by
+  /// `ExamScanningScreen._diagnosticsEnabled`, which also gates the live
+  /// preview's own diagnostic overlay and is the only current UI for
+  /// flipping this (debug builds only — see that field's doc comment).
+  bool diagnosticsEnabled = false;
 
   /// Tells [AppLockGate] to ignore an `AppLifecycleState.resumed` event
   /// instead of re-locking, for as long as this is true. Set by a screen
@@ -816,6 +977,7 @@ class AppState extends ChangeNotifier {
 
   void resetScanProgress() {
     currentScannedPage = 0;
+    _capturePreviews.clear();
     capturedPages.clear();
     scannedResults.clear();
     rectifiedImagePaths.clear();
@@ -834,6 +996,7 @@ class AppState extends ChangeNotifier {
     // in the compile queue and veto a subsequent good photo.
     if (rescanScanId != null) {
       capturedPages.clear();
+      _capturePreviews.clear();
       scannedResults.clear();
       rectifiedImagePaths.clear();
       scanProcessingError = null;
@@ -861,7 +1024,10 @@ class AppState extends ChangeNotifier {
     rectifiedImagePaths.clear();
     notifyListeners();
 
-    final debugDir = await _prepareDebugImagesDir();
+    // Ordinary scanning skips debug-image generation entirely -- it isn't
+    // just gated at the write site below, the directory is never even
+    // prepared. See diagnosticsEnabled's doc comment.
+    final debugDir = diagnosticsEnabled ? await _prepareDebugImagesDir() : null;
     lastDebugImagesDir = debugDir;
     final rectifiedDir = await _prepareRectifiedImagesDir();
 
@@ -871,12 +1037,21 @@ class AppState extends ChangeNotifier {
       pageIndex++;
       final pageSw = kOmrPerfDebug ? (Stopwatch()..start()) : null;
       final decodeSw = kOmrPerfDebug ? (Stopwatch()..start()) : null;
-      final tatOutput = template.examCode == 'TAT' && rectifiedDir != null
+      // Every exam type (2026-09-19; previously TAT-only, with every other
+      // exam getting a fully separate rectifyForOverlay isolate call and
+      // its own independent corner search below) asks decode() to also
+      // write the review/overlay image using the exact same registration
+      // it scores bubbles with -- see decode()'s own doc comment on this
+      // parameter. Timestamped, not a fixed per-page name, so a rescan
+      // retry can never display a stale cached copy of a previous
+      // attempt's image at the same path.
+      final preview = _capturePreviews[page.path];
+      final reviewOutput = preview != null ? preview.reviewPath : rectifiedDir != null
           ? '$rectifiedDir/${scanRef}_${pageIndex}_${DateTime.now().microsecondsSinceEpoch}.jpg' : null;
       var decoded = false;
       try {
-        final result = await compute(_decodeOmrPage, _OmrDecodeRequest(page.path, template,
-            rectifiedOutputPath: tatOutput));
+        final OmrScanResult result = preview?.result ?? await compute<_OmrDecodeRequest, OmrScanResult>(_decodeOmrPage, _OmrDecodeRequest(page.path, template,
+            rectifiedOutputPath: reviewOutput, diagnosticsEnabled: diagnosticsEnabled));
         scannedResults.add(result);
         decoded = true;
       } catch (e) {
@@ -884,6 +1059,11 @@ class AppState extends ChangeNotifier {
       }
       final decodeMs = decodeSw?.elapsedMilliseconds ?? 0;
       final debugSw = kOmrPerfDebug ? (Stopwatch()..start()) : null;
+      // debugDir is only ever non-null when diagnosticsEnabled was true at
+      // the top of this run (see above), so this whole second decode-alike
+      // pass -- illumination-normalize + CLAHE + threshold run a second
+      // time, plus several imwrite()s -- never happens during ordinary
+      // scanning.
       if (debugDir != null) {
         try {
           await compute(_saveDebugVisualization, _DebugVizRequest(page.path, template, debugDir, pageIndex));
@@ -892,23 +1072,13 @@ class AppState extends ChangeNotifier {
         }
       }
       final debugMs = debugSw?.elapsedMilliseconds ?? 0;
-      // Display-only, and computed by a call that never shares any state
-      // with the real decode above (see rectifyForOverlay's doc comment) —
-      // a failure here must never affect scannedResults or block scanning.
-      String? rectifiedPath;
+      // Display-only; a failure here (the file was never written, e.g. a
+      // decode failure, or the write itself failing) must never affect
+      // scannedResults or block scanning -- just leaves no review image.
       final rectifySw = kOmrPerfDebug ? (Stopwatch()..start()) : null;
-      if (template.examCode == 'TAT') {
-        if (decoded && tatOutput != null && await File(tatOutput).exists()) rectifiedPath = tatOutput;
-      } else if (rectifiedDir != null) {
-        try {
-          rectifiedPath = await compute(
-            _rectifyOmrPage,
-            _RectifyRequest(page.path, template, '$rectifiedDir/${scanRef}_$pageIndex.jpg'),
-          );
-        } catch (_) {
-          rectifiedPath = null;
-        }
-      }
+      final rectifiedPath = decoded && reviewOutput != null && await File(reviewOutput).exists()
+          ? reviewOutput
+          : null;
       final rectifyMs = rectifySw?.elapsedMilliseconds ?? 0;
       rectifiedImagePaths.add(rectifiedPath);
       if (pageSw != null) {
@@ -971,9 +1141,9 @@ class AppState extends ChangeNotifier {
 
         // Crop the handwritten name fields so staff have an image to read
         // when they open "Tag Student" — pure pixel work, never blocks
-        // saving the scan itself if it fails. No examinee is auto-filled:
-        // a scan starts untagged and stays "Unnamed examinee" until a
-        // human reads the crop and types a name in.
+        // saving the scan itself if it fails. The scan is auto-saved with a
+        // freshly generated Examinee ID and blank names (see [autoExaminee]
+        // below); staff read the crop and type the name in.
         String? nameCropLastPath;
         String? nameCropFirstPath;
         String? nameCropMiddlePath;
@@ -992,7 +1162,7 @@ class AppState extends ChangeNotifier {
             );
             nameCropLastPath = crops?.lastName;
             nameCropFirstPath = crops?.firstName;
-            nameCropMiddlePath = crops?.middleInitial;
+            nameCropMiddlePath = crops?.middleName;
           } catch (e, st) {
             // Leave all three crop paths null — a bad crop call must
             // never block saving the scan itself.
@@ -1000,6 +1170,9 @@ class AppState extends ChangeNotifier {
           }
         }
         final nameCropMs = nameCropSw?.elapsedMilliseconds ?? 0;
+        final autoExaminee = buildAutoExaminee(
+          generateId: generateExamineeId,
+        );
 
         final addScanSw = kOmrPerfDebug ? (Stopwatch()..start()) : null;
         try {
@@ -1009,6 +1182,7 @@ class AppState extends ChangeNotifier {
             sourceImage: File(capturedPages[i].path),
             rectifiedImage: rectifiedPath == null ? null : File(rectifiedPath),
             result: result,
+            examinee: autoExaminee,
             nameCropLastImage: nameCropLastPath == null ? null : File(nameCropLastPath),
             nameCropFirstImage: nameCropFirstPath == null ? null : File(nameCropFirstPath),
             nameCropMiddleImage: nameCropMiddlePath == null ? null : File(nameCropMiddlePath),
@@ -1076,6 +1250,139 @@ class AppState extends ChangeNotifier {
     );
     scanBatch = updated;
     notifyListeners();
+  }
+
+  // --- manual answer corrections ---------------------------------------------
+
+  /// Corrects what one item of a SAVED scan actually shows, then recalculates
+  /// that scan's stored score from its answers as they now read.
+  ///
+  /// What it does and does not touch:
+  ///  * the machine-detected answers and the scan image are never edited —
+  ///    the correction is appended to the scan's history ([LocalScan.corrections])
+  ///    with the original value, the corrected value, who made it, when, and
+  ///    an optional reason;
+  ///  * the score is rebuilt through the unchanged exam-specific scoring rules
+  ///    ([rescoreScan]) and persisted in the SAME write as the history, so
+  ///    results, View Scan, archived batches, analytics and the cloud record
+  ///    all read one consistent value;
+  ///  * the answer key and the student's details are never modified.
+  ///
+  /// [requestId] makes the call idempotent: an editor keeps one id per open
+  /// dialog, so a double tap or a retried save applies the correction once —
+  /// and a request that would not change what the item reads as is a no-op
+  /// (no new revision, nothing queued to sync).
+  Future<ScanCorrectionOutcome> correctScanAnswer({
+    required String batchId,
+    required String scanId,
+    required String sectionName,
+    required int itemNumber,
+    required CorrectedAnswer value,
+    String? reason,
+    required String requestId,
+  }) =>
+      _changeCorrection(
+        batchId: batchId,
+        scanId: scanId,
+        sectionName: sectionName,
+        itemNumber: itemNumber,
+        requestId: requestId,
+        apply: (history, scan, detected, editor) => CorrectionRules.withCorrection(
+          history,
+          id: requestId,
+          scanId: scanId,
+          captureRevision: scan.captureRevision,
+          detected: detected,
+          value: value,
+          reason: reason,
+          editorUid: editor.uid,
+          editorName: editor.name,
+          at: DateTime.now(),
+        ),
+      );
+
+  /// "Reset to detected answer": records a reset for the item so it reads as
+  /// the machine detected it again (the earlier correction stays in the
+  /// history). Same idempotency and recalculation as [correctScanAnswer]; a
+  /// no-op when the item has no active correction.
+  Future<ScanCorrectionOutcome> resetScanAnswer({
+    required String batchId,
+    required String scanId,
+    required String sectionName,
+    required int itemNumber,
+    required String requestId,
+  }) =>
+      _changeCorrection(
+        batchId: batchId,
+        scanId: scanId,
+        sectionName: sectionName,
+        itemNumber: itemNumber,
+        requestId: requestId,
+        apply: (history, scan, detected, editor) => CorrectionRules.withReset(
+          history,
+          id: requestId,
+          scanId: scanId,
+          captureRevision: scan.captureRevision,
+          detected: detected,
+          editorUid: editor.uid,
+          editorName: editor.name,
+          at: DateTime.now(),
+        ),
+      );
+
+  Future<ScanCorrectionOutcome> _changeCorrection({
+    required String batchId,
+    required String scanId,
+    required String sectionName,
+    required int itemNumber,
+    required String requestId,
+    required List<AnswerCorrection> Function(
+      List<AnswerCorrection> history,
+      LocalScan scan,
+      OmrItemResult detected,
+      ({String uid, String name}) editor,
+    ) apply,
+  }) async {
+    final batch = await batchRepository.getBatchById(batchId);
+    if (batch == null) throw StateError('Batch $batchId does not exist.');
+    final scan = batch.scans.where((s) => s.id == scanId).firstOrNull;
+    if (scan == null) throw StateError('Scan $scanId does not exist in batch $batchId.');
+    // The ORIGINAL detected value, straight from the untouched decode — the
+    // item is looked up by section + number because numbers repeat across
+    // TAT's sections.
+    final detected = scan.decoded.items
+        .where((i) => i.sectionName == sectionName && i.itemNumber == itemNumber)
+        .firstOrNull;
+    if (detected == null) {
+      throw StateError('Item $itemNumber in "$sectionName" is not on this sheet.');
+    }
+    final user = currentUser;
+    final editor = (uid: user?.userId ?? '', name: user?.displayName ?? '');
+    final history = apply(scan.corrections, scan, detected, editor);
+    if (identical(history, scan.corrections) || history.length == scan.corrections.length) {
+      return ScanCorrectionOutcome(batch: batch, scan: scan, changed: false);
+    }
+    final result = rescoreScan(
+      scan: scan.copyWith(corrections: history),
+      answerKey: answerKeys[batch.examCode],
+      editorUid: editor.uid,
+      editorName: editor.name,
+    );
+    final updated = await batchRepository.updateScanCorrections(
+      batchId: batchId,
+      scanId: scanId,
+      corrections: history,
+      result: result,
+    );
+    if (scanBatch?.id == updated.id) scanBatch = updated;
+    notifyListeners();
+    final updatedScan = updated.scans.firstWhere((s) => s.id == scanId);
+    return ScanCorrectionOutcome(
+      batch: updated,
+      scan: updatedScan,
+      changed: true,
+      scoreRecalculated: answerKeys[batch.examCode] != null,
+    );
   }
 
   /// App-external "omr_debug" folder for [processCapturedPages]'s debug
