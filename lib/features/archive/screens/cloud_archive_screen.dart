@@ -3,6 +3,7 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
+import '../../../core/constants/exam_catalog.dart';
 import '../../../core/routes/app_routes.dart';
 import '../../../core/state/app_state.dart';
 import '../../../core/sync/cloud_restore_service.dart';
@@ -27,6 +28,11 @@ class _CloudArchiveScreenState extends State<CloudArchiveScreen> {
   bool _loading = true;
   bool _restoring = false;
   List<LocalBatch> _batches = [];
+
+  /// The exam type whose archived batches are showing, or null while the
+  /// three-button picker is. Purely a view filter over [_batches] -- nothing
+  /// is reloaded, copied or written when it changes.
+  String? _selectedExam;
 
   @override
   void didChangeDependencies() {
@@ -110,40 +116,70 @@ class _CloudArchiveScreenState extends State<CloudArchiveScreen> {
   @override
   Widget build(BuildContext context) {
     final cloudRestoreService = AppStateScope.of(context).cloudRestoreService;
-    return Scaffold(
-      backgroundColor: AppColors.lightBg,
-      appBar: AppHeaderBar(
-        title: 'ARCHIVE',
-        trailing: cloudRestoreService == null
-            ? null
-            : IconButton(
-                tooltip: 'Restore from Cloud',
-                onPressed: _restoring ? null : _restoreFromCloud,
-                icon: _restoring
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                      )
-                    : const FaIcon(FontAwesomeIcons.cloudArrowDown, size: 16, color: Colors.white),
-              ),
-      ),
-      body: SafeArea(
-        top: false,
-        child: RefreshIndicator(
-          onRefresh: _load,
-          child: _loading
-              ? const Center(child: CircularProgressIndicator())
-              : _batches.isEmpty
-                  ? _buildEmptyState()
-                  : _buildList(),
+    return PopScope(
+      // Back from a type's list returns to the picker instead of leaving.
+      canPop: _selectedExam == null,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) setState(() => _selectedExam = null);
+      },
+      child: Scaffold(
+        backgroundColor: AppColors.lightBg,
+        appBar: AppHeaderBar(
+          title: 'ARCHIVE',
+          trailing: cloudRestoreService == null
+              ? null
+              : IconButton(
+                  tooltip: 'Restore from Cloud',
+                  onPressed: _restoring ? null : _restoreFromCloud,
+                  icon: _restoring
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                        )
+                      : const FaIcon(FontAwesomeIcons.cloudArrowDown, size: 16, color: Colors.white),
+                ),
         ),
+        body: SafeArea(
+          top: false,
+          child: RefreshIndicator(
+            onRefresh: _load,
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : _batches.isEmpty
+                    ? _buildEmptyState()
+                    : _selectedExam == null
+                        ? _buildTypePicker()
+                        : _buildTypeList(_selectedExam!),
+          ),
+        ),
+        bottomNavigationBar: const AppBottomNav(activeTab: 'cloud'),
       ),
-      bottomNavigationBar: const AppBottomNav(activeTab: 'cloud'),
     );
   }
 
-  Widget _buildList() {
+  /// The exam types the Archive offers, in button order.
+  static const List<String> _examTypes = ['QTM', 'TAT', 'AT'];
+
+  static const String _otherKey = 'OTHER';
+
+  /// Batches of one exam type, by each batch's own stored
+  /// [LocalBatch.examCode]; keeps [_batches]' existing order.
+  List<LocalBatch> _batchesFor(String examCode) =>
+      _batches.where((b) => b.examCode == examCode).toList(growable: false);
+
+  /// Batches whose exam code none of the three buttons covers. They get one
+  /// extra "Other" button (only when such a batch exists) so a batch is never
+  /// unreachable.
+  List<LocalBatch> get _otherBatches =>
+      _batches.where((b) => !_examTypes.contains(b.examCode)).toList(growable: false);
+
+  List<LocalBatch> _batchesForSelection(String selection) =>
+      selection == _otherKey ? _otherBatches : _batchesFor(selection);
+
+  /// Landing view: one button per exam type, like the Web Results exam
+  /// selector. No batch is listed until a type is chosen.
+  Widget _buildTypePicker() {
     final gradedTotal = _batches.where((b) => b.resultsAvailable).length;
     return ListView(
       padding: const EdgeInsets.all(16),
@@ -160,11 +196,109 @@ class _CloudArchiveScreenState extends State<CloudArchiveScreen> {
           children: [
             const FaIcon(FontAwesomeIcons.boxArchive, size: 11, color: AppColors.primaryGreen),
             const SizedBox(width: 6),
-            Text('Locally Saved Batches', style: AppTextStyles.heading(size: 11.5)),
+            Text('Choose an exam type', style: AppTextStyles.heading(size: 11.5)),
+          ],
+        ),
+        const SizedBox(height: 10),
+        for (final code in _examTypes) _buildTypeButton(code),
+        if (_otherBatches.isNotEmpty) _buildTypeButton(_otherKey),
+      ],
+    );
+  }
+
+  String _typeTitle(String code) {
+    if (code == _otherKey) return 'Other exam types';
+    // Titles come from the existing exam catalog, never re-typed here.
+    final entry = examCatalog.where((e) => e.examCode == code).firstOrNull;
+    return entry?.title ?? code;
+  }
+
+  Widget _buildTypeButton(String code) {
+    final count = _batchesForSelection(code).length;
+    final label = code == _otherKey ? 'Other' : code;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: InkWell(
+        key: Key('archiveType.$code'),
+        onTap: () => setState(() => _selectedExam = code),
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: AppColors.cardBorder),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 56,
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: AppColors.emerald100,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  label,
+                  style: AppTextStyles.heading(size: 14).copyWith(color: AppColors.primaryGreen),
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(_typeTitle(code), style: AppTextStyles.body(size: 12.5, weight: FontWeight.w700)),
+                    const SizedBox(height: 2),
+                    Text(
+                      '$count ${count == 1 ? 'batch' : 'batches'}',
+                      style: AppTextStyles.body(size: 10, color: AppColors.textGray),
+                    ),
+                  ],
+                ),
+              ),
+              const Icon(Icons.chevron_right, color: AppColors.textGray),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// The archived batches of the chosen exam type only.
+  Widget _buildTypeList(String selection) {
+    final batches = _batchesForSelection(selection);
+    final title = selection == _otherKey ? 'Archived Batches (Other)' : 'Archived $selection Batches';
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Row(
+          key: const Key('archiveTypeHeader'),
+          children: [
+            TextButton.icon(
+              key: const Key('archiveBackToTypes'),
+              onPressed: () => setState(() => _selectedExam = null),
+              icon: const Icon(Icons.arrow_back, size: 16),
+              label: const Text('Back'),
+            ),
+            const SizedBox(width: 6),
+            Expanded(child: Text(title, style: AppTextStyles.heading(size: 13))),
           ],
         ),
         const SizedBox(height: 8),
-        ..._batches.map(_buildBatchCard),
+        if (batches.isEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 60),
+            child: Center(
+              child: Text(
+                selection == _otherKey ? 'No batches here.' : 'No archived $selection batches yet.',
+                style: AppTextStyles.body(size: 11, color: AppColors.textGray),
+              ),
+            ),
+          )
+        else
+          ...batches.map(_buildBatchCard),
       ],
     );
   }
@@ -196,8 +330,8 @@ class _CloudArchiveScreenState extends State<CloudArchiveScreen> {
                       children: [
                         Text(
                           batch.description.isNotEmpty ? batch.description : 'Batch ${batch.batchCode}',
-                          style: AppTextStyles.body(size: 12.5, weight: FontWeight.w700),
-                          maxLines: 1,
+                          style: AppTextStyles.body(size: 14, weight: FontWeight.w800),
+                          maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                         ),
                         const SizedBox(height: 2),
