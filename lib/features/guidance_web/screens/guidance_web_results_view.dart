@@ -226,6 +226,12 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
   /// Quietly re-reads the batch list; failures are ignored and leave the
   /// current list untouched. Unopened new batches stay outside
   /// [_seenBatchIds], which is what lights the red dot.
+  ///
+  /// The selected batch is tracked by stable batch id, not object identity.
+  /// Refreshes often recreate the underlying [LocalBatch] objects, so we must
+  /// rebind [_activeBatch] to the current instance in the refreshed list when it
+  /// still exists; otherwise Flutter sees two equal-by-id models as different
+  /// objects and the dropdown assertion fires.
   Future<void> _refreshBatches() async {
     if (_loadingBatches || _batchesError != null) return;
     try {
@@ -239,7 +245,32 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
           if (!archivedIds.contains(b.id)) b,
       ]..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
       if (!mounted) return;
-      setState(() => _batches = batches);
+
+      final activeBatchId = _activeBatch?.id;
+      LocalBatch? refreshedActiveBatch;
+      if (activeBatchId != null) {
+        for (final batch in batches) {
+          if (batch.id == activeBatchId) {
+            refreshedActiveBatch = batch;
+            break;
+          }
+        }
+      }
+
+      setState(() {
+        _batches = batches;
+        if (refreshedActiveBatch != null) {
+          _activeBatch = refreshedActiveBatch;
+        } else if (_activeBatch != null) {
+          _activeBatch = null;
+          _scans = [];
+          _scansError = null;
+          _loadingScans = false;
+          _statusFilter = 'All';
+          _searchController.clear();
+          _viewingScan = null;
+        }
+      });
     } catch (_) {}
   }
 
@@ -513,7 +544,9 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
               TextField(
                 key: const Key('archiveReasonField'),
                 controller: reasonController,
-                decoration: const InputDecoration(labelText: 'Reason (optional)'),
+                decoration: const InputDecoration(
+                  labelText: 'Reason (optional)',
+                ),
               ),
             ],
           ),
@@ -550,11 +583,15 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
       );
     } on GuidanceWebArchiveException catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.message)));
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not archive this batch. Please try again.')),
+        const SnackBar(
+          content: Text('Could not archive this batch. Please try again.'),
+        ),
       );
     }
   }
@@ -1087,7 +1124,8 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
 /// at a time -- fields are never mixed -- and nothing is written anywhere.
 String? resultExamineeName(LocalScan scan, ExamineeRecord? linked) {
   if (linked != null &&
-      (linked.firstName.trim().isNotEmpty || linked.lastName.trim().isNotEmpty)) {
+      (linked.firstName.trim().isNotEmpty ||
+          linked.lastName.trim().isNotEmpty)) {
     return linked.displayName;
   }
   return scan.examinee?.displayName;
