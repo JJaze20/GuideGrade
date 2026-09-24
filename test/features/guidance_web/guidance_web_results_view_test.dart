@@ -202,7 +202,7 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
     await tester.pumpWidget(
       MaterialApp(
-        home: Scaffold(body: GuidanceWebResultsView(service: GuidanceWebResultsService(client: client))),
+        home: Scaffold(body: GuidanceWebResultsView(service: GuidanceWebResultsService(client: client), refreshInterval: null)),
       ),
     );
     await tester.pumpAndSettle();

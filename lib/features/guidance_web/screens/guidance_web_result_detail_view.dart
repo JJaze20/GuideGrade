@@ -6,15 +6,20 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
 import '../../../core/omr/admission_category.dart';
+import '../../../core/omr/cluster_analysis.dart';
 import '../../../core/omr/exam_score.dart';
 import '../../../core/omr/omr_mesh_correction.dart';
 import '../../../core/omr/omr_scorer.dart';
 import '../../../core/omr/omr_templates.dart';
+import '../../../core/omr/qtm_category.dart';
 import '../../../core/omr/qtm_result.dart';
+import '../../../core/omr/tat_category.dart';
+import '../../../core/omr/tat_result.dart';
 import '../../../models/answer_key.dart';
 import '../../../models/examinee_record.dart';
 import '../../../models/local_batch.dart';
 import '../services/guidance_web_results_service.dart';
+import 'guidance_web_cluster_radar.dart';
 
 /// Which outcome an [ScoredItem] should be rendered as in the Answer
 /// Details table — deliberately distinct from a plain correct/incorrect
@@ -341,6 +346,8 @@ class GuidanceWebResultDetailView extends StatefulWidget {
     required this.service,
     required this.onBack,
     this.linkedExaminee,
+    this.showClusterAnalysis = false,
+    this.backLabel = 'Back to Results',
   });
 
   final LocalScan scan;
@@ -354,6 +361,12 @@ class GuidanceWebResultDetailView extends StatefulWidget {
   /// tag -- see [resolveWebExamineeIdentity].
   final ExamineeRecord? linkedExaminee;
 
+  /// Analytics mode: for exams that have cluster definitions (AT, QTM) the
+  /// Answer Details card is replaced by a Cluster Analysis table. Every other
+  /// exam, and the default (false), keeps Answer Details.
+  final bool showClusterAnalysis;
+  final String backLabel;
+
   @override
   State<GuidanceWebResultDetailView> createState() =>
       _GuidanceWebResultDetailViewState();
@@ -364,6 +377,10 @@ class _GuidanceWebResultDetailViewState
   bool _loading = true;
   String? _error;
   AnswerKey? _answerKey;
+
+  /// Batch average right-count per cluster label (Analytics mode only);
+  /// empty until loaded or when it could not be computed.
+  Map<String, double> _clusterAverages = const {};
 
   /// Independent of [_loading]/[_error] above (which gate only the
   /// answer-key-driven Examinee Information/Result Summary/Answer Details)
@@ -389,9 +406,24 @@ class _GuidanceWebResultDetailViewState
     });
     try {
       final key = await widget.service.loadAnswerKey(widget.batch.examCode);
+      var averages = const <String, double>{};
+      if (widget.showClusterAnalysis &&
+          key != null &&
+          clusterDefsFor(widget.batch.examCode) != null) {
+        try {
+          final scans = await widget.service.loadScansForBatch(widget.batch);
+          averages = computeClusterAverages(
+            widget.batch.examCode,
+            scans.map((s) => scoreOmrResult(s.decoded, key).items),
+          );
+        } catch (_) {
+          // Averages are supplementary; the table still shows the counts.
+        }
+      }
       if (!mounted) return;
       setState(() {
         _answerKey = key;
+        _clusterAverages = averages;
         _loading = false;
       });
     } on GuidanceWebResultsException catch (e) {
@@ -528,7 +560,7 @@ class _GuidanceWebResultDetailViewState
             color: AppColors.primaryGreen,
           ),
           label: Text(
-            'Back to Results',
+            widget.backLabel,
             style: AppTextStyles.body(
               size: 11.5,
               weight: FontWeight.w700,
@@ -564,7 +596,14 @@ class _GuidanceWebResultDetailViewState
           const SizedBox(height: 16),
           _buildScannedSheetCard(),
           const SizedBox(height: 16),
-          _buildAnswerDetailsCard(),
+          if (widget.showClusterAnalysis) ...[
+            if (clusterDefsFor(widget.batch.examCode) != null) ...[
+              _buildClusterAnalysisCard(),
+              const SizedBox(height: 16),
+            ],
+            _buildCategoryCard(),
+          ] else
+            _buildAnswerDetailsCard(),
         ],
       ),
     );
@@ -887,6 +926,432 @@ class _GuidanceWebResultDetailViewState
           meshInteriorMeasuredFrac:
               widget.scan.decoded.meshInteriorMeasuredFrac,
         ),
+      ),
+    );
+  }
+
+  // --- Cluster Analysis (Analytics mode, AT / QTM) --------------------------
+
+  Widget _buildClusterAnalysisCard() {
+    final rows = computeClusterRows(
+      widget.batch.examCode,
+      _scored.items,
+      averages: _clusterAverages,
+    )!;
+    final headerStyle = AppTextStyles.body(
+      size: 9.5,
+      weight: FontWeight.w800,
+      color: AppColors.textGray,
+    );
+    Widget cell(Widget child) => Expanded(child: Center(child: child));
+    Widget minus() =>
+        Text('–', style: AppTextStyles.body(size: 12, color: AppColors.textGray));
+    Widget belowMark(ClusterRow r) => r.band == ClusterBand.below
+        ? const Icon(Icons.check, size: 16, color: AppColors.warmRedOrange)
+        : minus();
+    Widget aboveMark(ClusterRow r) => r.band == ClusterBand.above
+        ? const Icon(Icons.check, size: 16, color: AppColors.primaryGreen)
+        : minus();
+    String fmt(double v) =>
+        v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(1);
+    Widget averageCell(ClusterRow r) => Text(
+      r.average == null
+          ? '—'
+          : '${r.right?.toString() ?? '—'}/${fmt(r.average!)}',
+      style: AppTextStyles.body(
+        size: 11,
+        weight: r.band == ClusterBand.average
+            ? FontWeight.w800
+            : FontWeight.w400,
+      ),
+    );
+    return _card('CLUSTER ANALYSIS', [
+      if (_answerKey == null) ...[
+        _answerKeyNotice(),
+        const SizedBox(height: 12),
+      ],
+      Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Row(
+          children: [
+            Expanded(flex: 4, child: Text('CLUSTER', style: headerStyle)),
+            cell(Text('TOTAL ITEMS', style: headerStyle)),
+            cell(Text('RIGHT', style: headerStyle)),
+            cell(Text('BELOW AVG', style: headerStyle)),
+            cell(Text('AVERAGE', style: headerStyle)),
+            cell(Text('ABOVE AVG', style: headerStyle)),
+          ],
+        ),
+      ),
+      const Divider(height: 1, color: AppColors.cardBorder),
+      for (final r in rows)
+        Container(
+          key: Key('clusterRow_${r.def.label}'),
+          color: r.def.isGroup ? AppColors.lightBg : null,
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Row(
+            children: [
+              Expanded(
+                flex: 4,
+                child: Padding(
+                  padding: EdgeInsets.only(left: r.def.isGroup ? 8 : 20),
+                  child: Text(
+                    '${r.def.label} (${r.def.fromItem}–${r.def.toItem})',
+                    style: AppTextStyles.body(
+                      size: 11,
+                      weight: r.def.isGroup ? FontWeight.w700 : FontWeight.w400,
+                    ),
+                  ),
+                ),
+              ),
+              cell(Text('${r.total}', style: AppTextStyles.body(size: 11))),
+              cell(
+                Text(
+                  r.right?.toString() ?? '—',
+                  style: AppTextStyles.body(size: 11, weight: FontWeight.w700),
+                ),
+              ),
+              cell(belowMark(r)),
+              cell(averageCell(r)),
+              cell(aboveMark(r)),
+            ],
+          ),
+        ),
+    ]);
+  }
+
+  // --- Category (Analytics mode, AT / QTM) ----------------------------------
+
+  static const Color _catA = Color(0xFFEF4444);
+  static const Color _catB = Color(0xFFFFB000);
+  static const Color _catC = Color(0xFF4A7AF5);
+  static const Color _catD = Color(0xFF10B981);
+
+  /// (letter, color, score range, optional percent label) per exam, lowest
+  /// band first - mirrors the Guidance Council's category templates.
+  List<(String, Color, String, String?)> get _categoryBands =>
+      widget.batch.examCode == 'TAT'
+      ? const [
+          ('A', _catA, '0 – 121', '76% and below'),
+          ('B', _catB, '128 – 135', '80% – 84%'),
+          ('C', _catC, '136 – 143', '85% – 89%'),
+          ('D', _catD, '144 – 160', '90% and above'),
+        ]
+      : widget.batch.examCode == 'QTM'
+      ? const [
+          ('A', _catA, '0 – 45', '76% and below'),
+          ('B', _catB, '48 – 50', '80% – 84%'),
+          ('C', _catC, '51 – 53', '85% – 89%'),
+          ('D', _catD, '54 – 60', '90% and above'),
+        ]
+      : const [
+          ('A', _catA, '0 – 54', null),
+          ('B', _catB, '58 – 60', null),
+          ('C', _catC, '61 – 64', null),
+          ('D', _catD, '65 – 72', null),
+        ];
+
+  String? _examineeLetter() {
+    final raw = widget.scan.result?.rawScore;
+    if (raw == null) return null;
+    if (widget.batch.examCode == 'QTM') {
+      return qtmCategory(raw)?.name.toUpperCase();
+    }
+    if (widget.batch.examCode == 'TAT') {
+      return tatCategory(raw)?.name.toUpperCase();
+    }
+    return admissionCategory(raw)?.name.toUpperCase();
+  }
+
+  Widget _buildCategoryCard() {
+    final letter = _examineeLetter();
+    final letterColor = _categoryBands
+        .firstWhere(
+          (b) => b.$1 == letter,
+          orElse: () => ('', AppColors.textGray, '', null),
+        )
+        .$2;
+    final isQtm = widget.batch.examCode == 'QTM';
+    // TAT has no cluster analysis (yet): Category only, no radar or insights.
+    final allRows = computeClusterRows(
+      widget.batch.examCode,
+      _scored.items,
+      averages: _clusterAverages,
+    );
+    final rows = (allRows ?? const <ClusterRow>[])
+        .where((r) => !r.def.isGroup)
+        .toList();
+
+    List<double?> fractions(double? Function(ClusterRow r) value) => [
+      for (final r in rows)
+        () {
+          final v = value(r);
+          return v == null || r.total == 0 ? null : v / r.total;
+        }(),
+    ];
+
+    final raw = widget.scan.result?.rawScore;
+    final eligibility = (isQtm && raw != null) ? qtmEligibility(raw) : null;
+    final tatMeets =
+        widget.batch.examCode == 'TAT' &&
+        raw != null &&
+        tatEligibility(raw) == TatEligibility.meetsRequirement;
+
+    return _card('CATEGORY', [
+      Wrap(
+        spacing: 32,
+        runSpacing: 24,
+        crossAxisAlignment: WrapCrossAlignment.start,
+        children: [
+          if (allRows != null)
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              ClusterRadarChart(
+                key: const Key('clusterRadar'),
+                axes: [for (final r in rows) r.def.label],
+                series: [
+                  ClusterRadarSeries(
+                    label: 'Batch average',
+                    color: _catB,
+                    fractions: fractions((r) => r.average),
+                  ),
+                  ClusterRadarSeries(
+                    label: 'This examinee',
+                    color: _catC,
+                    fractions: fractions((r) => r.right?.toDouble()),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _legendDot(_catC, 'This examinee'),
+                  const SizedBox(width: 16),
+                  _legendDot(_catB, 'Batch average'),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                "Each axis is the share of that cluster's items answered correctly.",
+                style: AppTextStyles.body(size: 9.5, color: AppColors.textGray),
+              ),
+            ],
+          ),
+          ConstrainedBox(
+            constraints: const BoxConstraints(minWidth: 280, maxWidth: 380),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Category', style: AppTextStyles.heading(size: 20)),
+                Text(
+                  letter == null ? '—' : '$letter.',
+                  key: const Key('categoryLetter'),
+                  style: AppTextStyles.heading(size: 88).copyWith(
+                    color: letter == null ? AppColors.textGray : letterColor,
+                    height: 1.1,
+                  ),
+                ),
+                if (letter == null)
+                  Text(
+                    raw == null
+                        ? 'No recorded score.'
+                        : 'Unclassified for this score.',
+                    style: AppTextStyles.body(
+                      size: 11,
+                      color: AppColors.textGray,
+                    ),
+                  ),
+                const SizedBox(height: 12),
+                _categoryLegend(letter, isQtm, eligibility, tatMeets),
+              ],
+            ),
+          ),
+          if (allRows != null)
+            ConstrainedBox(
+              constraints: const BoxConstraints(minWidth: 240, maxWidth: 340),
+              child: _buildInsightsPanel(allRows),
+            ),
+        ],
+      ),
+    ]);
+  }
+
+  Widget _buildInsightsPanel(List<ClusterRow> rows) {
+    final insights = buildClusterInsights(rows);
+    return Container(
+      key: const Key('insightsPanel'),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.lightBg,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.cardBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Insights', style: AppTextStyles.heading(size: 15)),
+          const SizedBox(height: 10),
+          if (insights.isEmpty)
+            Text(
+              'No graded results to comment on yet.',
+              style: AppTextStyles.body(size: 11, color: AppColors.textGray),
+            )
+          else
+            for (final i in insights)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      switch (i.kind) {
+                        InsightKind.strength => Icons.trending_up,
+                        InsightKind.concern => Icons.flag_outlined,
+                        InsightKind.neutral => Icons.horizontal_rule,
+                      },
+                      size: 16,
+                      color: switch (i.kind) {
+                        InsightKind.strength => AppColors.primaryGreen,
+                        InsightKind.concern => AppColors.warmRedOrange,
+                        InsightKind.neutral => AppColors.textGray,
+                      },
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(i.text, style: AppTextStyles.body(size: 11.5)),
+                    ),
+                  ],
+                ),
+              ),
+        ],
+      ),
+    );
+  }
+
+  Widget _legendDot(Color color, String label) => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Container(
+        width: 10,
+        height: 10,
+        decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+      ),
+      const SizedBox(width: 6),
+      Text(label, style: AppTextStyles.body(size: 10.5)),
+    ],
+  );
+
+  Widget _categoryLegend(
+    String? letter,
+    bool isQtm,
+    QtmEligibility? elig,
+    bool tatMeets,
+  ) {
+    final isTat = widget.batch.examCode == 'TAT';
+    final title = isQtm
+        ? 'Qualifying Test for Mathematics (QTM)'
+        : isTat
+        ? 'Teaching Aptitude Test (TAT)'
+        : 'Admission Test (AT)';
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.cardBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: AppTextStyles.body(size: 11.5, weight: FontWeight.w700),
+          ),
+          const SizedBox(height: 8),
+          for (final b in _categoryBands.reversed)
+            Container(
+              padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 6),
+              decoration: BoxDecoration(
+                color: b.$1 == letter ? b.$2.withValues(alpha: 0.12) : null,
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 26,
+                    child: Text(
+                      '${b.$1}.',
+                      style: AppTextStyles.heading(size: 16).copyWith(color: b.$2),
+                    ),
+                  ),
+                  if (b.$4 != null)
+                    Expanded(
+                      child: Text(b.$4!, style: AppTextStyles.body(size: 11)),
+                    )
+                  else
+                    const Spacer(),
+                  Text(
+                    b.$3,
+                    style: AppTextStyles.body(
+                      size: 11,
+                      weight: FontWeight.w700,
+                      color: b.$2,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          if (isTat) ...[
+            const Divider(height: 16, color: AppColors.cardBorder),
+            _eligibilityRow(
+              'C.2',
+              _catC,
+              '30% (48) for English, Filipino, Mathematics, Science, Social Studies and Religious Education',
+              tatMeets,
+            ),
+          ],
+          if (isQtm) ...[
+            const Divider(height: 16, color: AppColors.cardBorder),
+            _eligibilityRow(
+              'C.2',
+              _catC,
+              '30% (18) for Computer Science',
+              elig == QtmEligibility.allCoursesIncludingBscs,
+            ),
+            _eligibilityRow(
+              'D.2',
+              const Color(0xFFA78BFA),
+              '25% (15) for Architecture, Civil, Computer, Electrical and Electronics Engineering',
+              elig == QtmEligibility.allCoursesIncludingBscs ||
+                  elig == QtmEligibility.allCoursesExceptBscs,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _eligibilityRow(String tag, Color color, String text, bool met) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3, horizontal: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 30,
+            child: Text(
+              tag,
+              style: AppTextStyles.heading(size: 14).copyWith(color: color),
+            ),
+          ),
+          Expanded(child: Text(text, style: AppTextStyles.body(size: 10.5))),
+          if (met)
+            const Padding(
+              padding: EdgeInsets.only(left: 6),
+              child: Icon(Icons.check, size: 15, color: AppColors.primaryGreen),
+            ),
+        ],
       ),
     );
   }
