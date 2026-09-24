@@ -172,16 +172,39 @@ class OmrDecoder {
     _ => 2.0,
   };
 
-  /// Odd threshold window spanning several bubbles to follow lighting gradients.
-  /// Per-exam: TAT's tighter bubble spacing means a 45-px window averages
-  /// across too many bubbles, diluting the local mean and making faint marks
-  /// harder to distinguish from blank paper.  A smaller window (31) tracks
-  /// the narrower columns more faithfully without being so small that it
-  /// loses the lighting-gradient-following property.
-  static int _adaptiveThresholdBlockSizeFor(String examCode) => switch (examCode) {
-    'TAT' => 31,
-    _ => 45,
-  };
+  /// How many bubble widths the adaptive-threshold window must span.
+  ///
+  /// An adaptive threshold compares each pixel against the mean of its own
+  /// window, so the window has to be dominated by PAPER for a mark to stand
+  /// out from it. Once the window is no wider than a bubble, a filled
+  /// bubble's centre is measured against a neighbourhood lying entirely
+  /// inside the same mark: the local mean is the mark's own darkness, the
+  /// centre fails `pixel < mean - C`, and the mark binarises as a ring with
+  /// a hole punched through it rather than a solid blob.
+  ///
+  /// Measured on the bench across TAT/QTM/AT, mean centre-fill of a shaded
+  /// bubble against this multiplier: 0.97x -> 0.67, 1.41x -> 0.86,
+  /// 1.88x -> 0.89, 2.50x -> 0.89, 3.44x -> 0.88. It climbs steeply out of
+  /// the hole, plateaus near 1.9x, and drifts back down as the window grows
+  /// too large to track lighting gradients. 2.5x sits on the plateau and is
+  /// what `guidegrade-omr-bench` has used all along (its 40pt window against
+  /// a 16pt bubble), which is the configuration every bench result and the
+  /// trained bubble classifier were produced under.
+  static const double _adaptiveThresholdBlockBubbleSpan = 2.5;
+
+  /// Odd threshold window, derived from the sheet's own bubble size.
+  ///
+  /// Previously hardcoded per exam (TAT 31px, others 45px) against a 32px
+  /// bubble — 0.97x and 1.41x respectively, i.e. TAT's window was narrower
+  /// than the bubble it had to measure. Deriving it keeps the ratio correct
+  /// if a redesigned sheet changes bubble size, instead of silently
+  /// reintroducing the hole.
+  static int _adaptiveThresholdBlockSizeFor(OmrExamTemplate template) {
+    final bubbleWidthPx = template.bubbleRadiusPt * 2 * _canonicalPxPerPt;
+    final raw = (bubbleWidthPx * _adaptiveThresholdBlockBubbleSpan).round();
+    // Adaptive thresholding requires an odd window of at least 3.
+    return raw < 3 ? 3 : (raw.isEven ? raw + 1 : raw);
+  }
 
   /// Constant subtracted from the local adaptive-threshold mean; higher
   /// values require darker pixels to count as "ink".
@@ -1881,7 +1904,7 @@ class OmrDecoder {
                         255,
                         cv.ADAPTIVE_THRESH_GAUSSIAN_C,
                         cv.THRESH_BINARY_INV,
-                        _adaptiveThresholdBlockSizeFor(template.examCode),
+                        _adaptiveThresholdBlockSizeFor(template),
                         _adaptiveThresholdCFor(_adaptiveThresholdC, warpedBrightness),
                       );
                       if (threshSw != null) {
@@ -2870,7 +2893,7 @@ class OmrDecoder {
                           255,
                           cv.ADAPTIVE_THRESH_GAUSSIAN_C,
                           cv.THRESH_BINARY_INV,
-                          _adaptiveThresholdBlockSizeFor(template.examCode),
+                          _adaptiveThresholdBlockSizeFor(template),
                           _adaptiveThresholdCFor(_adaptiveThresholdC, warpedGrayBrightness),
                         );
                         try {

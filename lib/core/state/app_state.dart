@@ -1027,7 +1027,18 @@ class AppState extends ChangeNotifier {
     // Ordinary scanning skips debug-image generation entirely -- it isn't
     // just gated at the write site below, the directory is never even
     // prepared. See diagnosticsEnabled's doc comment.
-    final debugDir = diagnosticsEnabled ? await _prepareDebugImagesDir() : null;
+    //
+    // Each run gets its own subfolder. The decoder names its output by page
+    // slot (`sheet1_inkmap.jpg` and so on), so a shared folder meant run two
+    // silently inherited run one's images for any stage it didn't overwrite
+    // -- a decode that bailed early wrote only sheet1_FAILED.jpg and left the
+    // previous session's ink map sitting there to be shown as if it were
+    // this sheet's. Per-run folders make that impossible, and keep the older
+    // runs around to compare against instead of deleting them.
+    final debugDir = diagnosticsEnabled
+        ? await _prepareDebugImagesDir(
+            runSubfolder: 'run_${DateTime.now().millisecondsSinceEpoch}')
+        : null;
     lastDebugImagesDir = debugDir;
     final rectifiedDir = await _prepareRectifiedImagesDir();
 
@@ -1394,11 +1405,18 @@ class AppState extends ChangeNotifier {
   /// reaches [processCapturedPages] at all.
   Future<String?> prepareDebugImagesDir() => _prepareDebugImagesDir();
 
-  Future<String?> _prepareDebugImagesDir() async {
+  /// [runSubfolder] isolates one processing run's images from every other
+  /// run's — see [processCapturedPages], which passes one. Omitted for the
+  /// rejected-capture snapshot, which does its own `rejected/` nesting.
+  Future<String?> _prepareDebugImagesDir({String? runSubfolder}) async {
     try {
       final base = await getExternalStorageDirectory();
       if (base == null) return null;
-      final dir = Directory('${base.path}/omr_debug');
+      final dir = Directory(
+        runSubfolder == null
+            ? '${base.path}/omr_debug'
+            : '${base.path}/omr_debug/$runSubfolder',
+      );
       if (!dir.existsSync()) dir.createSync(recursive: true);
       return dir.path;
     } catch (_) {
