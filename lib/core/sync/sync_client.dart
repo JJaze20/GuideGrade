@@ -117,6 +117,7 @@ class CloudScanRow {
     this.lastName,
     this.middleName,
     this.examineeNumber,
+    this.examineeId,
     this.imagePath,
     this.rectifiedImagePath,
     this.imageUploaded = false,
@@ -152,6 +153,14 @@ class CloudScanRow {
   /// constraint (mirrors [ExamineeInfo.middleName], never required for
   /// completeness); may be null/blank even when the trio above is set.
   final String? middleName;
+
+  /// `scans.examinee_id` -- the canonical `examinees` row this scan is linked
+  /// to (by "Link to Existing Examinee" or "Confirm and Create Examinee"), or
+  /// null for an unlinked / legacy scan. Only populated by reads that select
+  /// it ([SyncClient.readCloudScans]); null everywhere else. This is a
+  /// reference only: it is never copied into [LocalScan] and the scan's own
+  /// tag columns above are never changed by linking.
+  final String? examineeId;
 
   /// Storage object keys, or null when no image was ever uploaded for this
   /// scan/variant.

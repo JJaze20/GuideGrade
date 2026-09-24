@@ -1,7 +1,9 @@
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter/gestures.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:guidegrade/core/sync/sync_client.dart';
 import 'package:guidegrade/core/sync/sync_job.dart';
@@ -230,12 +232,13 @@ CloudScanRow _scanRow({
   required String examCode,
   String? firstName,
   String? lastName,
+  DateTime? capturedAt,
 }) =>
     CloudScanRow(
       id: id,
       batchId: batchId,
       examCode: examCode,
-      capturedAt: DateTime.utc(2026, 1, 1),
+      capturedAt: capturedAt ?? DateTime.utc(2026, 1, 1),
       decoded: {'examCode': examCode, 'items': <dynamic>[]},
       resultStatus: null,
       firstName: firstName,
@@ -456,7 +459,331 @@ void main() {
     });
   });
 
+  testWidgets('Unlinked Scans column headers line up with their row cells', (tester) async {
+    client.batchesToReturn = CloudBatchesRead.found([_batchRow(id: 'bq', examCode: 'QTM')]);
+    client.unlinkedScansToReturn = CloudScansRead.found([
+      _scanRow(id: 's1', batchId: 'bq', examCode: 'QTM', firstName: 'Juan', lastName: 'Cruz'),
+    ]);
+    await pumpView(tester);
+    await tester.tap(find.textContaining('Unlinked Scans'));
+    await tester.pumpAndSettle();
+
+    double left(Finder f) => tester.getTopLeft(f).dx;
+    expect(left(find.text('OCR NAME')), left(find.text('Cruz, Juan')));
+    expect(left(find.text('EXAM')), left(find.text('QTM').last));
+    expect(left(find.text('BATCH')), left(find.text('B-QTM')));
+    expect(left(find.text('CAPTURED')), left(find.text('Jan 1, 2026')));
+  });
+
+  group('Unlinked Scans exam-type filter', () {
+    Future<void> openUnlinked(WidgetTester tester) async {
+      client.batchesToReturn = CloudBatchesRead.found([
+        _batchRow(id: 'bq', examCode: 'QTM'),
+        _batchRow(id: 'bt', examCode: 'TAT'),
+        _batchRow(id: 'ba', examCode: 'AT'),
+      ]);
+      client.unlinkedScansToReturn = CloudScansRead.found([
+        _scanRow(id: 's1', batchId: 'bq', examCode: 'QTM', firstName: 'Juan', lastName: 'Cruz'),
+        _scanRow(id: 's2', batchId: 'bt', examCode: 'TAT', firstName: 'Maria', lastName: 'Santos'),
+        _scanRow(id: 's3', batchId: 'ba', examCode: 'AT', firstName: 'Pedro', lastName: 'Reyes'),
+        _scanRow(id: 's4', batchId: 'bt', examCode: 'TAT', firstName: 'Ana', lastName: 'Lopez'),
+      ]);
+      await pumpView(tester);
+      await tester.tap(find.textContaining('Unlinked Scans'));
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> pick(WidgetTester tester, String option) async {
+      await tester.tap(find.byKey(const Key('unlinkedExamTypeFilter')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(option).last);
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('defaults to All and shows every unlinked scan', (tester) async {
+      await openUnlinked(tester);
+      expect(find.text('Cruz, Juan'), findsOneWidget);
+      expect(find.text('Santos, Maria'), findsOneWidget);
+      expect(find.text('Reyes, Pedro'), findsOneWidget);
+      expect(find.text('Lopez, Ana'), findsOneWidget);
+      expect(find.text('Showing 4 of 4'), findsOneWidget);
+    });
+
+    testWidgets('QTM / TAT / AT each show only that exam type, and All restores the full list',
+        (tester) async {
+      await openUnlinked(tester);
+
+      await pick(tester, 'TAT');
+      expect(find.text('Santos, Maria'), findsOneWidget);
+      expect(find.text('Lopez, Ana'), findsOneWidget);
+      expect(find.text('Cruz, Juan'), findsNothing);
+      expect(find.text('Reyes, Pedro'), findsNothing);
+      expect(find.text('Showing 2 of 4'), findsOneWidget);
+
+      await pick(tester, 'QTM');
+      expect(find.text('Cruz, Juan'), findsOneWidget);
+      expect(find.text('Santos, Maria'), findsNothing);
+      expect(find.text('Showing 1 of 4'), findsOneWidget);
+
+      await pick(tester, 'AT');
+      expect(find.text('Reyes, Pedro'), findsOneWidget);
+      expect(find.text('Cruz, Juan'), findsNothing);
+
+      await pick(tester, 'All');
+      expect(find.text('Showing 4 of 4'), findsOneWidget);
+      expect(find.text('Lopez, Ana'), findsOneWidget);
+    });
+
+    testWidgets('changing the filter is view-only: no reload and nothing linked',
+        (tester) async {
+      await openUnlinked(tester);
+      client.calls.clear();
+      client.unlinkedScansToReturn = CloudScansRead.found(const []);
+      // Filter is view-only: switching it makes no request and links nothing.
+      await pick(tester, 'AT');
+      await pick(tester, 'QTM');
+      expect(client.calls.where((c) => c == 'readUnlinkedScans' || c.startsWith('linkScanToExaminee')), isEmpty);
+      expect(find.text('Cruz, Juan'), findsOneWidget);
+    });
+
+    testWidgets('a filter with no matches says so', (tester) async {
+      client.batchesToReturn = CloudBatchesRead.found([_batchRow(id: 'bt', examCode: 'TAT')]);
+      client.unlinkedScansToReturn = CloudScansRead.found([
+        _scanRow(id: 's2', batchId: 'bt', examCode: 'TAT', firstName: 'Maria', lastName: 'Santos'),
+      ]);
+      await pumpView(tester);
+      await tester.tap(find.textContaining('Unlinked Scans'));
+      await tester.pumpAndSettle();
+
+      await pick(tester, 'QTM');
+      expect(find.text('No unlinked QTM scans.'), findsOneWidget);
+      expect(find.text('Showing 0 of 1'), findsOneWidget);
+      expect(find.text('Santos, Maria'), findsNothing);
+    });
+  });
+
+  group('Unlinked Scans date filter', () {
+    // Days of the CURRENT month, so the date picker (which opens on this
+    // month) needs no month navigation.
+    DateTime day(int d) {
+      final now = DateTime.now();
+      return DateTime.utc(now.year, now.month, d);
+    }
+
+    Future<void> openUnlinked(WidgetTester tester) async {
+      client.batchesToReturn = CloudBatchesRead.found([
+        _batchRow(id: 'bq', examCode: 'QTM'),
+        _batchRow(id: 'bt', examCode: 'TAT'),
+      ]);
+      client.unlinkedScansToReturn = CloudScansRead.found([
+        _scanRow(id: 's1', batchId: 'bt', examCode: 'TAT', firstName: 'Juan', lastName: 'Cruz', capturedAt: day(9)),
+        _scanRow(id: 's2', batchId: 'bt', examCode: 'TAT', firstName: 'Maria', lastName: 'Santos', capturedAt: day(10)),
+        _scanRow(id: 's3', batchId: 'bq', examCode: 'QTM', firstName: 'Pedro', lastName: 'Reyes', capturedAt: day(15)),
+        _scanRow(id: 's4', batchId: 'bt', examCode: 'TAT', firstName: 'Ana', lastName: 'Lopez', capturedAt: day(16)),
+      ]);
+      await pumpView(tester);
+      await tester.tap(find.textContaining('Unlinked Scans'));
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> pickDay(WidgetTester tester, String fieldKey, int dayOfMonth) async {
+      await tester.tap(find.byKey(Key(fieldKey)));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('$dayOfMonth'));
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> pickRange(WidgetTester tester, int from, int to) async {
+      await pickDay(tester, 'unlinkedDateFrom', from);
+      await pickDay(tester, 'unlinkedDateTo', to);
+    }
+
+    testWidgets('defaults to All dates with every scan shown', (tester) async {
+      await openUnlinked(tester);
+      expect(find.text('Captured Date (MM/DD/YYYY)'), findsOneWidget);
+      expect(find.text('From'), findsOneWidget);
+      expect(find.text('to'), findsOneWidget);
+      expect(find.text('Showing 4 of 4'), findsOneWidget);
+      expect(find.byKey(const Key('unlinkedDateClear')), findsNothing);
+    });
+
+    testWidgets('a date range keeps scans captured on or between its first and last day', (tester) async {
+      await openUnlinked(tester);
+      await pickRange(tester, 10, 15);
+
+      expect(find.text('Santos, Maria'), findsOneWidget); // first day, inclusive
+      expect(find.text('Reyes, Pedro'), findsOneWidget); // last day, inclusive
+      expect(find.text('Cruz, Juan'), findsNothing); // day before
+      expect(find.text('Lopez, Ana'), findsNothing); // day after
+      expect(find.text('Showing 2 of 4'), findsOneWidget);
+      expect(find.byKey(const Key('unlinkedDateClear')), findsOneWidget);
+    });
+
+    testWidgets('Clear brings every date back', (tester) async {
+      await openUnlinked(tester);
+      await pickRange(tester, 10, 15);
+      await tester.tap(find.byKey(const Key('unlinkedDateClear')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('From'), findsOneWidget);
+      expect(find.text('to'), findsOneWidget);
+      expect(find.text('Showing 4 of 4'), findsOneWidget);
+      expect(find.text('Cruz, Juan'), findsOneWidget);
+    });
+
+    testWidgets('a From date alone means "on or after"; a To date alone means "on or before"', (tester) async {
+      await openUnlinked(tester);
+
+      await pickDay(tester, 'unlinkedDateFrom', 15);
+      expect(find.text('Reyes, Pedro'), findsOneWidget);
+      expect(find.text('Lopez, Ana'), findsOneWidget);
+      expect(find.text('Santos, Maria'), findsNothing);
+      expect(find.text('Showing 2 of 4'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('unlinkedDateClear')));
+      await tester.pumpAndSettle();
+      await pickDay(tester, 'unlinkedDateTo', 10);
+      expect(find.text('Cruz, Juan'), findsOneWidget);
+      expect(find.text('Santos, Maria'), findsOneWidget);
+      expect(find.text('Reyes, Pedro'), findsNothing);
+      expect(find.text('Showing 2 of 4'), findsOneWidget);
+    });
+
+    testWidgets('the fields show MM/DD/YYYY dates, and a From after To pulls To along', (tester) async {
+      await openUnlinked(tester);
+      final now = DateTime.now();
+      String fmt(int d) =>
+          '${now.month.toString().padLeft(2, '0')}/${d.toString().padLeft(2, '0')}/${now.year}';
+
+      await pickRange(tester, 10, 15);
+      expect(find.text(fmt(10)), findsOneWidget);
+      expect(find.text(fmt(15)), findsOneWidget);
+
+      await pickDay(tester, 'unlinkedDateFrom', 20); // after To (15)
+      expect(find.text(fmt(20)), findsNWidgets(2)); // To follows: never inverted
+    });
+
+    testWidgets('the calendar opens under the field and closes on an outside tap without changing anything',
+        (tester) async {
+      await openUnlinked(tester);
+      expect(find.byType(CalendarDatePicker), findsNothing);
+
+      await tester.tap(find.byKey(const Key('unlinkedDateFrom')));
+      await tester.pumpAndSettle();
+      expect(find.byType(CalendarDatePicker), findsOneWidget);
+      // Sits directly below the From field.
+      expect(
+        tester.getTopLeft(find.byType(CalendarDatePicker)).dy,
+        greaterThan(tester.getBottomLeft(find.byKey(const Key('unlinkedDateFrom'))).dy),
+      );
+
+      await tester.tapAt(const Offset(1300, 1500)); // outside the popover
+      await tester.pumpAndSettle();
+      expect(find.byType(CalendarDatePicker), findsNothing);
+      expect(find.text('From'), findsOneWidget);
+      expect(find.text('Showing 4 of 4'), findsOneWidget);
+    });
+
+    testWidgets('month arrows and arrow keys in the calendar work with a mouse (desktop web) without assertions',
+        (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer(location: Offset.zero);
+      addTearDown(mouse.removePointer);
+
+      await openUnlinked(tester);
+      await tester.tap(find.byKey(const Key('unlinkedDateFrom')));
+      await tester.pumpAndSettle();
+
+      Future<void> click(String tooltip) async {
+        final at = tester.getCenter(find.byTooltip(tooltip));
+        await mouse.moveTo(at); // hover shows the tooltip
+        await tester.pump(const Duration(milliseconds: 700));
+        await mouse.down(at);
+        await mouse.up();
+        await tester.pumpAndSettle();
+      }
+
+      await click('Next month');
+      await click('Next month');
+      await click('Previous month');
+      await click('Previous month');
+      await click('Previous month');
+      expect(find.byType(CalendarDatePicker), findsOneWidget);
+
+      for (var i = 0; i < 40; i++) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+        await tester.pump();
+      }
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      expect(find.byType(CalendarDatePicker), findsOneWidget);
+      // Must be unset before the test ends (the framework checks it).
+      debugDefaultTargetPlatformOverride = null;
+    });
+
+    testWidgets('combines with the Exam Type filter (both must match)', (tester) async {
+      await openUnlinked(tester);
+      await pickRange(tester, 10, 15);
+
+      await tester.tap(find.byKey(const Key('unlinkedExamTypeFilter')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('TAT').last);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Santos, Maria'), findsOneWidget); // TAT, in range
+      expect(find.text('Reyes, Pedro'), findsNothing); // in range but QTM
+      expect(find.text('Lopez, Ana'), findsNothing); // TAT but out of range
+      expect(find.text('Showing 1 of 4'), findsOneWidget);
+    });
+
+    testWidgets('a range with no scans says so and changes nothing', (tester) async {
+      await openUnlinked(tester);
+      client.calls.clear();
+      await pickRange(tester, 20, 21);
+
+      expect(find.text('No unlinked scans match the selected filters.'), findsOneWidget);
+      expect(find.text('Showing 0 of 4'), findsOneWidget);
+      expect(client.calls.where((c) => c == 'readUnlinkedScans' || c.startsWith('linkScanToExaminee')), isEmpty);
+    });
+  });
+
   group('3. Link to Existing Examinee', () {
+    testWidgets('the picker lists only ACTIVE examinees and says archived ones must be restored first',
+        (tester) async {
+      client.examineesToReturn = CloudExamineesRead.found([
+        _row(id: 'e1', temporaryExamineeId: 'EX-000001', firstName: 'Juan', lastName: 'Dela Cruz'),
+        _row(id: 'e2', temporaryExamineeId: 'EX-000002', firstName: 'Maria', lastName: 'Santos', status: 'archived'),
+      ]);
+      client.batchesToReturn = CloudBatchesRead.found([_batchRow(id: 'b1', examCode: 'TAT')]);
+      client.unlinkedScansToReturn = CloudScansRead.found([
+        _scanRow(id: 's1', batchId: 'b1', examCode: 'TAT', firstName: null, lastName: null),
+      ]);
+      await pumpView(tester);
+      await tester.tap(find.textContaining('Unlinked Scans'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(TextButton, 'Link to Existing'));
+      await tester.pumpAndSettle();
+
+      expect(find.widgetWithText(ListTile, 'Dela Cruz, Juan'), findsOneWidget);
+      expect(find.widgetWithText(ListTile, 'Santos, Maria'), findsNothing);
+      expect(find.byKey(const Key('linkPickerActiveOnlyHint')), findsOneWidget);
+      expect(
+        find.text('Only active examinees can be linked to a scan. Restore an archived examinee first.'),
+        findsOneWidget,
+      );
+
+      // Searching for the archived examinee's name / ID still does not offer it.
+      await tester.enterText(find.byType(TextField), 'Santos');
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(ListTile, 'Santos, Maria'), findsNothing);
+      expect(find.text('No matching Examinee Records.'), findsOneWidget);
+      await tester.enterText(find.byType(TextField), 'EX-000002');
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(ListTile, 'Santos, Maria'), findsNothing);
+    });
+
     testWidgets('never links without an explicit selection and a final confirmation', (tester) async {
       client.examineesToReturn = CloudExamineesRead.found([
         _row(id: 'e1', temporaryExamineeId: 'EX-000001', firstName: 'Juan', lastName: 'Dela Cruz'),

@@ -508,7 +508,16 @@ class _GuidanceWebResultDetailViewState
   /// second comparison implementation. `answerKey: null` (no cloud row for
   /// this exam) is a supported input: every item's `correctChoice` comes
   /// back null, i.e. [AnswerOutcome.notGraded], not an error.
-  ScoredResult get _scored => scoreOmrResult(widget.scan.decoded, _answerKey);
+  ///
+  /// Scores [LocalScan.effectiveDecoded] — the machine-detected answers with
+  /// this capture's manual corrections applied (restored from the cloud row's
+  /// `decoded.manual` block by `mapCloudScan`) — exactly what the Guidance
+  /// App's View Scan reads, so the Answer Details table, the graded overlay
+  /// and the TAT breakdown all agree with the stored (already recalculated)
+  /// score. The machine-detected `decoded` itself is never modified; a scan
+  /// with no active corrections gets `decoded` back unchanged.
+  ScoredResult get _scored =>
+      scoreOmrResult(widget.scan.effectiveDecoded, _answerKey);
 
   /// The exam's [OmrExamTemplate] to draw the graded overlay against, or
   /// null when the overlay must not be attempted — either because the

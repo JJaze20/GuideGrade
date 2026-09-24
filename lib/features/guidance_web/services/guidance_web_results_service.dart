@@ -10,7 +10,25 @@ import '../../../core/sync/sync_client.dart';
 import '../../../core/sync/sync_outcome.dart';
 import '../../../core/sync/sync_queue.dart' show SyncState;
 import '../../../models/answer_key.dart';
+import '../../../models/examinee_record.dart';
 import '../../../models/local_batch.dart';
+import 'guidance_web_examinee_records_service.dart' show examineeRecordFromCloudRow;
+
+/// One batch's scans plus the canonical examinee each linked scan belongs to.
+///
+/// [linkedExamineeByScanId] holds an entry only for a scan whose
+/// `scans.examinee_id` points at an `examinees` row (created by "Link to
+/// Existing Examinee" or "Confirm and Create Examinee"); an unlinked / legacy
+/// scan simply has no entry and keeps showing its own tag.
+class WebBatchResults {
+  const WebBatchResults({
+    required this.scans,
+    this.linkedExamineeByScanId = const {},
+  });
+
+  final List<LocalScan> scans;
+  final Map<String, ExamineeRecord> linkedExamineeByScanId;
+}
 
 /// Thrown by [GuidanceWebResultsService] on any read failure. Carries only
 /// an already-sanitized, user-safe message — never a raw exception, a
@@ -106,6 +124,46 @@ class GuidanceWebResultsService {
       throw GuidanceWebResultsException(_messageFor(read.error));
     }
     return read.scans.map(mapCloudScan).toList();
+  }
+
+  /// [loadScansForBatch] plus each linked scan's canonical examinee, resolved
+  /// through the relationship the database actually stores: `scans.examinee_id`
+  /// -> `examinees.id`. Nothing is copied into the scans and nothing is
+  /// written -- linking only ever sets `examinee_id`, so the applicant's name
+  /// lives on the `examinees` row and must be read from there.
+  ///
+  /// The `examinees` table is read only when at least one scan is linked, so
+  /// a batch with no linked scans makes no extra request. If that lookup
+  /// fails this throws (like a failed scan read) rather than silently showing
+  /// linked scans as "Unnamed" again.
+  Future<WebBatchResults> loadResultsForBatch(LocalBatch batch) async {
+    final read = await _client.readCloudScans(batch.id);
+    if (!read.isSuccess) {
+      throw GuidanceWebResultsException(_messageFor(read.error));
+    }
+    final scans = read.scans.map(mapCloudScan).toList();
+
+    final examineeIdByScanId = <String, String>{
+      for (final row in read.scans)
+        if (row.examineeId != null && row.examineeId!.isNotEmpty)
+          row.id: row.examineeId!,
+    };
+    if (examineeIdByScanId.isEmpty) return WebBatchResults(scans: scans);
+
+    final examinees = await _client.readCloudExaminees();
+    if (!examinees.isSuccess) {
+      throw GuidanceWebResultsException(_messageFor(examinees.error));
+    }
+    final byId = {
+      for (final row in examinees.examinees) row.id: examineeRecordFromCloudRow(row),
+    };
+    return WebBatchResults(
+      scans: scans,
+      linkedExamineeByScanId: {
+        for (final entry in examineeIdByScanId.entries)
+          if (byId[entry.value] != null) entry.key: byId[entry.value]!,
+      },
+    );
   }
 
   /// The current cloud answer key for [examCode] (Phase 3's Detailed Result

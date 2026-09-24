@@ -17,6 +17,22 @@ class _FakeSyncClient implements SyncClient {
   final List<String> calls = [];
   Map<String, String?>? lastLinkArgs;
 
+  /// What the database currently holds for the examinee the page shows (the
+  /// link service re-reads it to confirm the examinee is still active).
+  CloudExamineesRead examineesToReturn = CloudExamineesRead.found([
+    CloudExamineeRow(
+      id: 'e1',
+      temporaryExamineeId: 'EX-00025',
+      firstName: 'Juan',
+      lastName: 'Dela Cruz',
+      status: 'active',
+      createdAt: DateTime.utc(2026, 1, 1),
+      createdByUid: 'uid1',
+      updatedAt: DateTime.utc(2026, 1, 1),
+      updatedByUid: 'uid1',
+    ),
+  ]);
+
   Never _no(String label) {
     calls.add(label);
     throw StateError('must never call $label');
@@ -73,7 +89,10 @@ class _FakeSyncClient implements SyncClient {
   }
 
   @override
-  Future<CloudExamineesRead> readCloudExaminees() => _no('readCloudExaminees');
+  Future<CloudExamineesRead> readCloudExaminees() async {
+    calls.add('readCloudExaminees');
+    return examineesToReturn;
+  }
   @override
   Future<CloudExamineeWrite> createExamineeFromScan({
     required String batchId,
@@ -497,6 +516,75 @@ void main() {
 
       expect(find.textContaining('no longer linked'), findsOneWidget);
       expect(find.textContaining('link removed'), findsNothing);
+    });
+  });
+
+  group('Archived examinee cannot Attach a Scan', () {
+    Finder attachButton() => find.byKey(const Key('attachScanButton'));
+    const hint = 'Archived examinees cannot be linked to new scans. Restore the examinee first.';
+
+    testWidgets('an active examinee keeps a working Attach a Scan and shows no hint', (tester) async {
+      await pumpDetail(tester);
+      expect(tester.widget<TextButton>(attachButton()).onPressed, isNotNull);
+      expect(find.text(hint), findsNothing);
+    });
+
+    testWidgets('an archived examinee: Attach is disabled, the reason is shown, nothing is opened or linked',
+        (tester) async {
+      client.unlinkedScansToReturn = CloudScansRead.found([
+        _scanRow(id: 's-tat', batchId: 'b-tat', examCode: 'TAT'),
+      ]);
+      client.batchesToReturn = CloudBatchesRead.found([_batchRow(id: 'b-tat', examCode: 'TAT')]);
+      await pumpDetail(tester, examinee: _examinee(status: 'archived'));
+
+      expect(tester.widget<TextButton>(attachButton()).onPressed, isNull);
+      expect(find.byKey(const Key('archivedAttachHint')), findsOneWidget);
+      expect(find.text(hint), findsOneWidget);
+
+      await tester.tap(attachButton(), warnIfMissed: false);
+      await tester.pumpAndSettle();
+      expect(find.text('Attach a Scan to Dela Cruz, Juan'), findsNothing);
+      expect(client.calls, isNot(contains('readUnlinkedScans')));
+      expect(client.calls.where((c) => c.startsWith('linkScanToExaminee')), isEmpty);
+    });
+
+    testWidgets('an archived examinee is still viewable: existing exams and Restore remain available',
+        (tester) async {
+      client.batchesToReturn = CloudBatchesRead.found([_batchRow(id: 'b-qtm', examCode: 'QTM')]);
+      client.scansByExamineeId['e1'] = CloudScansRead.found([
+        _scanRow(id: 's1', batchId: 'b-qtm', examCode: 'QTM'),
+      ]);
+      await pumpDetail(tester, examinee: _examinee(status: 'archived'));
+
+      expect(find.text('Archived'), findsWidgets);
+      expect(find.text('QTM'), findsWidgets);
+      expect(find.widgetWithText(TextButton, 'Restore'), findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'Remove Link'), findsOneWidget);
+    });
+
+    testWidgets('Restore re-enables Attach a Scan and removes the hint', (tester) async {
+      client.updateResultToReturn = CloudExamineeWrite.success(CloudExamineeRow(
+        id: 'e1',
+        temporaryExamineeId: 'EX-00025',
+        firstName: 'Juan',
+        lastName: 'Dela Cruz',
+        status: 'active',
+        createdAt: DateTime.utc(2026, 1, 1),
+        createdByUid: 'uid1',
+        updatedAt: DateTime.utc(2026, 3, 1),
+        updatedByUid: 'uid2',
+      ));
+      await pumpDetail(tester, examinee: _examinee(status: 'archived'));
+      expect(tester.widget<TextButton>(attachButton()).onPressed, isNull);
+
+      await tester.tap(find.widgetWithText(TextButton, 'Restore'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Restore'));
+      await tester.pumpAndSettle();
+
+      expect(client.calls, contains('setExamineeArchived:e1/false'));
+      expect(tester.widget<TextButton>(attachButton()).onPressed, isNotNull);
+      expect(find.text(hint), findsNothing);
     });
   });
 

@@ -158,6 +158,9 @@ class _GuidanceWebExamineeDetailViewState extends State<GuidanceWebExamineeDetai
   }
 
   Future<void> _openAttachScanDialog() async {
+    // Defensive: the button is disabled while archived, and the service
+    // refuses too; this just keeps a stale tap from opening the dialog.
+    if (_examinee.isArchived) return;
     final attached = await showDialog<bool>(
       context: context,
       builder: (_) => _AttachScanDialog(service: widget.service, examinee: _examinee),
@@ -286,19 +289,37 @@ class _GuidanceWebExamineeDetailViewState extends State<GuidanceWebExamineeDetai
       title: 'Examinee Record',
       actions: [
         TextButton(onPressed: _openEditDialog, child: const Text('Edit')),
-        TextButton(onPressed: _openAttachScanDialog, child: const Text('Attach a Scan')),
+        TextButton(
+          key: const Key('attachScanButton'),
+          // Archived examinees cannot receive new scans until restored.
+          onPressed: _examinee.isActive ? _openAttachScanDialog : null,
+          child: const Text('Attach a Scan'),
+        ),
         TextButton(
           onPressed: _toggleArchive,
           child: Text(_examinee.isActive ? 'Archive' : 'Restore'),
         ),
       ],
-      child: Wrap(
-        spacing: 32,
-        runSpacing: 16,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _infoField('Name', _examinee.displayName),
-          _infoField('Temporary Examinee ID', _examinee.temporaryExamineeId),
-          _infoField('Status', _examinee.isActive ? 'Active' : 'Archived'),
+          Wrap(
+            spacing: 32,
+            runSpacing: 16,
+            children: [
+              _infoField('Name', _examinee.displayName),
+              _infoField('Temporary Examinee ID', _examinee.temporaryExamineeId),
+              _infoField('Status', _examinee.isActive ? 'Active' : 'Archived'),
+            ],
+          ),
+          if (_examinee.isArchived) ...[
+            const SizedBox(height: 12),
+            Text(
+              archivedExamineeLinkMessage,
+              key: const Key('archivedAttachHint'),
+              style: AppTextStyles.body(size: 11, color: AppColors.textGray),
+            ),
+          ],
         ],
       ),
     );

@@ -24,6 +24,49 @@ void main() {
     });
   });
 
+  group('name-crop storage keys', () {
+    test('are batches/<batch>/scans/<scan>/name_{last,first,mi}.jpg', () {
+      expect(
+        SupabaseSyncClient.nameCropImageKey('b_1790061393503_194', 's_1790174212329_3', 'name_last'),
+        'batches/b_1790061393503_194/scans/s_1790174212329_3/name_last.jpg',
+      );
+      expect(
+        SupabaseSyncClient.nameCropImageKey('b_1', 's_2', 'name_first'),
+        'batches/b_1/scans/s_2/name_first.jpg',
+      );
+      expect(
+        SupabaseSyncClient.nameCropImageKey('b_1', 's_2', 'name_mi'),
+        'batches/b_1/scans/s_2/name_mi.jpg',
+      );
+    });
+
+    test('use the named variants, all begin with batches/ (the INSERT policy needs it)', () {
+      expect(SupabaseSyncClient.nameCropVariants, [
+        SupabaseSyncClient.variantNameLast,
+        SupabaseSyncClient.variantNameFirst,
+        SupabaseSyncClient.variantNameMiddle,
+      ]);
+      const scanFolder = 'batches/b_1/scans/s_2/';
+      for (final v in SupabaseSyncClient.nameCropVariants) {
+        final key = SupabaseSyncClient.nameCropImageKey('b_1', 's_2', v);
+        expect(key.startsWith('batches/'), isTrue);
+        // Same folder as the original / rectified photos.
+        expect(key.startsWith(scanFolder), isTrue);
+        expect(SupabaseSyncClient.originalImageKey('b_1', 's_2').startsWith(scanFolder), isTrue);
+      }
+    });
+
+    test('an unknown variant is rejected (no arbitrary object names)', () {
+      expect(() => SupabaseSyncClient.nameCropImageKey('b_1', 's_2', 'original'), throwsArgumentError);
+      expect(() => SupabaseSyncClient.nameCropImageKey('b_1', 's_2', '../x'), throwsArgumentError);
+    });
+
+    test('the existing original / rectified keys are unchanged', () {
+      expect(SupabaseSyncClient.originalImageKey('b_1', 's_2'), 'batches/b_1/scans/s_2/original.jpg');
+      expect(SupabaseSyncClient.rectifiedImageKey('b_1', 's_2'), 'batches/b_1/scans/s_2/rectified.jpg');
+    });
+  });
+
   group('storage key construction', () {
     test('original / rectified / prefix are the agreed conventions', () {
       expect(
@@ -328,6 +371,27 @@ void main() {
       expect(polluted.action, clean.action);
       expect(polluted.version, clean.version); // 5
       expect(polluted.baselineUpdatedAt, clean.baselineUpdatedAt);
+    });
+  });
+
+  group('parseCloudScanRow -- scans.examinee_id (the Results page relies on it)', () {
+    test('reads the linked examinee id from the row', () {
+      final row = SupabaseSyncClient.parseCloudScanRow({
+        'id': 's1',
+        'examinee_id': 'fa445fcc-a59e-4b58-86ae-0ddac56138ac',
+        'first_name': null,
+        'last_name': null,
+        'examinee_number': 'EX-1790006562335-3',
+      });
+      expect(row.examineeId, 'fa445fcc-a59e-4b58-86ae-0ddac56138ac');
+      // The scan's own tag columns are read separately and untouched.
+      expect(row.examineeNumber, 'EX-1790006562335-3');
+      expect(row.firstName, isNull);
+    });
+
+    test('an unlinked / legacy row (null or absent examinee_id) has no examinee id', () {
+      expect(SupabaseSyncClient.parseCloudScanRow({'id': 's1', 'examinee_id': null}).examineeId, isNull);
+      expect(SupabaseSyncClient.parseCloudScanRow({'id': 's1'}).examineeId, isNull);
     });
   });
 
