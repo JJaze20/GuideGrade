@@ -368,6 +368,30 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
   bool get _isLowLight =>
       _meanLuma != null && _meanLuma! < _lowLightLumaThreshold && !_torchOn;
 
+  /// When the live read most recently stopped being all-four-confident, or
+  /// null while it currently is. Drives [_showCaptureAnyway] only.
+  DateTime? _nonGreenSince;
+
+  /// How long the corners may refuse to lock before the caption stops giving
+  /// advice and tells the user they can simply shoot.
+  static const Duration _captureAnywayAfter = Duration(seconds: 6);
+
+  /// Whether to tell the user they can capture without waiting for green.
+  ///
+  /// Manual capture has never actually been gated on the live read — see
+  /// [_captureReadySince]'s doc comment, and [_capture], which requires only
+  /// an initialized camera, no capture in flight, and the batch's scan
+  /// limit. But the viewfinder shows red corners and advice-shaped captions,
+  /// so in a dim room people wait for a green that is not coming. This says
+  /// the quiet part out loud once waiting has clearly stopped helping.
+  ///
+  /// Safe to act on: [_capture] re-runs the authoritative full-resolution
+  /// alignment check on the photo itself, so a capture taken on a
+  /// non-green preview is still verified before it can become a result.
+  bool get _showCaptureAnyway =>
+      _nonGreenSince != null &&
+      DateTime.now().difference(_nonGreenSince!) >= _captureAnywayAfter;
+
   /// Overall live traffic-light read, from the four independent per-corner
   /// tiers: RED if any corner is missing outright, GREEN only once all four
   /// are confidently locked, YELLOW for anything recoverable in between
@@ -386,9 +410,19 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
   static const _cornerNames = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
 
   /// Viewfinder caption text — the low-light hint takes priority over the
-  /// usual corner-alignment status when active (see [_isLowLight]).
+  /// usual corner-alignment status when active (see [_isLowLight]), and the
+  /// stuck hint (see [_showCaptureAnyway]) takes priority over both once the
+  /// corners have refused to lock for long enough that advice alone clearly
+  /// isn't working.
   String _viewfinderCaption() {
-    if (_isLowLight) return 'Low light — tap the flash icon';
+    // Ordered below the lighting hint on purpose: for the first few seconds
+    // "add light" is the more useful instruction, and only once that has
+    // visibly failed is it worth telling them to shoot regardless.
+    if (_showCaptureAnyway) {
+      return 'Corners not locked — tap the shutter anyway, '
+          'alignment is rechecked after capture';
+    }
+    if (_isLowLight) return 'Low light — flash may help, or just tap the shutter';
     final found = _liveCornersFound;
     if (found == null) return 'Align the 4 black corner squares inside the guides';
     switch (_liveVerdict!) {
@@ -675,6 +709,7 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
     _captureReadySince = null;
     _autoCaptureStableSince = null;
     _autoCaptureArmed = true;
+    _nonGreenSince = null;
     _meanLuma = null;
     _lastFrameCheckAt = null;
     _frameCheckInFlight = false;
@@ -853,6 +888,13 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
             // stopped moving between checks, not merely stayed found.
             final allConfident = result.cornersFound
                 .every((c) => c == CornerConfidence.confident);
+            // Reuses the flag above rather than recomputing: how long the
+            // corners have refused to lock is what [_showCaptureAnyway] needs.
+            if (allConfident) {
+              _nonGreenSince = null;
+            } else {
+              _nonGreenSince ??= now;
+            }
             if (!allConfident) {
               _autoCaptureStableSince = null;
               // Leaving GREEN re-arms auto-capture — the sheet was moved,
@@ -1634,7 +1676,14 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
                   child: Text(
                     _viewfinderCaption(),
                     style: TextStyle(
-                      color: _isLowLight ? AppColors.warmRedOrange : const Color(0xFF6EE7B7),
+                      // Amber for the capture-anyway hint: it is an
+                      // invitation to act, and the low-light red reads as a
+                      // prohibition.
+                      color: _showCaptureAnyway
+                          ? const Color(0xFFF59E0B)
+                          : (_isLowLight
+                              ? AppColors.warmRedOrange
+                              : const Color(0xFF6EE7B7)),
                       fontSize: 10,
                       fontFamily: 'monospace',
                     ),
