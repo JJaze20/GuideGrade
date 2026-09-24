@@ -123,7 +123,8 @@ class SyncJob {
   final String? scanId;
 
   /// Tiny operation metadata only. [uploadImage] uses `{"variant":
-  /// "original"}` or `{"variant": "rectified"}`. Never row data.
+  /// "original"}`, `{"variant": "rectified"}`, or one of the optional
+  /// name-crop variants `name_last` / `name_first` / `name_mi`. Never row data.
   final Map<String, String> meta;
 
   /// Collapse key for coalescing (see [SyncQueue.enqueue]). Derived from

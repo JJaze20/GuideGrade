@@ -24,6 +24,49 @@ void main() {
     });
   });
 
+  group('name-crop storage keys', () {
+    test('are batches/<batch>/scans/<scan>/name_{last,first,mi}.jpg', () {
+      expect(
+        SupabaseSyncClient.nameCropImageKey('b_1790061393503_194', 's_1790174212329_3', 'name_last'),
+        'batches/b_1790061393503_194/scans/s_1790174212329_3/name_last.jpg',
+      );
+      expect(
+        SupabaseSyncClient.nameCropImageKey('b_1', 's_2', 'name_first'),
+        'batches/b_1/scans/s_2/name_first.jpg',
+      );
+      expect(
+        SupabaseSyncClient.nameCropImageKey('b_1', 's_2', 'name_mi'),
+        'batches/b_1/scans/s_2/name_mi.jpg',
+      );
+    });
+
+    test('use the named variants, all begin with batches/ (the INSERT policy needs it)', () {
+      expect(SupabaseSyncClient.nameCropVariants, [
+        SupabaseSyncClient.variantNameLast,
+        SupabaseSyncClient.variantNameFirst,
+        SupabaseSyncClient.variantNameMiddle,
+      ]);
+      const scanFolder = 'batches/b_1/scans/s_2/';
+      for (final v in SupabaseSyncClient.nameCropVariants) {
+        final key = SupabaseSyncClient.nameCropImageKey('b_1', 's_2', v);
+        expect(key.startsWith('batches/'), isTrue);
+        // Same folder as the original / rectified photos.
+        expect(key.startsWith(scanFolder), isTrue);
+        expect(SupabaseSyncClient.originalImageKey('b_1', 's_2').startsWith(scanFolder), isTrue);
+      }
+    });
+
+    test('an unknown variant is rejected (no arbitrary object names)', () {
+      expect(() => SupabaseSyncClient.nameCropImageKey('b_1', 's_2', 'original'), throwsArgumentError);
+      expect(() => SupabaseSyncClient.nameCropImageKey('b_1', 's_2', '../x'), throwsArgumentError);
+    });
+
+    test('the existing original / rectified keys are unchanged', () {
+      expect(SupabaseSyncClient.originalImageKey('b_1', 's_2'), 'batches/b_1/scans/s_2/original.jpg');
+      expect(SupabaseSyncClient.rectifiedImageKey('b_1', 's_2'), 'batches/b_1/scans/s_2/rectified.jpg');
+    });
+  });
+
   group('storage key construction', () {
     test('original / rectified / prefix are the agreed conventions', () {
       expect(

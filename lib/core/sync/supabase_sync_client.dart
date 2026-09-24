@@ -149,6 +149,35 @@ class SupabaseSyncClient implements SyncClient {
   static String rectifiedImageKey(String batchId, String scanId) =>
       'batches/$batchId/scans/$scanId/rectified.jpg';
 
+  /// The `uploadImage` job variants that upload one of a scan's optional
+  /// handwritten-name crops (see [LocalScan.nameCropLastFileName] and its two
+  /// siblings). Each is also the crop's Storage file name (plus `.jpg`).
+  static const String variantNameLast = 'name_last';
+  static const String variantNameFirst = 'name_first';
+  static const String variantNameMiddle = 'name_mi';
+
+  /// Every name-crop variant, in Last / First / MI order.
+  static const List<String> nameCropVariants = [
+    variantNameLast,
+    variantNameFirst,
+    variantNameMiddle,
+  ];
+
+  /// Storage object key for one name crop of a scan, e.g.
+  /// `batches/<batch>/scans/<scan>/name_last.jpg`. Same folder and
+  /// `batches/` first segment as the original / rectified photos, so the
+  /// bucket's existing access rules apply to it unchanged.
+  static String nameCropImageKey(
+    String batchId,
+    String scanId,
+    String variant,
+  ) {
+    if (!nameCropVariants.contains(variant)) {
+      throw ArgumentError.value(variant, 'variant', 'not a name-crop variant');
+    }
+    return 'batches/$batchId/scans/$scanId/$variant.jpg';
+  }
+
   /// Storage prefix that contains everything for one batch.
   static String batchStoragePrefix(String batchId) => 'batches/$batchId/';
 
@@ -702,7 +731,9 @@ class SupabaseSyncClient implements SyncClient {
     final variant = job.meta['variant'];
     if (batchId == null ||
         scanId == null ||
-        (variant != 'original' && variant != 'rectified')) {
+        (variant != 'original' &&
+            variant != 'rectified' &&
+            !nameCropVariants.contains(variant))) {
       return const SyncOutcome.permanent('bad_job');
     }
 
@@ -731,6 +762,30 @@ class SupabaseSyncClient implements SyncClient {
                   const FileOptions(upsert: true, contentType: 'image/jpeg'),
             );
         syncState.setScanUploaded(batchId, scanId, original: true);
+        return const SyncOutcome.success();
+      });
+    }
+
+    if (nameCropVariants.contains(variant)) {
+      // Optional handwritten-name crop. The local copy is the source of truth
+      // (already the JPEG cropNameFields produced -- uploaded as-is, never
+      // re-encoded). No local crop (an older scan, a sheet whose crop failed,
+      // or one that was deleted) means there is nothing to upload: a no-op
+      // success, never a fake object and never a scan-level failure. Unlike
+      // the photos there is no *_uploaded flag to record.
+      final cropBytes = switch (variant) {
+        variantNameLast => await batches.resolveScanNameCropLast(batchId, scan),
+        variantNameFirst => await batches.resolveScanNameCropFirst(batchId, scan),
+        _ => await batches.resolveScanNameCropMiddle(batchId, scan),
+      };
+      if (cropBytes == null) return const SyncOutcome.success();
+      return _guardStorage(StorageOp.write, () async {
+        await _client.storage.from(storageBucket).uploadBinary(
+              nameCropImageKey(batchId, scanId, variant!),
+              cropBytes,
+              fileOptions:
+                  const FileOptions(upsert: true, contentType: 'image/jpeg'),
+            );
         return const SyncOutcome.success();
       });
     }
