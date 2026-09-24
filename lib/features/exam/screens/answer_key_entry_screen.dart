@@ -24,7 +24,10 @@ enum _ConflictChoice { keepCloud, replaceCloud }
 /// the cloud data in memory only, and never discards the local answer key
 /// unless the user explicitly chooses "Keep cloud".
 class AnswerKeyEntryScreen extends StatefulWidget {
-  const AnswerKeyEntryScreen({super.key});
+  const AnswerKeyEntryScreen({super.key, this.examCode});
+
+  /// When opened from Exam Management, does not change the active scan exam.
+  final String? examCode;
 
   @override
   State<AnswerKeyEntryScreen> createState() => _AnswerKeyEntryScreenState();
@@ -32,6 +35,9 @@ class AnswerKeyEntryScreen extends StatefulWidget {
 
 class _AnswerKeyEntryScreenState extends State<AnswerKeyEntryScreen> {
   final Map<String, String> _selections = {};
+  final Map<String, String> _questionTexts = {};
+  late String _examCode;
+  bool _saving = false;
   bool _loadedExisting = false;
 
   /// True while a cloud read is in flight — disables the banner actions and
@@ -41,11 +47,17 @@ class _AnswerKeyEntryScreenState extends State<AnswerKeyEntryScreen> {
   @override
   Widget build(BuildContext context) {
     final appState = AppStateScope.of(context);
-    final template = omrTemplates[appState.activeExamCode];
+    if (!_loadedExisting) {
+      _examCode = widget.examCode ?? appState.activeExamCode;
+    }
+    final template = omrTemplates[_examCode];
 
     if (!_loadedExisting) {
-      final existing = appState.answerKeys[appState.activeExamCode];
-      if (existing != null) _selections.addAll(existing.correctChoices);
+      final existing = appState.answerKeys[_examCode];
+      if (existing != null) {
+        _selections.addAll(existing.correctChoices);
+        _questionTexts.addAll(existing.questionTexts);
+      }
       _loadedExisting = true;
     }
 
@@ -53,14 +65,14 @@ class _AnswerKeyEntryScreenState extends State<AnswerKeyEntryScreen> {
       return Scaffold(
         appBar: AppBar(title: const Text('Answer Key')),
         body: Center(
-          child: Text('No sheet layout is defined for exam code "${appState.activeExamCode}".'),
+          child: Text('No sheet layout is defined for exam code "${_examCode}".'),
         ),
       );
     }
 
     final totalItems = template.sections.fold<int>(0, (sum, s) => sum + s.itemCount);
-    final syncStatus = appState.answerKeySyncStatusFor(appState.activeExamCode);
-    final syncLabel = appState.answerKeySyncLabelFor(appState.activeExamCode);
+    final syncStatus = appState.answerKeySyncStatusFor(_examCode);
+    final syncLabel = appState.answerKeySyncLabelFor(_examCode);
 
     return Scaffold(
       backgroundColor: AppColors.lightBg,
@@ -68,7 +80,7 @@ class _AnswerKeyEntryScreenState extends State<AnswerKeyEntryScreen> {
         backgroundColor: Colors.white,
         foregroundColor: AppColors.textDark,
         elevation: 0.5,
-        title: Text('Answer Key — ${appState.activeExamCode}', style: AppTextStyles.heading(size: 13)),
+        title: Text('Answer Key — ${_examCode}', style: AppTextStyles.heading(size: 13)),
         actions: [
           if (appState.syncManager != null) _buildLoadFromCloudButton(appState),
         ],
@@ -100,6 +112,13 @@ class _AnswerKeyEntryScreenState extends State<AnswerKeyEntryScreen> {
                 ],
               ),
             ),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              child: Text(
+                'Question Mapping: use the edit icon beside each item. '
+                'Question text is saved on this device only; cloud sync covers answer choices.',
+              ),
+            ),
             Expanded(
               child: ListView.builder(
                 padding: const EdgeInsets.all(16),
@@ -111,18 +130,22 @@ class _AnswerKeyEntryScreenState extends State<AnswerKeyEntryScreen> {
               padding: const EdgeInsets.all(16),
               child: PrimaryButton(
                 label: 'SAVE ANSWER KEY',
-                onPressed: () async {
+                onPressed: _saving || _cloudBusy ? null : () async {
+                  setState(() => _saving = true);
                   final navigator = Navigator.of(context);
                   final messenger = ScaffoldMessenger.of(context);
 
                   try {
                     await appState.setAnswerKey(
                       AnswerKey(
-                        examCode: appState.activeExamCode,
+                        examCode: _examCode,
                         correctChoices: Map.of(_selections),
+                        questionTexts: Map.of(_questionTexts),
                       ),
                     );
                   } catch (_) {
+                    if (!mounted) return;
+                    setState(() => _saving = false);
                     messenger.showSnackBar(
                       const SnackBar(
                         content: Text(
@@ -184,15 +207,15 @@ class _AnswerKeyEntryScreenState extends State<AnswerKeyEntryScreen> {
                 spacing: 4,
                 children: [
                   TextButton(
-                    onPressed: _cloudBusy ? null : () => _onReview(appState),
+                    onPressed: _cloudBusy || _saving ? null : () => _onReview(appState),
                     child: const Text('Review'),
                   ),
                   TextButton(
-                    onPressed: _cloudBusy ? null : () => _onKeepCloud(appState),
+                    onPressed: _cloudBusy || _saving ? null : () => _onKeepCloud(appState),
                     child: const Text('Keep cloud'),
                   ),
                   TextButton(
-                    onPressed: _cloudBusy ? null : () => _onReplaceCloud(appState),
+                    onPressed: _cloudBusy || _saving ? null : () => _onReplaceCloud(appState),
                     child: Text('Replace cloud',
                         style: TextStyle(color: AppColors.warmRedOrange)),
                   ),
@@ -209,7 +232,7 @@ class _AnswerKeyEntryScreenState extends State<AnswerKeyEntryScreen> {
   /// holding the cloud-key icon. Lets a device with no local key — or one
   /// that just wants the shared key — pull the cloud answer key directly.
   Widget _buildLoadFromCloudButton(AppState appState) {
-    final enabled = appState.isOnline && !_cloudBusy;
+    final enabled = appState.isOnline && !_cloudBusy && !_saving;
     return Padding(
       padding: const EdgeInsets.only(right: 12),
       child: Center(
@@ -255,7 +278,7 @@ class _AnswerKeyEntryScreenState extends State<AnswerKeyEntryScreen> {
   Future<void> _onLoadFromCloud(AppState appState) async {
     final cloud = await _readCloudOrShowError(
       appState,
-      absentMessage: 'No cloud answer key for ${appState.activeExamCode} yet.',
+      absentMessage: 'No cloud answer key for ${_examCode} yet.',
     );
     if (cloud == null || !mounted) return;
     await _confirmAndKeepCloud(appState, cloud);
@@ -305,7 +328,7 @@ class _AnswerKeyEntryScreenState extends State<AnswerKeyEntryScreen> {
 
     CloudAnswerKeyRead? read;
     try {
-      read = await appState.readCloudAnswerKey(appState.activeExamCode);
+      read = await appState.readCloudAnswerKey(_examCode);
     } catch (_) {
       read = null;
     }
@@ -387,7 +410,7 @@ class _AnswerKeyEntryScreenState extends State<AnswerKeyEntryScreen> {
     if (ok != true || !mounted) return;
 
     await appState.adoptAnswerKeyFromCloud(
-      appState.activeExamCode,
+      _examCode,
       cloudVersion: cloud.version!,
       answers: cloud.answers ?? const {},
       updatedAt: DateTime.tryParse(cloud.updatedAt ?? '')?.toUtc() ??
@@ -397,7 +420,7 @@ class _AnswerKeyEntryScreenState extends State<AnswerKeyEntryScreen> {
     setState(() {
       _selections
         ..clear()
-        ..addAll(appState.answerKeys[appState.activeExamCode]?.correctChoices ??
+        ..addAll(appState.answerKeys[_examCode]?.correctChoices ??
             const {});
     });
     _snack('Using the cloud answer key.');
@@ -478,7 +501,7 @@ class _AnswerKeyEntryScreenState extends State<AnswerKeyEntryScreen> {
     // expectedCloudVersion, and wakes the manager. The force push re-reads
     // the cloud and re-conflicts if it moved past [cloud.version].
     await appState.prepareAnswerKeyForcePush(
-      appState.activeExamCode,
+      _examCode,
       cloud.version!,
     );
     if (!mounted) return;
@@ -634,7 +657,7 @@ class _AnswerKeyEntryScreenState extends State<AnswerKeyEntryScreen> {
   }
 
   // ---------------------------------------------------------------------------
-  // Answer-key grid (unchanged)
+  // Answer-key grid and optional question text
   // ---------------------------------------------------------------------------
 
   Widget _buildSectionCard(OmrSection section) {
@@ -672,22 +695,84 @@ class _AnswerKeyEntryScreenState extends State<AnswerKeyEntryScreen> {
             child: Text('$itemNumber.', style: AppTextStyles.body(size: 10, color: AppColors.textGray)),
           ),
           Expanded(
-            child: Wrap(
-              spacing: 6,
-              runSpacing: 6,
-              children: choices.map((bubble) => _buildChoiceBubble(key, bubble.choice, selected)).toList(),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (_questionTexts[key]?.isNotEmpty == true)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Text(_questionTexts[key]!),
+                  ),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: choices.map((bubble) => _buildChoiceBubble(key, bubble.choice, selected)).toList(),
+                ),
+              ],
             ),
+          ),
+          IconButton(
+            key: ValueKey('editQuestion:$key'),
+            tooltip: 'Edit question — ${section.name}, item $itemNumber',
+            onPressed: _saving ? null : () => _editQuestion(section.name, itemNumber),
+            icon: const Icon(Icons.edit_note),
           ),
         ],
       ),
     );
   }
 
+  Future<void> _editQuestion(String sectionName, int itemNumber) async {
+    final key = AnswerKey.keyFor(sectionName, itemNumber);
+    var draft = _questionTexts[key] ?? '';
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Question Mapping — $sectionName, item $itemNumber'),
+        content: SizedBox(
+          width: 480,
+          child: TextFormField(
+            key: const Key('questionTextField'),
+            initialValue: draft,
+            onChanged: (value) => draft = value,
+            autofocus: true,
+            minLines: 3,
+            maxLines: 8,
+            maxLength: 4000,
+            decoration: const InputDecoration(
+              labelText: 'Question text or booklet reference',
+              hintText: 'Enter the question for this item',
+              helperText: 'Leave blank to remove. Save Answer Key to keep changes.',
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, draft.trim()),
+            child: const Text('Apply'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || result == null) return;
+    setState(() {
+      if (result.isEmpty) {
+        _questionTexts.remove(key);
+      } else {
+        _questionTexts[key] = result;
+      }
+    });
+  }
+
   Widget _buildChoiceBubble(String key, String choice, String? selected) {
     final isSelected = choice == selected;
     return InkWell(
       borderRadius: BorderRadius.circular(16),
-      onTap: () => setState(() {
+      onTap: _saving ? null : () => setState(() {
         if (isSelected) {
           _selections.remove(key);
         } else {

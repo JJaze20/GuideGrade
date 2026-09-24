@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:guidegrade/core/services/local_batch_repository.dart';
+import 'package:guidegrade/core/omr/omr_templates.dart';
 import 'package:guidegrade/core/services/local_storage_service.dart';
 import 'package:guidegrade/core/state/app_state.dart';
 import 'package:guidegrade/core/sync/sync_client.dart';
@@ -173,6 +175,95 @@ void main() {
   Map<String, String> localKey() => appState.answerKeys['AT']!.correctChoices;
 
   // -- tests -----------------------------------------------------------
+
+  for (final code in ['AT', 'QTM', 'TAT']) {
+    testWidgets('$code uses configured items without changing the scan exam',
+        (tester) async {
+      appState.setActiveExamCode('AT');
+      await tester.pumpWidget(MaterialApp(
+        home: AppStateScope(
+          notifier: appState,
+          child: AnswerKeyEntryScreen(examCode: code),
+        ),
+      ));
+      final template = omrTemplates[code]!;
+      final count = template.sections.fold<int>(0, (n, s) => n + s.itemCount);
+      expect(find.textContaining('/$count answered'), findsOneWidget);
+      final section = template.sections.first;
+      final item = section.items.keys.first;
+      expect(find.byKey(ValueKey('editQuestion:${section.name}|$item')), findsOneWidget);
+      expect(find.text('Answer Key — $code'), findsOneWidget);
+      expect(appState.activeExamCode, 'AT');
+    });
+  }
+
+  testWidgets('question text can be applied, cancelled, cleared and saved',
+      (tester) async {
+    await pumpScreen(tester);
+    final edit = find.byKey(const ValueKey('editQuestion:Section 1|1'));
+    await tester.tap(edit);
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('questionTextField')), 'Booklet question 1');
+    await tester.tap(find.text('Apply'));
+    await tester.pumpAndSettle();
+    expect(find.text('Booklet question 1'), findsOneWidget);
+    expect(fakeStorage.savedAnswerKeys, isEmpty);
+
+    await tester.tap(edit);
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('questionTextField')), 'Cancelled edit');
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(find.text('Booklet question 1'), findsOneWidget);
+
+    // Force the first save to fail so the screen remains open for a retry.
+    fakeStorage.throwOnSaveAnswerKeys = StateError('disk full');
+    await tester.tap(find.text('SAVE ANSWER KEY'));
+    await tester.pumpAndSettle();
+    expect(appState.answerKeys['AT']!.questionTexts, isEmpty);
+    expect(find.text('Booklet question 1'), findsOneWidget);
+
+    await tester.tap(edit);
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('questionTextField')), '');
+    await tester.tap(find.text('Apply'));
+    await tester.pumpAndSettle();
+    expect(find.text('Booklet question 1'), findsNothing);
+    await tester.tap(edit);
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('questionTextField')), 'Saved question');
+    await tester.tap(find.text('Apply'));
+    await tester.pumpAndSettle();
+    fakeStorage.throwOnSaveAnswerKeys = null;
+    await tester.tap(find.text('SAVE ANSWER KEY'));
+    await tester.pumpAndSettle();
+    final saved = fakeStorage.savedAnswerKeys.last['AT']!;
+    expect(saved.questionTexts, {'Section 1|1': 'Saved question'});
+    expect(saved.correctChoices, _localAnswers);
+  });
+
+  test('cloud adoption preserves device-local question text', () async {
+    final state = AppState(
+      batchRepository: appState.batchRepository,
+      localStorage: fakeStorage,
+      connectivityStream: const Stream<List<ConnectivityResult>>.empty(),
+    );
+    addTearDown(state.dispose);
+    state.answerKeys['TAT'] = const AnswerKey(
+      examCode: 'TAT',
+      correctChoices: {'Test I|1': 'A'},
+      questionTexts: {'Test I|1': 'Keep this question'},
+    );
+    await state.adoptAnswerKeyFromCloud(
+      'TAT',
+      cloudVersion: 2,
+      answers: {'Test I|1': 'B'},
+      updatedAt: DateTime.utc(2026),
+    );
+    final saved = fakeStorage.savedAnswerKeys.last['TAT']!;
+    expect(saved.correctChoices, {'Test I|1': 'B'});
+    expect(saved.questionTexts, {'Test I|1': 'Keep this question'});
+  });
 
   testWidgets('1. a conflict status shows the persistent banner', (tester) async {
     appState.status = AnswerKeySyncStatus.conflict;

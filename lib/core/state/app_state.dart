@@ -793,9 +793,10 @@ class AppState extends ChangeNotifier {
   /// (type only) and swallowed, never turning a successful local save into
   /// a reported failure. No Supabase/network call is made from here.
   Future<void> setAnswerKey(AnswerKey key) async {
+    final updated = Map<String, AnswerKey>.of(answerKeys)..[key.examCode] = key;
+    await _localStorage.saveAnswerKeys(updated);
     answerKeys[key.examCode] = key;
     notifyListeners();
-    await _localStorage.saveAnswerKeys(answerKeys);
     await _enqueueAnswerKeyPush(key.examCode);
   }
 
@@ -896,8 +897,11 @@ class AppState extends ChangeNotifier {
     required Map<String, String> answers,
     required DateTime updatedAt,
   }) async {
-    answerKeys[examCode] =
-        AnswerKey(examCode: examCode, correctChoices: Map.of(answers));
+    answerKeys[examCode] = AnswerKey(
+      examCode: examCode,
+      correctChoices: Map.of(answers),
+      questionTexts: answerKeys[examCode]?.questionTexts ?? const {},
+    );
     notifyListeners();
     await _localStorage.saveAnswerKeys(answerKeys);
 

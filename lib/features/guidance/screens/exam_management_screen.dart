@@ -5,13 +5,13 @@ import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
 import '../../../core/constants/exam_catalog.dart';
 import '../../../core/routes/app_routes.dart';
+import '../../exam/screens/answer_key_entry_screen.dart';
 
 /// Exam Management screen for Guidance Council users.
 ///
 /// Exam designs aren't finalized yet, so this only lets staff pick one of
 /// the three predefined exams (AT/QTM/TAT) and preview/print/export its
-/// official answer sheet -- no creating, editing, or otherwise modifying
-/// exams or answer keys.
+/// official answer sheet and edit its answer key / per-item question text.
 class ExamManagementScreen extends StatelessWidget {
   const ExamManagementScreen({super.key});
 
@@ -30,7 +30,7 @@ class ExamManagementScreen extends StatelessWidget {
           padding: const EdgeInsets.all(16),
           children: [
             Text(
-              'Select an exam to preview and print its official answer sheet.',
+              'Select an exam to preview its sheets or edit its answer key and question mapping.',
               style: AppTextStyles.body(size: 10.5, color: AppColors.textGray),
             ),
             const SizedBox(height: 16),
@@ -93,6 +93,15 @@ class _ExamCatalogCard extends StatelessWidget {
                   Text(
                     entry.examCode,
                     style: AppTextStyles.body(size: 10, color: AppColors.textGray),
+                  ),
+                  TextButton.icon(
+                    icon: const Icon(Icons.edit_note),
+                    label: const Text('Answer Key / Question Mapping'),
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => AnswerKeyEntryScreen(examCode: entry.examCode),
+                      ),
+                    ),
                   ),
                 ],
               ),

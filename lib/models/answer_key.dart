@@ -8,16 +8,31 @@ class AnswerKey {
   final String examCode;
   final Map<String, String> correctChoices;
 
-  const AnswerKey({required this.examCode, required this.correctChoices});
+  /// Optional device-local question text, using the same section/item IDs as
+  /// [correctChoices]. Cloud answer-choice synchronization does not change it.
+  final Map<String, String> questionTexts;
+
+  const AnswerKey({
+    required this.examCode,
+    required this.correctChoices,
+    this.questionTexts = const {},
+  });
 
   static String keyFor(String sectionName, int itemNumber) => '$sectionName|$itemNumber';
 
   String? choiceFor(String sectionName, int itemNumber) => correctChoices[keyFor(sectionName, itemNumber)];
 
-  Map<String, dynamic> toJson() => {'examCode': examCode, 'correctChoices': correctChoices};
+  Map<String, dynamic> toJson() => {
+        'examCode': examCode,
+        'correctChoices': correctChoices,
+        'questionTexts': questionTexts,
+      };
 
   factory AnswerKey.fromJson(Map<String, dynamic> json) => AnswerKey(
         examCode: json['examCode'] as String,
         correctChoices: Map<String, String>.from(json['correctChoices'] as Map),
+        questionTexts: Map<String, String>.from(
+          json['questionTexts'] as Map? ?? const {},
+        ),
       );
 }
