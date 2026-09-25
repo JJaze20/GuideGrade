@@ -54,6 +54,14 @@ class _FakeSyncClient implements SyncClient {
     required String scanId,
     required bool rectified,
   }) => _no('downloadScanImage');
+
+  @override
+  Future<CloudImageRead> downloadNameCropImage({
+    required String batchId,
+    required String scanId,
+    required String variant,
+  }) => _no('downloadNameCropImage');
+
   @override
   Future<SyncOutcome> deleteBatch(String batchId) => _no('deleteBatch');
   @override

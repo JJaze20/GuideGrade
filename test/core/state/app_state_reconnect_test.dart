@@ -43,6 +43,14 @@ class _NeverSyncClient implements SyncClient {
     required bool rectified,
   }) =>
       _no();
+
+  @override
+  Future<CloudImageRead> downloadNameCropImage({
+    required String batchId,
+    required String scanId,
+    required String variant,
+  }) => _no();
+
   @override
   Future<SyncOutcome> deleteBatch(String batchId) => _no();
   @override

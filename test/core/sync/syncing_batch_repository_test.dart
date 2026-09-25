@@ -360,6 +360,17 @@ class _NeverSyncClient implements SyncClient {
   }
 
   @override
+  Future<CloudImageRead> downloadNameCropImage({
+    required String batchId,
+    required String scanId,
+    required String variant,
+  }) async {
+    calls.add('downloadNameCropImage');
+    throw StateError('SyncingBatchRepository must not call the network client');
+  }
+
+
+  @override
   Future<SyncOutcome> deleteBatch(String batchId) => _rec('deleteBatch');
   @override
   Future<SyncOutcome> deleteScan(String batchId, String scanId) => _rec('deleteScan');

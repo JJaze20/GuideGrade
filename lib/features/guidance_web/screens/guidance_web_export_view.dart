@@ -70,6 +70,10 @@ class _GuidanceWebExportViewState extends State<GuidanceWebExportView> {
   /// Whether the next opened batch goes straight to its output preview.
   bool _startInPreview = false;
 
+  /// "Include Certificates?" as chosen in the list's Export popup; carried
+  /// into the opened batch and used by the quick export.
+  bool _includeCertificates = true;
+
   /// Batch whose quick export (list `export` button) is being built.
   String? _exportingBatchId;
 
@@ -80,14 +84,16 @@ class _GuidanceWebExportViewState extends State<GuidanceWebExportView> {
 
   /// The list's `export`: asks first (Export / View output / Cancel).
   Future<void> _confirmQuickExport(LocalBatch b) async {
-    final choice = await showExportConfirmDialog(
+    final decision = await showExportConfirmDialog(
       context,
       summary:
           'Export ${b.batchCode} as one PDF containing the batch analytics and '
           'an analytics page for every examinee in the batch.',
+      includeCertificates: _includeCertificates,
     );
-    if (!mounted || choice == null) return;
-    if (choice == ExportChoice.viewOutput) {
+    if (!mounted || decision == null) return;
+    setState(() => _includeCertificates = decision.includeCertificates);
+    if (decision.choice == ExportChoice.viewOutput) {
       setState(() {
         _viewing = b;
         _startInPreview = true;
@@ -103,7 +109,10 @@ class _GuidanceWebExportViewState extends State<GuidanceWebExportView> {
     if (_exportingBatchId != null) return;
     setState(() => _exportingBatchId = b.id);
     try {
-      final bytes = await _exporter.buildDefaultPdf(b);
+      final bytes = await _exporter.buildDefaultPdf(
+        b,
+        includeCertificates: _includeCertificates,
+      );
       await Printing.sharePdf(bytes: bytes, filename: '${b.batchCode}_export.pdf');
     } catch (_) {
       if (!mounted) return;
@@ -251,6 +260,7 @@ class _GuidanceWebExportViewState extends State<GuidanceWebExportView> {
         service: _results,
         analyticsService: _analytics,
         startInPreview: _startInPreview,
+        initialIncludeCertificates: _includeCertificates,
         onBack: () => setState(() {
           _viewing = null;
           _startInPreview = false;

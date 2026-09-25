@@ -1,6 +1,9 @@
+import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:printing/printing.dart';
 
 import '../../../core/constants/app_colors.dart';
@@ -13,41 +16,109 @@ import '../services/guidance_web_results_service.dart';
 /// What the person chose in the export confirmation popup.
 enum ExportChoice { exportNow, viewOutput }
 
-/// The "Export?" safety popup: says what will be exported and offers
-/// `view output` first, so nobody exports blind. Null when cancelled.
-Future<ExportChoice?> showExportConfirmDialog(
-  BuildContext context, {
-  required String summary,
-}) {
-  return showDialog<ExportChoice>(
-    context: context,
-    builder: (ctx) => AlertDialog(
-      key: const Key('exportConfirmDialog'),
-      title: const Text('Export?'),
-      content: Text(
-        '$summary\n\nYou can view the output first to check what it will '
-        'look like.',
-      ),
-      actions: [
-        TextButton(
-          key: const Key('exportConfirmCancel'),
-          onPressed: () => Navigator.pop(ctx),
-          child: const Text('Cancel'),
+/// The popup's answer: the button pressed and the "Include Certificates?"
+/// switch as it was left.
+class ExportDecision {
+  const ExportDecision(this.choice, this.includeCertificates);
+  final ExportChoice choice;
+  final bool includeCertificates;
+}
+
+/// Brand cyan used for the "Include Certificates?" control (same as the
+/// Category D colour on the certificates).
+const Color _certificatesCyan = Color(0xFF00B0F0);
+
+/// "Include Certificates?" label + switch, shared by the popup and the
+/// checklist header.
+class IncludeCertificatesSwitch extends StatelessWidget {
+  const IncludeCertificatesSwitch({
+    super.key,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          'Include Certificates?',
+          style: AppTextStyles.body(
+            size: 13,
+            weight: FontWeight.w800,
+            color: _certificatesCyan,
+          ).copyWith(fontStyle: FontStyle.italic),
         ),
-        OutlinedButton(
-          key: const Key('exportConfirmViewOutput'),
-          onPressed: () => Navigator.pop(ctx, ExportChoice.viewOutput),
-          child: const Text('View output'),
-        ),
-        FilledButton(
-          key: const Key('exportConfirmExport'),
-          onPressed: () => Navigator.pop(ctx, ExportChoice.exportNow),
-          style: FilledButton.styleFrom(
-            backgroundColor: AppColors.primaryGreen,
-          ),
-          child: const Text('Export'),
+        const SizedBox(width: 8),
+        Switch(
+          key: const Key('includeCertificatesSwitch'),
+          value: value,
+          onChanged: onChanged,
+          activeThumbColor: Colors.white,
+          activeTrackColor: _certificatesCyan,
         ),
       ],
+    );
+  }
+}
+
+/// The "Export?" safety popup: says what will be exported and offers
+/// `view output` first, so nobody exports blind. Null when cancelled.
+Future<ExportDecision?> showExportConfirmDialog(
+  BuildContext context, {
+  required String summary,
+  bool includeCertificates = true,
+}) {
+  var certificates = includeCertificates;
+  return showDialog<ExportDecision>(
+    context: context,
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setDialogState) => AlertDialog(
+        key: const Key('exportConfirmDialog'),
+        title: Row(
+          children: [
+            const Expanded(child: Text('Export?')),
+            IncludeCertificatesSwitch(
+              value: certificates,
+              onChanged: (v) => setDialogState(() => certificates = v),
+            ),
+          ],
+        ),
+        content: Text(
+          '$summary\n\nYou can view the output first to check what it will '
+          'look like.',
+        ),
+        actions: [
+          TextButton(
+            key: const Key('exportConfirmCancel'),
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          OutlinedButton(
+            key: const Key('exportConfirmViewOutput'),
+            onPressed: () => Navigator.pop(
+              ctx,
+              ExportDecision(ExportChoice.viewOutput, certificates),
+            ),
+            child: const Text('View output'),
+          ),
+          FilledButton(
+            key: const Key('exportConfirmExport'),
+            onPressed: () => Navigator.pop(
+              ctx,
+              ExportDecision(ExportChoice.exportNow, certificates),
+            ),
+            style: FilledButton.styleFrom(
+              backgroundColor: AppColors.primaryGreen,
+            ),
+            child: const Text('Export'),
+          ),
+        ],
+      ),
     ),
   );
 }
@@ -70,6 +141,7 @@ class GuidanceWebExportBatchView extends StatefulWidget {
     GuidanceWebAnalyticsService? analyticsService,
     GuidanceWebExportService? exportService,
     this.startInPreview = false,
+    this.initialIncludeCertificates = true,
   }) : _service = service,
        _analyticsService = analyticsService,
        _exportService = exportService;
@@ -80,6 +152,9 @@ class GuidanceWebExportBatchView extends StatefulWidget {
   /// Open straight into the output preview of the default selection once the
   /// scans are loaded (used by the list page's "View output").
   final bool startInPreview;
+
+  /// Starting state of the "Include Certificates?" switch.
+  final bool initialIncludeCertificates;
   final GuidanceWebResultsService? _service;
   final GuidanceWebAnalyticsService? _analyticsService;
 
@@ -114,6 +189,7 @@ class _GuidanceWebExportBatchViewState
   List<LocalScan> _scans = [];
 
   bool _includeSummary = true;
+  late bool _includeCertificates = widget.initialIncludeCertificates;
   final Set<String> _selected = {};
   _Preview? _preview;
   Future<Uint8List>? _pdf;
@@ -170,6 +246,7 @@ class _GuidanceWebExportBatchViewState
     includeSummary: p.includeSummary,
     selected: p.scans,
     allScans: _scans,
+    includeCertificates: _includeCertificates,
   );
 
   void _openPreview(_Preview p) {
@@ -185,16 +262,19 @@ class _GuidanceWebExportBatchViewState
     final count = _selected.length;
     final summary = _includeSummary ? 'the batch summary and ' : '';
     return 'Export ${widget.batch.batchCode} as one PDF containing '
-        '$summary$count examinee page${count == 1 ? '' : 's'}.';
+        '$summary$count examinee analytics page${count == 1 ? '' : 's'}'
+        '${_includeCertificates ? ', each followed by its certificate' : ''}.';
   }
 
   Future<void> _confirmExport() async {
-    final choice = await showExportConfirmDialog(
+    final decision = await showExportConfirmDialog(
       context,
       summary: _selectionSummary,
+      includeCertificates: _includeCertificates,
     );
-    if (!mounted || choice == null) return;
-    if (choice == ExportChoice.viewOutput) {
+    if (!mounted || decision == null) return;
+    setState(() => _includeCertificates = decision.includeCertificates);
+    if (decision.choice == ExportChoice.viewOutput) {
       _openPreview(
         _Preview(includeSummary: _includeSummary, scans: _selectedScans),
       );
@@ -310,6 +390,13 @@ class _GuidanceWebExportBatchViewState
                 label: const Text('Back to List'),
               ),
               const Spacer(),
+              if (!_loading && _scans.isNotEmpty) ...[
+                IncludeCertificatesSwitch(
+                  value: _includeCertificates,
+                  onChanged: (v) => setState(() => _includeCertificates = v),
+                ),
+                const SizedBox(width: 24),
+              ],
               if (!_loading && _scans.isNotEmpty)
                 Padding(
                   // Lines the dot up with the row dots below.
@@ -578,10 +665,42 @@ class _GuidanceWebExportBatchViewState
   }
 }
 
-/// The export as printed: renders the real PDF (built by
-/// [GuidanceWebExportService]) in a paged preview with print and download
-/// actions.
-class _PdfPreviewPane extends StatelessWidget {
+/// While Ctrl (or Cmd) is held the page scrollers ignore the mouse wheel, so
+/// Ctrl+scroll can zoom the preview instead of scrolling it.
+class _CtrlAwareScrollPhysics extends ScrollPhysics {
+  const _CtrlAwareScrollPhysics({super.parent});
+
+  @override
+  _CtrlAwareScrollPhysics applyTo(ScrollPhysics? ancestor) =>
+      _CtrlAwareScrollPhysics(parent: buildParent(ancestor));
+
+  @override
+  bool shouldAcceptUserOffset(ScrollMetrics position) {
+    final kb = HardwareKeyboard.instance;
+    if (kb.isControlPressed || kb.isMetaPressed) return false;
+    return super.shouldAcceptUserOffset(position);
+  }
+}
+
+/// One rendered page of the preview: PNG bytes (decoded lazily by the list, so
+/// a big batch does not hold every page as raw pixels) and its shape.
+class _PageImage {
+  const _PageImage(this.png, this.aspect);
+  final Uint8List png;
+
+  /// width / height
+  final double aspect;
+}
+
+/// The export as printed: the real PDF (built by [GuidanceWebExportService])
+/// in a fixed frame, drawn page by page.
+///
+///  * Pages appear as soon as each one is drawn — there is no full-screen
+///    spinner; a blank page holds the place of the one being drawn.
+///  * Zoom (slider, buttons, Ctrl+wheel) just resizes the pages already drawn,
+///    so it is instant and never redraws anything.
+///  * The frame and the toolbar above it never change size.
+class _PdfPreviewPane extends StatefulWidget {
   const _PdfPreviewPane({
     required this.pdf,
     required this.fileName,
@@ -593,53 +712,284 @@ class _PdfPreviewPane extends StatelessWidget {
   final VoidCallback onBack;
 
   @override
+  State<_PdfPreviewPane> createState() => _PdfPreviewPaneState();
+}
+
+class _PdfPreviewPaneState extends State<_PdfPreviewPane> {
+  static const double _minZoom = 0.3;
+  static const double _maxZoom = 2.0;
+
+  /// The zoom every preview opens at, and what "Fit" returns to (50%).
+  static const double _defaultZoom = 0.5;
+
+  /// Pages are drawn at this resolution and scaled to the zoom, so they stay
+  /// reasonably sharp up to about 100%.
+  static const double _renderDpi = 150;
+
+  double _zoom = _defaultZoom;
+
+  Uint8List? _bytes;
+  final List<_PageImage> _pages = [];
+  bool _drawing = true;
+  bool _failed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final bytes = await widget.pdf;
+      if (!mounted) return;
+      setState(() => _bytes = bytes);
+      // A fresh copy: on the web the viewer takes ownership of the bytes it is
+      // given, so the same buffer cannot be handed over twice.
+      await for (final page in Printing.raster(_copy(bytes), dpi: _renderDpi)) {
+        final png = await page.toPng();
+        if (!mounted) return;
+        setState(() => _pages.add(_PageImage(png, page.width / page.height)));
+      }
+    } catch (_) {
+      if (mounted && _pages.isEmpty) setState(() => _failed = true);
+    } finally {
+      if (mounted) setState(() => _drawing = false);
+    }
+  }
+
+  void _setZoom(double v) =>
+      setState(() => _zoom = v.clamp(_minZoom, _maxZoom).toDouble());
+
+  static Uint8List _copy(Uint8List bytes) => Uint8List.fromList(bytes);
+
+  /// Ctrl (or Cmd) + mouse wheel zooms the preview: wheel up zooms in.
+  ///
+  /// Flutter on the web reports Ctrl+wheel (and trackpad pinch) as a
+  /// [PointerScaleEvent], other platforms as a [PointerScrollEvent]; both are
+  /// handled.
+  void _onPointerSignal(PointerSignalEvent event) {
+    double? factor;
+    if (event is PointerScaleEvent) {
+      // scale is 1.0 = no change; soften it so one wheel notch is ~15%.
+      factor = math.pow(event.scale, 0.35).toDouble();
+    } else if (event is PointerScrollEvent) {
+      final kb = HardwareKeyboard.instance;
+      if (!(kb.isControlPressed || kb.isMetaPressed)) return;
+      factor = event.scrollDelta.dy < 0 ? 1.15 : 1 / 1.15;
+    } else {
+      return;
+    }
+    final f = factor;
+    // Registering marks the event as handled, so the browser does not also
+    // zoom the whole page.
+    GestureBinding.instance.pointerSignalResolver.register(
+      event,
+      (_) => _setZoom(_zoom * f),
+    );
+  }
+
+  Widget _zoomControls() {
+    return Row(
+      key: const Key('previewZoomControls'),
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        IconButton(
+          key: const Key('zoomOut'),
+          tooltip: 'Zoom out',
+          icon: const Icon(Icons.zoom_out),
+          onPressed: _zoom > _minZoom ? () => _setZoom(_zoom - 0.1) : null,
+        ),
+        SizedBox(
+          width: 170,
+          child: Slider(
+            key: const Key('zoomSlider'),
+            min: _minZoom,
+            max: _maxZoom,
+            value: _zoom,
+            onChanged: _setZoom,
+          ),
+        ),
+        IconButton(
+          key: const Key('zoomIn'),
+          tooltip: 'Zoom in',
+          icon: const Icon(Icons.zoom_in),
+          onPressed: _zoom < _maxZoom ? () => _setZoom(_zoom + 0.1) : null,
+        ),
+        SizedBox(
+          width: 48,
+          child: Text(
+            '${(_zoom * 100).round()}%',
+            key: const Key('zoomLabel'),
+            textAlign: TextAlign.right,
+            style: AppTextStyles.body(size: 12, weight: FontWeight.w700),
+          ),
+        ),
+        // "Fit" is the default view size: 50%.
+        TextButton(
+          key: const Key('zoomFit'),
+          onPressed: () => _setZoom(_defaultZoom),
+          child: const Text('Fit'),
+        ),
+      ],
+    );
+  }
+
+  Widget _toolbar() {
+    final bytes = _bytes;
+    return Row(
+      children: [
+        TextButton.icon(
+          onPressed: widget.onBack,
+          icon: const Icon(Icons.arrow_back, size: 16),
+          label: const Text('Back to Checklist'),
+        ),
+        const Spacer(),
+        if (_pages.isNotEmpty) _zoomControls(),
+        if (bytes != null) ...[
+          const SizedBox(width: 12),
+          OutlinedButton.icon(
+            key: const Key('previewPrint'),
+            onPressed: () => Printing.layoutPdf(
+              onLayout: (_) async => _copy(bytes),
+              name: widget.fileName,
+            ),
+            icon: const Icon(Icons.print, size: 16),
+            label: const Text('Print'),
+          ),
+          const SizedBox(width: 8),
+          FilledButton.icon(
+            key: const Key('previewDownload'),
+            onPressed: () => Printing.sharePdf(
+              bytes: _copy(bytes),
+              filename: widget.fileName,
+            ),
+            style: FilledButton.styleFrom(
+              backgroundColor: AppColors.primaryGreen,
+            ),
+            icon: const Icon(Icons.download, size: 16),
+            label: const Text('Download'),
+          ),
+        ],
+      ],
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.all(24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Align(
-            alignment: Alignment.centerLeft,
-            child: TextButton.icon(
-              onPressed: onBack,
-              icon: const Icon(Icons.arrow_back, size: 16),
-              label: const Text('Back to Checklist'),
-            ),
-          ),
+          _toolbar(),
           const SizedBox(height: 8),
-          Expanded(
-            child: FutureBuilder<Uint8List>(
-              future: pdf,
-              builder: (context, snap) {
-                if (snap.connectionState != ConnectionState.done) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-                if (snap.hasError || snap.data == null) {
-                  return Center(
-                    child: Text(
-                      'Could not build the export preview. Please try again.',
-                      key: const Key('previewError'),
-                      style: AppTextStyles.body(
-                        size: 11.5,
-                        color: AppColors.warmRedOrange,
-                      ),
-                    ),
-                  );
-                }
-                final bytes = snap.data!;
-                return PdfPreview(
-                  key: const Key('pdfPreview'),
-                  build: (_) async => bytes,
-                  pdfFileName: fileName,
-                  canChangePageFormat: false,
-                  canChangeOrientation: false,
-                  canDebug: false,
-                );
-              },
-            ),
-          ),
+          Expanded(child: _frame(context)),
         ],
+      ),
+    );
+  }
+
+  /// A white page-shaped placeholder for a page that is not drawn yet.
+  Widget _placeholderPage(double width, String label) {
+    return Container(
+      key: const Key('previewPlaceholder'),
+      width: width,
+      height: width * 11 / 8.5,
+      alignment: Alignment.center,
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        boxShadow: [
+          BoxShadow(color: Color(0x33000000), blurRadius: 6, offset: Offset(0, 2)),
+        ],
+      ),
+      child: Text(
+        label,
+        style: AppTextStyles.body(size: 12, color: AppColors.textGray),
+      ),
+    );
+  }
+
+  Widget _pageTile(double width, _PageImage page) {
+    return Container(
+      width: width,
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        boxShadow: [
+          BoxShadow(color: Color(0x33000000), blurRadius: 6, offset: Offset(0, 2)),
+        ],
+      ),
+      child: Image.memory(
+        page.png,
+        width: width,
+        fit: BoxFit.fitWidth,
+        gaplessPlayback: true,
+        filterQuality: FilterQuality.medium,
+      ),
+    );
+  }
+
+  /// The fixed frame: same size whatever the zoom. Pages narrower than the
+  /// frame are centred; wider ones scroll sideways inside it.
+  Widget _frame(BuildContext context) {
+    Widget inner;
+    if (_failed) {
+      inner = Center(
+        child: Text(
+          'Could not build the export preview. Please try again.',
+          key: const Key('previewError'),
+          style: AppTextStyles.body(
+            size: 11.5,
+            color: AppColors.warmRedOrange,
+          ),
+        ),
+      );
+    } else {
+      inner = LayoutBuilder(
+        builder: (context, box) {
+          final width = (box.maxWidth - 32) * _zoom;
+          final extra = _drawing ? 1 : 0;
+          final list = ListView.separated(
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            itemCount: _pages.length + extra,
+            separatorBuilder: (_, _) => const SizedBox(height: 14),
+            itemBuilder: (_, i) {
+              final child = i < _pages.length
+                  ? _pageTile(width, _pages[i])
+                  : _placeholderPage(
+                      width,
+                      _bytes == null
+                          ? 'Preparing your export...'
+                          : 'Drawing page ${_pages.length + 1}...',
+                    );
+              return Center(child: child);
+            },
+          );
+          return _zoom > 1.0
+              ? SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: SizedBox(width: width + 32, child: list),
+                )
+              : list;
+        },
+      );
+    }
+    return Container(
+      key: const Key('previewFrame'),
+      clipBehavior: Clip.hardEdge,
+      decoration: BoxDecoration(
+        color: const Color(0xFFE9E9E9),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppColors.cardBorder),
+      ),
+      child: Listener(
+        onPointerSignal: _onPointerSignal,
+        child: ScrollConfiguration(
+          behavior: ScrollConfiguration.of(
+            context,
+          ).copyWith(physics: const _CtrlAwareScrollPhysics()),
+          child: inner,
+        ),
       ),
     );
   }

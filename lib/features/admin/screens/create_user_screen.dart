@@ -4,6 +4,7 @@ import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
 import '../../../core/services/user_provisioning_service.dart';
 import '../../../core/state/app_state.dart';
+import '../../../models/user.dart';
 import '../../../shared/widgets/primary_button.dart';
 
 /// Create User screen for the System Administrator.
@@ -18,18 +19,25 @@ import '../../../shared/widgets/primary_button.dart';
 /// password the admin never has access to, then emails the new user a
 /// password-setup link.
 class CreateUserScreen extends StatefulWidget {
-  const CreateUserScreen({super.key});
+  /// [provisioningService] is only for tests; the app uses the real one.
+  const CreateUserScreen({super.key, this.provisioningService});
+
+  final UserProvisioningService? provisioningService;
 
   @override
   State<CreateUserScreen> createState() => _CreateUserScreenState();
 }
 
 class _CreateUserScreenState extends State<CreateUserScreen> {
-  final _provisioningService = UserProvisioningService();
+  late final UserProvisioningService _provisioningService =
+      widget.provisioningService ?? UserProvisioningService();
 
   final _formKey = GlobalKey<FormState>();
 
   final _emailController = TextEditingController();
+  final _firstNameController = TextEditingController();
+  final _middleInitialController = TextEditingController();
+  final _lastNameController = TextEditingController();
   final _displayNameController = TextEditingController();
   final _institutionController = TextEditingController(text: 'NDMU');
 
@@ -41,6 +49,9 @@ class _CreateUserScreenState extends State<CreateUserScreen> {
   @override
   void dispose() {
     _emailController.dispose();
+    _firstNameController.dispose();
+    _middleInitialController.dispose();
+    _lastNameController.dispose();
     _displayNameController.dispose();
     _institutionController.dispose();
     super.dispose();
@@ -65,7 +76,11 @@ class _CreateUserScreenState extends State<CreateUserScreen> {
     try {
       await _provisioningService.createGuidanceCouncilUser(
         email: _emailController.text,
+        // Independent of the structured name below -- never derived from it.
         displayName: _displayNameController.text,
+        firstName: _firstNameController.text,
+        middleInitial: _middleInitialController.text,
+        lastName: _lastNameController.text,
         actor: admin,
         guidancePosition: _guidancePosition,
         institution: _institutionController.text.trim().isEmpty ? 'NDMU' : _institutionController.text.trim(),
@@ -108,6 +123,41 @@ class _CreateUserScreenState extends State<CreateUserScreen> {
           child: ListView(
             padding: const EdgeInsets.all(16),
             children: [
+              _buildSection('Name'),
+              const SizedBox(height: 16),
+              _buildTextField(
+                label: 'First Name',
+                controller: _firstNameController,
+                hint: 'e.g., Juan',
+                required: true,
+                fieldKey: const Key('createUser.firstName'),
+                validator: UserNameRules.validateFirstName,
+              ),
+              const SizedBox(height: 12),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: SizedBox(
+                  width: 200,
+                  child: _buildTextField(
+                    label: 'Middle Initial',
+                    controller: _middleInitialController,
+                    hint: 'e.g., D.',
+                    required: true,
+                    fieldKey: const Key('createUser.middleInitial'),
+                    validator: UserNameRules.validateMiddleInitial,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              _buildTextField(
+                label: 'Last Name',
+                controller: _lastNameController,
+                hint: 'e.g., Dela Cruz',
+                required: true,
+                fieldKey: const Key('createUser.lastName'),
+                validator: UserNameRules.validateLastName,
+              ),
+              const SizedBox(height: 16),
               _buildSection('Account'),
               const SizedBox(height: 16),
               Container(
@@ -127,6 +177,7 @@ class _CreateUserScreenState extends State<CreateUserScreen> {
                 controller: _emailController,
                 hint: 'e.g., staff@ndmu.edu.ph',
                 required: true,
+                fieldKey: const Key('createUser.email'),
                 keyboardType: TextInputType.emailAddress,
                 validator: (value) {
                   if (value == null || value.trim().isEmpty) return 'Email is required';
@@ -140,6 +191,7 @@ class _CreateUserScreenState extends State<CreateUserScreen> {
                 controller: _displayNameController,
                 hint: 'e.g., Juan Dela Cruz',
                 required: true,
+                fieldKey: const Key('createUser.displayName'),
               ),
               const SizedBox(height: 16),
               _buildSection('Guidance Details'),
@@ -190,6 +242,7 @@ class _CreateUserScreenState extends State<CreateUserScreen> {
     bool required = false,
     TextInputType? keyboardType,
     String? Function(String?)? validator,
+    Key? fieldKey,
   }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -202,6 +255,7 @@ class _CreateUserScreenState extends State<CreateUserScreen> {
         ),
         const SizedBox(height: 6),
         TextFormField(
+          key: fieldKey,
           controller: controller,
           keyboardType: keyboardType,
           decoration: InputDecoration(
