@@ -8,12 +8,19 @@ class BubbleScores {
   final double center;
   final double score;
 
+  /// How much darker this bubble's interior reads than the paper around it,
+  /// measured on the illumination-normalized gray rather than the binarised
+  /// ink map -- binarising discards magnitude, and magnitude is the whole
+  /// signal for a faint mark.
+  final double dark;
+
   const BubbleScores({
     required this.choice,
     required this.ring,
     required this.whole,
     required this.center,
     required this.score,
+    required this.dark,
   });
 }
 
@@ -50,15 +57,18 @@ class OmrBubbleClassifier {
 
   /// Order matters: these line up with [_featureVector].
   static const List<double> _weights = <double>[
-    1.3497170060, // scoreRelItem
-    2.0845441083, // scoreRelBest
-    1.0167256504, // scoreRelSheet
-    1.0698163241, // ringRelItem
-    2.0110768935, // centerRelItem
-    -1.0439037672, // choiceCount
+    1.0771558156, // darkRelItem
+    1.5698024090, // darkRelBest
+    1.0082333447, // darkRelSheet
+    1.2011692260, // scoreRelItem
+    1.8356162615, // scoreRelBest
+    0.8842461254, // scoreRelSheet
+    0.9667710140, // ringRelItem
+    1.7314793950, // centerRelItem
+    -1.0232138824, // choiceCount
   ];
 
-  static const double _bias = 0.29792150167138;
+  static const double _bias = 0.23925394994393;
 
   /// Probability above which a bubble counts as marked.
   static const double markThreshold = 0.5;
@@ -76,25 +86,35 @@ class OmrBubbleClassifier {
   /// Most bubbles on any sheet are unmarked, so the median is a robust stand-in
   /// for "what blank looks like on this particular capture" -- which is what
   /// makes `scoreRelSheet` exposure-independent.
-  static double sheetMedianScore(List<List<BubbleScores>> sheet) {
-    final all = <double>[];
+  static (double score, double dark) sheetMedians(
+    List<List<BubbleScores>> sheet,
+  ) {
+    final allScore = <double>[];
+    final allDark = <double>[];
     for (final item in sheet) {
       for (final bubble in item) {
-        all.add(bubble.score);
+        allScore.add(bubble.score);
+        allDark.add(bubble.dark);
       }
     }
-    if (all.isEmpty) return 0.0;
-    all.sort();
-    return all[all.length ~/ 2];
+    if (allScore.isEmpty) return (0.0, 0.0);
+    allScore.sort();
+    allDark.sort();
+    return (
+      allScore[allScore.length ~/ 2],
+      allDark[allDark.length ~/ 2],
+    );
   }
 
   static List<double> _featureVector(
     int index,
     List<BubbleScores> choices,
     double minScore,
+    double minDark,
     double minRing,
     double minCenter,
     double medianScore,
+    double medianDark,
   ) {
     final bubble = choices[index];
 
@@ -102,19 +122,29 @@ class OmrBubbleClassifier {
     // Excluded by position, not by identity: two choices on one item can hold
     // numerically identical measurements, and comparing instances would then
     // drop the wrong one.
-    var bestOther = 0.0;
+    var bestOtherScore = 0.0;
+    var bestOtherDark = 0.0;
     var sawOther = false;
     for (var i = 0; i < choices.length; i++) {
       if (i == index) continue;
-      if (!sawOther || choices[i].score > bestOther) {
-        bestOther = choices[i].score;
-        sawOther = true;
+      if (!sawOther || choices[i].score > bestOtherScore) {
+        bestOtherScore = choices[i].score;
       }
+      if (!sawOther || choices[i].dark > bestOtherDark) {
+        bestOtherDark = choices[i].dark;
+      }
+      sawOther = true;
     }
 
+    // Order is the model's own, from the bench's Features::NAMES:
+    // darkRelItem, darkRelBest, darkRelSheet, scoreRelItem, scoreRelBest,
+    // scoreRelSheet, ringRelItem, centerRelItem, choiceCount.
     return <double>[
+      bubble.dark - minDark,
+      bubble.dark - bestOtherDark,
+      bubble.dark - medianDark,
       bubble.score - minScore,
-      bubble.score - bestOther,
+      bubble.score - bestOtherScore,
       bubble.score - medianScore,
       bubble.ring - minRing,
       bubble.center - minCenter,
@@ -135,14 +165,17 @@ class OmrBubbleClassifier {
   static BubbleVerdict classify(
     List<BubbleScores> choices,
     double medianScore,
+    double medianDark,
   ) {
     if (choices.isEmpty) return const BubbleVerdict(null, false);
 
     var minScore = choices[0].score;
+    var minDark = choices[0].dark;
     var minRing = choices[0].ring;
     var minCenter = choices[0].center;
     for (final bubble in choices) {
       if (bubble.score < minScore) minScore = bubble.score;
+      if (bubble.dark < minDark) minDark = bubble.dark;
       if (bubble.ring < minRing) minRing = bubble.ring;
       if (bubble.center < minCenter) minCenter = bubble.center;
     }
@@ -156,9 +189,11 @@ class OmrBubbleClassifier {
         i,
         choices,
         minScore,
+        minDark,
         minRing,
         minCenter,
         medianScore,
+        medianDark,
       ));
       if (p > bestProb) {
         runnerProb = bestProb;

@@ -27,7 +27,7 @@ typedef _QuadrantSearch = ({
 /// Ranked outcome of measuring every choice in one OMR item at a given
 /// (possibly zero) sampling shift -- see [OmrDecoder._measureItemAt].
 typedef _ItemMeasurement = ({
-  List<(String, ({double ringFill, double wholeFill, double centerFill, double score}))>
+  List<(String, ({double ringFill, double wholeFill, double centerFill, double score, double dark}))>
       measurements,
   String bestChoice,
   double bestFill,
@@ -1914,6 +1914,15 @@ class OmrDecoder {
                         final bubbleSw = _kPerfDebug ? (Stopwatch()..start()) : null;
                         final result = _readBubbles(
                           inkMap,
+                          // Darkness is measured on the illumination-
+                          // normalized gray, NOT on the CLAHE output that
+                          // feeds the ink map. The bench fits the model's
+                          // darkness weights against `normalizeIllumination`'s
+                          // result with no CLAHE applied, and CLAHE rewrites
+                          // local contrast hard enough that measuring after
+                          // it would feed the model a different statistic
+                          // than the one it was trained on.
+                          normalizedGray ?? warped,
                           template,
                           canonicalWidth,
                           canonicalHeight,
@@ -4581,6 +4590,7 @@ class OmrDecoder {
   /// Equally filled choices (including all-marked rows) can read as blank.
   OmrScanResult _readBubbles(
     cv.Mat inkMap,
+    cv.Mat gray,
     OmrExamTemplate template,
     int canonicalWidth,
     int canonicalHeight,
@@ -4611,6 +4621,7 @@ class OmrDecoder {
 
         var measured = _measureItemAt(
           inkMap,
+          gray,
           choices,
           bubbleSampleHalfPxX,
           bubbleSampleHalfPxY,
@@ -4636,6 +4647,7 @@ class OmrDecoder {
               if (dxFrac == 0 && dyFrac == 0) continue;
               final candidate = _measureItemAt(
                 inkMap,
+                gray,
                 choices,
                 bubbleSampleHalfPxX,
                 bubbleSampleHalfPxY,
@@ -4684,6 +4696,7 @@ class OmrDecoder {
                 whole: m.wholeFill,
                 center: m.centerFill,
                 score: m.score,
+                dark: m.dark,
               ),
           ]);
           classifierItems.add(
@@ -4721,10 +4734,12 @@ class OmrDecoder {
     if (OmrBubbleClassifier.enabled &&
         classifierBubbles.length == items.length &&
         classifierBubbles.isNotEmpty) {
-      final medianScore = OmrBubbleClassifier.sheetMedianScore(classifierBubbles);
+      final (medianScore, medianDark) =
+          OmrBubbleClassifier.sheetMedians(classifierBubbles);
       for (var i = 0; i < classifierBubbles.length; i++) {
         final verdict =
-            OmrBubbleClassifier.classify(classifierBubbles[i], medianScore);
+            OmrBubbleClassifier.classify(
+                classifierBubbles[i], medianScore, medianDark);
         items[i] = OmrItemResult(
           sectionName: classifierItems[i].sectionName,
           itemNumber: classifierItems[i].itemNumber,
@@ -4772,6 +4787,7 @@ class OmrDecoder {
   /// fields [_readBubbles] and its recenter search need.
   _ItemMeasurement _measureItemAt(
     cv.Mat inkMap,
+    cv.Mat gray,
     List<BubblePos> choices,
     double halfPxX,
     double halfPxY,
@@ -4787,6 +4803,7 @@ class OmrDecoder {
           bubble.choice,
           _measureBubble(
             inkMap,
+            gray,
             bubble,
             halfPxX,
             halfPxY,
@@ -4818,9 +4835,10 @@ class OmrDecoder {
   /// The ring excludes the printed choice letter; center ink retains pencil evidence.
   /// These signals overlap, so the blend reweights center ink rather than adding
   /// independent votes. Separate X/Y radii match flattened printed bubbles.
-  ({double ringFill, double wholeFill, double centerFill, double score})
+  ({double ringFill, double wholeFill, double centerFill, double score, double dark})
       _measureBubble(
     cv.Mat inkMap,
+    cv.Mat gray,
     BubblePos bubble,
     double halfPxX,
     double halfPxY,
@@ -4872,12 +4890,106 @@ class OmrDecoder {
       0.55 * ringFill + 0.30 * outerFill + 0.15 * innerFill,
     );
 
+    final dark = _measureDarkness(
+      gray, cx, cy, halfPxX, halfPxY, canonicalWidth, canonicalHeight,
+    );
+
     return (
       ringFill: ringFill,
       wholeFill: outerFill,
       centerFill: innerFill,
       score: score,
+      dark: dark,
     );
+  }
+
+  /// Mean gray over a box, as a 0-255 level. Null when the box is degenerate.
+  double? _boxMeanGray(
+    cv.Mat gray,
+    double cx,
+    double cy,
+    double halfPxX,
+    double halfPxY,
+    int canonicalWidth,
+    int canonicalHeight,
+  ) {
+    final left = (cx - halfPxX).clamp(0, canonicalWidth - 1).round();
+    final top = (cy - halfPxY).clamp(0, canonicalHeight - 1).round();
+    final right = (cx + halfPxX).clamp(left + 1, canonicalWidth).round();
+    final bottom = (cy + halfPxY).clamp(top + 1, canonicalHeight).round();
+    if (right <= left || bottom <= top) return null;
+
+    final roi = gray.region(cv.Rect(left, top, right - left, bottom - top));
+    try {
+      final mean = roi.mean();
+      try {
+        return mean.val1;
+      } finally {
+        mean.dispose();
+      }
+    } finally {
+      roi.dispose();
+    }
+  }
+
+  /// How much darker a bubble's interior is than the paper immediately around
+  /// it, as a 0-1 fraction of that paper's brightness.
+  ///
+  /// Measured on the GRAY image rather than the binarised ink map, because
+  /// binarising throws away magnitude and magnitude is the entire signal for
+  /// a faint mark: a light pencil stroke is a 10-15 level shift that may
+  /// never cross the adaptive threshold at all, and worse, the local mean
+  /// that threshold uses is itself dragged down by the very mark it should
+  /// be detecting.
+  ///
+  /// Deliberately relative to a local paper reading rather than absolute:
+  /// across real captures a BLANK bubble's absolute fill ranged 0.18-0.46
+  /// with exposure, so one sheet's blanks read darker than another's marks.
+  ///
+  /// Geometry mirrors `guidegrade-omr-bench`'s `Omr::measureDarkness`
+  /// EXACTLY -- inner box at 0.62 of the bubble radius, paper ring between
+  /// 2.2x and 1.0x -- because the model weights that consume this were fitted
+  /// against that definition. Changing either constant here silently
+  /// invalidates them.
+  double _measureDarkness(
+    cv.Mat gray,
+    double cx,
+    double cy,
+    double halfPxX,
+    double halfPxY,
+    int canonicalWidth,
+    int canonicalHeight,
+  ) {
+    final inner = _boxMeanGray(
+      gray, cx, cy, halfPxX * 0.62, halfPxY * 0.62,
+      canonicalWidth, canonicalHeight,
+    );
+    if (inner == null) return 0.0;
+
+    // Local paper: the ring between a 2.2x box and the bubble itself, which
+    // on these layouts is the gap between neighbouring bubbles. Taken as the
+    // difference of two box means weighted by their areas, since a ring isn't
+    // a rectangle.
+    final outerHalfX = halfPxX * 2.2;
+    final outerHalfY = halfPxY * 2.2;
+    final outer = _boxMeanGray(
+      gray, cx, cy, outerHalfX, outerHalfY, canonicalWidth, canonicalHeight,
+    );
+    final bubble = _boxMeanGray(
+      gray, cx, cy, halfPxX, halfPxY, canonicalWidth, canonicalHeight,
+    );
+    if (outer == null || bubble == null) return 0.0;
+
+    final outerArea = outerHalfX * outerHalfY * 4;
+    final bubbleArea = halfPxX * halfPxY * 4;
+    final ringArea = outerArea - bubbleArea;
+    if (ringArea <= 0) return 0.0;
+
+    final paper = ((outer * outerArea) - (bubble * bubbleArea)) / ringArea;
+    if (paper < 1.0) return 0.0;
+
+    final dark = (paper - inner) / paper;
+    return dark < 0.0 ? 0.0 : (dark > 1.0 ? 1.0 : dark);
   }
 
   double _squareFillFraction(
