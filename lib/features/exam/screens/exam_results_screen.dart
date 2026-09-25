@@ -356,6 +356,7 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
                       // The decoder numbers pages from 1; this list is 0-based.
                       pageIndex: sheetIndex + 1,
                       title: 'How it was read — Sheet ${sheetIndex + 1}',
+                      meshVerdict: scored.meshVerdict,
                     ),
                   ),
                 ),

@@ -83,12 +83,70 @@ class OmrDebugViewerScreen extends StatelessWidget {
 
   final String title;
 
+  /// The decode's `OmrMeshVerdict` name, or null for a scan made before it
+  /// was recorded — see `OmrScanResult.meshVerdict`.
+  ///
+  /// Shown because whether local geometry correction actually ran is
+  /// otherwise invisible, and it is the single thing that decides how a
+  /// slanted or bowed sheet reads. A template with no interior fiducials
+  /// reports `notApplicable` and gets only the 4-corner warp, which cannot
+  /// correct anything BETWEEN the corners — so seeing that on a sheet that
+  /// should have fiducials means the wrong sheet version is being printed.
+  final String? meshVerdict;
+
   const OmrDebugViewerScreen({
     super.key,
     required this.debugDir,
     required this.pageIndex,
     required this.title,
+    this.meshVerdict,
   });
+
+  /// Plain-language reading of [meshVerdict]: the explanation, and whether it
+  /// is good news.
+  (String, bool) get _meshSummary => switch (meshVerdict) {
+        'meshApplied' => (
+            'Geometry correction APPLIED — the sheet was measurably bowed and '
+                'was corrected before the bubbles were read.',
+            true,
+          ),
+        'planar' => (
+            'Geometry checked, sheet was flat — the interior marks landed '
+                'where the template says, so no correction was needed.',
+            true,
+          ),
+        'inconclusive' => (
+            'Too few interior marks were found to judge the geometry. The '
+                'read fell back to the 4-corner warp alone. Not necessarily '
+                'wrong, but it is unverified.',
+            false,
+          ),
+        'notApplicable' => (
+            'This sheet has NO interior reference marks, so local geometry '
+                'correction could not run at all — only the 4-corner warp, '
+                'which cannot correct bowing between the corners. If this is '
+                'a TAT sheet, an older layout is being printed: the current '
+                'one (TAT-portrait-v5) has ten interior marks.',
+            false,
+          ),
+        'tooSevere' => (
+            'The sheet was too bowed or slanted to correct reliably. Flatten '
+                'it and rescan.',
+            false,
+          ),
+        'likelyMisregistered' => (
+            'The interior marks disagree with the corners by a large, uniform '
+                'amount — usually one corner square was mismatched, which '
+                'makes every answer on the sheet unreliable.',
+            false,
+          ),
+        'unsupportedDistortion' => (
+            'Distortion was measured but there were not enough reference '
+                'points to correct it.',
+            false,
+          ),
+        _ => ('Geometry verdict was not recorded for this scan.', false),
+      };
 
   File _fileFor(String suffix) =>
       File('$debugDir/sheet${pageIndex}_$suffix.jpg');
@@ -126,6 +184,14 @@ class OmrDebugViewerScreen extends StatelessWidget {
         children: [
           if (errorMessage != null && errorMessage.isNotEmpty)
             _ErrorCard(message: errorMessage),
+          // Above the stages: the stages show what the page LOOKED like, this
+          // says whether its geometry was actually corrected. A sheet can pass
+          // every visual stage and still read badly if this never ran.
+          _MeshVerdictCard(
+            verdict: meshVerdict,
+            summary: _meshSummary.$1,
+            good: _meshSummary.$2,
+          ),
           if (failed) ...[
             const _StageCardHeader(
               title: 'Decode failed before flattening',
@@ -253,6 +319,76 @@ class _FullScreenStage extends StatelessWidget {
           maxScale: 8,
           child: Image.file(file, fit: BoxFit.contain),
         ),
+      ),
+    );
+  }
+}
+
+/// Whether local geometry correction ran, in plain language.
+///
+/// Sits above the image stages because it answers a question none of them
+/// can: the page can look perfectly fine at every stage and still have been
+/// read on uncorrected geometry.
+class _MeshVerdictCard extends StatelessWidget {
+  final String? verdict;
+  final String summary;
+  final bool good;
+
+  const _MeshVerdictCard({
+    required this.verdict,
+    required this.summary,
+    required this.good,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = good ? const Color(0xFF34D399) : const Color(0xFFFBBF24);
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(11),
+      decoration: BoxDecoration(
+        color: const Color(0xFF111827),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: accent.withOpacity(0.45)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(good ? Icons.check_circle_outline : Icons.info_outline,
+                  size: 16, color: accent),
+              const SizedBox(width: 7),
+              Text(
+                'Sheet geometry',
+                style: TextStyle(
+                  color: accent,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const Spacer(),
+              Text(
+                verdict ?? 'not recorded',
+                style: const TextStyle(
+                  color: Color(0xFF94A3B8),
+                  fontSize: 10.5,
+                  fontFamily: 'monospace',
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            summary,
+            style: const TextStyle(
+              color: Color(0xFFCBD5E1),
+              fontSize: 11.5,
+              height: 1.35,
+            ),
+          ),
+        ],
       ),
     );
   }
