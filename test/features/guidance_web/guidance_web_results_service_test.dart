@@ -58,6 +58,17 @@ class _FakeSyncClient implements SyncClient {
     calls.add('downloadScanImage:$batchId:$scanId:${rectified ? 'rectified' : 'original'}');
     return imageToReturn;
   }
+
+  @override
+  Future<CloudImageRead> downloadNameCropImage({
+    required String batchId,
+    required String scanId,
+    required String variant,
+  }) async {
+    calls.add('downloadNameCropImage:$batchId:$scanId:$variant');
+    return imageToReturn;
+  }
+
   @override
   Future<SyncOutcome> deleteBatch(String batchId) => _no('deleteBatch');
   @override
@@ -360,6 +371,44 @@ void main() {
 
       expect(client.calls, ['downloadScanImage:b1:s1:original']);
     });
+  });
+
+  group('loadNameCropImage', () {
+    test(
+      'returns the crop bytes and calls the crop download API with the variant',
+      () async {
+        client.imageToReturn = CloudImageRead.found([4, 5, 6]);
+
+        final bytes = await service.loadNameCropImage(
+          'b1',
+          's1',
+          variant: 'name_last',
+        );
+
+        expect(bytes, [4, 5, 6]);
+        expect(client.calls, ['downloadNameCropImage:b1:s1:name_last']);
+      },
+    );
+
+    test(
+      'sanitizes a crop download failure into GuidanceWebResultsException',
+      () async {
+        client.imageToReturn = const CloudImageRead.failed(
+          SyncOutcome.transient('network'),
+        );
+
+        expect(
+          () => service.loadNameCropImage('b1', 's1', variant: 'name_first'),
+          throwsA(
+            isA<GuidanceWebResultsException>().having(
+              (e) => e.message,
+              'message',
+              isNot(contains('network')),
+            ),
+          ),
+        );
+      },
+    );
   });
 
   test('never calls any push/write/delete/image method for a full batches+scans load', () async {

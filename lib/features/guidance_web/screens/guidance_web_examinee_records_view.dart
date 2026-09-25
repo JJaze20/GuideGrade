@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -66,6 +67,9 @@ class _GuidanceWebExamineeRecordsViewState
       widget._service ?? GuidanceWebExamineeRecordsService();
   late final GuidanceWebResultsService _resultsService =
       widget._resultsService ?? GuidanceWebResultsService();
+  /// Name-crop downloads for the Unlinked Scans rows, kept so a row scrolled
+  /// out and back in is not downloaded again.
+  late final _NameCropCache _nameCropCache = _NameCropCache(_resultsService);
   final TextEditingController _searchController = TextEditingController();
 
   _RecordsTab _tab = _RecordsTab.examinees;
@@ -134,6 +138,7 @@ class _GuidanceWebExamineeRecordsViewState
   }
 
   Future<void> _loadUnlinkedScans() async {
+    _nameCropCache.clear();
     setState(() {
       _loadingUnlinked = true;
       _unlinkedError = null;
@@ -749,8 +754,17 @@ class _GuidanceWebExamineeRecordsViewState
 
   /// Width of the trailing action buttons in BOTH the header and every row, so
   /// the flexible EXAM / BATCH / CAPTURED columns get identical widths (and
-  /// therefore line up) in the two.
-  static const double _unlinkedActionsWidth = 610;
+  /// therefore line up) in the two. Just wide enough for the three buttons;
+  /// the rest of the row goes to the name crops. The buttons are wrapped in a
+  /// scale-down FittedBox, so a narrower window shrinks them slightly instead
+  /// of overflowing.
+  static const double _unlinkedActionsWidth = 460;
+
+  /// The NAME CROP column (between OCR NAME and EXAM): its share of the row's
+  /// flexible width, and the gap that separates it from the OCR name. Header
+  /// and rows use the same two values so the column lines up.
+  static const int _nameCropFlex = 9;
+  static const double _nameCropGap = 8;
 
   Widget _buildUnlinkedTableHeader() {
     final style = AppTextStyles.body(size: 9.5, weight: FontWeight.w800, color: AppColors.textGray);
@@ -759,6 +773,13 @@ class _GuidanceWebExamineeRecordsViewState
       child: Row(
         children: [
           Expanded(flex: 3, child: Text('OCR NAME', style: style)),
+          Expanded(
+            flex: _nameCropFlex,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: _nameCropGap),
+              child: Text('NAME CROP', style: style),
+            ),
+          ),
           Expanded(flex: 1, child: Text('EXAM', style: style)),
           Expanded(flex: 2, child: Text('BATCH', style: style)),
           Expanded(flex: 2, child: Text('CAPTURED', style: style)),
@@ -786,13 +807,31 @@ class _GuidanceWebExamineeRecordsViewState
               overflow: TextOverflow.ellipsis,
             ),
           ),
+          Expanded(
+            flex: _nameCropFlex,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: _nameCropGap),
+              child: _NameCropStrip(
+                // One strip per scan, so its three downloads start only when
+                // this row is built (ListView builds rows lazily) and never
+                // restart for a different scan reusing the element.
+                key: ValueKey('nameCrop_${item.batch.id}_${item.scan.id}'),
+                cache: _nameCropCache,
+                batchId: item.batch.id,
+                scanId: item.scan.id,
+              ),
+            ),
+          ),
           Expanded(flex: 1, child: Text(item.examCode, style: AppTextStyles.body(size: 11))),
           Expanded(flex: 2, child: Text(item.batch.batchCode, style: AppTextStyles.body(size: 11))),
           Expanded(flex: 2, child: Text(_formatDate(item.scan.capturedAt), style: AppTextStyles.body(size: 11))),
           SizedBox(
             width: _unlinkedActionsWidth,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.end,
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerRight,
+              child: Row(
+              mainAxisSize: MainAxisSize.min,
               children: [
                 TextButton(
                   style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 6)),
@@ -810,6 +849,7 @@ class _GuidanceWebExamineeRecordsViewState
                   child: Text('Confirm and Create Examinee', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w700, color: AppColors.primaryGreen)),
                 ),
               ],
+            ),
             ),
           ),
         ],
@@ -1368,6 +1408,367 @@ class _DatePopoverFieldState extends State<_DatePopoverField> {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// De-duplicates the name-crop downloads of the Unlinked Scans table.
+///
+/// One download per scan and crop variant, started the first time a row asks
+/// for it and answered from memory afterwards. A failed download is NOT
+/// remembered, so the row's retry (or a reload of the list) asks again.
+/// Reads only through [GuidanceWebResultsService.loadNameCropImage] -- the
+/// existing authenticated Storage read; nothing is written anywhere.
+class _NameCropCache {
+  _NameCropCache(this._service);
+
+  final GuidanceWebResultsService _service;
+  final Map<String, Future<Uint8List?>> _downloads = {};
+
+  Future<Uint8List?> load(String batchId, String scanId, String variant) {
+    final key = '$batchId/$scanId/$variant';
+    return _downloads.putIfAbsent(key, () {
+      final download = _service.loadNameCropImage(
+        batchId,
+        scanId,
+        variant: variant,
+      );
+      unawaited(
+        download.then(
+          (_) {},
+          onError: (Object _) {
+            _downloads.remove(key);
+          },
+        ),
+      );
+      return download;
+    });
+  }
+
+  void clear() => _downloads.clear();
+}
+
+/// The three handwritten-name crops (Last / First / MI) of one unlinked scan,
+/// shown side by side and large enough to read in the table, so the OCR name
+/// can be compared with the handwriting at a glance. Clicking a loaded crop
+/// opens just that crop enlarged ([_NameCropZoomDialog]).
+///
+/// Each crop loads on its own: a slow, missing or failed crop only affects its
+/// own box, never the row's other cells or the page.
+class _NameCropStrip extends StatefulWidget {
+  const _NameCropStrip({
+    super.key,
+    required this.cache,
+    required this.batchId,
+    required this.scanId,
+  });
+
+  final _NameCropCache cache;
+  final String batchId;
+  final String scanId;
+
+  @override
+  State<_NameCropStrip> createState() => _NameCropStripState();
+}
+
+class _NameCropStripState extends State<_NameCropStrip> {
+  /// Variant, short label under the box, title in the enlarged view, and the
+  /// share of the strip's width. Last / First names are long, wide
+  /// handwriting strips; the middle initial needs far less room.
+  static const List<(String variant, String label, String title, int flex)>
+  _crops = [
+    ('name_last', 'Last', 'Last Name', 5),
+    ('name_first', 'First', 'First Name', 5),
+    ('name_mi', 'MI', 'Middle Initial', 3),
+  ];
+
+  static const double _gap = 6;
+
+  late final Map<String, Future<Uint8List?>> _futures = {
+    for (final crop in _crops) crop.$1: _start(crop.$1),
+  };
+
+  Future<Uint8List?> _start(String variant) =>
+      widget.cache.load(widget.batchId, widget.scanId, variant);
+
+  void _retry(String variant) {
+    setState(() {
+      _futures[variant] = _start(variant);
+    });
+  }
+
+  void _zoom(String title, Uint8List bytes) {
+    showDialog<void>(
+      context: context,
+      builder: (_) => _NameCropZoomDialog(title: title, bytes: bytes),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Box height follows the width the strip actually gets, so the crops
+        // grow with the window but stay within a sensible range.
+        final totalFlex = _crops.fold<int>(0, (sum, c) => sum + c.$4);
+        final unit =
+            (constraints.maxWidth - _gap * (_crops.length - 1)) / totalFlex;
+        final boxHeight = (unit * _crops.first.$4 * 0.3).clamp(40.0, 72.0);
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            for (var i = 0; i < _crops.length; i++) ...[
+              if (i > 0) const SizedBox(width: _gap),
+              Expanded(
+                flex: _crops[i].$4,
+                child: _buildCrop(
+                  _crops[i].$1,
+                  _crops[i].$2,
+                  _crops[i].$3,
+                  boxHeight,
+                ),
+              ),
+            ],
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildCrop(
+    String variant,
+    String label,
+    String title,
+    double boxHeight,
+  ) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          height: boxHeight,
+          child: FutureBuilder<Uint8List?>(
+            future: _futures[variant],
+            builder: (context, snapshot) {
+              if (snapshot.connectionState != ConnectionState.done) {
+                return _box(
+                  key: Key('nameCropLoading_$variant'),
+                  child: const SizedBox.shrink(),
+                );
+              }
+              if (snapshot.hasError) {
+                return Tooltip(
+                  message: 'Could not load this crop. Click to retry.',
+                  child: InkWell(
+                    onTap: () => _retry(variant),
+                    child: _box(
+                      key: Key('nameCropError_$variant'),
+                      child: const Icon(
+                        Icons.refresh,
+                        size: 14,
+                        color: AppColors.textGray,
+                      ),
+                    ),
+                  ),
+                );
+              }
+              final bytes = snapshot.data;
+              if (bytes == null) return _placeholder(variant);
+              return _ClickableCrop(
+                variant: variant,
+                tooltip: 'Click to enlarge the $title crop',
+                onTap: () => _zoom(title, bytes),
+                child: _box(
+                  key: Key('nameCropImage_$variant'),
+                  white: true,
+                  child: Image.memory(
+                    bytes,
+                    fit: BoxFit.contain,
+                    filterQuality: FilterQuality.medium,
+                    errorBuilder: (_, _, _) => _placeholder(variant),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+        const SizedBox(height: 3),
+        Text(
+          label,
+          textAlign: TextAlign.center,
+          style: AppTextStyles.body(size: 9.5, color: AppColors.textGray),
+        ),
+      ],
+    );
+  }
+
+  /// "N/A": the crop was never uploaded (older scan, cropping failed, or the
+  /// scan came from a phone that has not synced it) -- a normal state.
+  Widget _placeholder(String variant) => _box(
+    key: Key('nameCropMissing_$variant'),
+    child: Text(
+      'N/A',
+      style: AppTextStyles.body(size: 10, color: AppColors.textGray),
+    ),
+  );
+
+  Widget _box({Key? key, required Widget child, bool white = false}) {
+    return Container(
+      key: key,
+      alignment: Alignment.center,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: white ? Colors.white : AppColors.lightBg,
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: AppColors.cardBorder),
+      ),
+      child: child,
+    );
+  }
+}
+
+/// Makes a loaded crop obviously clickable: a pointer cursor, a highlighted
+/// border while the mouse is over it, and a tooltip.
+class _ClickableCrop extends StatefulWidget {
+  const _ClickableCrop({
+    required this.variant,
+    required this.tooltip,
+    required this.onTap,
+    required this.child,
+  });
+
+  final String variant;
+  final String tooltip;
+  final VoidCallback onTap;
+  final Widget child;
+
+  @override
+  State<_ClickableCrop> createState() => _ClickableCropState();
+}
+
+class _ClickableCropState extends State<_ClickableCrop> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: widget.tooltip,
+      waitDuration: const Duration(milliseconds: 500),
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() => _hover = false),
+        child: GestureDetector(
+          key: Key('nameCropTap_${widget.variant}'),
+          behavior: HitTestBehavior.opaque,
+          onTap: widget.onTap,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              widget.child,
+              if (_hover)
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: DecoratedBox(
+                      key: Key('nameCropHover_${widget.variant}'),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(
+                          color: AppColors.primaryGreen,
+                          width: 2,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// One name crop enlarged in a modal: a clear title, a close button (Escape or
+/// a click outside also close it), and the crop shown as large as the dialog
+/// allows with scroll / pinch zoom for a closer look at the handwriting.
+class _NameCropZoomDialog extends StatelessWidget {
+  const _NameCropZoomDialog({required this.title, required this.bytes});
+
+  final String title;
+  final Uint8List bytes;
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      insetPadding: const EdgeInsets.all(32),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 1100),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 12, 12, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '$title — handwritten crop',
+                      key: const Key('nameCropZoomTitle'),
+                      style: AppTextStyles.body(
+                        size: 14,
+                        weight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    key: const Key('nameCropZoomClose'),
+                    tooltip: 'Close',
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.of(context).pop(),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Container(
+                height: 320,
+                clipBehavior: Clip.antiAlias,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: AppColors.cardBorder),
+                ),
+                // InteractiveViewer hands its child unbounded space, so the
+                // image is sized to the viewport explicitly: it fills the width
+                // (or the height, for a squarer crop) instead of showing at
+                // its tiny natural size.
+                child: LayoutBuilder(
+                  builder: (context, box) => InteractiveViewer(
+                    minScale: 1,
+                    maxScale: 6,
+                    child: SizedBox(
+                      width: box.maxWidth,
+                      height: box.maxHeight,
+                      child: Image.memory(
+                        bytes,
+                        key: const Key('nameCropZoomImage'),
+                        fit: BoxFit.contain,
+                        filterQuality: FilterQuality.high,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Scroll or pinch to zoom in further.',
+                style: AppTextStyles.body(size: 10, color: AppColors.textGray),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

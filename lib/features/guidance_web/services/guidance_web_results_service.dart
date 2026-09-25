@@ -217,6 +217,27 @@ class GuidanceWebResultsService {
     return bytes == null ? null : Uint8List.fromList(bytes);
   }
 
+  /// One handwritten-name crop image from the private `scanned-sheets`
+  /// bucket, using the existing crop key contract in
+  /// [SupabaseSyncClient.nameCropImageKey]. Like [loadScanImage], no local
+  /// write occurs here; bytes live only in memory for the caller's current UI.
+  Future<Uint8List?> loadNameCropImage(
+    String batchId,
+    String scanId, {
+    required String variant,
+  }) async {
+    final read = await _client.downloadNameCropImage(
+      batchId: batchId,
+      scanId: scanId,
+      variant: variant,
+    );
+    if (read.error != null) {
+      throw GuidanceWebResultsException(_messageFor(read.error));
+    }
+    final bytes = read.bytes;
+    return bytes == null ? null : Uint8List.fromList(bytes);
+  }
+
   String _messageFor(SyncOutcome? outcome) {
     if (outcome != null && outcome.isTransient) {
       return 'Could not reach Supabase. Check your connection and try again.';
