@@ -1341,6 +1341,47 @@ class AppState extends ChangeNotifier {
         ),
       );
 
+  /// The exact user-facing message when a correction cannot be scored
+  /// because no answer key is available for its exam, even after trying to
+  /// load one — see [_ensureAnswerKeyForCorrection]. Exposed as a constant
+  /// so the thrown [StateError] and its tests share one string.
+  static const String answerKeyUnavailableForCorrectionMessage =
+      'Answer Key is unavailable. The correction cannot be scored and saved.';
+
+  /// Guarantees [examCode]'s answer key is in [answerKeys] before a
+  /// correction is scored and saved, so a correction can never be recorded
+  /// as if it were graded when it silently wasn't (see [rescoreScan]'s own
+  /// doc comment on why it returns the unchanged result with no key).
+  ///
+  /// Reuses the EXACT existing cloud-key architecture — [readCloudAnswerKey]
+  /// / [adoptAnswerKeyFromCloud], the same pair `AnswerKeyEntryScreen`'s own
+  /// "load from cloud" action calls — rather than a second implementation.
+  /// A key already cached locally is used as-is with no network call.
+  ///
+  /// Returns the now-available [AnswerKey], or null when it genuinely could
+  /// not be made available: no cloud data plane on this device, no cloud
+  /// row for this exam, or the read failed.
+  Future<AnswerKey?> _ensureAnswerKeyForCorrection(String examCode) async {
+    final cached = answerKeys[examCode];
+    if (cached != null) return cached;
+
+    CloudAnswerKeyRead? read;
+    try {
+      read = await readCloudAnswerKey(examCode);
+    } catch (_) {
+      read = null;
+    }
+    if (read == null || !read.exists) return null;
+
+    await adoptAnswerKeyFromCloud(
+      examCode,
+      cloudVersion: read.version!,
+      answers: read.answers ?? const {},
+      updatedAt: DateTime.tryParse(read.updatedAt ?? '')?.toUtc() ?? DateTime.now().toUtc(),
+    );
+    return answerKeys[examCode];
+  }
+
   Future<ScanCorrectionOutcome> _changeCorrection({
     required String batchId,
     required String scanId,
@@ -1373,9 +1414,17 @@ class AppState extends ChangeNotifier {
     if (identical(history, scan.corrections) || history.length == scan.corrections.length) {
       return ScanCorrectionOutcome(batch: batch, scan: scan, changed: false);
     }
+    // A correction is actually about to be recorded — guarantee it can be
+    // scored BEFORE anything is saved. Nothing is written to the repository
+    // and nothing is enqueued for sync when this fails: the scan and its
+    // result are left exactly as they were.
+    final answerKey = await _ensureAnswerKeyForCorrection(batch.examCode);
+    if (answerKey == null) {
+      throw StateError(answerKeyUnavailableForCorrectionMessage);
+    }
     final result = rescoreScan(
       scan: scan.copyWith(corrections: history),
-      answerKey: answerKeys[batch.examCode],
+      answerKey: answerKey,
       editorUid: editor.uid,
       editorName: editor.name,
     );
@@ -1388,11 +1437,13 @@ class AppState extends ChangeNotifier {
     if (scanBatch?.id == updated.id) scanBatch = updated;
     notifyListeners();
     final updatedScan = updated.scans.firstWhere((s) => s.id == scanId);
+    // The key was just guaranteed available above, so the save that just
+    // happened always recalculated the score — never the stale-result path.
     return ScanCorrectionOutcome(
       batch: updated,
       scan: updatedScan,
       changed: true,
-      scoreRecalculated: answerKeys[batch.examCode] != null,
+      scoreRecalculated: true,
     );
   }
 

@@ -7,6 +7,7 @@ import 'package:guidegrade/core/sync/sync_job.dart';
 import 'package:guidegrade/core/sync/sync_outcome.dart';
 import 'package:guidegrade/features/guidance_web/screens/guidance_web_result_detail_view.dart';
 import 'package:guidegrade/features/guidance_web/services/guidance_web_results_service.dart';
+import 'package:guidegrade/models/answer_correction.dart';
 import 'package:guidegrade/models/examinee_record.dart';
 import 'package:guidegrade/models/local_batch.dart';
 import 'package:guidegrade/models/omr_scan_result.dart';
@@ -142,6 +143,8 @@ LocalScan _scan({
   List<OmrItemResult> items = const [],
   String? rectifiedImageFileName,
   Map<String, (double, double)>? meshInteriorMeasuredFrac,
+  List<AnswerCorrection> corrections = const [],
+  int captureRevision = 0,
 }) =>
     LocalScan(
       id: 's1',
@@ -155,6 +158,48 @@ LocalScan _scan({
       ),
       result: result,
       examinee: examinee,
+      corrections: corrections,
+      captureRevision: captureRevision,
+    );
+
+/// One manual correction as `mapCloudScan` restores it from the cloud row's
+/// `decoded.manual.corrections` block.
+AnswerCorrection _correction({
+  required String section,
+  required int item,
+  required CorrectedAnswer original,
+  required CorrectedAnswer corrected,
+  int revision = 0,
+  String id = 'c1',
+}) =>
+    AnswerCorrection(
+      id: id,
+      scanId: 's1',
+      sectionName: section,
+      itemNumber: item,
+      captureRevision: revision,
+      action: CorrectionAction.set,
+      original: original,
+      corrected: corrected,
+      editorUid: 'u1',
+      editorName: 'Officer',
+      correctedAt: DateTime.utc(2026, 1, 2),
+    );
+
+LocalScanResult _storedResult({
+  required int raw,
+  int graded = 1,
+  int total = 72,
+}) =>
+    LocalScanResult(
+      rawScore: raw,
+      totalGraded: graded,
+      totalItems: total,
+      percentage: 0,
+      status: 'Graded',
+      scannedAt: DateTime.utc(2026, 1, 1),
+      processedByUid: 'uid',
+      processedByName: 'Officer',
     );
 
 /// A canonical examinees row as the Examinee Records page holds it.
@@ -659,6 +704,289 @@ void main() {
       // Examinee ID / First / Middle / Last Name -> four dashes, no Scan ID row.
       expect(find.text('—'), findsNWidgets(4));
       expect(find.text('Scan ID'), findsNothing);
+    });
+
+    // --- manual corrections (LocalScan.effectiveDecoded) ------------------
+    //
+    // The Guidance App stores a correction as an overlay on the untouched
+    // machine answers and pushes it (with the recalculated score) inside the
+    // cloud row's decoded.manual block; mapCloudScan restores it onto
+    // LocalScan.corrections. Answer Details, the graded overlay and the TAT
+    // breakdown must read the corrected answers so they agree with the stored
+    // score.
+
+    const atSection = 'Answer Document';
+
+    void answerKeyOf(Map<String, String> answers) {
+      client.answerKeyToReturn = CloudAnswerKeyRead.found(
+        version: 1,
+        answers: answers,
+        updatedByName: 'Officer',
+        updatedAt: '2026-01-01T00:00:00Z',
+      );
+    }
+
+    testWidgets('1. BLANK -> A correction shows A / Correct in Answer Details (and Incorrect without it)',
+        (tester) async {
+      answerKeyOf({'$atSection|1': 'A'});
+      final machineOnly = _scan(
+        result: _storedResult(raw: 0),
+        items: const [OmrItemResult(sectionName: atSection, itemNumber: 1, markedChoice: null)],
+      );
+      await pump(tester, scan: machineOnly, batch: _batch());
+      expect(find.text('Incorrect'), findsOneWidget, reason: 'control: the machine read this item as blank');
+      expect(find.text('Correct'), findsNothing);
+      expect(find.text('—'), findsNWidgets(5), reason: '4 empty examinee fields + the blank answer');
+
+      final corrected = _scan(
+        result: _storedResult(raw: 1),
+        items: const [OmrItemResult(sectionName: atSection, itemNumber: 1, markedChoice: null)],
+        corrections: [
+          _correction(
+            section: atSection,
+            item: 1,
+            original: const CorrectedAnswer.blank(),
+            corrected: const CorrectedAnswer.choice('A'),
+          ),
+        ],
+      );
+      await pump(tester, scan: corrected, batch: _batch());
+      expect(find.text('Correct'), findsOneWidget);
+      expect(find.text('Incorrect'), findsNothing);
+      // The Examinee Information card shows 4 dashes (no examinee on this scan);
+      // the control above showed a 5th, for the blank examinee answer.
+      expect(find.text('—'), findsNWidgets(4), reason: 'the item is no longer shown as unanswered');
+      expect(corrected.decoded.items.single.markedChoice, isNull,
+          reason: 'the machine-detected answer itself is never modified');
+    });
+
+    testWidgets('2. the corrected answer produces a green overlay (and the uncorrected one does not)',
+        (tester) async {
+      answerKeyOf({'Section 1|1': 'A'});
+      client.rectifiedImageToReturn = CloudImageRead.found(_pngBytes);
+      const blank = [OmrItemResult(sectionName: 'Section 1', itemNumber: 1, markedChoice: null)];
+      final bubbles = bubblesForOverlayItem(omrTemplates['AT']!, 'Section 1', 1);
+
+      List<ScoredItem> overlayItems(WidgetTester t) {
+        final paint = t.widget<CustomPaint>(find.byKey(const Key('gradedOverlayPaint')));
+        return ((paint.painter as dynamic).scoredItems as List).cast<ScoredItem>();
+      }
+
+      // Control: no correction -> nothing marked, only the yellow key ring.
+      await pump(
+        tester,
+        scan: _scan(
+          rectifiedImageFileName: 'images/s1_rectified.enc',
+          result: _storedResult(raw: 0),
+          items: blank,
+        ),
+        batch: _batch(),
+      );
+      final before = planOverlayForItem(overlayItems(tester).single, bubbles)!;
+      expect(before.markedBubble, isNull);
+      expect(before.keyBubble?.choice, 'A');
+
+      await pump(
+        tester,
+        scan: _scan(
+          rectifiedImageFileName: 'images/s1_rectified.enc',
+          result: _storedResult(raw: 1),
+          items: blank,
+          corrections: [
+            _correction(
+              section: 'Section 1',
+              item: 1,
+              original: const CorrectedAnswer.blank(),
+              corrected: const CorrectedAnswer.choice('A'),
+            ),
+          ],
+        ),
+        batch: _batch(),
+      );
+      final item = overlayItems(tester).single;
+      expect(item.markedChoice, 'A');
+      final after = planOverlayForItem(item, bubbles)!;
+      expect(after.markedBubble?.choice, 'A');
+      expect(after.markedColor, WebOverlayColors.correct, reason: 'the corrected bubble is drawn green');
+      expect(after.badgeIsCorrect, isTrue);
+      expect(after.keyBubble, isNull, reason: 'already correct -- no separate key ring');
+    });
+
+    testWidgets('3. wrong -> correct answer flips Incorrect to Correct', (tester) async {
+      answerKeyOf({'$atSection|1': 'A'});
+      await pump(
+        tester,
+        scan: _scan(
+          result: _storedResult(raw: 1),
+          items: const [OmrItemResult(sectionName: atSection, itemNumber: 1, markedChoice: 'B')],
+          corrections: [
+            _correction(
+              section: atSection,
+              item: 1,
+              original: const CorrectedAnswer.choice('B'),
+              corrected: const CorrectedAnswer.choice('A'),
+            ),
+          ],
+        ),
+        batch: _batch(),
+      );
+      expect(find.text('Correct'), findsOneWidget);
+      expect(find.text('Incorrect'), findsNothing);
+    });
+
+    testWidgets('4. correct -> wrong answer flips Correct to Incorrect', (tester) async {
+      answerKeyOf({'$atSection|1': 'A'});
+      await pump(
+        tester,
+        scan: _scan(
+          result: _storedResult(raw: 0),
+          items: const [OmrItemResult(sectionName: atSection, itemNumber: 1, markedChoice: 'A')],
+          corrections: [
+            _correction(
+              section: atSection,
+              item: 1,
+              original: const CorrectedAnswer.choice('A'),
+              corrected: const CorrectedAnswer.choice('B'),
+            ),
+          ],
+        ),
+        batch: _batch(),
+      );
+      expect(find.text('Incorrect'), findsOneWidget);
+      expect(find.text('Correct'), findsNothing);
+    });
+
+    testWidgets('5. multiple corrections all apply together', (tester) async {
+      answerKeyOf({'$atSection|1': 'A', '$atSection|2': 'A', '$atSection|3': 'A'});
+      await pump(
+        tester,
+        scan: _scan(
+          result: _storedResult(raw: 3, graded: 3),
+          items: const [
+            OmrItemResult(sectionName: atSection, itemNumber: 1, markedChoice: null), // blank
+            OmrItemResult(sectionName: atSection, itemNumber: 2, markedChoice: 'B'), // wrong
+            OmrItemResult(sectionName: atSection, itemNumber: 3, markedChoice: 'A'), // correct
+          ],
+          corrections: [
+            _correction(
+              id: 'c1',
+              section: atSection,
+              item: 1,
+              original: const CorrectedAnswer.blank(),
+              corrected: const CorrectedAnswer.choice('A'),
+            ),
+            _correction(
+              id: 'c2',
+              section: atSection,
+              item: 2,
+              original: const CorrectedAnswer.choice('B'),
+              corrected: const CorrectedAnswer.choice('A'),
+            ),
+          ],
+        ),
+        batch: _batch(),
+      );
+      expect(find.text('Correct'), findsNWidgets(3));
+      expect(find.text('Incorrect'), findsNothing);
+    });
+
+    testWidgets('6. a TAT correction updates the per-test breakdown (Test I x 2 rule unchanged)',
+        (tester) async {
+      answerKeyOf({'Test I|1': 'A', 'Test II|1': 'T', 'Test III|1': 'T'});
+      const items = [
+        OmrItemResult(sectionName: 'Test I', itemNumber: 1, markedChoice: null), // blank
+        OmrItemResult(sectionName: 'Test II', itemNumber: 1, markedChoice: 'T'),
+        OmrItemResult(sectionName: 'Test III', itemNumber: 1, markedChoice: 'T'),
+      ];
+      final tatBatch = _batch(examCode: 'TAT', examTitle: 'Teaching Aptitude Test');
+
+      // Control: the machine result -> Test I scores 0.
+      await pump(tester, scan: _scan(examCode: 'TAT', result: _storedResult(raw: 2, graded: 3, total: 130), items: items), batch: tatBatch);
+      expect(find.text('0 correct × 2 = 0 / 60'), findsOneWidget);
+
+      await pump(
+        tester,
+        scan: _scan(
+          examCode: 'TAT',
+          // The stored headline as pushed after the correction: 2 (Test I) + 1 + 1.
+          result: _storedResult(raw: 4, graded: 3, total: 130),
+          items: items,
+          corrections: [
+            _correction(
+              section: 'Test I',
+              item: 1,
+              original: const CorrectedAnswer.blank(),
+              corrected: const CorrectedAnswer.choice('A'),
+            ),
+          ],
+        ),
+        batch: tatBatch,
+      );
+      expect(find.text('1 correct × 2 = 2 / 60'), findsOneWidget);
+      expect(find.text('1 correct − 0 wrong = 1 / 80'), findsOneWidget, reason: 'Test II is untouched');
+      expect(find.text('1 correct − 0 wrong = 1 / 20'), findsOneWidget, reason: 'Test III is untouched');
+      expect(find.text('4 / 160'), findsOneWidget, reason: 'the stored headline is still shown verbatim');
+    });
+
+    testWidgets('7. a scan with no corrections renders exactly as before', (tester) async {
+      answerKeyOf({'$atSection|1': 'A', '$atSection|2': 'A'});
+      final scan = _scan(
+        result: _storedResult(raw: 1, graded: 2),
+        items: const [
+          OmrItemResult(sectionName: atSection, itemNumber: 1, markedChoice: 'A'),
+          OmrItemResult(sectionName: atSection, itemNumber: 2, markedChoice: null),
+        ],
+      );
+      expect(identical(scan.effectiveDecoded, scan.decoded), isTrue,
+          reason: 'no active corrections -> the machine result is used as-is');
+
+      await pump(tester, scan: scan, batch: _batch());
+      expect(find.text('Correct'), findsOneWidget);
+      expect(find.text('Incorrect'), findsOneWidget);
+    });
+
+    testWidgets('8. a correction from an EARLIER capture revision is not applied to a rescanned sheet',
+        (tester) async {
+      answerKeyOf({'$atSection|1': 'A'});
+      const items = [OmrItemResult(sectionName: atSection, itemNumber: 1, markedChoice: null)];
+      final oldCorrection = _correction(
+        section: atSection,
+        item: 1,
+        original: const CorrectedAnswer.blank(),
+        corrected: const CorrectedAnswer.choice('A'),
+        revision: 0,
+      );
+
+      // The sheet was rescanned (revision 1): the revision-0 correction must not apply.
+      await pump(
+        tester,
+        scan: _scan(result: _storedResult(raw: 0), items: items, captureRevision: 1, corrections: [oldCorrection]),
+        batch: _batch(),
+      );
+      expect(find.text('Incorrect'), findsOneWidget);
+      expect(find.text('Correct'), findsNothing);
+
+      // Control: the same correction recorded on the CURRENT revision does apply.
+      await pump(
+        tester,
+        scan: _scan(
+          result: _storedResult(raw: 1),
+          items: items,
+          captureRevision: 1,
+          corrections: [
+            _correction(
+              id: 'c9',
+              section: atSection,
+              item: 1,
+              original: const CorrectedAnswer.blank(),
+              corrected: const CorrectedAnswer.choice('A'),
+              revision: 1,
+            ),
+          ],
+        ),
+        batch: _batch(),
+      );
+      expect(find.text('Correct'), findsOneWidget);
     });
 
     testWidgets('2. a missing answer key does not crash; marked answers are still shown, '

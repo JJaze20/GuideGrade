@@ -13,6 +13,9 @@ import 'guidance_web_examinee_detail_view.dart';
 
 const List<String> _statusFilterOptions = ['All', 'Active', 'Archived'];
 
+/// Exam-type filter of the Unlinked Scans tab (`All` or a batch's exam code).
+const List<String> _examTypeFilterOptions = ['All', 'QTM', 'TAT', 'AT'];
+
 enum _RecordsTab { examinees, unlinkedScans }
 
 /// The Guidance Council Web Console's Examinee Records page.
@@ -74,6 +77,14 @@ class _GuidanceWebExamineeRecordsViewState
 
   bool _loadingUnlinked = true;
   List<ExamineeHistoryItem> _unlinkedScans = [];
+
+  /// View-only filter over [_unlinkedScans] (never reloads or changes them).
+  String _unlinkedExamFilter = 'All';
+
+  /// Optional captured-date bounds (inclusive, whole days) for the Unlinked
+  /// Scans tab; null = open-ended. Either may be set alone. Also view-only.
+  DateTime? _unlinkedDateFrom;
+  DateTime? _unlinkedDateTo;
   String? _unlinkedError;
 
   /// The examinee currently open in the Detail view, or null while a tab's
@@ -549,28 +560,197 @@ class _GuidanceWebExamineeRecordsViewState
     if (_unlinkedScans.isEmpty) {
       return _buildMessage(FontAwesomeIcons.circleCheck, 'No unlinked scans — every scan has an Examinee Record.');
     }
+    final visible = _visibleUnlinkedScans;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildUnlinkedControls(visible.length),
+        const SizedBox(height: 16),
+        Expanded(
+          child: visible.isEmpty
+              ? _buildMessage(
+                  FontAwesomeIcons.magnifyingGlass,
+                  (_unlinkedDateFrom == null && _unlinkedDateTo == null)
+                      ? 'No unlinked $_unlinkedExamFilter scans.'
+                      : 'No unlinked scans match the selected filters.',
+                )
+              : Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: AppColors.cardBorder),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _buildUnlinkedTableHeader(),
+                      const Divider(height: 1, color: AppColors.cardBorder),
+                      Expanded(
+                        child: ListView.separated(
+                          itemCount: visible.length,
+                          separatorBuilder: (_, _) => const Divider(height: 1, color: AppColors.cardBorder),
+                          itemBuilder: (context, index) => _buildUnlinkedRow(visible[index]),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+        ),
+      ],
+    );
+  }
+
+  /// The unlinked scans matching the Exam Type filter, in their loaded order.
+  List<ExamineeHistoryItem> get _visibleUnlinkedScans {
+    return [
+      for (final s in _unlinkedScans)
+        if ((_unlinkedExamFilter == 'All' ||
+                s.examCode.trim().toUpperCase() == _unlinkedExamFilter) &&
+            _capturedWithinBounds(s.scan.capturedAt))
+          s,
+    ];
+  }
+
+  /// Whole-day, inclusive comparison against the From / To bounds (either may
+  /// be unset), on the same calendar date the table's CAPTURED column shows.
+  bool _capturedWithinBounds(DateTime capturedAt) {
+    final day = DateTime(capturedAt.year, capturedAt.month, capturedAt.day);
+    final from = _unlinkedDateFrom;
+    final to = _unlinkedDateTo;
+    if (from != null && day.isBefore(from)) return false;
+    if (to != null && day.isAfter(to)) return false;
+    return true;
+  }
+
+  /// A picked day for one bound; if that would leave From after To, the other
+  /// bound follows so the range is never inverted.
+  void _setUnlinkedDate({required bool isFrom, required DateTime picked}) {
+    final day = DateUtils.dateOnly(picked);
+    setState(() {
+      if (isFrom) {
+        _unlinkedDateFrom = day;
+        final to = _unlinkedDateTo;
+        if (to != null && day.isAfter(to)) _unlinkedDateTo = day;
+      } else {
+        _unlinkedDateTo = day;
+        final from = _unlinkedDateFrom;
+        if (from != null && day.isBefore(from)) _unlinkedDateFrom = day;
+      }
+    });
+  }
+
+  /// "Captured Date (MM/DD/YYYY)": a From and a To field, each with a calendar
+  /// icon that opens a month calendar right under the field.
+  Widget _buildUnlinkedDateFilter() {
+    final hasDate = _unlinkedDateFrom != null || _unlinkedDateTo != null;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Captured Date (MM/DD/YYYY)',
+          style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600),
+        ),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            _dateBoundField(
+              fieldKey: const Key('unlinkedDateFrom'),
+              hint: 'From',
+              value: _unlinkedDateFrom,
+              onPicked: (d) => _setUnlinkedDate(isFrom: true, picked: d),
+            ),
+            const SizedBox(width: 12),
+            _dateBoundField(
+              fieldKey: const Key('unlinkedDateTo'),
+              hint: 'to',
+              value: _unlinkedDateTo,
+              onPicked: (d) => _setUnlinkedDate(isFrom: false, picked: d),
+            ),
+            if (hasDate)
+              IconButton(
+                key: const Key('unlinkedDateClear'),
+                tooltip: 'Clear date filter',
+                onPressed: () => setState(() {
+                  _unlinkedDateFrom = null;
+                  _unlinkedDateTo = null;
+                }),
+                icon: const Icon(Icons.close, size: 16),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _dateBoundField({
+    required Key fieldKey,
+    required String hint,
+    required DateTime? value,
+    required ValueChanged<DateTime> onPicked,
+  }) {
+    return _DatePopoverField(
+      fieldKey: fieldKey,
+      width: 170,
+      text: value == null ? hint : _formatNumericDate(value),
+      isPlaceholder: value == null,
+      decoration: _fieldDecoration().copyWith(
+        suffixIcon: const Icon(Icons.calendar_today, size: 16),
+      ),
+      selected: value,
+      onPicked: onPicked,
+    );
+  }
+
+  String _formatNumericDate(DateTime d) =>
+      '${d.month.toString().padLeft(2, '0')}/${d.day.toString().padLeft(2, '0')}/${d.year}';
+
+  Widget _buildUnlinkedControls(int shown) {
     return Container(
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: AppColors.cardBorder),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          _buildUnlinkedTableHeader(),
-          const Divider(height: 1, color: AppColors.cardBorder),
-          Expanded(
-            child: ListView.separated(
-              itemCount: _unlinkedScans.length,
-              separatorBuilder: (_, _) => const Divider(height: 1, color: AppColors.cardBorder),
-              itemBuilder: (context, index) => _buildUnlinkedRow(_unlinkedScans[index]),
+          SizedBox(
+            width: 240,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Exam Type', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600)),
+                const SizedBox(height: 6),
+                DropdownButtonFormField<String>(
+                  key: const Key('unlinkedExamTypeFilter'),
+                  initialValue: _unlinkedExamFilter,
+                  decoration: _fieldDecoration(),
+                  items: _examTypeFilterOptions
+                      .map((t) => DropdownMenuItem(value: t, child: Text(t, style: AppTextStyles.body(size: 11))))
+                      .toList(),
+                  onChanged: (v) => setState(() => _unlinkedExamFilter = v ?? 'All'),
+                ),
+              ],
             ),
+          ),
+          const SizedBox(width: 16),
+          _buildUnlinkedDateFilter(),
+          const Spacer(),
+          Text(
+            'Showing $shown of ${_unlinkedScans.length}',
+            key: const Key('unlinkedShowingCount'),
+            style: AppTextStyles.body(size: 10.5, color: AppColors.textGray),
           ),
         ],
       ),
     );
   }
+
+  /// Width of the trailing action buttons in BOTH the header and every row, so
+  /// the flexible EXAM / BATCH / CAPTURED columns get identical widths (and
+  /// therefore line up) in the two.
+  static const double _unlinkedActionsWidth = 610;
 
   Widget _buildUnlinkedTableHeader() {
     final style = AppTextStyles.body(size: 9.5, weight: FontWeight.w800, color: AppColors.textGray);
@@ -582,7 +762,7 @@ class _GuidanceWebExamineeRecordsViewState
           Expanded(flex: 1, child: Text('EXAM', style: style)),
           Expanded(flex: 2, child: Text('BATCH', style: style)),
           Expanded(flex: 2, child: Text('CAPTURED', style: style)),
-          const SizedBox(width: 480),
+          const SizedBox(width: _unlinkedActionsWidth),
         ],
       ),
     );
@@ -610,7 +790,7 @@ class _GuidanceWebExamineeRecordsViewState
           Expanded(flex: 2, child: Text(item.batch.batchCode, style: AppTextStyles.body(size: 11))),
           Expanded(flex: 2, child: Text(_formatDate(item.scan.capturedAt), style: AppTextStyles.body(size: 11))),
           SizedBox(
-            width: 610,
+            width: _unlinkedActionsWidth,
             child: Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
@@ -801,10 +981,14 @@ class _LinkExistingExamineeDialogState extends State<_LinkExistingExamineeDialog
     super.dispose();
   }
 
+  /// Only ACTIVE examinees can receive a scan; an archived one must be
+  /// restored first, so it is never offered here. (The page's own
+  /// All/Active/Archived filter is separate and unaffected.)
   List<ExamineeRecord> get _candidates {
     final term = _search.text.trim().toLowerCase();
-    if (term.isEmpty) return widget.examinees;
-    return widget.examinees
+    final active = widget.examinees.where((e) => e.isActive);
+    if (term.isEmpty) return active.toList();
+    return active
         .where((e) =>
             e.displayName.toLowerCase().contains(term) ||
             e.temporaryExamineeId.toLowerCase().contains(term))
@@ -877,6 +1061,12 @@ class _LinkExistingExamineeDialogState extends State<_LinkExistingExamineeDialog
                 labelText: 'Search name or Temporary Examinee ID',
                 prefixIcon: Icon(Icons.search, size: 18),
               ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Only active examinees can be linked to a scan. Restore an archived examinee first.',
+              key: const Key('linkPickerActiveOnlyHint'),
+              style: AppTextStyles.body(size: 10, color: AppColors.textGray),
             ),
             const SizedBox(height: 10),
             Expanded(
@@ -1065,6 +1255,119 @@ class _ZoomableImageViewer extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// A read-only date field with a calendar icon. Tapping it opens a month
+/// calendar in a popover right under the field (like a date-range filter on a
+/// search form); picking a day fills the field and closes the popover, and
+/// tapping anywhere outside closes it without changing anything.
+class _DatePopoverField extends StatefulWidget {
+  const _DatePopoverField({
+    required this.fieldKey,
+    required this.width,
+    required this.text,
+    required this.isPlaceholder,
+    required this.decoration,
+    required this.selected,
+    required this.onPicked,
+  });
+
+  final Key fieldKey;
+  final double width;
+  final String text;
+  final bool isPlaceholder;
+  final InputDecoration decoration;
+  final DateTime? selected;
+  final ValueChanged<DateTime> onPicked;
+
+  @override
+  State<_DatePopoverField> createState() => _DatePopoverFieldState();
+}
+
+class _DatePopoverFieldState extends State<_DatePopoverField> {
+  final OverlayPortalController _portal = OverlayPortalController();
+
+  @override
+  Widget build(BuildContext context) {
+    // overlayChildLayoutBuilder (not a CompositedTransformFollower): the
+    // calendar's own Tooltips (Previous/Next month) compute paint transforms
+    // and assert if a follower layer is among their ancestors.
+    return OverlayPortal.overlayChildLayoutBuilder(
+      controller: _portal,
+      overlayChildBuilder: _buildPopover,
+      child: SizedBox(
+        width: widget.width,
+        child: InkWell(
+          key: widget.fieldKey,
+          borderRadius: BorderRadius.circular(10),
+          onTap: _portal.toggle,
+          child: InputDecorator(
+            decoration: widget.decoration,
+            child: Text(
+              widget.text,
+              style: AppTextStyles.body(
+                size: 11,
+                color: widget.isPlaceholder ? AppColors.textGray : AppColors.textDark,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPopover(BuildContext context, OverlayChildLayoutInfo info) {
+    final firstDate = DateTime(2020);
+    final lastDate = DateTime(DateTime.now().year + 1, 12, 31);
+    var initial = widget.selected ?? DateTime.now();
+    if (initial.isAfter(lastDate)) initial = lastDate;
+    if (initial.isBefore(firstDate)) initial = firstDate;
+    const popoverWidth = 320.0;
+    const popoverHeight = 340.0;
+    // The field's box in overlay coordinates; the calendar goes right below
+    // it (or above it when there is no room), kept inside the overlay.
+    final field = MatrixUtils.transformRect(
+      info.childPaintTransform,
+      Offset.zero & info.childSize,
+    );
+    final maxLeft = (info.overlaySize.width - popoverWidth).clamp(0.0, double.infinity);
+    final left = field.left.clamp(0.0, maxLeft);
+    var top = field.bottom + 6;
+    if (top + popoverHeight > info.overlaySize.height) {
+      top = (field.top - popoverHeight - 6).clamp(0.0, double.infinity);
+    }
+    return Stack(
+      children: [
+        // Tap outside the calendar to dismiss it.
+        Positioned.fill(
+          child: GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onTap: _portal.hide,
+          ),
+        ),
+        Positioned(
+          left: left,
+          top: top,
+          width: popoverWidth,
+          height: popoverHeight,
+          child: Material(
+            elevation: 8,
+            borderRadius: BorderRadius.circular(12),
+            color: Colors.white,
+            child: CalendarDatePicker(
+              initialDate: initial,
+              firstDate: firstDate,
+              lastDate: lastDate,
+              onDateChanged: (d) {
+                widget.onPicked(d);
+                _portal.hide();
+              },
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

@@ -5,6 +5,7 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
+import '../../../models/examinee_record.dart';
 import '../../../models/local_batch.dart';
 import '../services/guidance_web_archive_service.dart';
 import '../services/guidance_web_results_service.dart';
@@ -67,7 +68,8 @@ class GuidanceWebResultsView extends StatefulWidget {
 const List<String> _statusFilterOptions = ['All', 'Graded', 'Ungraded'];
 
 /// The three exam types this page groups batches into, in display order,
-/// with the section label used above each dropdown. Matches the exam
+/// with the label used on each exam tab and above the batch dropdown.
+/// Matches the exam
 /// codes the mobile app itself already produces
 /// (`LocalBatch.examCode` — 'AT' | 'QTM' | 'TAT'); no other exam code is
 /// given special handling.
@@ -106,12 +108,12 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
   List<LocalBatch> _batches = [];
   String? _batchesError;
 
-  /// The single selected/active batch across ALL THREE exam dropdowns —
-  /// never more than one at a time. Whichever dropdown's `examCode`
-  /// matches `_activeBatch?.examCode` shows it selected; the other two
-  /// show "Select batch" (see [_buildExamDropdown]'s `value:`). Selecting
-  /// a batch in one dropdown therefore implicitly clears the other two —
-  /// there is no separate per-exam memory to clear.
+  /// The single selected/active batch — never more than one at a time. The
+  /// one batch dropdown (for the selected exam tab, see [_selectedExam]) shows
+  /// it selected only when its `examCode` matches `_activeBatch?.examCode`,
+  /// otherwise it shows "Select batch" (see [_buildExamDropdown]'s `value:`).
+  /// Switching exam tabs clears it (see [_selectExamTab]), so there is no
+  /// separate per-exam memory to clear.
   LocalBatch? _activeBatch;
 
   /// The exam tab (AT/TAT/QTM) currently shown. Only the selected tab's
@@ -131,6 +133,11 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
   bool _loadingScans = false;
   List<LocalScan> _scans = [];
   String? _scansError;
+
+  /// The canonical examinee for each LINKED scan (keyed by scan id), read
+  /// through `scans.examinee_id` -> `examinees.id`. A scan with no entry is
+  /// unlinked/legacy and shows its own tag, exactly as before.
+  Map<String, ExamineeRecord> _linkedExaminees = {};
 
   String _statusFilter = 'All';
 
@@ -219,6 +226,12 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
   /// Quietly re-reads the batch list; failures are ignored and leave the
   /// current list untouched. Unopened new batches stay outside
   /// [_seenBatchIds], which is what lights the red dot.
+  ///
+  /// The selected batch is tracked by stable batch id, not object identity.
+  /// Refreshes often recreate the underlying [LocalBatch] objects, so we must
+  /// rebind [_activeBatch] to the current instance in the refreshed list when it
+  /// still exists; otherwise Flutter sees two equal-by-id models as different
+  /// objects and the dropdown assertion fires.
   Future<void> _refreshBatches() async {
     if (_loadingBatches || _batchesError != null) return;
     try {
@@ -232,7 +245,32 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
           if (!archivedIds.contains(b.id)) b,
       ]..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
       if (!mounted) return;
-      setState(() => _batches = batches);
+
+      final activeBatchId = _activeBatch?.id;
+      LocalBatch? refreshedActiveBatch;
+      if (activeBatchId != null) {
+        for (final batch in batches) {
+          if (batch.id == activeBatchId) {
+            refreshedActiveBatch = batch;
+            break;
+          }
+        }
+      }
+
+      setState(() {
+        _batches = batches;
+        if (refreshedActiveBatch != null) {
+          _activeBatch = refreshedActiveBatch;
+        } else if (_activeBatch != null) {
+          _activeBatch = null;
+          _scans = [];
+          _scansError = null;
+          _loadingScans = false;
+          _statusFilter = 'All';
+          _searchController.clear();
+          _viewingScan = null;
+        }
+      });
     } catch (_) {}
   }
 
@@ -277,6 +315,7 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
     setState(() {
       _activeBatch = batch;
       _scans = [];
+      _linkedExaminees = {};
       _scansError = null;
       _loadingScans = true;
       _statusFilter = 'All';
@@ -284,10 +323,11 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
       _viewingScan = null;
     });
     try {
-      final scans = await _service.loadScansForBatch(batch);
+      final results = await _service.loadResultsForBatch(batch);
       if (!mounted) return;
       setState(() {
-        _scans = scans;
+        _scans = results.scans;
+        _linkedExaminees = results.linkedExamineeByScanId;
         _loadingScans = false;
       });
     } on GuidanceWebResultsException catch (e) {
@@ -317,6 +357,14 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
       if (_statusFilter != 'All' && _effectiveStatus(scan) != _statusFilter)
         return false;
       if (term.isEmpty) return true;
+      final linked = _linkedExaminees[scan.id];
+      if (linked != null &&
+          (linked.firstName.toLowerCase().contains(term) ||
+              (linked.middleName ?? '').toLowerCase().contains(term) ||
+              linked.lastName.toLowerCase().contains(term) ||
+              linked.temporaryExamineeId.toLowerCase().contains(term))) {
+        return true;
+      }
       final examinee = scan.examinee;
       if (examinee == null) return false;
       return examinee.firstName.toLowerCase().contains(term) ||
@@ -336,6 +384,7 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
           ? GuidanceWebResultDetailView(
               scan: viewing,
               batch: batch,
+              linkedExaminee: _linkedExaminees[viewing.id],
               service: _service,
               onBack: () => setState(() => _viewingScan = null),
             )
@@ -376,6 +425,10 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
               ],
             ),
           if (_activeBatch != null) ...[
+            if (_activeBatch!.description.trim().isNotEmpty) ...[
+              const SizedBox(height: 14),
+              _buildBatchDescription(_activeBatch!),
+            ],
             const SizedBox(height: 14),
             Row(
               crossAxisAlignment: CrossAxisAlignment.end,
@@ -422,7 +475,7 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
     );
   }
 
-  /// Header shown instead of the batch dropdowns when an ARCHIVED batch is
+  /// Header shown instead of the exam tabs and batch dropdown when an ARCHIVED batch is
   /// opened from the Web Archive.
   Widget _buildArchivedHeader(LocalBatch batch) {
     return Row(
@@ -491,7 +544,9 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
               TextField(
                 key: const Key('archiveReasonField'),
                 controller: reasonController,
-                decoration: const InputDecoration(labelText: 'Reason (optional)'),
+                decoration: const InputDecoration(
+                  labelText: 'Reason (optional)',
+                ),
               ),
             ],
           ),
@@ -528,13 +583,73 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
       );
     } on GuidanceWebArchiveException catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.message)));
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not archive this batch. Please try again.')),
+        const SnackBar(
+          content: Text('Could not archive this batch. Please try again.'),
+        ),
       );
     }
+  }
+
+  /// One batch's "name" line: code, exam title (or code) and created date.
+  /// Shown smaller than the description wherever both appear.
+  String _batchOptionLabel(LocalBatch b) =>
+      '${b.batchCode} — ${b.examTitle.isNotEmpty ? b.examTitle : b.examCode}'
+      ' (${_fmtDate(b.createdAt)})';
+
+  // Batch identification hierarchy (Results batch selection/display area):
+  // the DESCRIPTION is the main focus -- larger and bold -- while the batch
+  // name/code line stays clearly readable but smaller.
+  static const double _descriptionSize = 13;
+  static const double _batchNameSize = 10.5;
+  static const double _descriptionHeadingSize = 16;
+
+  /// The selected batch's own description (the existing
+  /// `batches.description` the Guidance Council typed when creating it),
+  /// shown under the exam tabs and batch dropdown as the main visual focus so batches with
+  /// similar names are easy to tell apart. Only built for a non-blank
+  /// description, so a batch without one leaves the layout exactly as it was.
+  /// Capped at three lines; the full text is in the tooltip.
+  Widget _buildBatchDescription(LocalBatch batch) {
+    final description = batch.description.trim();
+    return Container(
+      key: const Key('batchDescription'),
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: AppColors.lightBg,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppColors.cardBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Batch Description',
+            style: AppTextStyles.body(
+              size: 9.5,
+              weight: FontWeight.w600,
+              color: AppColors.textGray,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Tooltip(
+            message: description,
+            child: Text(
+              description,
+              style: AppTextStyles.heading(size: _descriptionHeadingSize),
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   /// One exam-specific batch dropdown, populated ONLY with [_batchesFor]
@@ -570,19 +685,80 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
             value: _activeBatch?.examCode == examCode ? _activeBatch : null,
             isExpanded: true,
             decoration: _fieldDecoration(hint: 'Select batch'),
-            items: options
-                .map(
-                  (b) => DropdownMenuItem(
-                    value: b,
-                    child: Text(
-                      '${b.batchCode} — ${b.examTitle.isNotEmpty ? b.examTitle : b.examCode}'
-                      ' (${_fmtDate(b.createdAt)})',
-                      style: AppTextStyles.body(size: 11),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                )
-                .toList(),
+            // With a description, the description leads (larger, bold) and the
+            // batch name follows smaller. A batch with no description keeps
+            // the original single name line exactly as before. The closed
+            // field stays a single line.
+            selectedItemBuilder: (context) => [
+              for (final b in options)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: b.description.trim().isEmpty
+                      ? Text(
+                          _batchOptionLabel(b),
+                          style: AppTextStyles.body(size: 11),
+                          overflow: TextOverflow.ellipsis,
+                        )
+                      : Text.rich(
+                          TextSpan(
+                            children: [
+                              TextSpan(
+                                text: b.description.trim(),
+                                style: AppTextStyles.body(
+                                  size: _descriptionSize,
+                                  weight: FontWeight.w700,
+                                ),
+                              ),
+                              TextSpan(
+                                text: '   ·   ${_batchOptionLabel(b)}',
+                                style: AppTextStyles.body(
+                                  size: _batchNameSize,
+                                  color: AppColors.textGray,
+                                ),
+                              ),
+                            ],
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                ),
+            ],
+            items: options.map((b) {
+              final description = b.description.trim();
+              return DropdownMenuItem(
+                value: b,
+                child: description.isEmpty
+                    ? Text(
+                        _batchOptionLabel(b),
+                        style: AppTextStyles.body(size: 11),
+                        overflow: TextOverflow.ellipsis,
+                      )
+                    : Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            description,
+                            style: AppTextStyles.body(
+                              size: _descriptionSize,
+                              weight: FontWeight.w700,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          Text(
+                            _batchOptionLabel(b),
+                            style: AppTextStyles.body(
+                              size: _batchNameSize,
+                              color: AppColors.textGray,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+              );
+            }).toList(),
             onChanged: _loadingBatches
                 ? null
                 : (batch) => _selectExamBatch(examCode, batch),
@@ -827,9 +1003,10 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
   }
 
   Widget _buildResultRow(int index, LocalScan scan, LocalBatch batch) {
-    final examinee = scan.examinee;
+    final linked = _linkedExaminees[scan.id];
+    final hasIdentity = linked != null || scan.examinee != null;
     final result = scan.result;
-    final name = examinee?.displayName ?? 'Untagged';
+    final name = resultExamineeName(scan, linked) ?? 'Untagged';
     final score = result == null
         ? '—'
         : '${result.rawScore} / ${_denominatorFor(batch, result)}';
@@ -854,9 +1031,7 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
               style: AppTextStyles.body(
                 size: 11,
                 weight: FontWeight.w600,
-                color: examinee == null
-                    ? AppColors.textGray
-                    : AppColors.textDark,
+                color: hasIdentity ? AppColors.textDark : AppColors.textGray,
               ),
               overflow: TextOverflow.ellipsis,
             ),
@@ -940,6 +1115,20 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
   ];
 
   String _fmtDate(DateTime d) => '${_months[d.month - 1]} ${d.day}, ${d.year}';
+}
+
+/// The name the Results table shows for [scan]: the LINKED canonical examinee
+/// when the scan is linked to one (`scans.examinee_id` -> `examinees`) and
+/// that record has a usable name (first or last non-blank), otherwise the
+/// scan's own tag, otherwise null (the caller shows "Untagged"). One source
+/// at a time -- fields are never mixed -- and nothing is written anywhere.
+String? resultExamineeName(LocalScan scan, ExamineeRecord? linked) {
+  if (linked != null &&
+      (linked.firstName.trim().isNotEmpty ||
+          linked.lastName.trim().isNotEmpty)) {
+    return linked.displayName;
+  }
+  return scan.examinee?.displayName;
 }
 
 class _ExamTab extends StatelessWidget {

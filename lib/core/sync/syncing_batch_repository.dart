@@ -176,11 +176,9 @@ class SyncingBatchRepository implements BatchRepository {
       rectifiedImage: rectifiedImage,
       result: result,
       examinee: examinee,
-      // Name crops are a device-local convenience only, for staff to read
-      // while manually tagging a scan — forwarded to the local store, but
-      // deliberately never uploaded to the cloud below (see
-      // supabase_sync_client.dart's upload/column builders, which this
-      // method never touches).
+      // Name crops are forwarded to the local store, which stays their
+      // source of truth; the cloud copy is uploaded by the optional
+      // name-crop image jobs queued below (only for crops that exist).
       nameCropLastImage: nameCropLastImage,
       nameCropFirstImage: nameCropFirstImage,
       nameCropMiddleImage: nameCropMiddleImage,
@@ -201,6 +199,9 @@ class SyncingBatchRepository implements BatchRepository {
       jobs.add(_uploadImage(batchId, scan.id, _variantRectified));
     }
     jobs.add(_patchImageStatus(batchId, scan.id));
+    // After the core scan / photo jobs, so a slow crop upload never delays
+    // them. Each crop is its own job with its own retry.
+    jobs.addAll(_nameCropUploads(batchId, scan));
     _fireEnqueue(jobs);
     return batch;
   }
@@ -242,6 +243,10 @@ class SyncingBatchRepository implements BatchRepository {
       _uploadImage(batchId, scanId, _variantRectified),
       _patchImageStatus(batchId, scanId),
       _pushBatch(batchId),
+      // The rescan's new crops overwrite the cloud ones (same keys, upsert). A
+      // crop the rescan did NOT produce is left alone here -- removing a stale
+      // cloud crop is deliberately not handled yet.
+      ..._nameCropUploads(batchId, _scanIn(batch, scanId)),
     ]);
     return batch;
   }
@@ -395,6 +400,31 @@ class SyncingBatchRepository implements BatchRepository {
 
   static const String _variantOriginal = 'original';
   static const String _variantRectified = 'rectified';
+  static const String _variantNameLast = 'name_last';
+  static const String _variantNameFirst = 'name_first';
+  static const String _variantNameMiddle = 'name_mi';
+
+  /// The scan with [scanId] in [batch], or null (e.g. a stub result).
+  LocalScan? _scanIn(LocalBatch batch, String scanId) {
+    for (final s in batch.scans) {
+      if (s.id == scanId) return s;
+    }
+    return null;
+  }
+
+  /// One optional-crop upload job per name crop [scan] actually has (by its
+  /// stored crop file name) -- none for a missing crop, never a placeholder.
+  List<SyncJob> _nameCropUploads(String batchId, LocalScan? scan) {
+    if (scan == null) return const [];
+    return [
+      if (scan.nameCropLastFileName != null)
+        _uploadImage(batchId, scan.id, _variantNameLast),
+      if (scan.nameCropFirstFileName != null)
+        _uploadImage(batchId, scan.id, _variantNameFirst),
+      if (scan.nameCropMiddleFileName != null)
+        _uploadImage(batchId, scan.id, _variantNameMiddle),
+    ];
+  }
 
   SyncJob _pushBatch(String batchId) => SyncJob.create(
         type: SyncJobType.pushBatch,

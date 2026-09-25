@@ -28,6 +28,26 @@ LocalScan _scan(String id, {bool rectified = false, ExamineeInfo? examinee}) =>
       examinee: examinee,
     );
 
+/// A scan that already has the given name crops stored locally (by file name,
+/// as the local repository records them).
+LocalScan _scanWithCrops(
+  String id, {
+  bool last = false,
+  bool first = false,
+  bool mi = false,
+  bool rectified = false,
+}) =>
+    LocalScan(
+      id: id,
+      imageFileName: 'images/$id.enc',
+      rectifiedImageFileName: rectified ? 'images/${id}_rectified.enc' : null,
+      capturedAt: DateTime.utc(2026),
+      decoded: const OmrScanResult(examCode: 'AT', items: []),
+      nameCropLastFileName: last ? 'images/${id}_name_last.enc' : null,
+      nameCropFirstFileName: first ? 'images/${id}_name_first.enc' : null,
+      nameCropMiddleFileName: mi ? 'images/${id}_name_mi.enc' : null,
+    );
+
 const _examinee = ExamineeInfo(
   firstName: 'Juan',
   lastName: 'Test',
@@ -674,6 +694,131 @@ void main() {
       'patchImageStatus',
     ]);
     expectNoNetworkOrDrain();
+  });
+
+  group('name-crop upload jobs', () {
+    const core = ['pushBatch', 'pushScan', 'uploadImage:original', 'patchImageStatus'];
+
+    Future<void> add(LocalScan scan) async {
+      fakeLocal.batchResult = _batch(scans: [scan]);
+      await repo.addScan(batchId: 'b1', decoded: _decoded, sourceImage: File('src.jpg'));
+    }
+
+    test('addScan with all three crops queues three separate jobs, after the core jobs', () async {
+      await add(_scanWithCrops('s1', last: true, first: true, mi: true));
+      await waitForJobs(7);
+
+      expect(jobLabels(), [
+        ...core,
+        'uploadImage:name_last',
+        'uploadImage:name_first',
+        'uploadImage:name_mi',
+      ]);
+      for (final j in queue.jobs.where((j) => '${j.meta['variant']}'.startsWith('name_'))) {
+        expect(j.batchId, 'b1');
+        expect(j.scanId, 's1');
+      }
+      expectNoNetworkOrDrain();
+    });
+
+    test('crop jobs come after the rectified job too', () async {
+      await add(_scanWithCrops('s1', last: true, rectified: true));
+      await waitForJobs(6);
+
+      expect(jobLabels(), [
+        'pushBatch',
+        'pushScan',
+        'uploadImage:original',
+        'uploadImage:rectified',
+        'patchImageStatus',
+        'uploadImage:name_last',
+      ]);
+    });
+
+    test('only the last-name crop present -> only name_last', () async {
+      await add(_scanWithCrops('s1', last: true));
+      await waitForJobs(5);
+      expect(jobLabels(), [...core, 'uploadImage:name_last']);
+    });
+
+    test('only the first-name crop present -> only name_first', () async {
+      await add(_scanWithCrops('s1', first: true));
+      await waitForJobs(5);
+      expect(jobLabels(), [...core, 'uploadImage:name_first']);
+    });
+
+    test('only the middle-name crop present -> only name_mi', () async {
+      await add(_scanWithCrops('s1', mi: true));
+      await waitForJobs(5);
+      expect(jobLabels(), [...core, 'uploadImage:name_mi']);
+    });
+
+    test('any missing crop is skipped while the others are still queued', () async {
+      await add(_scanWithCrops('s1', first: true, mi: true)); // no last
+      await waitForJobs(6);
+      expect(jobLabels(), [...core, 'uploadImage:name_first', 'uploadImage:name_mi']);
+    });
+
+    test('a scan with no crops keeps exactly its previous job sequence', () async {
+      await add(_scanWithCrops('s1'));
+      await waitForJobs(4);
+      expect(jobLabels(), core);
+    });
+
+    test('rescan with all crops queues the crop uploads after the existing five jobs', () async {
+      fakeLocal.batchResult = _batch(scans: [_scanWithCrops('s1', last: true, first: true, mi: true)]);
+      await repo.replaceScan(
+        batchId: 'b1',
+        scanId: 's1',
+        decoded: _decoded,
+        sourceImage: File('src.jpg'),
+      );
+      await waitForJobs(8);
+
+      expect(jobLabels(), [
+        'pushScan',
+        'uploadImage:original',
+        'uploadImage:rectified',
+        'patchImageStatus',
+        'pushBatch',
+        'uploadImage:name_last',
+        'uploadImage:name_first',
+        'uploadImage:name_mi',
+      ]);
+    });
+
+    test('rescan without a particular crop queues no job for it (and never a delete)', () async {
+      fakeLocal.batchResult = _batch(scans: [_scanWithCrops('s1', last: true, mi: true)]);
+      await repo.replaceScan(
+        batchId: 'b1',
+        scanId: 's1',
+        decoded: _decoded,
+        sourceImage: File('src.jpg'),
+      );
+      await waitForJobs(7);
+
+      final labels = jobLabels();
+      expect(labels.where((l) => l.contains('name_')), ['uploadImage:name_last', 'uploadImage:name_mi']);
+      expect(labels.any((l) => l.startsWith('delete')), isFalse);
+    });
+
+    test('rescan that produced no crops keeps the previous five-job sequence', () async {
+      fakeLocal.batchResult = _batch(scans: [_scanWithCrops('s1')]);
+      await repo.replaceScan(
+        batchId: 'b1',
+        scanId: 's1',
+        decoded: _decoded,
+        sourceImage: File('src.jpg'),
+      );
+      await waitForJobs(5);
+      expect(jobLabels(), [
+        'pushScan',
+        'uploadImage:original',
+        'uploadImage:rectified',
+        'patchImageStatus',
+        'pushBatch',
+      ]);
+    });
   });
 
   test('6. addScan local failure (scan-limit) enqueues nothing', () async {
