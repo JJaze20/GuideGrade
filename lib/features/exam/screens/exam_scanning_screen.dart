@@ -258,6 +258,16 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
   /// feature, and defaults to false even there.
   bool _diagnosticsEnabled = false;
 
+  /// Whether to keep this session's per-stage decode images so they can be
+  /// reviewed afterwards from Scan Results ("How it was read").
+  ///
+  /// Unlike [_diagnosticsEnabled] this is available in a release build: the
+  /// people who need to see how a sheet was read are running one. It costs
+  /// one extra decode per page and nothing else -- deliberately NOT the
+  /// verbose per-contour logging, which is what made dim-light scanning
+  /// crawl and stays behind [_diagnosticsEnabled].
+  bool _debugImagesEnabled = false;
+
   /// Populated only while [_diagnosticsEnabled] is true (see
   /// [_LiveCornersRequest.includeDiagnostics]); null otherwise, same as
   /// before diagnostics existed.
@@ -1610,6 +1620,34 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
+              // Available in release, unlike the bug icon below: staff need
+              // to be able to capture how a sheet was read without a special
+              // build. Off by default so an ordinary session pays nothing.
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: InkWell(
+                  onTap: () => setState(() {
+                    _debugImagesEnabled = !_debugImagesEnabled;
+                    _appState.debugImagesEnabled = _debugImagesEnabled;
+                  }),
+                  child: Container(
+                    width: 32,
+                    height: 32,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: _debugImagesEnabled
+                          ? AppColors.accentYellowGreen
+                          : Colors.black.withOpacity(0.4),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      Icons.layers_outlined,
+                      color: _debugImagesEnabled ? Colors.black : Colors.white,
+                      size: 16,
+                    ),
+                  ),
+                ),
+              ),
               // TEMPORARY developer tool, debug-build-only and off by
               // default (see [_diagnosticsEnabled]) — never shown in a
               // release build, so this can't reach end users.

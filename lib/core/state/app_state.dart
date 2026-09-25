@@ -55,14 +55,25 @@ class _DebugVizRequest {
   final OmrExamTemplate template;
   final String outputDir;
   final int pageIndex;
-  const _DebugVizRequest(this.imagePath, this.template, this.outputDir, this.pageIndex);
+
+  /// Whether this pass should ALSO emit the verbose per-contour/per-bubble
+  /// log. False writes the stage images alone, which is all the "How it was
+  /// read" viewer needs.
+  final bool verboseLogging;
+  const _DebugVizRequest(this.imagePath, this.template, this.outputDir, this.pageIndex,
+      {this.verboseLogging = false});
 }
 
 void _saveDebugVisualization(_DebugVizRequest request) {
   // Only ever called (see processCapturedPages) when diagnostics are on,
   // but set explicitly anyway rather than assuming that -- this isolate
   // has no memory of what the calling isolate's flag was.
-  OmrDecoder.setDiagnosticsEnabled(true);
+  // Only the LOGGING follows this flag. saveDebugVisualization's stage
+  // images are written unconditionally -- it contains no reference to the
+  // verbose switches -- so the viewer works without paying for thousands of
+  // synchronous print() calls per sheet, which is what made dim-light
+  // scanning crawl.
+  OmrDecoder.setDiagnosticsEnabled(request.verboseLogging);
   const OmrDecoder().saveDebugVisualization(request.imagePath, request.template, request.outputDir, request.pageIndex);
 }
 
@@ -745,6 +756,24 @@ class AppState extends ChangeNotifier {
   /// flipping this (debug builds only — see that field's doc comment).
   bool diagnosticsEnabled = false;
 
+  /// Whether to write [lastDebugImagesDir]'s per-stage images, WITHOUT the
+  /// verbose decode logging that [diagnosticsEnabled] also turns on.
+  ///
+  /// Split from [diagnosticsEnabled] because the two have very different
+  /// costs and only one of them is what staff actually want to look at. The
+  /// verbose side flips [OmrDecoder.setDiagnosticsEnabled], which re-enables
+  /// thousands of synchronous `print()` calls per sheet -- that is what made
+  /// scanning crawl in dim light, where the expensive full-quadrant fiducial
+  /// fallback runs. The images are one extra decode per page, paid once,
+  /// after the real decode, and are the only part the "How it was read"
+  /// viewer needs.
+  ///
+  /// Still off by default: a real exam session should not pay for output
+  /// nobody opens. Unlike [diagnosticsEnabled] this one is reachable in a
+  /// release build, since the people who need to see how a sheet was read
+  /// are running release builds.
+  bool debugImagesEnabled = false;
+
   /// Tells [AppLockGate] to ignore an `AppLifecycleState.resumed` event
   /// instead of re-locking, for as long as this is true. Set by a screen
   /// that knowingly causes spurious resumes of its own doing (see
@@ -1035,7 +1064,7 @@ class AppState extends ChangeNotifier {
     // previous session's ink map sitting there to be shown as if it were
     // this sheet's. Per-run folders make that impossible, and keep the older
     // runs around to compare against instead of deleting them.
-    final debugDir = diagnosticsEnabled
+    final debugDir = (diagnosticsEnabled || debugImagesEnabled)
         ? await _prepareDebugImagesDir(
             runSubfolder: 'run_${DateTime.now().millisecondsSinceEpoch}')
         : null;
@@ -1077,7 +1106,9 @@ class AppState extends ChangeNotifier {
       // scanning.
       if (debugDir != null) {
         try {
-          await compute(_saveDebugVisualization, _DebugVizRequest(page.path, template, debugDir, pageIndex));
+          await compute(_saveDebugVisualization,
+              _DebugVizRequest(page.path, template, debugDir, pageIndex,
+                  verboseLogging: diagnosticsEnabled));
         } catch (_) {
           // Diagnostic-only; never let a debug-image failure block real results.
         }
