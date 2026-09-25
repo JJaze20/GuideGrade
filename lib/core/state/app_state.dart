@@ -768,11 +768,16 @@ class AppState extends ChangeNotifier {
   /// after the real decode, and are the only part the "How it was read"
   /// viewer needs.
   ///
-  /// Still off by default: a real exam session should not pay for output
-  /// nobody opens. Unlike [diagnosticsEnabled] this one is reachable in a
-  /// release build, since the people who need to see how a sheet was read
-  /// are running release builds.
-  bool debugImagesEnabled = false;
+  /// ON by default while scan accuracy is still being worked on, so every
+  /// scan can be inspected afterwards without anyone having to predict which
+  /// sheet would be worth looking at -- the sheet that reads badly is
+  /// exactly the one nobody thought to enable this for. Reachable in a
+  /// release build, unlike [diagnosticsEnabled], since the people reviewing
+  /// the reads are running release builds.
+  ///
+  /// Costs one extra decode per page. Flip back to false once the accuracy
+  /// work is finished and this stops earning that.
+  bool debugImagesEnabled = true;
 
   /// Tells [AppLockGate] to ignore an `AppLifecycleState.resumed` event
   /// instead of re-locking, for as long as this is true. Set by a screen

@@ -266,7 +266,11 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
   /// one extra decode per page and nothing else -- deliberately NOT the
   /// verbose per-contour logging, which is what made dim-light scanning
   /// crawl and stays behind [_diagnosticsEnabled].
-  bool _debugImagesEnabled = false;
+  ///
+  /// Mirrors [AppState.debugImagesEnabled], which is ON by default during
+  /// the accuracy work; the toggle stays so a session that needs the speed
+  /// back can still turn it off.
+  bool _debugImagesEnabled = true;
 
   /// Populated only while [_diagnosticsEnabled] is true (see
   /// [_LiveCornersRequest.includeDiagnostics]); null otherwise, same as
