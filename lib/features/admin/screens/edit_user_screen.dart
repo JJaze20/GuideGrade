@@ -11,7 +11,8 @@ import '../../../shared/widgets/primary_button.dart';
 
 /// Edit User screen for the System Administrator.
 ///
-/// Editable: Display Name, Guidance Position, Institution, Active/Inactive
+/// Editable: Display Name, First Name / Middle Initial / Last Name (Guidance
+/// Council accounts), Guidance Position, Institution, Active/Inactive
 /// status. Email is read-only (changing a Firebase Auth email for another
 /// user is an Admin-SDK-only operation, out of scope here). Role is
 /// read-only in this first version -- there is currently no "appropriate"
@@ -26,18 +27,32 @@ import '../../../shared/widgets/primary_button.dart';
 class EditUserScreen extends StatefulWidget {
   final UserModel? user;
 
-  const EditUserScreen({super.key, this.user});
+  /// Only for tests; the app uses the real services.
+  final FirestoreService? firestoreService;
+  final LoggingService? loggingService;
+
+  const EditUserScreen({
+    super.key,
+    this.user,
+    this.firestoreService,
+    this.loggingService,
+  });
 
   @override
   State<EditUserScreen> createState() => _EditUserScreenState();
 }
 
 class _EditUserScreenState extends State<EditUserScreen> {
-  final _firestoreService = FirestoreService();
-  final _loggingService = LoggingService();
+  late final FirestoreService _firestoreService =
+      widget.firestoreService ?? FirestoreService();
+  late final LoggingService _loggingService =
+      widget.loggingService ?? LoggingService();
   final _formKey = GlobalKey<FormState>();
 
   late final TextEditingController _displayNameController;
+  late final TextEditingController _firstNameController;
+  late final TextEditingController _middleInitialController;
+  late final TextEditingController _lastNameController;
   late final TextEditingController _institutionController;
 
   String? _guidancePosition;
@@ -74,6 +89,10 @@ class _EditUserScreenState extends State<EditUserScreen> {
     setState(() {
       _user = fresh;
       _displayNameController = TextEditingController(text: fresh.displayName);
+      // Empty for an older account that has no structured name yet.
+      _firstNameController = TextEditingController(text: fresh.firstName ?? '');
+      _middleInitialController = TextEditingController(text: fresh.middleInitial ?? '');
+      _lastNameController = TextEditingController(text: fresh.lastName ?? '');
       _institutionController = TextEditingController(text: fresh.institution);
       _guidancePosition = fresh.guidancePosition;
       _isLoading = false;
@@ -84,10 +103,24 @@ class _EditUserScreenState extends State<EditUserScreen> {
   void dispose() {
     if (!_isLoading) {
       _displayNameController.dispose();
+      _firstNameController.dispose();
+      _middleInitialController.dispose();
+      _lastNameController.dispose();
       _institutionController.dispose();
     }
     super.dispose();
   }
+
+  /// The structured name is checked with the Create User rules once the
+  /// account has one, or as soon as any part of it is typed. An older account
+  /// with none stays saveable with all three left empty, so unrelated edits
+  /// are never blocked by a name it was never given.
+  bool get _structuredNameRequired =>
+      _user!.isGuidanceCouncil &&
+      (_user!.hasStructuredName ||
+          _firstNameController.text.trim().isNotEmpty ||
+          _middleInitialController.text.trim().isNotEmpty ||
+          _lastNameController.text.trim().isNotEmpty);
 
   bool get _isEditingSelf {
     final appState = AppStateScope.of(context);
@@ -99,8 +132,14 @@ class _EditUserScreenState extends State<EditUserScreen> {
 
     setState(() => _isSaving = true);
     try {
+      final saveName = _structuredNameRequired;
       final updated = _user!.copyWith(
         displayName: _displayNameController.text.trim(),
+        firstName: saveName ? _firstNameController.text.trim() : null,
+        middleInitial: saveName
+            ? UserNameRules.normalizeMiddleInitial(_middleInitialController.text)
+            : null,
+        lastName: saveName ? _lastNameController.text.trim() : null,
         institution: _institutionController.text.trim().isEmpty ? 'NDMU' : _institutionController.text.trim(),
         guidancePosition: _guidancePosition,
       );
@@ -267,7 +306,42 @@ class _EditUserScreenState extends State<EditUserScreen> {
               const SizedBox(height: 16),
               _buildSection('Profile'),
               const SizedBox(height: 16),
-              _buildTextField(label: 'Display Name', controller: _displayNameController, required: true),
+              if (_user!.isGuidanceCouncil) ...[
+                _buildTextField(
+                  label: 'First Name',
+                  controller: _firstNameController,
+                  fieldKey: const Key('editUser.firstName'),
+                  validator: (v) => _structuredNameRequired ? UserNameRules.validateFirstName(v) : null,
+                ),
+                const SizedBox(height: 12),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: SizedBox(
+                    width: 200,
+                    child: _buildTextField(
+                      label: 'Middle Initial',
+                      controller: _middleInitialController,
+                      hint: 'e.g., D.',
+                      fieldKey: const Key('editUser.middleInitial'),
+                      validator: (v) => _structuredNameRequired ? UserNameRules.validateMiddleInitial(v) : null,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                _buildTextField(
+                  label: 'Last Name',
+                  controller: _lastNameController,
+                  fieldKey: const Key('editUser.lastName'),
+                  validator: (v) => _structuredNameRequired ? UserNameRules.validateLastName(v) : null,
+                ),
+                const SizedBox(height: 16),
+              ],
+              _buildTextField(
+                label: 'Display Name',
+                controller: _displayNameController,
+                required: true,
+                fieldKey: const Key('editUser.displayName'),
+              ),
               const SizedBox(height: 12),
               if (_user!.role == 'guidance_council') ...[
                 _buildGuidancePositionDropdown(),
@@ -366,6 +440,9 @@ class _EditUserScreenState extends State<EditUserScreen> {
     required String label,
     required TextEditingController controller,
     bool required = false,
+    String? hint,
+    Key? fieldKey,
+    String? Function(String?)? validator,
   }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -378,8 +455,10 @@ class _EditUserScreenState extends State<EditUserScreen> {
         ),
         const SizedBox(height: 6),
         TextFormField(
+          key: fieldKey,
           controller: controller,
           decoration: InputDecoration(
+            hintText: hint,
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(10),
               borderSide: BorderSide(color: AppColors.cardBorder),
@@ -394,12 +473,13 @@ class _EditUserScreenState extends State<EditUserScreen> {
             ),
             contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
           ),
-          validator: required
-              ? (value) {
-                  if (value == null || value.trim().isEmpty) return 'This field is required';
-                  return null;
-                }
-              : null,
+          validator: validator ??
+              (required
+                  ? (value) {
+                      if (value == null || value.trim().isEmpty) return 'This field is required';
+                      return null;
+                    }
+                  : null),
         ),
       ],
     );

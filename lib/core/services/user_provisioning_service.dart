@@ -73,10 +73,21 @@ class UserProvisioningService {
   Future<UserModel> createGuidanceCouncilUser({
     required String email,
     required String displayName,
+    required String firstName,
+    required String middleInitial,
+    required String lastName,
     required UserModel actor,
     String? guidancePosition,
     String institution = 'NDMU',
   }) async {
+    // The structured name is required for a Guidance Council account. Checked
+    // first, before anything is looked up or created, so a bad name never
+    // leaves an Auth account behind.
+    final nameError = UserNameRules.validateFirstName(firstName) ??
+        UserNameRules.validateMiddleInitial(middleInitial) ??
+        UserNameRules.validateLastName(lastName);
+    if (nameError != null) throw UserProvisioningException(nameError);
+
     final normalizedEmail = email.trim();
 
     final existing = await _firestoreService.getUserByEmail(normalizedEmail);
@@ -114,19 +125,17 @@ class UserProvisioningService {
         print('UserProvisioning: could not send the setup email to $normalizedEmail: $e');
       }
 
-      final now = DateTime.now();
-      final newUser = UserModel(
+      final newUser = buildGuidanceCouncilUser(
         userId: newUid,
         email: normalizedEmail,
-        displayName: displayName.trim(),
-        role: 'guidance_council',
-        guidancePosition: guidancePosition,
-        isActive: true,
-        createdAt: now,
-        lastLoginAt: null,
-        passwordResetRequired: true,
+        displayName: displayName,
+        firstName: firstName,
+        middleInitial: middleInitial,
+        lastName: lastName,
         createdBy: actor.userId,
+        guidancePosition: guidancePosition,
         institution: institution,
+        createdAt: DateTime.now(),
       );
 
       try {
@@ -181,6 +190,43 @@ class UserProvisioningService {
         }
       }
     }
+  }
+
+  /// The `users/{uid}` profile written for a newly created Guidance Council
+  /// account. Pure (no Firebase), so what gets stored can be checked directly.
+  ///
+  /// [displayName] is stored exactly as the System Administrator entered it
+  /// (only trimmed) -- it is an independent field and is NEVER derived from
+  /// the structured name. The names are trimmed, and the middle initial is
+  /// normalized to "X." (see [UserNameRules.normalizeMiddleInitial]).
+  static UserModel buildGuidanceCouncilUser({
+    required String userId,
+    required String email,
+    required String displayName,
+    required String firstName,
+    required String middleInitial,
+    required String lastName,
+    required String createdBy,
+    required DateTime createdAt,
+    String? guidancePosition,
+    String institution = 'NDMU',
+  }) {
+    return UserModel(
+      userId: userId,
+      email: email.trim(),
+      displayName: displayName.trim(),
+      role: 'guidance_council',
+      guidancePosition: guidancePosition,
+      isActive: true,
+      createdAt: createdAt,
+      lastLoginAt: null,
+      passwordResetRequired: true,
+      createdBy: createdBy,
+      institution: institution,
+      firstName: firstName.trim(),
+      middleInitial: UserNameRules.normalizeMiddleInitial(middleInitial),
+      lastName: lastName.trim(),
+    );
   }
 
   /// A single-use password satisfying Firebase Auth's minimum requirements,
