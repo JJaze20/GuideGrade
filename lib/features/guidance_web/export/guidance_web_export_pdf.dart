@@ -4,6 +4,7 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 
 import '../../../core/omr/cluster_analysis.dart';
+import 'guidance_web_certificate.dart';
 import 'guidance_web_export_models.dart';
 
 /// Builds the Guidance Council export PDF from [ExportDocument]: a Batch
@@ -46,6 +47,16 @@ Future<Uint8List> buildExportPdf(
         build: (_) => _examineePage(e, left, right),
       ),
     );
+    final cert = e.certificate;
+    if (cert != null) {
+      pdf.addPage(
+        pw.Page(
+          pageFormat: format.landscape,
+          margin: const pw.EdgeInsets.fromLTRB(72, 30, 72, 30),
+          build: (_) => _certificatePage(cert, left, right),
+        ),
+      );
+    }
   }
   return pdf.save();
 }
@@ -209,6 +220,8 @@ pw.Widget _batchPage(
           pw.Expanded(child: _labelValue('Batch', s.batchLabel)),
         ],
       ),
+      pw.SizedBox(height: 6),
+      _labelValue('Batch Date', s.batchDate),
       pw.SizedBox(height: 16),
       pw.Text('Overall Statistics', style: _s(11, bold: true)),
       pw.SizedBox(height: 6),
@@ -452,6 +465,174 @@ pw.Widget _examineePage(
       _h1('Category:'),
       pw.SizedBox(height: 6),
       _categoryList(s),
+    ],
+  );
+}
+
+// --- category certificate ---------------------------------------------------
+
+PdfColor _certColor(String letter) => switch (letter) {
+  'D' => const PdfColor.fromInt(0xFF00B0F0),
+  'C' => const PdfColor.fromInt(0xFF1F497D),
+  'B' => const PdfColor.fromInt(0xFFFFC000),
+  _ => const PdfColor.fromInt(0xFFEE0000),
+};
+
+pw.Widget _certHeader(pw.ImageProvider crest, pw.ImageProvider seal) {
+  const grey = PdfColor.fromInt(0xFF7F7F7F);
+  pw.Widget line(String t, double size) => pw.Text(
+    t,
+    style: _s(size, color: grey),
+    textAlign: pw.TextAlign.center,
+  );
+  return pw.Row(
+    crossAxisAlignment: pw.CrossAxisAlignment.center,
+    children: [
+      pw.SizedBox(width: 49, height: 57, child: pw.Image(crest)),
+      pw.Expanded(
+        child: pw.Column(
+          children: [
+            line('JMJ Marist Brothers', 10),
+            line('Notre Dame of Marbel University', 10),
+            line('Guidance Council of NDMU', 10),
+            line('City of Koronadal, Province of South Cotabato', 10),
+            line('Guidance and Testing Center', 18),
+          ],
+        ),
+      ),
+      pw.SizedBox(width: 58, height: 57, child: pw.Image(seal)),
+    ],
+  );
+}
+
+pw.Widget _certColumn(List<CertEntry> col) => pw.Column(
+  crossAxisAlignment: pw.CrossAxisAlignment.start,
+  children: [
+    for (final e in col)
+      pw.Padding(
+        // The template sets the course lists in Calibri Bold, which is
+        // narrower than the built-in Helvetica Bold, hence the smaller size.
+        padding: pw.EdgeInsets.only(top: e.isHeading ? 6 : 0, bottom: 1.5),
+        child: pw.Text(
+          _clean(e.text),
+          style: _s(11.5, bold: true),
+        ),
+      ),
+  ],
+);
+
+pw.Widget _certificatePage(
+  ExportCertificate c,
+  pw.ImageProvider crest,
+  pw.ImageProvider seal,
+) {
+  final color = _certColor(c.letter);
+  final cols = c.columns;
+  final body = pw.Column(
+    crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+    children: [
+      pw.Center(child: pw.Text('CONGRATULATIONS!', style: _s(36, bold: true))),
+      pw.SizedBox(height: 2),
+      pw.Center(
+        child: pw.Text(
+          _clean(c.intro),
+          style: _s(14, bold: true),
+          textAlign: pw.TextAlign.center,
+        ),
+      ),
+      pw.SizedBox(height: 4),
+      pw.Center(
+        child: pw.RichText(
+          text: pw.TextSpan(
+            children: [
+              pw.TextSpan(text: 'TEST RESULT: ', style: _s(18, bold: true)),
+              pw.TextSpan(
+                text: 'CATEGORY ${c.letter} ',
+                style: _s(18, bold: true, color: color),
+              ),
+              pw.TextSpan(
+                text: _clean(c.rangeLabel),
+                style: _s(18, bold: true),
+              ),
+            ],
+          ),
+        ),
+      ),
+      pw.SizedBox(height: 14),
+      if (c.name.isEmpty)
+        // No name on record: leave a line to write it on.
+        pw.Center(
+          child: pw.Container(
+            width: 340,
+            height: 30,
+            decoration: pw.BoxDecoration(
+              border: pw.Border(bottom: pw.BorderSide(color: color, width: 1.2)),
+            ),
+          ),
+        )
+      else
+        pw.Center(
+          child: pw.Text(
+            _clean(c.name),
+            style: _s(24, bold: true, color: color),
+            textAlign: pw.TextAlign.center,
+          ),
+        ),
+      pw.SizedBox(height: 8),
+      pw.Container(height: 1, color: _rule),
+      pw.SizedBox(height: 10),
+      pw.Center(
+        child: pw.RichText(
+          text: pw.TextSpan(
+            children: [
+              pw.TextSpan(
+                text: 'Based on your result, you are qualified to ${c.verb} ',
+                style: _s(14),
+              ),
+              pw.TextSpan(
+                text: 'ANY',
+                style: pw.TextStyle(
+                  font: pw.Font.helveticaBold(),
+                  fontSize: 14,
+                  decoration: pw.TextDecoration.underline,
+                ),
+              ),
+              pw.TextSpan(
+                text: ' of the following courses:',
+                style: _s(14),
+              ),
+            ],
+          ),
+        ),
+      ),
+      pw.SizedBox(height: 10),
+      pw.Row(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          for (final col in cols)
+            pw.Expanded(
+              child: pw.Padding(
+                padding: const pw.EdgeInsets.only(right: 8),
+                child: _certColumn(col),
+              ),
+            ),
+        ],
+      ),
+    ],
+  );
+  return pw.Column(
+    crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+    children: [
+      _certHeader(crest, seal),
+      pw.SizedBox(height: 6),
+      // Scales down (never overflows) if a long course list needs the room.
+      pw.Expanded(
+        child: pw.FittedBox(
+          fit: pw.BoxFit.scaleDown,
+          alignment: pw.Alignment.topCenter,
+          child: pw.SizedBox(width: 648, child: body),
+        ),
+      ),
     ],
   );
 }

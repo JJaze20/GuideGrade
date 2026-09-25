@@ -1,4 +1,5 @@
 import '../../../core/omr/cluster_analysis.dart';
+import 'guidance_web_certificate.dart';
 
 /// Plain data for the exported PDF — everything already formatted as it will
 /// be printed, so the PDF builder itself does no scoring or lookups.
@@ -23,6 +24,7 @@ class ExportBatchSection {
   const ExportBatchSection({
     required this.examLabel,
     required this.batchLabel,
+    required this.batchDate,
     required this.stats,
     required this.scoreBars,
     required this.categoryBars,
@@ -31,6 +33,9 @@ class ExportBatchSection {
 
   final String examLabel;
   final String batchLabel;
+
+  /// The batch's date as printed, e.g. `September 24, 2026`.
+  final String batchDate;
 
   /// (label, value) in template order: Total, Graded, Ungraded, Average,
   /// Highest, Lowest, Median.
@@ -59,6 +64,7 @@ class ExportExamineeSection {
     required this.clusterRows,
     required this.categoryBands,
     required this.categoryLetter,
+    this.certificate,
   });
 
   final String examLabel;
@@ -80,6 +86,10 @@ class ExportExamineeSection {
 
   /// The examinee's letter, or null when unclassified / not graded.
   final String? categoryLetter;
+
+  /// Printed on its own landscape page right after this examinee's analytics
+  /// page; null when certificates are off or none is issued for this scan.
+  final ExportCertificate? certificate;
 }
 
 class ExportDocument {

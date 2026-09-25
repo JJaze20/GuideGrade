@@ -12,6 +12,7 @@ import '../../../models/answer_key.dart';
 import '../../../models/local_batch.dart';
 import '../services/guidance_web_analytics_service.dart';
 import '../services/guidance_web_results_service.dart';
+import 'guidance_web_certificate.dart';
 import 'guidance_web_export_models.dart';
 import 'guidance_web_export_pdf.dart';
 
@@ -80,6 +81,7 @@ class GuidanceWebExportService {
     required bool includeSummary,
     required List<LocalScan> selected,
     required List<LocalScan> allScans,
+    bool includeCertificates = false,
   }) async {
     AnswerKey? key;
     try {
@@ -92,7 +94,8 @@ class GuidanceWebExportService {
         ? await _batchSection(batch, allScans)
         : null;
     final examinees = [
-      for (final s in selected) _examineeSection(batch, s, allScans, key),
+      for (final s in selected)
+        _examineeSection(batch, s, allScans, key, includeCertificates),
     ];
 
     final left = (await rootBundle.load('assets/images/ndmu_logo.png'))
@@ -111,13 +114,17 @@ class GuidanceWebExportService {
 
   /// The whole-batch export used by the list's `export`: the batch analytics
   /// plus a page for every examinee (tagged or not) in the batch.
-  Future<Uint8List> buildDefaultPdf(LocalBatch batch) async {
+  Future<Uint8List> buildDefaultPdf(
+    LocalBatch batch, {
+    bool includeCertificates = false,
+  }) async {
     final scans = await _results.loadScansForBatch(batch);
     return buildPdf(
       batch: batch,
       includeSummary: true,
       selected: scans,
       allScans: scans,
+      includeCertificates: includeCertificates,
     );
   }
 
@@ -147,6 +154,7 @@ class GuidanceWebExportService {
         return ExportBatchSection(
           examLabel: examLabel,
           batchLabel: _batchLabel(batch),
+          batchDate: _date(batch.createdAt),
           stats: const [],
           scoreBars: const [],
           categoryBars: categoryBars,
@@ -158,6 +166,7 @@ class GuidanceWebExportService {
       return ExportBatchSection(
         examLabel: examLabel,
         batchLabel: _batchLabel(batch),
+        batchDate: _date(batch.createdAt),
         stats: stats,
         scoreBars: bars,
         categoryBars: categoryBars,
@@ -166,6 +175,7 @@ class GuidanceWebExportService {
       return ExportBatchSection(
         examLabel: examLabel,
         batchLabel: _batchLabel(batch),
+        batchDate: _date(batch.createdAt),
         stats: const [],
         scoreBars: const [],
         categoryBars: categoryBars,
@@ -307,6 +317,7 @@ class GuidanceWebExportService {
     LocalScan scan,
     List<LocalScan> allScans,
     AnswerKey? key,
+    bool includeCertificates,
   ) {
     final e = scan.examinee;
     final result = scan.result;
@@ -353,6 +364,15 @@ class GuidanceWebExportService {
       categoryLetter: result == null
           ? null
           : exportCategoryLetter(batch.examCode, result.rawScore),
+      // Printed right after this examinee's analytics page.
+      certificate: includeCertificates
+          ? buildCertificate(
+              examCode: batch.examCode,
+              rawScore: result?.rawScore,
+              status: result?.status,
+              name: e?.displayName,
+            )
+          : null,
     );
   }
 }
