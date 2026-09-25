@@ -389,6 +389,20 @@ abstract class SyncClient {
     required bool rectified,
   });
 
+  /// Downloads a handwritten-name crop image from private Storage, or
+  /// reports it absent (a 404 -- the crop was never uploaded or no longer
+  /// exists, not an error). This follows the same authenticated read-only
+  /// contract as [downloadScanImage].
+  Future<CloudImageRead> downloadNameCropImage({
+    required String batchId,
+    required String scanId,
+    required String variant,
+  }) async {
+    return const CloudImageRead.failed(
+      SyncOutcome.permanent('not_implemented'),
+    );
+  }
+
   /// Removes one scan's cloud row and its Storage image objects (original and
   /// rectified). Idempotent: a row or object that is already gone is success.
   Future<SyncOutcome> deleteScan(String batchId, String scanId);

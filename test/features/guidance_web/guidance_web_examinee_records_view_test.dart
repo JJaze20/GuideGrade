@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -21,6 +22,14 @@ class _FakeSyncClient implements SyncClient {
 
   /// Bytes [downloadScanImage] returns; null means "no image".
   Uint8List? imageToReturn;
+
+  /// What [downloadNameCropImage] returns: `nameCropRead` when set (e.g. a
+  /// failure), otherwise `nameCropBytes` (null = the crop was never uploaded).
+  Uint8List? nameCropBytes;
+  CloudImageRead? nameCropRead;
+
+  /// When set, every crop download waits for it (a slow Storage).
+  Completer<void>? nameCropGate;
 
   /// Simulates PostgreSQL's atomic `nextval()` default for
   /// `temporary_examinee_id` — increments on every call, proving the ID
@@ -185,6 +194,24 @@ class _FakeSyncClient implements SyncClient {
     final bytes = imageToReturn;
     return bytes == null ? const CloudImageRead.absent() : CloudImageRead.found(bytes);
   }
+
+  @override
+  Future<CloudImageRead> downloadNameCropImage({
+    required String batchId,
+    required String scanId,
+    required String variant,
+  }) async {
+    calls.add('downloadNameCropImage:$batchId/$scanId/$variant');
+    final gate = nameCropGate;
+    if (gate != null) await gate.future;
+    final read = nameCropRead;
+    if (read != null) return read;
+    final bytes = nameCropBytes;
+    return bytes == null
+        ? const CloudImageRead.absent()
+        : CloudImageRead.found(bytes);
+  }
+
   @override
   Future<SyncOutcome> deleteBatch(String batchId) => _no('deleteBatch');
   @override
@@ -747,6 +774,508 @@ void main() {
       expect(find.text('Showing 0 of 4'), findsOneWidget);
       expect(client.calls.where((c) => c == 'readUnlinkedScans' || c.startsWith('linkScanToExaminee')), isEmpty);
     });
+  });
+
+  group('Unlinked Scans inline name crop', () {
+    // A valid 1x1 PNG standing in for a handwritten-name crop.
+    final png = base64Decode(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+    );
+
+    Future<void> openUnlinked(
+      WidgetTester tester, {
+      int scans = 1,
+      bool settle = true,
+    }) async {
+      client.batchesToReturn = CloudBatchesRead.found([
+        _batchRow(id: 'bq', examCode: 'QTM'),
+      ]);
+      client.unlinkedScansToReturn = CloudScansRead.found([
+        for (var i = 1; i <= scans; i++)
+          _scanRow(
+            id: 's$i',
+            batchId: 'bq',
+            examCode: 'QTM',
+            firstName: 'Juan$i',
+            lastName: 'Cruz',
+          ),
+      ]);
+      await pumpView(tester);
+      await tester.tap(find.textContaining('Unlinked Scans'));
+      if (settle) {
+        await tester.pumpAndSettle();
+      } else {
+        await tester.pump();
+        await tester.pump();
+      }
+    }
+
+    int cropCalls() =>
+        client.calls.where((c) => c.startsWith('downloadNameCropImage')).length;
+
+    testWidgets(
+      'there is a NAME CROP column, right after OCR NAME and before EXAM',
+      (tester) async {
+        await openUnlinked(tester);
+
+        double left(String text) => tester.getTopLeft(find.text(text)).dx;
+        expect(find.text('NAME CROP'), findsOneWidget);
+        expect(left('OCR NAME'), lessThan(left('NAME CROP')));
+        expect(left('NAME CROP'), lessThan(left('EXAM')));
+        expect(left('EXAM'), lessThan(left('BATCH')));
+        expect(left('BATCH'), lessThan(left('CAPTURED')));
+      },
+    );
+
+    testWidgets(
+      'the three crops (Last, First, MI) are shown inline, to the right of the OCR name and left of EXAM',
+      (tester) async {
+        client.nameCropBytes = png;
+        await openUnlinked(tester);
+
+        for (final v in ['name_last', 'name_first', 'name_mi']) {
+          expect(find.byKey(Key('nameCropImage_$v')), findsOneWidget);
+        }
+        expect(find.text('Last'), findsOneWidget);
+        expect(find.text('First'), findsOneWidget);
+        expect(find.text('MI'), findsOneWidget);
+
+        final nameRight = tester.getTopRight(find.text('Cruz, Juan1')).dx;
+        final last = tester.getTopLeft(
+          find.byKey(const Key('nameCropImage_name_last')),
+        );
+        final first = tester.getTopLeft(
+          find.byKey(const Key('nameCropImage_name_first')),
+        );
+        final mi = tester.getTopLeft(
+          find.byKey(const Key('nameCropImage_name_mi')),
+        );
+        final examLeft = tester.getTopLeft(find.text('QTM').last).dx;
+        expect(last.dx, greaterThanOrEqualTo(nameRight));
+        expect(last.dx, lessThan(first.dx));
+        expect(first.dx, lessThan(mi.dx));
+        expect(mi.dx, lessThan(examLeft));
+
+        // Large enough to read in the table: all three share one height, the
+        // long Last / First names get the widest boxes.
+        final last0 = tester.getSize(
+          find.byKey(const Key('nameCropImage_name_last')),
+        );
+        final first0 = tester.getSize(
+          find.byKey(const Key('nameCropImage_name_first')),
+        );
+        final mi0 = tester.getSize(
+          find.byKey(const Key('nameCropImage_name_mi')),
+        );
+        expect(first0.height, last0.height);
+        expect(mi0.height, last0.height);
+        expect(last0.height, greaterThanOrEqualTo(44));
+        expect(last0.width, greaterThanOrEqualTo(140));
+        expect(first0.width, last0.width);
+        expect(mi0.width, lessThan(last0.width));
+
+        // The header lines up with the first crop.
+        expect(tester.getTopLeft(find.text('NAME CROP')).dx, last.dx);
+      },
+    );
+
+    testWidgets(
+      'the crops never overlap EXAM, BATCH, CAPTURED or the action buttons',
+      (tester) async {
+        client.nameCropBytes = png;
+        await openUnlinked(tester);
+
+        final miRight = tester
+            .getTopRight(find.byKey(const Key('nameCropImage_name_mi')))
+            .dx;
+        final examLeft = tester.getTopLeft(find.text('QTM').last).dx;
+        final batch = find.text('B-QTM');
+        final captured = find.text('Jan 1, 2026');
+        final actionsLeft = tester
+            .getTopLeft(find.widgetWithText(TextButton, 'View Image'))
+            .dx;
+        expect(miRight, lessThan(examLeft));
+        // Cells may touch the actions column edge but never cross it.
+        expect(tester.getTopRight(batch).dx, lessThanOrEqualTo(actionsLeft));
+        expect(tester.getTopRight(captured).dx, lessThanOrEqualTo(actionsLeft));
+        // The OCR name and the other cells are all still visible.
+        expect(find.text('Cruz, Juan1'), findsOneWidget);
+        expect(tester.takeException(), isNull, reason: 'no layout overflow');
+      },
+    );
+
+    testWidgets('there is no "View Name Crop" button', (tester) async {
+      client.nameCropBytes = png;
+      await openUnlinked(tester);
+
+      expect(find.text('View Name Crop'), findsNothing);
+      expect(find.text('Handwritten Name Crops'), findsNothing);
+      // Nothing is open until a crop is clicked.
+      expect(find.byType(Dialog), findsNothing);
+    });
+
+    group('click to enlarge', () {
+      Future<void> openZoom(WidgetTester tester, String variant) async {
+        await tester.tap(find.byKey(Key('nameCropTap_$variant')));
+        await tester.pumpAndSettle();
+      }
+
+      testWidgets('each crop opens ONLY its own enlarged image, with a title', (
+        tester,
+      ) async {
+        client.nameCropBytes = png;
+        await openUnlinked(tester);
+
+        for (final (variant, title) in [
+          ('name_last', 'Last Name'),
+          ('name_first', 'First Name'),
+          ('name_mi', 'Middle Initial'),
+        ]) {
+          await openZoom(tester, variant);
+          expect(find.byType(Dialog), findsOneWidget);
+          expect(find.byKey(const Key('nameCropZoomImage')), findsOneWidget);
+          expect(
+            find.text('$title — handwritten crop'),
+            findsOneWidget,
+            reason: 'the title says which crop this is',
+          );
+          // The enlarged image is far bigger than the table thumbnail.
+          final zoomed = tester.getSize(
+            find.byKey(const Key('nameCropZoomImage')),
+          );
+          final thumb = tester.getSize(
+            find.byKey(Key('nameCropImage_$variant')),
+          );
+          expect(zoomed.height, greaterThan(thumb.height * 3));
+
+          await tester.tap(find.byKey(const Key('nameCropZoomClose')));
+          await tester.pumpAndSettle();
+          expect(find.byType(Dialog), findsNothing);
+        }
+      });
+
+      testWidgets('closing returns to the table with everything intact', (
+        tester,
+      ) async {
+        client.nameCropBytes = png;
+        await openUnlinked(tester);
+        await openZoom(tester, 'name_last');
+
+        await tester.tap(find.byKey(const Key('nameCropZoomClose')));
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('nameCropZoomImage')), findsNothing);
+        expect(find.text('Cruz, Juan1'), findsOneWidget);
+        expect(find.text('Showing 1 of 1'), findsOneWidget);
+        expect(
+          find.byKey(const Key('nameCropImage_name_last')),
+          findsOneWidget,
+        );
+      });
+
+      testWidgets('Escape and a click outside also close it', (tester) async {
+        client.nameCropBytes = png;
+        await openUnlinked(tester);
+
+        await openZoom(tester, 'name_first');
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        expect(find.byType(Dialog), findsNothing);
+
+        await openZoom(tester, 'name_first');
+        await tester.tapAt(const Offset(4, 4));
+        await tester.pumpAndSettle();
+        expect(find.byType(Dialog), findsNothing);
+      });
+
+      testWidgets(
+        'the crops look clickable: pointer cursor and a hover highlight',
+        (tester) async {
+          client.nameCropBytes = png;
+          await openUnlinked(tester);
+
+          final region = tester.widgetList<MouseRegion>(
+            find.ancestor(
+              of: find.byKey(const Key('nameCropTap_name_last')),
+              matching: find.byType(MouseRegion),
+            ),
+          );
+          expect(
+            region.any((r) => r.cursor == SystemMouseCursors.click),
+            isTrue,
+          );
+
+          expect(
+            find.byKey(const Key('nameCropHover_name_last')),
+            findsNothing,
+          );
+          final mouse = await tester.createGesture(
+            kind: PointerDeviceKind.mouse,
+          );
+          await mouse.addPointer(location: Offset.zero);
+          addTearDown(mouse.removePointer);
+          await mouse.moveTo(
+            tester.getCenter(find.byKey(const Key('nameCropImage_name_last'))),
+          );
+          await tester.pump();
+          expect(
+            find.byKey(const Key('nameCropHover_name_last')),
+            findsOneWidget,
+          );
+          expect(
+            find.byKey(const Key('nameCropHover_name_first')),
+            findsNothing,
+          );
+          await mouse.moveTo(Offset.zero);
+          await tester.pump();
+          expect(
+            find.byKey(const Key('nameCropHover_name_last')),
+            findsNothing,
+          );
+        },
+      );
+
+      testWidgets('a missing or failed crop is not clickable', (tester) async {
+        client.nameCropBytes = null;
+        await openUnlinked(tester);
+
+        expect(find.byKey(const Key('nameCropTap_name_last')), findsNothing);
+        await tester.tap(find.byKey(const Key('nameCropMissing_name_last')));
+        await tester.pumpAndSettle();
+        expect(find.byType(Dialog), findsNothing);
+      });
+
+      testWidgets('the row actions still work after using the zoom', (
+        tester,
+      ) async {
+        client.nameCropBytes = png;
+        client.examineesToReturn = CloudExamineesRead.found([
+          _row(
+            id: 'e1',
+            temporaryExamineeId: 'EX-000001',
+            firstName: 'Juan1',
+            lastName: 'Cruz',
+          ),
+        ]);
+        await openUnlinked(tester);
+        await openZoom(tester, 'name_last');
+        await tester.tap(find.byKey(const Key('nameCropZoomClose')));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.widgetWithText(TextButton, 'Link to Existing'));
+        await tester.pumpAndSettle();
+        expect(find.text('Link to Existing Examinee'), findsOneWidget);
+      });
+    });
+
+    testWidgets('the existing actions are all still there', (tester) async {
+      await openUnlinked(tester);
+
+      expect(find.widgetWithText(TextButton, 'View Image'), findsOneWidget);
+      expect(
+        find.widgetWithText(TextButton, 'Link to Existing'),
+        findsOneWidget,
+      );
+      expect(
+        find.widgetWithText(TextButton, 'Confirm and Create Examinee'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets(
+      'Link to Existing still opens the picker from a row with crops',
+      (tester) async {
+        client.nameCropBytes = png;
+        client.examineesToReturn = CloudExamineesRead.found([
+          _row(
+            id: 'e1',
+            temporaryExamineeId: 'EX-000001',
+            // The picker starts its search from the scan's own OCR name.
+            firstName: 'Juan1',
+            lastName: 'Cruz',
+          ),
+        ]);
+        await openUnlinked(tester);
+
+        await tester.tap(find.widgetWithText(TextButton, 'Link to Existing'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Link to Existing Examinee'), findsOneWidget);
+        expect(find.widgetWithText(ListTile, 'Cruz, Juan1'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'Confirm and Create Examinee still opens its dialog from a row with crops',
+      (tester) async {
+        client.nameCropBytes = png;
+        await openUnlinked(tester);
+
+        await tester.tap(
+          find.widgetWithText(TextButton, 'Confirm and Create Examinee'),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('Create Examinee Record'), findsWidgets);
+      },
+    );
+
+    testWidgets(
+      'a crop that was never uploaded shows a small N/A and the row is intact',
+      (tester) async {
+        client.nameCropBytes = null; // 404 -> absent, not an error
+        await openUnlinked(tester);
+
+        for (final v in ['name_last', 'name_first', 'name_mi']) {
+          expect(find.byKey(Key('nameCropMissing_$v')), findsOneWidget);
+        }
+        expect(find.text('N/A'), findsNWidgets(3));
+        expect(find.text('Cruz, Juan1'), findsOneWidget);
+        expect(find.text('QTM'), findsWidgets);
+        expect(find.text('B-QTM'), findsOneWidget);
+        expect(find.widgetWithText(TextButton, 'View Image'), findsOneWidget);
+        // Missing is a normal state: no error box, no page-level error.
+        expect(find.byKey(const Key('nameCropError_name_last')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'a failed download shows a compact retry box; the row is intact and retry reloads',
+      (tester) async {
+        client.nameCropRead = const CloudImageRead.failed(
+          SyncOutcome.transient('network'),
+        );
+        await openUnlinked(tester);
+
+        expect(
+          find.byKey(const Key('nameCropError_name_last')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const Key('nameCropError_name_first')),
+          findsOneWidget,
+        );
+        expect(find.byKey(const Key('nameCropError_name_mi')), findsOneWidget);
+        expect(find.text('Cruz, Juan1'), findsOneWidget);
+        expect(
+          find.widgetWithText(TextButton, 'Link to Existing'),
+          findsOneWidget,
+        );
+        final before = cropCalls();
+
+        // Storage recovers; clicking one crop retries just that one.
+        client.nameCropRead = null;
+        client.nameCropBytes = png;
+        await tester.tap(find.byKey(const Key('nameCropError_name_last')));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const Key('nameCropImage_name_last')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const Key('nameCropError_name_first')),
+          findsOneWidget,
+        );
+        expect(cropCalls(), before + 1);
+      },
+    );
+
+    testWidgets(
+      'undecodable crop bytes fall back to N/A instead of breaking the row',
+      (tester) async {
+        client.nameCropBytes = Uint8List.fromList([1, 2, 3, 4]);
+        await openUnlinked(tester);
+
+        expect(find.text('Cruz, Juan1'), findsOneWidget);
+        expect(find.widgetWithText(TextButton, 'View Image'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      },
+    );
+
+    testWidgets(
+      'slow crops never block the list: rows, filters and actions work while they load',
+      (tester) async {
+        client.nameCropGate = Completer<void>();
+        client.nameCropBytes = png;
+        await openUnlinked(tester, scans: 3, settle: false);
+
+        // Nothing has come back yet, but the whole table is already usable.
+        expect(find.text('Cruz, Juan1'), findsOneWidget);
+        expect(find.text('Cruz, Juan3'), findsOneWidget);
+        expect(find.text('Showing 3 of 3'), findsOneWidget);
+        expect(find.widgetWithText(TextButton, 'View Image'), findsNWidgets(3));
+        expect(
+          find.byKey(const Key('nameCropLoading_name_last')),
+          findsNWidgets(3),
+        );
+        expect(find.byKey(const Key('nameCropImage_name_last')), findsNothing);
+
+        // Filtering still works while crops are in flight.
+        await tester.tap(find.byKey(const Key('unlinkedExamTypeFilter')));
+        await tester.pump();
+        await tester.tap(find.text('TAT').last);
+        await tester.pump();
+        expect(find.text('Showing 0 of 3'), findsOneWidget);
+
+        // Storage answers: the crops fill in.
+        client.nameCropGate!.complete();
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('unlinkedExamTypeFilter')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('All').last);
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const Key('nameCropImage_name_last')),
+          findsNWidgets(3),
+        );
+      },
+    );
+
+    testWidgets(
+      'crops load lazily: only the rows being shown are downloaded, once, and more load on scroll',
+      (tester) async {
+        client.nameCropBytes = png;
+        await openUnlinked(tester, scans: 80);
+
+        final atStart = cropCalls();
+        expect(atStart, greaterThan(0));
+        expect(atStart, lessThan(3 * 80), reason: 'not every row at page load');
+        expect(
+          atStart % 3,
+          0,
+          reason: 'a row loads all three of its crops together',
+        );
+        expect(
+          client.calls.where(
+            (c) => c == 'downloadNameCropImage:bq/s80/name_last',
+          ),
+          isEmpty,
+          reason: 'a row far below the fold is not downloaded yet',
+        );
+
+        // Scroll to the bottom: the last rows now load...
+        await tester.drag(find.byType(ListView).last, const Offset(0, -100000));
+        await tester.pumpAndSettle();
+        expect(
+          client.calls.where(
+            (c) => c == 'downloadNameCropImage:bq/s80/name_last',
+          ),
+          hasLength(1),
+        );
+        expect(cropCalls(), greaterThan(atStart));
+
+        // ...and scrolling back does not download the first row again.
+        await tester.drag(find.byType(ListView).last, const Offset(0, 100000));
+        await tester.pumpAndSettle();
+        expect(
+          client.calls.where(
+            (c) => c == 'downloadNameCropImage:bq/s1/name_last',
+          ),
+          hasLength(1),
+        );
+      },
+    );
   });
 
   group('3. Link to Existing Examinee', () {

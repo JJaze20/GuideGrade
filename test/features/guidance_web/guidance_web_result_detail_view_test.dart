@@ -43,6 +43,17 @@ class _FakeSyncClient implements SyncClient {
   }
 
   @override
+  Future<CloudImageRead> downloadNameCropImage({
+    required String batchId,
+    required String scanId,
+    required String variant,
+  }) async {
+    imageCalls.add('name_crop:$variant');
+    return const CloudImageRead.absent();
+  }
+
+
+  @override
   Future<CloudBatchesRead> readCloudBatches() => _no('readCloudBatches');
   @override
   Future<CloudScansRead> readCloudScans(String batchId) => _no('readCloudScans');

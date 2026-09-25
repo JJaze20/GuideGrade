@@ -1589,6 +1589,50 @@ class SupabaseSyncClient implements SyncClient {
     }
   }
 
+  /// Downloads one handwritten-name crop image from the existing private
+  /// `scanned-sheets` bucket using the same authenticated Storage contract as
+  /// [downloadScanImage]. Missing crop objects are a normal absent state, not a
+  /// database error.
+  @override
+  Future<CloudImageRead> downloadNameCropImage({
+    required String batchId,
+    required String scanId,
+    required String variant,
+  }) async {
+    if (!nameCropVariants.contains(variant)) {
+      return const CloudImageRead.failed(SyncOutcome.permanent('bad_variant'));
+    }
+
+    final key = nameCropImageKey(batchId, scanId, variant);
+    var refreshed = false;
+    while (true) {
+      try {
+        final bytes = await _client.storage.from(storageBucket).download(key);
+        return CloudImageRead.found(bytes);
+      } on StorageException catch (e) {
+        final status = _sanitizeCode(e.statusCode);
+        if (status == '404') return const CloudImageRead.absent();
+        if ((status == '401' || status == 'PGRST301') && !refreshed) {
+          refreshed = true;
+          if (await _safeRefresh()) continue;
+        }
+        _logGuard(
+          'storage error status=$status op=read crop (${e.runtimeType})',
+        );
+        return CloudImageRead.failed(
+          classifyStorageStatus(status, StorageOp.read),
+        );
+      } on TimeoutException {
+        return const CloudImageRead.failed(SyncOutcome.transient('network'));
+      } on SocketException {
+        return const CloudImageRead.failed(SyncOutcome.transient('network'));
+      } catch (e) {
+        _logUnclassified(e);
+        return CloudImageRead.failed(classifyUnexpectedError(e));
+      }
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // G0. deleteScan
   // ---------------------------------------------------------------------------

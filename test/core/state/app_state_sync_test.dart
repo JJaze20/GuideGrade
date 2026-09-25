@@ -106,6 +106,13 @@ class _ThrowingSyncClient implements SyncClient {
     required bool rectified,
   }) async =>
       throw StateError('no network in AppState sync-wiring tests');
+
+  @override
+  Future<CloudImageRead> downloadNameCropImage({
+    required String batchId,
+    required String scanId,
+    required String variant,
+  }) async => throw StateError('no network in AppState sync-wiring tests');
   @override
   Future<SyncOutcome> deleteBatch(String batchId) => _no();
   @override

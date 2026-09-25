@@ -114,6 +114,17 @@ class _FakeClient implements SyncClient {
   }
 
   @override
+  Future<CloudImageRead> downloadNameCropImage({
+    required String batchId,
+    required String scanId,
+    required String variant,
+  }) async {
+    calls.add('downloadNameCropImage:$batchId/$scanId/$variant');
+    return const CloudImageRead.absent();
+  }
+
+
+  @override
   Future<SyncOutcome> pushBatch(String batchId) => _no('pushBatch');
   @override
   Future<SyncOutcome> pushScan(String batchId, String scanId, {Map<String, String> meta = const {}}) =>
