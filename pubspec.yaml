@@ -52,6 +52,12 @@ dependencies:
   # existing Firebase identity via Supabase's native Firebase third-party
   # auth. No Supabase Auth sign-in is ever called (see lib/main.dart).
   supabase_flutter: ^2.5.0
+  # On-device (offline) handwriting OCR for the Last Name/First Name fields
+  # on a scanned sheet — see lib/core/omr/name_ocr_service_native.dart.
+  # Android/iOS only; kept out of the Web build via a conditional export
+  # (see name_ocr_service.dart), the same pattern already used for
+  # opencv_dart in omr_decoder.dart.
+  google_mlkit_text_recognition: ^0.15.0
   connectivity_plus: ^7.3.1
   # Encrypts locally saved batch data at rest (batch.json + scan images) --
   # see lib/core/services/batch_crypto_service.dart. flutter_secure_storage

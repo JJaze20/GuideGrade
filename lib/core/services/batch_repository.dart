@@ -31,6 +31,24 @@ class BatchScanLimitExceededException implements Exception {
   String toString() => message;
 }
 
+/// Thrown by [BatchRepository.replaceScan] when the sheet being replaced is
+/// no longer exactly what a reviewer was shown — it was edited (a correction,
+/// a student tag, an earlier rescan) or deleted while a rescan comparison was
+/// open. Nothing is replaced. [message] is worded for direct display.
+class RescanOriginalChangedException implements Exception {
+  final bool deleted;
+  final String message;
+
+  RescanOriginalChangedException({required this.deleted})
+      : message = deleted
+            ? 'The original sheet was deleted while you were comparing. Nothing was replaced.'
+            : 'The original sheet was changed while you were comparing (for example a correction '
+                'or student tag was saved). Nothing was replaced — cancel and review it again.';
+
+  @override
+  String toString() => message;
+}
+
 abstract class BatchRepository {
   /// All batches, newest activity first.
   Future<List<LocalBatch>> getBatches();
@@ -96,6 +114,16 @@ abstract class BatchRepository {
   /// default, and what [AppState.finishRescan] always passes), the
   /// existing tag is kept as-is — a rescan means the same physical sheet,
   /// just a bad photo, so any already-entered name stays untouched.
+  ///
+  /// [expectedOriginal], when given, is the stored scan a reviewer compared
+  /// the new photo against: if the stored scan is no longer exactly that
+  /// (see [LocalScan.sameStoredStateAs]) or is gone, this throws
+  /// [RescanOriginalChangedException] and replaces nothing.
+  ///
+  /// The scan keeps its original [LocalScan.capturedAt] (the sheet's date);
+  /// the time of this replacement is recorded in [LocalScan.rescannedAt].
+  /// Nothing about the existing record or its files changes unless the whole
+  /// replacement succeeds: a failure part-way leaves the original intact.
   /// [nameCropLastImage]/[nameCropFirstImage]/[nameCropMiddleImage] follow
   /// [addScan]'s convention and always refresh to match the new photo.
   Future<LocalBatch> replaceScan({
@@ -109,6 +137,7 @@ abstract class BatchRepository {
     File? nameCropLastImage,
     File? nameCropFirstImage,
     File? nameCropMiddleImage,
+    LocalScan? expectedOriginal,
   });
 
   /// Attaches/overwrites the grading outcome for one already-stored scan.

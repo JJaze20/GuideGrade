@@ -204,6 +204,7 @@ class _FakeLocal implements LocalBatchRepository {
     File? nameCropLastImage,
     File? nameCropFirstImage,
     File? nameCropMiddleImage,
+    LocalScan? expectedOriginal,
   }) async {
     calls.add('replaceScan:$batchId/$scanId');
     _maybeThrow('replaceScan');

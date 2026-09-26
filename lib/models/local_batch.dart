@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import '../core/omr/duplicate_scan_detector.dart';
 import 'answer_correction.dart';
 import 'omr_scan_result.dart';
@@ -450,6 +452,13 @@ class LocalScan {
   /// capture — see [AnswerCorrection.captureRevision].
   final int captureRevision;
 
+  /// When the photo currently stored for this sheet was taken by a rescan,
+  /// or null if it is still the original capture. [capturedAt] never moves on
+  /// a rescan — it is the sheet's original date — so this is the only record
+  /// of when the replacement happened. Local only: there is no cloud column
+  /// for it.
+  final DateTime? rescannedAt;
+
   /// Append-only history of manual answer corrections and resets for this
   /// scan, oldest first, across every capture. [decoded] is never edited:
   /// the machine-detected answers and the scan image stay as captured, and
@@ -468,6 +477,7 @@ class LocalScan {
     this.nameCropFirstFileName,
     this.nameCropMiddleFileName,
     this.captureRevision = 0,
+    this.rescannedAt,
     this.corrections = const [],
   });
 
@@ -493,6 +503,13 @@ class LocalScan {
 
   /// Whether at least one flagged item is still unresolved.
   bool get needsReview => unresolvedFlaggedItems.isNotEmpty;
+
+  /// Whether [other] is this exact stored record — same capture, answers,
+  /// score, student details, corrections and image references. Used to
+  /// notice that a sheet changed (or was replaced) while a review of it was
+  /// open. Compares the persisted form, so it can't drift from what is saved.
+  bool sameStoredStateAs(LocalScan other) =>
+      jsonEncode(toJson()) == jsonEncode(other.toJson());
 
   /// Corrections on this capture that currently change an answer.
   Map<String, AnswerCorrection> get activeCorrections =>
@@ -522,6 +539,7 @@ class LocalScan {
         nameCropMiddleFileName: nameCropMiddleFileName,
         captureRevision: captureRevision,
         corrections: corrections ?? this.corrections,
+        rescannedAt: rescannedAt,
       );
 
   Map<String, dynamic> toJson() => {
@@ -538,6 +556,7 @@ class LocalScan {
         // Additive: absent for a scan with no rescan and no corrections, so
         // such a scan serializes exactly as it did before these existed.
         if (captureRevision != 0) 'captureRevision': captureRevision,
+        if (rescannedAt != null) 'rescannedAt': rescannedAt!.toIso8601String(),
         if (corrections.isNotEmpty)
           'corrections': corrections.map((c) => c.toJson()).toList(),
       };
@@ -560,6 +579,7 @@ class LocalScan {
         nameCropFirstFileName: json['nameCropFirstFileName'] as String?,
         nameCropMiddleFileName: json['nameCropMiddleFileName'] as String?,
         captureRevision: json['captureRevision'] as int? ?? 0,
+        rescannedAt: json['rescannedAt'] == null ? null : DateTime.parse(json['rescannedAt'] as String),
         corrections: (json['corrections'] as List<dynamic>? ?? [])
             .map((e) => AnswerCorrection.fromJson(e as Map<String, dynamic>))
             .toList(),

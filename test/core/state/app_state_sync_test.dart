@@ -12,6 +12,7 @@ import 'package:guidegrade/core/sync/sync_queue.dart';
 import 'package:guidegrade/models/activity_model.dart';
 import 'package:guidegrade/models/answer_key.dart';
 import 'package:guidegrade/models/local_batch.dart';
+import 'package:guidegrade/models/omr_scan_result.dart';
 import 'package:guidegrade/models/user.dart';
 
 /// Spy over the real [SyncManager]: counts start/pause/processQueue/wake and
@@ -282,7 +283,15 @@ void main() {
     appState.setActiveExamCode('QTM');
     appState.resetScanProgress();
     appState.clearScanSession();
-    final rescanned = await appState.finishRescan();
+    final rescanned = await appState.finishRescan(
+      expectedOriginal: LocalScan(
+        id: 's',
+        imageFileName: 'images/s.enc',
+        capturedAt: DateTime.utc(2026),
+        decoded: const OmrScanResult(examCode: 'AT', items: []),
+      ),
+      identityVerified: true,
+    );
 
     expect(rescanned, isFalse); // guard intact: no active session
     expect(spy.startCalls, 0);

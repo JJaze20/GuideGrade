@@ -18,12 +18,14 @@ import '../../models/local_batch.dart';
 import '../../models/omr_scan_result.dart';
 import '../../models/user.dart';
 import '../omr/exam_score.dart';
+import '../omr/name_ocr_service.dart';
 import '../omr/omr_decoder.dart';
 import '../omr/omr_scorer.dart';
 import '../omr/scan_rescoring.dart';
 import '../omr/omr_templates.dart';
 import '../services/batch_repository.dart';
 import '../services/local_batch_repository.dart';
+import 'rescan_candidate.dart';
 import '../services/local_storage_service.dart';
 import '../sync/batch_archive_coordinator.dart';
 import '../sync/cloud_restore_service.dart';
@@ -550,100 +552,215 @@ class AppState extends ChangeNotifier {
   }
 
   /// Abandons an in-progress rescan (e.g. the user backed out of the
-  /// scanner) without touching the batch.
+  /// scanner or cancelled the comparison) without touching the batch. The
+  /// candidate's temporary photos are deleted; nothing a saved record
+  /// references is.
   void cancelRescan() {
+    _deleteRescanCandidateFiles();
     rescanScanId = null;
+    rescanCandidate = null;
+    rescanSaveError = null;
+    rescanOriginalChanged = false;
     resetScanProgress();
     notifyListeners();
+  }
+
+  /// The replacement photo awaiting review during a rescan, once
+  /// [prepareRescanCandidate] has cropped its name fields. Null otherwise.
+  RescanCandidate? rescanCandidate;
+
+  /// True once a save failed because the original sheet changed or was
+  /// deleted while the comparison was open — retrying the same candidate
+  /// can't succeed, so the panel only offers Cancel/Retake afterwards.
+  bool rescanOriginalChanged = false;
+
+  /// Builds the [rescanCandidate] for the photo just captured (the last of
+  /// [capturedPages]) from the decode that capture already produced — no
+  /// second decode. Crops the name fields into candidate-specific temporary
+  /// files and asks on-device OCR to read them, purely to show as an
+  /// unverified suggestion. Best effort: a failed crop or OCR call leaves
+  /// those parts null and never blocks the review. Idempotent per photo.
+  Future<RescanCandidate?> prepareRescanCandidate() async {
+    final batch = scanBatch;
+    final scanId = rescanScanId;
+    if (batch == null || scanId == null || capturedPages.isEmpty) return null;
+    final photo = capturedPages.last;
+    final already = rescanCandidate;
+    if (already != null && already.photoPath == photo.path) return already;
+    final preview = _capturePreviews[photo.path];
+    if (preview == null) return null;
+
+    String? cropLast;
+    String? cropFirst;
+    String? cropMiddle;
+    String? ocrLast;
+    String? ocrFirst;
+    String? ocrMiddle;
+    final template = omrTemplates[batch.examCode];
+    final nameCropDir = await _prepareNameCropDir();
+    if (template != null && nameCropDir != null) {
+      try {
+        final stamp = DateTime.now().microsecondsSinceEpoch;
+        final crops = await compute(
+          _cropNameFields,
+          _CropNameFieldsRequest(
+            photo.path,
+            template,
+            '$nameCropDir/${scanId}_cand_${stamp}_last.jpg',
+            '$nameCropDir/${scanId}_cand_${stamp}_first.jpg',
+            '$nameCropDir/${scanId}_cand_${stamp}_mi.jpg',
+          ),
+        );
+        cropLast = crops?.lastName;
+        cropFirst = crops?.firstName;
+        cropMiddle = crops?.middleName;
+        if (crops != null) {
+          // Platform channel: must run on the main isolate.
+          const nameOcr = NameOcrService();
+          ocrLast = await nameOcr.recognizeName(crops.lastName, fieldLabel: 'Last Name');
+          ocrFirst = await nameOcr.recognizeName(crops.firstName, fieldLabel: 'First Name');
+          ocrMiddle = await nameOcr.recognizeName(crops.middleName, fieldLabel: 'MI');
+        }
+      } catch (e, st) {
+        debugPrint('prepareRescanCandidate: cropNameFields/OCR threw: $e\n$st');
+      }
+    }
+    final candidate = RescanCandidate(
+      photoPath: photo.path,
+      decoded: preview.result,
+      reviewImagePath: preview.reviewPath,
+      nameCropLastPath: cropLast,
+      nameCropFirstPath: cropFirst,
+      nameCropMiddlePath: cropMiddle,
+      ocrLastName: ocrLast,
+      ocrFirstName: ocrFirst,
+      ocrMiddleName: ocrMiddle,
+    );
+    rescanCandidate = candidate;
+    notifyListeners();
+    return candidate;
+  }
+
+  /// "Retake photo": throws the candidate (and its temporary files) away and
+  /// leaves the rescan open for a fresh capture. The stored sheet is
+  /// untouched.
+  void discardRescanCandidate() {
+    _deleteRescanCandidateFiles();
+    rescanCandidate = null;
+    rescanSaveError = null;
+    rescanOriginalChanged = false;
+    resetScanProgress(); // keeps rescanScanId
+  }
+
+  /// Deletes every temporary file the current candidate owns. Only paths this
+  /// rescan created are touched (camera cache, review image, candidate
+  /// crops); the guard below additionally refuses anything inside batch
+  /// storage, so a file a saved record references can never be removed here.
+  void _deleteRescanCandidateFiles() {
+    final paths = <String?>{
+      for (final p in capturedPages) p.path,
+      for (final e in _capturePreviews.values) e.reviewPath,
+      ...rectifiedImagePaths,
+      ...?rescanCandidate?.temporaryPaths,
+    };
+    for (final path in paths) {
+      _deleteTemporaryFile(path);
+    }
+  }
+
+  static void _deleteTemporaryFile(String? path) {
+    if (path == null || path.isEmpty) return;
+    if (path.replaceAll('\\', '/').contains('/guidegrade_batches/')) return;
+    try {
+      final file = File(path);
+      if (file.existsSync()) file.deleteSync();
+    } catch (_) {
+      // Best effort: a leftover temp file is harmless, a failed delete must
+      // never surface as a scanning error.
+    }
   }
 
   /// Outcome of the last [finishRescan] run.
   bool isSavingRescan = false;
   String? rescanSaveError;
 
-  /// Replaces [rescanScanId]'s stored photo/decode/result with whichever
-  /// captured page was decoded *last* (so retaking the photo mid-session,
-  /// by simply capturing again, naturally picks up the newest attempt
-  /// rather than the first). Requires at least one successfully decoded
-  /// page. Also refreshes the persisted name-crop images to match the
-  /// retaken photo, but never touches the existing examinee tag — a
-  /// rescan means the same physical sheet, just a bad photo, so whatever
-  /// name staff already entered stays exactly as it was; use "Edit
-  /// student" if the retake reveals a correction is actually needed.
-  /// Leaves [scanBatch] refreshed and clears the rescan/capture state on
-  /// success. Returns whether it succeeded — see [rescanSaveError] for the
-  /// failure message.
-  Future<bool> finishRescan() async {
+  /// Replaces [rescanScanId]'s stored photo/decode/result with the candidate
+  /// photo a reviewer has compared against the original — the last captured
+  /// page — and returns whether it saved; see [rescanSaveError] otherwise.
+  ///
+  /// Nothing about the stored sheet changes before this succeeds, and it does
+  /// nothing at all unless [identityVerified] is true (the reviewer ticked
+  /// "I verified that this is the same original answer sheet for this
+  /// examinee"). This is a human verification safeguard: answer similarity
+  /// and OCR names are shown to help that person decide and are never used to
+  /// accept or reject a rescan.
+  ///
+  /// [expectedOriginal] is the stored sheet the reviewer was shown. If it has
+  /// changed or been deleted since, the repository refuses the replacement
+  /// ([RescanOriginalChangedException]) and [rescanOriginalChanged] is set.
+  ///
+  /// What is kept: the sheet's id and position, its student tag (names and
+  /// Examinee ID — OCR never overwrites them; a legacy sheet with no ID is
+  /// given one), and its original date (a rescan never moves it — the
+  /// replacement time is recorded in [LocalScan.rescannedAt]). What is
+  /// replaced: the photo, decode, score and name crops. Manual corrections
+  /// stay in the history but, being on the old capture, stop applying — the
+  /// comparison panel shows the score this produces.
+  ///
+  /// Repeated calls while a save is running are ignored, and a failure leaves
+  /// the candidate in place so the reviewer can retry or cancel.
+  Future<bool> finishRescan({
+    required LocalScan expectedOriginal,
+    required bool identityVerified,
+  }) async {
+    if (isSavingRescan) return false;
     final batch = scanBatch;
     final scanId = rescanScanId;
-    if (batch == null || scanId == null) return false;
+    if (batch == null || scanId == null || scanId != expectedOriginal.id) return false;
     if (capturedPages.isEmpty || scannedResults.isEmpty) return false;
+    if (!identityVerified) {
+      rescanSaveError = 'Confirm that this is the same original answer sheet before replacing it.';
+      notifyListeners();
+      return false;
+    }
 
     isSavingRescan = true;
     rescanSaveError = null;
+    rescanOriginalChanged = false;
     notifyListeners();
 
     try {
       final decoded = scannedResults.last;
       final answerKey = answerKeys[batch.examCode];
       final scored = scoreOmrResult(decoded, answerKey);
-      final firebaseUser = FirebaseAuth.instance.currentUser;
-      final uid = firebaseUser?.uid ?? '';
-      final name = firebaseUser?.displayName ?? currentUser?.displayName ?? 'Unknown';
+      var uid = '';
+      String? firebaseName;
+      try {
+        final firebaseUser = FirebaseAuth.instance.currentUser;
+        uid = firebaseUser?.uid ?? '';
+        firebaseName = firebaseUser?.displayName;
+      } catch (_) {
+        // Firebase not initialised (a test harness): no signed-in uid.
+      }
+      final name = firebaseName ?? currentUser?.displayName ?? 'Unknown';
+      // The replacement is scored on its own decode — exactly what the
+      // comparison panel showed — but keeps the sheet's original scoring date.
       final result = buildLocalScanResult(
         scored,
         computeExamScoreForCode(scored),
         processedByUid: uid,
         processedByName: name,
+        scannedAt: expectedOriginal.result?.scannedAt ?? expectedOriginal.capturedAt,
       );
       final rectifiedPath = rectifiedImagePaths.isNotEmpty ? rectifiedImagePaths.last : null;
 
-      // Crop the name fields out of the retaken photo so staff have an
-      // up-to-date image to read if they open "Edit student" — pure pixel
-      // work, never blocks saving the rescan itself if it fails. The
-      // existing examinee tag (names and all) is preserved; the only change
-      // that can happen is that a legacy scan with no generated Examinee ID
-      // is given one — see [resolveRescanExaminee] for the exact rule (an
-      // existing ID is never replaced merely because a rescan happened).
-      LocalScan? existingScan;
-      for (final s in batch.scans) {
-        if (s.id == scanId) {
-          existingScan = s;
-          break;
-        }
-      }
-      final existingExaminee = existingScan?.examinee;
-      final template = omrTemplates[batch.examCode];
-      final nameCropDir = await _prepareNameCropDir();
-      String? nameCropLastPath;
-      String? nameCropFirstPath;
-      String? nameCropMiddlePath;
-      if (template != null && nameCropDir != null) {
-        try {
-          final crops = await compute(
-            _cropNameFields,
-            _CropNameFieldsRequest(
-              capturedPages.last.path,
-              template,
-              '$nameCropDir/${scanId}_rescan_last.jpg',
-              '$nameCropDir/${scanId}_rescan_first.jpg',
-              '$nameCropDir/${scanId}_rescan_mi.jpg',
-            ),
-          );
-          nameCropLastPath = crops?.lastName;
-          nameCropFirstPath = crops?.firstName;
-          nameCropMiddlePath = crops?.middleName;
-        } catch (e, st) {
-          // Leave all three crop paths null -- a bad crop call must never
-          // block saving the rescan itself.
-          debugPrint('finishRescan: cropNameFields threw: $e\n$st');
-        }
-      }
-
-      // No OCR, hence no fresh name guesses: null (keep the tag as-is) when an
-      // Examinee ID already exists, otherwise the existing tag plus a new ID.
+      // Name crops come from the candidate the reviewer looked at (computed
+      // once, in prepareRescanCandidate). The saved tag is never rebuilt from
+      // OCR; the only change possible is a fresh Examinee ID for a legacy
+      // sheet that has none (see [resolveRescanExaminee]).
+      final candidate = rescanCandidate;
       final refreshedExaminee = resolveRescanExaminee(
-        existingExaminee: existingExaminee,
+        existingExaminee: expectedOriginal.examinee,
         generateId: generateExamineeId,
       );
 
@@ -655,14 +772,23 @@ class AppState extends ChangeNotifier {
         rectifiedImage: rectifiedPath == null ? null : File(rectifiedPath),
         result: result,
         examinee: refreshedExaminee,
-        nameCropLastImage: nameCropLastPath == null ? null : File(nameCropLastPath),
-        nameCropFirstImage: nameCropFirstPath == null ? null : File(nameCropFirstPath),
-        nameCropMiddleImage: nameCropMiddlePath == null ? null : File(nameCropMiddlePath),
+        nameCropLastImage: candidate?.nameCropLastPath == null ? null : File(candidate!.nameCropLastPath!),
+        nameCropFirstImage: candidate?.nameCropFirstPath == null ? null : File(candidate!.nameCropFirstPath!),
+        nameCropMiddleImage: candidate?.nameCropMiddlePath == null ? null : File(candidate!.nameCropMiddlePath!),
+        expectedOriginal: expectedOriginal,
       );
       scanBatch = updated;
+      // Saved: the repository holds its own encrypted copies, so the temporary
+      // candidate files are no longer needed.
+      _deleteRescanCandidateFiles();
       rescanScanId = null;
+      rescanCandidate = null;
       resetScanProgress();
       return true;
+    } on RescanOriginalChangedException catch (e) {
+      rescanOriginalChanged = true;
+      rescanSaveError = e.message;
+      return false;
     } catch (e) {
       rescanSaveError = 'Could not save the rescan: $e';
       return false;
@@ -977,6 +1103,7 @@ class AppState extends ChangeNotifier {
 
   void resetScanProgress() {
     currentScannedPage = 0;
+    rescanCandidate = null;
     _capturePreviews.clear();
     capturedPages.clear();
     scannedResults.clear();
@@ -1147,7 +1274,11 @@ class AppState extends ChangeNotifier {
         String? nameCropLastPath;
         String? nameCropFirstPath;
         String? nameCropMiddlePath;
+        String? ocrLastNameGuess;
+        String? ocrFirstNameGuess;
+        String? ocrMiddleNameGuess;
         final nameCropSw = kOmrPerfDebug ? (Stopwatch()..start()) : null;
+        var ocrRecognizeMs = 0;
         if (template != null && nameCropDir != null) {
           try {
             final crops = await compute(
@@ -1163,14 +1294,30 @@ class AppState extends ChangeNotifier {
             nameCropLastPath = crops?.lastName;
             nameCropFirstPath = crops?.firstName;
             nameCropMiddlePath = crops?.middleName;
+            if (crops != null) {
+              // Best-effort on-device OCR (platform channel: must run on the
+              // main isolate). Never blocks saving; a failed read is null.
+              final ocrSw = kOmrPerfDebug ? (Stopwatch()..start()) : null;
+              const nameOcr = NameOcrService();
+              ocrLastNameGuess = await nameOcr.recognizeName(crops.lastName, fieldLabel: 'Last Name');
+              ocrFirstNameGuess = await nameOcr.recognizeName(crops.firstName, fieldLabel: 'First Name');
+              ocrMiddleNameGuess = await nameOcr.recognizeName(crops.middleName, fieldLabel: 'MI');
+              if (ocrSw != null) ocrRecognizeMs = ocrSw.elapsedMilliseconds;
+            }
           } catch (e, st) {
-            // Leave all three crop paths null — a bad crop call must
+            // Leave the crop/OCR results null — a bad crop or OCR call must
             // never block saving the scan itself.
-            debugPrint('persistCapturedSessionToBatch: cropNameFields threw: $e\n$st');
+            debugPrint('persistCapturedSessionToBatch: cropNameFields/OCR threw: $e\n$st');
           }
         }
         final nameCropMs = nameCropSw?.elapsedMilliseconds ?? 0;
+        // Names come from OCR where it read them (blank otherwise) and the
+        // scan always gets a generated Examinee ID; staff confirm or correct
+        // the names later via "Edit student".
         final autoExaminee = buildAutoExaminee(
+          ocrLastNameGuess: ocrLastNameGuess,
+          ocrFirstNameGuess: ocrFirstNameGuess,
+          ocrMiddleNameGuess: ocrMiddleNameGuess,
           generateId: generateExamineeId,
         );
 
@@ -1202,7 +1349,7 @@ class AppState extends ChangeNotifier {
         } finally {
           if (persistPageSw != null) {
             omrPerfLog(
-              'persist pageIndex=${i + 1} nameCrop=${nameCropMs}ms '
+              'persist pageIndex=${i + 1} nameCrop=${nameCropMs}ms ocrRecognize=${ocrRecognizeMs}ms '
               'addScan=${addScanSw?.elapsedMilliseconds ?? 0}ms '
               'total=${persistPageSw.elapsedMilliseconds}ms',
             );

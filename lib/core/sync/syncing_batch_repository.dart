@@ -222,6 +222,7 @@ class SyncingBatchRepository implements BatchRepository {
     File? nameCropLastImage,
     File? nameCropFirstImage,
     File? nameCropMiddleImage,
+    LocalScan? expectedOriginal,
   }) async {
     final batch = await local.replaceScan(
       batchId: batchId,
@@ -234,6 +235,7 @@ class SyncingBatchRepository implements BatchRepository {
       nameCropLastImage: nameCropLastImage,
       nameCropFirstImage: nameCropFirstImage,
       nameCropMiddleImage: nameCropMiddleImage,
+      expectedOriginal: expectedOriginal,
     );
     _fireEnqueue([
       _pushScan(batchId, scanId),

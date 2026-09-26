@@ -15,9 +15,13 @@ import '../../../core/omr/exam_score.dart';
 import '../../../core/omr/omr_decoder.dart';
 import '../../../core/omr/omr_scorer.dart';
 import '../../../core/omr/omr_templates.dart';
+import '../../../core/omr/rescan_comparison.dart';
 import '../../../core/routes/app_routes.dart';
 import '../../../core/state/app_state.dart';
+import '../../../core/state/rescan_candidate.dart';
 import '../../../core/utils/omr_perf_log.dart';
+import '../../../models/local_batch.dart';
+import 'rescan_comparison_screen.dart';
 
 class _AlignmentCheckRequest {
   final String imagePath;
@@ -1163,6 +1167,14 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
       if (!mounted) return;
       final decoded = await appState.previewCapturedPage(file);
       if (!mounted) return;
+      if (appState.rescanScanId != null) {
+        // A rescan never saves straight from the camera: the photo has passed
+        // the alignment and decoding checks, so hand it to a person to
+        // compare against the original sheet before anything is replaced.
+        _autoCaptureArmed = false;
+        await _reviewRescanCandidate(appState);
+        return;
+      }
       final scored = scoreOmrResult(
         decoded, appState.answerKeys[decoded.examCode],
       );
@@ -1276,6 +1288,12 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
   }
 
   Future<void> _compileData(AppState appState) async {
+    // A rescan is never saved from here: it always goes through the
+    // comparison panel, which is the only path that can replace a sheet.
+    if (appState.rescanScanId != null) {
+      await _reviewRescanCandidate(appState);
+      return;
+    }
     await appState.processCapturedPages();
     if (!mounted) return;
     if (appState.scanProcessingError != null) {
@@ -1288,34 +1306,156 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
       );
       return;
     }
-    // Content-based "same physical sheet scanned twice" check — skipped
-    // while rescanning: a rescan is *expected* to match the slot it's
-    // replacing, and the wrong-sheet-in-this-slot mistake already has its
-    // own dedicated guard in AppState.finishRescan (name-mismatch check).
-    if (appState.rescanScanId == null) {
-      final warnings = _duplicateScanWarnings(appState);
-      if (warnings.isNotEmpty) {
-        final proceed = await _showDuplicateScanDialog(warnings);
-        if (!mounted) return;
-        if (!proceed) return;
-      }
-    }
-    if (appState.rescanScanId != null) {
-      // Rescanning one existing sheet in an archived batch, not building a
-      // normal multi-sheet session -- overwrite it in place and return to
-      // wherever "Rescan" was tapped from, instead of Exam Results.
-      final ok = await appState.finishRescan();
+    // Content-based "same physical sheet scanned twice" check (not used for
+    // a rescan, which is handled above and expected to match its own slot).
+    final warnings = _duplicateScanWarnings(appState);
+    if (warnings.isNotEmpty) {
+      final proceed = await _showDuplicateScanDialog(warnings);
       if (!mounted) return;
-      if (!ok) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(appState.rescanSaveError ?? 'Could not save the rescan.')),
-        );
-        return;
+      if (!proceed) return;
+    }
+    Navigator.of(context).pushReplacementNamed(AppRoutes.examResults);
+  }
+
+  /// Compare-before-replace for a rescan: shows the stored sheet next to the
+  /// new photo and only replaces the original if a person confirms it is the
+  /// same physical sheet. Nothing is saved before that; Cancel, back and
+  /// dismissal discard the candidate and leave the original untouched, and
+  /// Retake photo discards it and returns to capture.
+  ///
+  /// The candidate was already decoded when it was captured, so the panel and
+  /// the eventual save reuse that result — nothing is decoded again here.
+  /// This is a human verification safeguard, not proof of identity.
+  Future<void> _reviewRescanCandidate(AppState appState) async {
+    final batch = appState.scanBatch;
+    final scanId = appState.rescanScanId;
+    if (batch == null || scanId == null || appState.capturedPages.isEmpty) return;
+    final repo = appState.batchRepository;
+
+    // Reading the name crops takes a moment; show that instead of a frozen
+    // camera screen.
+    final rootNavigator = Navigator.of(context, rootNavigator: true);
+    unawaited(showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const PopScope(canPop: false, child: Center(child: CircularProgressIndicator())),
+    ));
+
+    LocalScan? original;
+    RescanCandidate? candidate;
+    ImageProvider? originalSheet;
+    ImageProvider? originalLast;
+    ImageProvider? originalFirst;
+    ImageProvider? originalMiddle;
+    try {
+      // The stored sheet AS IT IS NOW — this exact record is what a later save
+      // is checked against, so a change made while comparing is caught.
+      final fresh = await repo.getBatchById(batch.id);
+      original = fresh?.scans.where((s) => s.id == scanId).firstOrNull;
+      candidate = await appState.prepareRescanCandidate();
+      if (original != null) {
+        var bytes = await repo.resolveScanImage(batch.id, original);
+        if (bytes == null) {
+          // A cloud-restored sheet whose photo hasn't been downloaded yet.
+          await appState.cloudRestoreService?.restoreImageIfMissing(
+            batchId: batch.id,
+            scan: original,
+            rectified: false,
+          );
+          bytes = await repo.resolveScanImage(batch.id, original);
+        }
+        if (bytes != null) originalSheet = ResizeImage(MemoryImage(bytes), width: 1400, allowUpscaling: false);
+        Future<ImageProvider?> crop(Future<Uint8List?> Function() load) async {
+          final b = await load();
+          return b == null ? null : MemoryImage(b);
+        }
+
+        originalLast = await crop(() => repo.resolveScanNameCropLast(batch.id, original!));
+        originalFirst = await crop(() => repo.resolveScanNameCropFirst(batch.id, original!));
+        originalMiddle = await crop(() => repo.resolveScanNameCropMiddle(batch.id, original!));
       }
+    } catch (e) {
+      debugPrint('[ExamScanning] rescan comparison prep failed: $e');
+    } finally {
+      if (mounted) rootNavigator.pop();
+    }
+    if (!mounted) return;
+
+    if (original == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('The original sheet no longer exists. Nothing was replaced.')),
+      );
+      appState.cancelRescan();
       Navigator.of(context).pop();
       return;
     }
-    Navigator.of(context).pushReplacementNamed(AppRoutes.examResults);
+    if (candidate == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not prepare the new photo for comparison. Please retake it.')),
+      );
+      appState.discardRescanCandidate();
+      return;
+    }
+
+    ImageProvider? file(String? path) => path == null ? null : FileImage(File(path));
+    final stored = original;
+    final cand = candidate;
+    final data = RescanComparisonData(
+      comparison: RescanComparison.build(
+        original: stored,
+        candidate: cand.decoded,
+        answerKey: appState.answerKeys[batch.examCode],
+      ),
+      originalExaminee: stored.examinee,
+      originalCapturedAt: stored.capturedAt,
+      originalSheet: originalSheet,
+      originalCropLast: originalLast,
+      originalCropFirst: originalFirst,
+      originalCropMiddle: originalMiddle,
+      candidateSheet: ResizeImage(FileImage(File(cand.photoPath)), width: 1400, allowUpscaling: false),
+      candidateCropLast: file(cand.nameCropLastPath),
+      candidateCropFirst: file(cand.nameCropFirstPath),
+      candidateCropMiddle: file(cand.nameCropMiddlePath),
+      ocrLastName: cand.ocrLastName,
+      ocrFirstName: cand.ocrFirstName,
+      ocrMiddleName: cand.ocrMiddleName,
+    );
+
+    final decision = await Navigator.of(context).push<RescanDecision>(
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (_) => RescanComparisonScreen(
+          data: data,
+          onConfirm: () async {
+            // Reuses the decode the capture already produced (no second decode).
+            await appState.processCapturedPages();
+            if (appState.scanProcessingError != null) {
+              return RescanConfirmOutcome.failed(
+                'Could not process the scan: ${appState.scanProcessingError}',
+              );
+            }
+            // Only reachable once the reviewer ticked the verification box.
+            final ok = await appState.finishRescan(expectedOriginal: stored, identityVerified: true);
+            if (ok) return const RescanConfirmOutcome.saved();
+            return RescanConfirmOutcome.failed(
+              appState.rescanSaveError ?? 'Could not save the rescan.',
+              canRetry: !appState.rescanOriginalChanged,
+            );
+          },
+        ),
+      ),
+    );
+    if (!mounted) return;
+    switch (decision) {
+      case RescanDecision.saved:
+        Navigator.of(context).pop(); // back to wherever Rescan was tapped
+      case RescanDecision.retake:
+        appState.discardRescanCandidate(); // stay on the camera
+      case RescanDecision.cancelled:
+      case null:
+        appState.cancelRescan();
+        Navigator.of(context).pop();
+    }
   }
 
   /// Human-readable warnings for every pair of decoded sheets that look
