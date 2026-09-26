@@ -8,6 +8,7 @@ import '../../models/omr_scan_result.dart';
 import 'fiducial_search_tuning.dart';
 import 'omr_alignment_check.dart';
 import 'omr_mesh_correction.dart';
+import 'omr_bubble_classifier.dart';
 import 'omr_templates.dart';
 import 'tat_marker_validation.dart';
 
@@ -26,7 +27,7 @@ typedef _QuadrantSearch = ({
 /// Ranked outcome of measuring every choice in one OMR item at a given
 /// (possibly zero) sampling shift -- see [OmrDecoder._measureItemAt].
 typedef _ItemMeasurement = ({
-  List<(String, ({double ringFill, double wholeFill, double centerFill, double score}))>
+  List<(String, ({double ringFill, double wholeFill, double centerFill, double score, double dark}))>
       measurements,
   String bestChoice,
   double bestFill,
@@ -161,11 +162,49 @@ class OmrDecoder {
   /// other exams retain stronger correction for uneven lighting.
   static double _claheClipLimitFor(String examCode) => switch (examCode) {
     'QTM' => 1.2,
+    // TAT's dense landscape layout packs 120 small oval T/F bubbles across
+    // many narrow columns — its bubble-to-bubble spacing is the tightest of
+    // any exam, so CLAHE noise amplification on blank paper between bubbles
+    // bleeds into neighboring fill readings more than on QTM/AT.  A clip
+    // limit between QTM's conservative 1.2 and the default 2.0 restores
+    // shadow/LED contrast without the speckle that inflates false positives.
+    'TAT' => 1.5,
     _ => 2.0,
   };
 
-  /// Odd threshold window spanning several bubbles to follow lighting gradients.
-  static const int _adaptiveThresholdBlockSize = 45;
+  /// How many bubble widths the adaptive-threshold window must span.
+  ///
+  /// An adaptive threshold compares each pixel against the mean of its own
+  /// window, so the window has to be dominated by PAPER for a mark to stand
+  /// out from it. Once the window is no wider than a bubble, a filled
+  /// bubble's centre is measured against a neighbourhood lying entirely
+  /// inside the same mark: the local mean is the mark's own darkness, the
+  /// centre fails `pixel < mean - C`, and the mark binarises as a ring with
+  /// a hole punched through it rather than a solid blob.
+  ///
+  /// Measured on the bench across TAT/QTM/AT, mean centre-fill of a shaded
+  /// bubble against this multiplier: 0.97x -> 0.67, 1.41x -> 0.86,
+  /// 1.88x -> 0.89, 2.50x -> 0.89, 3.44x -> 0.88. It climbs steeply out of
+  /// the hole, plateaus near 1.9x, and drifts back down as the window grows
+  /// too large to track lighting gradients. 2.5x sits on the plateau and is
+  /// what `guidegrade-omr-bench` has used all along (its 40pt window against
+  /// a 16pt bubble), which is the configuration every bench result and the
+  /// trained bubble classifier were produced under.
+  static const double _adaptiveThresholdBlockBubbleSpan = 2.5;
+
+  /// Odd threshold window, derived from the sheet's own bubble size.
+  ///
+  /// Previously hardcoded per exam (TAT 31px, others 45px) against a 32px
+  /// bubble — 0.97x and 1.41x respectively, i.e. TAT's window was narrower
+  /// than the bubble it had to measure. Deriving it keeps the ratio correct
+  /// if a redesigned sheet changes bubble size, instead of silently
+  /// reintroducing the hole.
+  static int _adaptiveThresholdBlockSizeFor(OmrExamTemplate template) {
+    final bubbleWidthPx = template.bubbleRadiusPt * 2 * _canonicalPxPerPt;
+    final raw = (bubbleWidthPx * _adaptiveThresholdBlockBubbleSpan).round();
+    // Adaptive thresholding requires an odd window of at least 3.
+    return raw < 3 ? 3 : (raw.isEven ? raw + 1 : raw);
+  }
 
   /// Constant subtracted from the local adaptive-threshold mean; higher
   /// values require darker pixels to count as "ink".
@@ -182,9 +221,20 @@ class OmrDecoder {
   static double _darknessFactor(double meanBrightness) =>
       ((_referenceBrightness - meanBrightness) / _maxDarknessRange).clamp(0.0, 1.0);
 
-  /// Increase contrast correction up to 2× for dark inputs.
+  /// Washout factor: 0 at reference brightness, 1 at near-saturation (250).
+  /// Captures the opposite problem from darkness — an overexposed image from
+  /// a low-end camera's aggressive auto-exposure, where pencil marks are
+  /// compressed to within a few gray levels of white paper.
+  static double _washoutFactor(double meanBrightness) =>
+      ((meanBrightness - _referenceBrightness) / 80.0).clamp(0.0, 1.0);
+
+  /// Increase contrast correction for both dark AND washed-out inputs.
+  /// Dark inputs: up to 2× base (unchanged from before).
+  /// Washed-out inputs: up to 1.5× base — a gentler boost because the image
+  /// already has high mean brightness and aggressive CLAHE on bright images
+  /// risks amplifying JPEG artifacts more than on dark ones.
   static double _adaptiveClipLimit(double base, double meanBrightness) =>
-      base * (1 + _darknessFactor(meanBrightness));
+      base * (1 + _darknessFactor(meanBrightness) + _washoutFactor(meanBrightness) * 0.5);
 
   /// Reduce the ink threshold offset up to 50% for dark inputs.
   static double _adaptiveThresholdCFor(double base, double meanBrightness) =>
@@ -194,7 +244,14 @@ class OmrDecoder {
   static const int _illumDownscaleDiv = 8;
 
   /// Target paper-brightness band after background division, preserving faint ink.
-  static const double _illumTargetLevelMin = 170;
+  /// Min lowered from 170 → 150: on washed-out low-end camera captures (auto-
+  /// exposure pushes paper to near-255), the background mean is very high, and
+  /// clamping the division target to 170 keeps the result too bright — faint
+  /// pencil marks end up only a few gray levels below paper, well within CLAHE
+  /// noise.  A target of 150 pulls the normalized page further from saturation,
+  /// giving CLAHE and adaptive thresholding more dynamic range to separate
+  /// genuinely marked bubbles from blank paper.
+  static const double _illumTargetLevelMin = 150;
   static const double _illumTargetLevelMax = 230;
 
   /// Normalize broad lighting variations before CLAHE and thresholding by dividing
@@ -222,8 +279,14 @@ class OmrDecoder {
       // Odd kernel ~1/3 of the downscaled short side: strong enough at this
       // scale to erase text and whole clusters of bubbles, so only the
       // lighting field survives into the estimate. Capped so an unusually
-      // large page can't make this needlessly slow.
-      final k = ((math.min(downW, downH) ~/ 3) | 1).clamp(11, 151);
+      // large page can't make this needlessly slow. Floor raised from 11 to
+      // 21 so that high-frequency LED panel banding (narrow bright/dark
+      // stripes across the page from PWM flicker or rolling-shutter
+      // interaction) gets averaged out rather than surviving into the
+      // background estimate — a visible stripe in `background` divides out
+      // as a complementary stripe in the result, producing a false lighting
+      // gradient that wasn't in the original capture.
+      final k = ((math.min(downW, downH) ~/ 3) | 1).clamp(21, 151);
       smallBlurred = cv.gaussianBlur(small, (k, k), 0);
 
       background =
@@ -261,7 +324,16 @@ class OmrDecoder {
       // (paper vs. ink). If it came out far too dark or bright, or collapsed
       // toward a single shade, discard it rather than hand the rest of the
       // pipeline something worse than the raw warp.
-      if (rMean < 30 || rMean > 250 || rStd < 3) {
+      //
+      // Upper bound relaxed from 250 → 253: under strong LED panel lighting
+      // (multiple ceiling LEDs in a defense/conference room) the paper is
+      // almost saturated white in the capture, which pushes the normalized
+      // mean into 245-252. Rejecting those and falling back to the raw warp
+      // loses the gradient correction that _normalizeIllumination provides,
+      // exactly when it's needed most. A mean above 253 still indicates a
+      // degenerate division (everything near 255) where thresholding will
+      // fail regardless.
+      if (rMean < 30 || rMean > 253 || rStd < 3) {
         return gray;
       }
 
@@ -279,18 +351,43 @@ class OmrDecoder {
 
   /// Minimum ink signal. Mark presence primarily uses same-row bubble differences
   /// so changes in overall lighting do not shift every item across a fixed floor.
-  static const double _blankFillFloor = 0.15;
+  /// Per-exam: TAT's small oval bubbles on washed-out low-end camera captures
+  /// (auto-exposure blows out pencil-vs-paper contrast) can score below the
+  /// standard 0.15 even when genuinely marked — lowered to 0.10 so faint marks
+  /// at least reach the presence/ambiguity checks instead of being silently
+  /// dismissed as blank.  Risk of false positives on dirty paper is mitigated
+  /// by the _markPresenceGap check that still requires the best bubble to
+  /// stand out from its row's floor.
+  static double _blankFillFloorFor(String examCode) => switch (examCode) {
+    'TAT' => 0.10,
+    _ => 0.15,
+  };
 
   /// Minimum best-to-runner-up gap for an unambiguous mark.
   /// AT/QTM use 0.10 for lighter, ring-shaped marks observed in real scans.
   static double _ambiguousMarginFor(String examCode) => switch (examCode) {
     'AT' || 'QTM' => 0.10,
+    // TAT's True/False items have only 2 choices per row — the runner-up is
+    // the *only* other bubble, so the absolute best-to-runner-up margin is
+    // structurally lower than on 4-5 choice exams where runner-up is a
+    // randomly blank neighbor.  A 0.15 flat cutoff flags too many genuinely
+    // single-marked T/F items as ambiguous; 0.08 matches the reduced
+    // headroom while still catching real double-marks.
+    'TAT' => 0.08,
     _ => 0.15,
   };
 
   /// Minimum best-to-lowest bubble gap for mark presence, including two-choice items.
   /// Lower than the ambiguity margin so faint marks can reach review.
-  static const double _markPresenceGap = 0.08;
+  /// Per-exam: TAT on washed-out captures (low-end camera auto-exposure) can
+  /// compress the entire fill range into a narrow band where even a genuinely
+  /// marked bubble barely exceeds its row's blank floor by 0.04-0.06.  A gap
+  /// of 0.05 lets those faint-but-real marks reach the ambiguity/margin checks
+  /// instead of being dismissed as blank.
+  static double _markPresenceGapFor(String examCode) => switch (examCode) {
+    'TAT' => 0.05,
+    _ => 0.08,
+  };
 
   /// A best-to-runner-up gap at least this fraction of the item's own
   /// presence gap (best-to-floor) counts as decisive even when it falls
@@ -303,7 +400,7 @@ class OmrDecoder {
   /// flagged ambiguous despite a visually unambiguous, single dark bubble.
   static const double _ambiguousRelativeMarginFloor = 0.55;
 
-  /// Presence gap must clear this multiple of [_markPresenceGap] before the
+  /// Presence gap must clear this multiple of [_markPresenceGapFor] before the
   /// relative-margin rescue above applies -- keeps genuinely faint marks
   /// (gap barely over the floor, so its ratio to the gap is unreliable)
   /// routed to ambiguous review as originally intended, rather than being
@@ -323,7 +420,14 @@ class OmrDecoder {
   /// second, independent path to the same "decisive" verdict, asking about
   /// the *other* choices instead: do any of them look like a real
   /// contender at all, regardless of how faint the winner itself is.
-  static const double _noCompetitorGapCeiling = _markPresenceGap * 0.5;
+  ///
+  /// Expressed as a fraction of the item's own per-exam presence gap
+  /// ([_markPresenceGapFor]) rather than a flat number, so that TAT's
+  /// deliberately compressed thresholds scale this ceiling down with them --
+  /// on a sheet where a *real* mark only has to clear its floor by 0.05, a
+  /// runner-up sitting 0.04 above that floor is a genuine contender, not
+  /// blank paper.
+  static const double _noCompetitorGapFraction = 0.5;
 
   /// Small local re-centering search tried only for items the flat/relative
   /// checks above still call blank or ambiguous. A single page-wide
@@ -340,6 +444,17 @@ class OmrDecoder {
   /// are of the bubble's own outer sampling half-width/height, kept well
   /// under half the template's own bubble-to-bubble spacing.
   static const List<double> _itemRecenterShiftFracs = [-0.35, -0.15, 0.0, 0.15, 0.35];
+
+  /// Wider recenter search grid used whenever mesh correction isn't in effect
+  /// (`!mesh.isActive`) — either the template prints no interior fiducials, or
+  /// it does but the mesh was rejected on this capture. Without the
+  /// triangulated mesh, the single global homography can leave center-of-page
+  /// bubbles off by more than the standard ±0.35 half-width — especially on
+  /// TAT's landscape layout where the sheet's longer horizontal span amplifies
+  /// any paper curl. The wider ±0.55 grid roughly doubles the candidates
+  /// (7×7 vs 5×5) but covers drift the narrower grid simply cannot reach, and
+  /// only ever runs for items already judged blank or ambiguous.
+  static const List<double> _itemRecenterShiftFracsWide = [-0.55, -0.35, -0.15, 0.0, 0.15, 0.35, 0.55];
 
   /// A fiducial blob must be at least this many gray levels darker than the
   /// local background to count as a real mark (not a shadow edge). Still a
@@ -1789,7 +1904,7 @@ class OmrDecoder {
                         255,
                         cv.ADAPTIVE_THRESH_GAUSSIAN_C,
                         cv.THRESH_BINARY_INV,
-                        _adaptiveThresholdBlockSize,
+                        _adaptiveThresholdBlockSizeFor(template),
                         _adaptiveThresholdCFor(_adaptiveThresholdC, warpedBrightness),
                       );
                       if (threshSw != null) {
@@ -1799,6 +1914,15 @@ class OmrDecoder {
                         final bubbleSw = _kPerfDebug ? (Stopwatch()..start()) : null;
                         final result = _readBubbles(
                           inkMap,
+                          // Darkness is measured on the illumination-
+                          // normalized gray, NOT on the CLAHE output that
+                          // feeds the ink map. The bench fits the model's
+                          // darkness weights against `normalizeIllumination`'s
+                          // result with no CLAHE applied, and CLAHE rewrites
+                          // local contrast hard enough that measuring after
+                          // it would feed the model a different statistic
+                          // than the one it was trained on.
+                          normalizedGray ?? warped,
                           template,
                           canonicalWidth,
                           canonicalHeight,
@@ -1869,6 +1993,7 @@ class OmrDecoder {
                           meshInteriorMeasuredFrac: mesh.verdict == OmrMeshVerdict.notApplicable
                               ? null
                               : mesh.toMeasuredFractions(canonicalWidth, canonicalHeight),
+                          meshVerdict: mesh.verdict.name,
                         );
                       } finally {
                         inkMap.dispose();
@@ -2777,7 +2902,7 @@ class OmrDecoder {
                           255,
                           cv.ADAPTIVE_THRESH_GAUSSIAN_C,
                           cv.THRESH_BINARY_INV,
-                          _adaptiveThresholdBlockSize,
+                          _adaptiveThresholdBlockSizeFor(template),
                           _adaptiveThresholdCFor(_adaptiveThresholdC, warpedGrayBrightness),
                         );
                         try {
@@ -4465,6 +4590,7 @@ class OmrDecoder {
   /// Equally filled choices (including all-marked rows) can read as blank.
   OmrScanResult _readBubbles(
     cv.Mat inkMap,
+    cv.Mat gray,
     OmrExamTemplate template,
     int canonicalWidth,
     int canonicalHeight,
@@ -4474,14 +4600,28 @@ class OmrDecoder {
     final bubbleSampleHalfPxX = template.bubbleRadiusPt * _canonicalPxPerPt;
     final bubbleSampleHalfPxY = template.bubbleRadiusYPt * _canonicalPxPerPt;
     final ambiguousMargin = _ambiguousMarginFor(template.examCode);
+    final blankFloor = _blankFillFloorFor(template.examCode);
+    final presenceGap = _markPresenceGapFor(template.examCode);
     final bubbleDebug = _kBubbleDebug;
+    // Use the wider recenter grid when mesh correction couldn't run (no
+    // interior fiducials on this template) — the single global homography
+    // leaves more local drift to compensate for.
+    final recenterGrid = mesh.isActive
+        ? _itemRecenterShiftFracs
+        : _itemRecenterShiftFracsWide;
     final items = <OmrItemResult>[];
+    // Kept alongside [items] so the classifier can re-decide every item once
+    // the whole sheet has been measured -- its sheet-relative feature needs a
+    // median over every bubble, which is only known after the loop.
+    final classifierBubbles = <List<BubbleScores>>[];
+    final classifierItems = <OmrItemResult>[];
     for (final section in template.sections) {
       for (final itemNumber in section.items.keys.toList()..sort()) {
         final choices = section.items[itemNumber]!;
 
         var measured = _measureItemAt(
           inkMap,
+          gray,
           choices,
           bubbleSampleHalfPxX,
           bubbleSampleHalfPxY,
@@ -4491,10 +4631,10 @@ class OmrDecoder {
           0,
           mesh,
         );
-        var hasSomething = measured.bestFill >= _blankFillFloor &&
-            (measured.bestFill - measured.floorReference) >= _markPresenceGap;
+        var hasSomething = measured.bestFill >= blankFloor &&
+            (measured.bestFill - measured.floorReference) >= presenceGap;
         var isAmbiguous = hasSomething &&
-            _isAmbiguousMargin(measured, ambiguousMargin);
+            _isAmbiguousMargin(measured, ambiguousMargin, presenceGap);
         var recentered = false;
 
         // Only spend the extra search on items the flat/relative checks
@@ -4502,11 +4642,12 @@ class OmrDecoder {
         // confidently marked item is left untouched, so this can only
         // rescue an uncertain result, never destabilize a good one.
         if (!hasSomething || isAmbiguous) {
-          for (final dxFrac in _itemRecenterShiftFracs) {
-            for (final dyFrac in _itemRecenterShiftFracs) {
+          for (final dxFrac in recenterGrid) {
+            for (final dyFrac in recenterGrid) {
               if (dxFrac == 0 && dyFrac == 0) continue;
               final candidate = _measureItemAt(
                 inkMap,
+                gray,
                 choices,
                 bubbleSampleHalfPxX,
                 bubbleSampleHalfPxY,
@@ -4525,10 +4666,10 @@ class OmrDecoder {
             }
           }
           if (recentered) {
-            hasSomething = measured.bestFill >= _blankFillFloor &&
-                (measured.bestFill - measured.floorReference) >= _markPresenceGap;
+            hasSomething = measured.bestFill >= blankFloor &&
+                (measured.bestFill - measured.floorReference) >= presenceGap;
             isAmbiguous = hasSomething &&
-                _isAmbiguousMargin(measured, ambiguousMargin);
+                _isAmbiguousMargin(measured, ambiguousMargin, presenceGap);
           }
         }
 
@@ -4546,6 +4687,26 @@ class OmrDecoder {
             isAmbiguous: isAmbiguous,
           ),
         );
+        if (OmrBubbleClassifier.enabled) {
+          classifierBubbles.add(<BubbleScores>[
+            for (final (choice, m) in measured.measurements)
+              BubbleScores(
+                choice: choice,
+                ring: m.ringFill,
+                whole: m.wholeFill,
+                center: m.centerFill,
+                score: m.score,
+                dark: m.dark,
+              ),
+          ]);
+          classifierItems.add(
+            OmrItemResult(
+              sectionName: section.name,
+              itemNumber: itemNumber,
+              markedChoice: null,
+            ),
+          );
+        }
         if (bubbleDebug) {
           final debugResult = markedChoice ?? (isAmbiguous ? 'AMBIGUOUS' : 'BLANK');
           final buf = StringBuffer('Q$itemNumber\n');
@@ -4570,6 +4731,23 @@ class OmrDecoder {
         }
       }
     }
+    if (OmrBubbleClassifier.enabled &&
+        classifierBubbles.length == items.length &&
+        classifierBubbles.isNotEmpty) {
+      final (medianScore, medianDark) =
+          OmrBubbleClassifier.sheetMedians(classifierBubbles);
+      for (var i = 0; i < classifierBubbles.length; i++) {
+        final verdict =
+            OmrBubbleClassifier.classify(
+                classifierBubbles[i], medianScore, medianDark);
+        items[i] = OmrItemResult(
+          sectionName: classifierItems[i].sectionName,
+          itemNumber: classifierItems[i].itemNumber,
+          markedChoice: verdict.markedChoice,
+          isAmbiguous: verdict.isAmbiguous,
+        );
+      }
+    }
     return OmrScanResult(examCode: template.examCode, items: items);
   }
 
@@ -4577,18 +4755,29 @@ class OmrDecoder {
   /// item decisively marked -- either by the flat per-exam [ambiguousMargin],
   /// by (see [_ambiguousRelativeMarginFloor]) falling well short of the
   /// item's own presence gap despite a comfortably strong signal, or (see
-  /// [_noCompetitorGapCeiling]) because there simply isn't a real second
+  /// [_noCompetitorGapFraction]) because there simply isn't a real second
   /// choice regardless of how faint the winner itself is.
-  bool _isAmbiguousMargin(_ItemMeasurement measured, double ambiguousMargin) {
+  ///
+  /// [markPresenceGap] is the item's per-exam presence gap
+  /// ([_markPresenceGapFor]), which both of those rescue paths scale
+  /// against so that an exam with deliberately compressed thresholds (TAT)
+  /// keeps the same relationships rather than being judged on AT/QTM's
+  /// wider absolute numbers.
+  bool _isAmbiguousMargin(
+    _ItemMeasurement measured,
+    double ambiguousMargin,
+    double markPresenceGap,
+  ) {
     final margin = measured.bestFill - measured.runnerUpFill;
     if (margin >= ambiguousMargin) return false;
     final presenceGap = measured.bestFill - measured.floorReference;
     final strongPresence =
-        presenceGap >= _markPresenceGap * _strongPresenceGapMultiplier;
+        presenceGap >= markPresenceGap * _strongPresenceGapMultiplier;
     final decisiveRelativeToOwnSignal =
         strongPresence && (margin / presenceGap) >= _ambiguousRelativeMarginFloor;
     final runnerUpGapFromFloor = measured.runnerUpFill - measured.floorReference;
-    final noRealCompetitor = runnerUpGapFromFloor < _noCompetitorGapCeiling;
+    final noRealCompetitor =
+        runnerUpGapFromFloor < markPresenceGap * _noCompetitorGapFraction;
     return !(decisiveRelativeToOwnSignal || noRealCompetitor);
   }
 
@@ -4598,6 +4787,7 @@ class OmrDecoder {
   /// fields [_readBubbles] and its recenter search need.
   _ItemMeasurement _measureItemAt(
     cv.Mat inkMap,
+    cv.Mat gray,
     List<BubblePos> choices,
     double halfPxX,
     double halfPxY,
@@ -4613,6 +4803,7 @@ class OmrDecoder {
           bubble.choice,
           _measureBubble(
             inkMap,
+            gray,
             bubble,
             halfPxX,
             halfPxY,
@@ -4644,9 +4835,10 @@ class OmrDecoder {
   /// The ring excludes the printed choice letter; center ink retains pencil evidence.
   /// These signals overlap, so the blend reweights center ink rather than adding
   /// independent votes. Separate X/Y radii match flattened printed bubbles.
-  ({double ringFill, double wholeFill, double centerFill, double score})
+  ({double ringFill, double wholeFill, double centerFill, double score, double dark})
       _measureBubble(
     cv.Mat inkMap,
+    cv.Mat gray,
     BubblePos bubble,
     double halfPxX,
     double halfPxY,
@@ -4698,12 +4890,106 @@ class OmrDecoder {
       0.55 * ringFill + 0.30 * outerFill + 0.15 * innerFill,
     );
 
+    final dark = _measureDarkness(
+      gray, cx, cy, halfPxX, halfPxY, canonicalWidth, canonicalHeight,
+    );
+
     return (
       ringFill: ringFill,
       wholeFill: outerFill,
       centerFill: innerFill,
       score: score,
+      dark: dark,
     );
+  }
+
+  /// Mean gray over a box, as a 0-255 level. Null when the box is degenerate.
+  double? _boxMeanGray(
+    cv.Mat gray,
+    double cx,
+    double cy,
+    double halfPxX,
+    double halfPxY,
+    int canonicalWidth,
+    int canonicalHeight,
+  ) {
+    final left = (cx - halfPxX).clamp(0, canonicalWidth - 1).round();
+    final top = (cy - halfPxY).clamp(0, canonicalHeight - 1).round();
+    final right = (cx + halfPxX).clamp(left + 1, canonicalWidth).round();
+    final bottom = (cy + halfPxY).clamp(top + 1, canonicalHeight).round();
+    if (right <= left || bottom <= top) return null;
+
+    final roi = gray.region(cv.Rect(left, top, right - left, bottom - top));
+    try {
+      final mean = roi.mean();
+      try {
+        return mean.val1;
+      } finally {
+        mean.dispose();
+      }
+    } finally {
+      roi.dispose();
+    }
+  }
+
+  /// How much darker a bubble's interior is than the paper immediately around
+  /// it, as a 0-1 fraction of that paper's brightness.
+  ///
+  /// Measured on the GRAY image rather than the binarised ink map, because
+  /// binarising throws away magnitude and magnitude is the entire signal for
+  /// a faint mark: a light pencil stroke is a 10-15 level shift that may
+  /// never cross the adaptive threshold at all, and worse, the local mean
+  /// that threshold uses is itself dragged down by the very mark it should
+  /// be detecting.
+  ///
+  /// Deliberately relative to a local paper reading rather than absolute:
+  /// across real captures a BLANK bubble's absolute fill ranged 0.18-0.46
+  /// with exposure, so one sheet's blanks read darker than another's marks.
+  ///
+  /// Geometry mirrors `guidegrade-omr-bench`'s `Omr::measureDarkness`
+  /// EXACTLY -- inner box at 0.62 of the bubble radius, paper ring between
+  /// 2.2x and 1.0x -- because the model weights that consume this were fitted
+  /// against that definition. Changing either constant here silently
+  /// invalidates them.
+  double _measureDarkness(
+    cv.Mat gray,
+    double cx,
+    double cy,
+    double halfPxX,
+    double halfPxY,
+    int canonicalWidth,
+    int canonicalHeight,
+  ) {
+    final inner = _boxMeanGray(
+      gray, cx, cy, halfPxX * 0.62, halfPxY * 0.62,
+      canonicalWidth, canonicalHeight,
+    );
+    if (inner == null) return 0.0;
+
+    // Local paper: the ring between a 2.2x box and the bubble itself, which
+    // on these layouts is the gap between neighbouring bubbles. Taken as the
+    // difference of two box means weighted by their areas, since a ring isn't
+    // a rectangle.
+    final outerHalfX = halfPxX * 2.2;
+    final outerHalfY = halfPxY * 2.2;
+    final outer = _boxMeanGray(
+      gray, cx, cy, outerHalfX, outerHalfY, canonicalWidth, canonicalHeight,
+    );
+    final bubble = _boxMeanGray(
+      gray, cx, cy, halfPxX, halfPxY, canonicalWidth, canonicalHeight,
+    );
+    if (outer == null || bubble == null) return 0.0;
+
+    final outerArea = outerHalfX * outerHalfY * 4;
+    final bubbleArea = halfPxX * halfPxY * 4;
+    final ringArea = outerArea - bubbleArea;
+    if (ringArea <= 0) return 0.0;
+
+    final paper = ((outer * outerArea) - (bubble * bubbleArea)) / ringArea;
+    if (paper < 1.0) return 0.0;
+
+    final dark = (paper - inner) / paper;
+    return dark < 0.0 ? 0.0 : (dark > 1.0 ? 1.0 : dark);
   }
 
   double _squareFillFraction(

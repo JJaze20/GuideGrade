@@ -35,12 +35,21 @@ class ScoredResult {
   final String? templateVersion;
   final Map<String, (double, double)>? meshInteriorMeasuredFrac;
 
+  /// Carried through from [OmrScanResult.meshVerdict] so a viewer can warn
+  /// that this sheet's geometry was never trustworthy — see
+  /// [OmrScanResult.geometryWarning].
+  final String? meshVerdict;
+
   const ScoredResult({
     required this.examCode,
     required this.items,
     this.templateVersion,
     this.meshInteriorMeasuredFrac,
+    this.meshVerdict,
   });
+
+  /// The retake hint for this scan's geometry, or null when it is sound.
+  String? get geometryWarning => geometryWarningFor(meshVerdict);
 
   int get rawScore => items.where((i) => i.isCorrect == true).length;
 
@@ -70,5 +79,6 @@ ScoredResult scoreOmrResult(OmrScanResult result, AnswerKey? answerKey) {
     items: items,
     templateVersion: result.templateVersion,
     meshInteriorMeasuredFrac: result.meshInteriorMeasuredFrac,
+    meshVerdict: result.meshVerdict,
   );
 }

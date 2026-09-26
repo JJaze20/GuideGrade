@@ -57,14 +57,25 @@ class _DebugVizRequest {
   final OmrExamTemplate template;
   final String outputDir;
   final int pageIndex;
-  const _DebugVizRequest(this.imagePath, this.template, this.outputDir, this.pageIndex);
+
+  /// Whether this pass should ALSO emit the verbose per-contour/per-bubble
+  /// log. False writes the stage images alone, which is all the "How it was
+  /// read" viewer needs.
+  final bool verboseLogging;
+  const _DebugVizRequest(this.imagePath, this.template, this.outputDir, this.pageIndex,
+      {this.verboseLogging = false});
 }
 
 void _saveDebugVisualization(_DebugVizRequest request) {
   // Only ever called (see processCapturedPages) when diagnostics are on,
   // but set explicitly anyway rather than assuming that -- this isolate
   // has no memory of what the calling isolate's flag was.
-  OmrDecoder.setDiagnosticsEnabled(true);
+  // Only the LOGGING follows this flag. saveDebugVisualization's stage
+  // images are written unconditionally -- it contains no reference to the
+  // verbose switches -- so the viewer works without paying for thousands of
+  // synchronous print() calls per sheet, which is what made dim-light
+  // scanning crawl.
+  OmrDecoder.setDiagnosticsEnabled(request.verboseLogging);
   const OmrDecoder().saveDebugVisualization(request.imagePath, request.template, request.outputDir, request.pageIndex);
 }
 
@@ -871,6 +882,29 @@ class AppState extends ChangeNotifier {
   /// flipping this (debug builds only — see that field's doc comment).
   bool diagnosticsEnabled = false;
 
+  /// Whether to write [lastDebugImagesDir]'s per-stage images, WITHOUT the
+  /// verbose decode logging that [diagnosticsEnabled] also turns on.
+  ///
+  /// Split from [diagnosticsEnabled] because the two have very different
+  /// costs and only one of them is what staff actually want to look at. The
+  /// verbose side flips [OmrDecoder.setDiagnosticsEnabled], which re-enables
+  /// thousands of synchronous `print()` calls per sheet -- that is what made
+  /// scanning crawl in dim light, where the expensive full-quadrant fiducial
+  /// fallback runs. The images are one extra decode per page, paid once,
+  /// after the real decode, and are the only part the "How it was read"
+  /// viewer needs.
+  ///
+  /// ON by default while scan accuracy is still being worked on, so every
+  /// scan can be inspected afterwards without anyone having to predict which
+  /// sheet would be worth looking at -- the sheet that reads badly is
+  /// exactly the one nobody thought to enable this for. Reachable in a
+  /// release build, unlike [diagnosticsEnabled], since the people reviewing
+  /// the reads are running release builds.
+  ///
+  /// Costs one extra decode per page. Flip back to false once the accuracy
+  /// work is finished and this stops earning that.
+  bool debugImagesEnabled = true;
+
   /// Tells [AppLockGate] to ignore an `AppLifecycleState.resumed` event
   /// instead of re-locking, for as long as this is true. Set by a screen
   /// that knowingly causes spurious resumes of its own doing (see
@@ -1154,7 +1188,18 @@ class AppState extends ChangeNotifier {
     // Ordinary scanning skips debug-image generation entirely -- it isn't
     // just gated at the write site below, the directory is never even
     // prepared. See diagnosticsEnabled's doc comment.
-    final debugDir = diagnosticsEnabled ? await _prepareDebugImagesDir() : null;
+    //
+    // Each run gets its own subfolder. The decoder names its output by page
+    // slot (`sheet1_inkmap.jpg` and so on), so a shared folder meant run two
+    // silently inherited run one's images for any stage it didn't overwrite
+    // -- a decode that bailed early wrote only sheet1_FAILED.jpg and left the
+    // previous session's ink map sitting there to be shown as if it were
+    // this sheet's. Per-run folders make that impossible, and keep the older
+    // runs around to compare against instead of deleting them.
+    final debugDir = (diagnosticsEnabled || debugImagesEnabled)
+        ? await _prepareDebugImagesDir(
+            runSubfolder: 'run_${DateTime.now().millisecondsSinceEpoch}')
+        : null;
     lastDebugImagesDir = debugDir;
     final rectifiedDir = await _prepareRectifiedImagesDir();
 
@@ -1193,7 +1238,9 @@ class AppState extends ChangeNotifier {
       // scanning.
       if (debugDir != null) {
         try {
-          await compute(_saveDebugVisualization, _DebugVizRequest(page.path, template, debugDir, pageIndex));
+          await compute(_saveDebugVisualization,
+              _DebugVizRequest(page.path, template, debugDir, pageIndex,
+                  verboseLogging: diagnosticsEnabled));
         } catch (_) {
           // Diagnostic-only; never let a debug-image failure block real results.
         }
@@ -1592,11 +1639,18 @@ class AppState extends ChangeNotifier {
   /// reaches [processCapturedPages] at all.
   Future<String?> prepareDebugImagesDir() => _prepareDebugImagesDir();
 
-  Future<String?> _prepareDebugImagesDir() async {
+  /// [runSubfolder] isolates one processing run's images from every other
+  /// run's — see [processCapturedPages], which passes one. Omitted for the
+  /// rejected-capture snapshot, which does its own `rejected/` nesting.
+  Future<String?> _prepareDebugImagesDir({String? runSubfolder}) async {
     try {
       final base = await getExternalStorageDirectory();
       if (base == null) return null;
-      final dir = Directory('${base.path}/omr_debug');
+      final dir = Directory(
+        runSubfolder == null
+            ? '${base.path}/omr_debug'
+            : '${base.path}/omr_debug/$runSubfolder',
+      );
       if (!dir.existsSync()) dir.createSync(recursive: true);
       return dir.path;
     } catch (_) {
