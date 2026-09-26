@@ -1475,6 +1475,12 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
       ocrLastName: cand.ocrLastName,
       ocrFirstName: cand.ocrFirstName,
       ocrMiddleName: cand.ocrMiddleName,
+      ocrSuggestionWillBeSaved: rescanWillFillNamesFromOcr(
+        existing: stored.examinee,
+        ocrLastName: cand.ocrLastName,
+        ocrFirstName: cand.ocrFirstName,
+        ocrMiddleName: cand.ocrMiddleName,
+      ),
     );
 
     final decision = await Navigator.of(context).push<RescanDecision>(

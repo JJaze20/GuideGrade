@@ -203,19 +203,22 @@ ExamineeInfo buildAutoExaminee({
 /// sheet's `examinee` (contract: `null` means "keep the existing tag
 /// exactly as-is" — see [BatchRepository.replaceScan]).
 ///
-///  * No generated ID yet on [existingExaminee] (a legacy scan predating
-///    this feature, or `existingExaminee == null`): always returns a fresh
-///    [ExamineeInfo] carrying a newly [generateId]d Examinee ID — a rescan
-///    must never leave a record permanently id-less — refreshing names
-///    from this pass's OCR where available and otherwise falling back to
-///    whatever [existingExaminee] already had.
-///  * An existing generated ID is already present and the tag is not yet
-///    fully complete (see [ExamineeInfo.isComplete]) and this pass's OCR
-///    produced at least one fresh guess: returns a refreshed name using
-///    the SAME existing Examinee ID (never a new one merely because of a
-///    rescan).
-///  * Otherwise (a fully-tagged existing record, or no fresh OCR to
-///    refresh with): returns `null` — the existing tag is left untouched.
+/// OCR only ever FILLS BLANKS. A name field a person has already typed is
+/// never replaced by an OCR guess, and a field OCR could not read is never
+/// blanked; every other detail on the record (birth date, age, school, the
+/// Examinee ID) is carried over untouched.
+///
+///  * No Examinee ID yet on [existingExaminee] (a legacy scan predating
+///    that feature, or `existingExaminee == null`): always returns a record
+///    carrying a newly [generateId]d ID — a rescan must never leave a
+///    record permanently id-less — with any blank name field filled from
+///    this pass's OCR.
+///  * An ID is present but the tag is not yet complete (see
+///    [ExamineeInfo.isComplete]) and OCR read at least one field that is
+///    still blank: returns the same record (SAME ID, never a new one) with
+///    those blanks filled.
+///  * Otherwise — a complete tag, no fresh OCR, or OCR that would add
+///    nothing new — returns `null`: the existing tag is left untouched.
 @visibleForTesting
 ExamineeInfo? resolveRescanExaminee({
   required ExamineeInfo? existingExaminee,
@@ -224,29 +227,51 @@ ExamineeInfo? resolveRescanExaminee({
   String? ocrMiddleNameGuess,
   required String Function() generateId,
 }) {
-  final hasId = existingExaminee != null && existingExaminee.examineeNumber.trim().isNotEmpty;
-  final hasFreshOcr =
-      ocrLastNameGuess != null || ocrFirstNameGuess != null || ocrMiddleNameGuess != null;
-
-  if (!hasId) {
-    return ExamineeInfo(
-      lastName: ocrLastNameGuess ?? existingExaminee?.lastName ?? '',
-      firstName: ocrFirstNameGuess ?? existingExaminee?.firstName ?? '',
-      middleName: ocrMiddleNameGuess ?? existingExaminee?.middleName ?? '',
-      examineeNumber: generateId(),
-    );
+  final base = existingExaminee ?? const ExamineeInfo(firstName: '', lastName: '', examineeNumber: '');
+  String fill(String current, String? ocr) {
+    if (current.trim().isNotEmpty) return current;
+    final guess = ocr?.trim() ?? '';
+    return guess.isEmpty ? current : guess;
   }
 
-  if (!existingExaminee.isComplete && hasFreshOcr) {
-    return ExamineeInfo(
-      lastName: ocrLastNameGuess ?? '',
-      firstName: ocrFirstNameGuess ?? '',
-      middleName: ocrMiddleNameGuess ?? '',
-      examineeNumber: existingExaminee.examineeNumber,
-    );
-  }
+  final filled = base.copyWith(
+    lastName: fill(base.lastName, ocrLastNameGuess),
+    firstName: fill(base.firstName, ocrFirstNameGuess),
+    middleName: fill(base.middleName, ocrMiddleNameGuess),
+  );
+
+  final hasId = base.examineeNumber.trim().isNotEmpty;
+  if (!hasId) return filled.copyWith(examineeNumber: generateId());
+
+  final addedSomething = filled.lastName != base.lastName ||
+      filled.firstName != base.firstName ||
+      filled.middleName != base.middleName;
+  if (!base.isComplete && addedSomething) return filled;
 
   return null;
+}
+
+/// Whether confirming a rescan would write OCR-read names into [existing]'s
+/// blank name fields — asked by the comparison panel so what it announces can
+/// never differ from what [AppState.finishRescan] saves (both go through
+/// [resolveRescanExaminee]).
+bool rescanWillFillNamesFromOcr({
+  required ExamineeInfo? existing,
+  String? ocrLastName,
+  String? ocrFirstName,
+  String? ocrMiddleName,
+}) {
+  final resolved = resolveRescanExaminee(
+    existingExaminee: existing,
+    ocrLastNameGuess: ocrLastName,
+    ocrFirstNameGuess: ocrFirstName,
+    ocrMiddleNameGuess: ocrMiddleName,
+    generateId: () => '',
+  );
+  if (resolved == null) return false;
+  return resolved.lastName != (existing?.lastName ?? '') ||
+      resolved.firstName != (existing?.firstName ?? '') ||
+      resolved.middleName != (existing?.middleName ?? '');
 }
 
 /// A lightweight in-memory app state shared across screens via
@@ -710,11 +735,13 @@ class AppState extends ChangeNotifier {
   /// changed or been deleted since, the repository refuses the replacement
   /// ([RescanOriginalChangedException]) and [rescanOriginalChanged] is set.
   ///
-  /// What is kept: the sheet's id and position, its student tag (names and
-  /// Examinee ID — OCR never overwrites them; a legacy sheet with no ID is
-  /// given one), and its original date (a rescan never moves it — the
-  /// replacement time is recorded in [LocalScan.rescannedAt]). What is
-  /// replaced: the photo, decode, score and name crops. Manual corrections
+  /// What is kept: the sheet's id and position, its Examinee ID (never
+  /// changed; a legacy sheet with no ID is given one), every name a person has
+  /// already entered, and its original date (a rescan never moves it — the
+  /// replacement time is recorded in [LocalScan.rescannedAt]). OCR of the new
+  /// photo only fills BLANK name fields on a sheet with no confirmed name yet
+  /// (see [resolveRescanExaminee]); it never overwrites or blanks anything.
+  /// What is replaced: the photo, decode, score and name crops. Manual corrections
   /// stay in the history but, being on the old capture, stop applying — the
   /// comparison panel shows the score this produces.
   ///
@@ -765,13 +792,16 @@ class AppState extends ChangeNotifier {
       );
       final rectifiedPath = rectifiedImagePaths.isNotEmpty ? rectifiedImagePaths.last : null;
 
-      // Name crops come from the candidate the reviewer looked at (computed
-      // once, in prepareRescanCandidate). The saved tag is never rebuilt from
-      // OCR; the only change possible is a fresh Examinee ID for a legacy
-      // sheet that has none (see [resolveRescanExaminee]).
+      // Name crops and the OCR read of them come from the candidate the
+      // reviewer looked at (computed once, in prepareRescanCandidate). OCR only
+      // fills blank name fields on a sheet with no confirmed name; anything a
+      // person already entered is kept (see [resolveRescanExaminee]).
       final candidate = rescanCandidate;
       final refreshedExaminee = resolveRescanExaminee(
         existingExaminee: expectedOriginal.examinee,
+        ocrLastNameGuess: candidate?.ocrLastName,
+        ocrFirstNameGuess: candidate?.ocrFirstName,
+        ocrMiddleNameGuess: candidate?.ocrMiddleName,
         generateId: generateExamineeId,
       );
 

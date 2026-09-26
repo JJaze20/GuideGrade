@@ -24,8 +24,9 @@ class RescanCandidate {
   final String? nameCropMiddlePath;
 
   /// What on-device OCR made of the new photo's name crops. UNVERIFIED and
-  /// advisory: shown next to the saved identity, never saved by a rescan and
-  /// never used to accept or reject it.
+  /// advisory: shown next to the saved identity. It is saved only into blank
+  /// name fields of a sheet with no confirmed name (see resolveRescanExaminee),
+  /// and is never used to accept or reject the rescan.
   final String? ocrLastName;
   final String? ocrFirstName;
   final String? ocrMiddleName;

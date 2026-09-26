@@ -176,7 +176,7 @@ void main() {
   });
 
   group('identity and date are preserved', () {
-    test('the saved name and Examinee ID are not rebuilt from OCR', () async {
+    test('a sheet that already has a confirmed name keeps it: OCR never replaces it', () async {
       stage(ocrLast: 'TotallyDifferent', ocrFirst: 'Person');
 
       await app.finishRescan(expectedOriginal: stored, identityVerified: true);
@@ -185,7 +185,58 @@ void main() {
       expect(repo.calls.single.examinee, isNull);
     });
 
-    test('a legacy sheet with no Examinee ID gets one, keeping its names — never OCR names', () async {
+    test('an UNNAMED sheet gets the name OCR read from the rescan, with its Examinee ID unchanged', () async {
+      stored = _stored(examinee: const ExamineeInfo(firstName: '', lastName: '', examineeNumber: 'EX-42'));
+      repo = _Repo(_batch(stored));
+      app = AppState(batchRepository: repo)..answerKeys['AT'] = _key;
+      stage(ocrLast: 'Reyes', ocrFirst: 'Ben');
+
+      final ok = await app.finishRescan(expectedOriginal: stored, identityVerified: true);
+
+      expect(ok, isTrue);
+      final e = repo.calls.single.examinee!;
+      expect(e.lastName, 'Reyes');
+      expect(e.firstName, 'Ben');
+      expect(e.examineeNumber, 'EX-42', reason: 'the id is never replaced by a rescan');
+    });
+
+    test('a partly typed name keeps what was typed and only the blank field is filled', () async {
+      stored = _stored(examinee: const ExamineeInfo(firstName: 'Ana', lastName: '', examineeNumber: 'EX-42'));
+      repo = _Repo(_batch(stored));
+      app = AppState(batchRepository: repo)..answerKeys['AT'] = _key;
+      stage(ocrLast: 'Reyes', ocrFirst: 'SomethingElse');
+
+      await app.finishRescan(expectedOriginal: stored, identityVerified: true);
+
+      final e = repo.calls.single.examinee!;
+      expect(e.firstName, 'Ana', reason: 'typed by a person: never overwritten by OCR');
+      expect(e.lastName, 'Reyes');
+    });
+
+    test('an unnamed sheet where OCR read nothing is left exactly as it was', () async {
+      stored = _stored(examinee: const ExamineeInfo(firstName: '', lastName: '', examineeNumber: 'EX-42'));
+      repo = _Repo(_batch(stored));
+      app = AppState(batchRepository: repo)..answerKeys['AT'] = _key;
+      stage(); // no OCR guesses
+
+      await app.finishRescan(expectedOriginal: stored, identityVerified: true);
+
+      expect(repo.calls.single.examinee, isNull);
+    });
+
+    test('OCR names are saved only on confirmation — never while the comparison is open or cancelled', () async {
+      stored = _stored(examinee: const ExamineeInfo(firstName: '', lastName: '', examineeNumber: 'EX-42'));
+      repo = _Repo(_batch(stored));
+      app = AppState(batchRepository: repo)..answerKeys['AT'] = _key;
+      stage(ocrLast: 'Reyes', ocrFirst: 'Ben');
+
+      expect(repo.calls, isEmpty, reason: 'staging the candidate (with its OCR read) writes nothing');
+      app.cancelRescan();
+      expect(repo.calls, isEmpty);
+      expect(stored.examinee!.lastName, '', reason: 'the stored record is untouched');
+    });
+
+    test('a legacy sheet with no Examinee ID gets one, keeping its typed names (OCR only fills blanks)', () async {
       stored = _stored(examinee: const ExamineeInfo(firstName: 'Ana', lastName: 'Cruz', examineeNumber: ''));
       repo = _Repo(_batch(stored));
       app = AppState(batchRepository: repo)..answerKeys['AT'] = _key;

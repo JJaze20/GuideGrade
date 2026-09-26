@@ -105,6 +105,7 @@ class _ScannedImageViewerScreenState extends State<ScannedImageViewerScreen> {
   Uint8List? get rectifiedImageBytes => widget.rectifiedImageBytes;
   OmrExamTemplate? get template => widget.template;
   String? get scanTemplateVersion => widget.scanTemplateVersion;
+  String? get geometryWarning => widget.geometryWarning;
   ScanEditing? get editing => widget.editing;
 
   /// Items as they read NOW: recomputed from the detected answers plus this

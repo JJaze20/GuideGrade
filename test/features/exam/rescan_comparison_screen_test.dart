@@ -54,6 +54,7 @@ RescanComparisonData _data({
   bool candidateCrops = true,
   String? ocrLast = 'Reyes',
   String? ocrFirst = 'Ben',
+  bool ocrWillBeSaved = false,
 }) =>
     RescanComparisonData(
       comparison: _comparison(),
@@ -72,6 +73,7 @@ RescanComparisonData _data({
       candidateCropFirst: candidateCrops ? _img : null,
       ocrLastName: ocrLast,
       ocrFirstName: ocrFirst,
+      ocrSuggestionWillBeSaved: ocrWillBeSaved,
     );
 
 void main() {
@@ -153,6 +155,22 @@ void main() {
       }
       expect(find.textContaining('Blank'), findsWidgets);
       expect(find.textContaining('Multiple marks'), findsWidgets);
+    });
+
+    testWidgets('an already-named sheet says the OCR guess will NOT be saved', (tester) async {
+      await open(tester, onConfirm: () async => const RescanConfirmOutcome.saved());
+      final note = tester.widget<Text>(key('rescan-ocr-note'));
+      expect(note.data, contains('will not be saved'));
+      expect(note.data, isNot(contains('will be saved into')));
+    });
+
+    testWidgets('an unnamed sheet announces that confirming saves the OCR name into blank fields only', (tester) async {
+      await open(tester, data: _data(ocrWillBeSaved: true), onConfirm: () async => const RescanConfirmOutcome.saved());
+      final note = tester.widget<Text>(key('rescan-ocr-note'));
+      expect(note.data, contains('will be saved into the blank name fields only'));
+      expect(note.data, contains('Edit student'));
+      // Still clearly labelled as an unverified guess.
+      expect(find.descendant(of: key('rescan-ocr-suggestion'), matching: find.textContaining('unverified')), findsOneWidget);
     });
 
     testWidgets('a scanner reminder says answers/names are advisory and nothing is saved yet', (tester) async {

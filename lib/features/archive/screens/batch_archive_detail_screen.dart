@@ -11,6 +11,7 @@ import '../../../core/routes/app_routes.dart';
 import '../../../core/services/batch_repository.dart';
 import '../../../core/state/app_state.dart';
 import '../../../core/sync/cloud_restore_service.dart';
+import '../../../core/sync/sync_failure_hint.dart';
 import '../../../core/sync/sync_job.dart';
 import '../../../core/sync/sync_manager.dart';
 import '../../../models/local_batch.dart';
@@ -392,6 +393,12 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
             if (pending > 0) '$pending pending',
           ];
           statusText = parts.join(' · ');
+          // Say WHY: the distinct error codes the failed jobs recorded, with
+          // what each means, so a stuck batch can be diagnosed from the phone.
+          final reasons = summarizeSyncFailures(
+            jobs.where((j) => j.status == SyncJobStatus.failedPermanent),
+          );
+          if (reasons.isNotEmpty) statusText = '$statusText\n${reasons.join('\n')}';
           statusColor = const Color(0xFF991B1B);
         } else {
           statusText = '$pending item${pending == 1 ? '' : 's'} pending sync';

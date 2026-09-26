@@ -56,6 +56,11 @@ class RescanComparisonData {
   final String? ocrFirstName;
   final String? ocrMiddleName;
 
+  /// Whether confirming will save the OCR suggestion into this sheet's blank
+  /// name fields (true only when the sheet has no confirmed name yet). The
+  /// panel says so either way, so nothing is written without being announced.
+  final bool ocrSuggestionWillBeSaved;
+
   const RescanComparisonData({
     required this.comparison,
     required this.originalExaminee,
@@ -71,6 +76,7 @@ class RescanComparisonData {
     this.ocrLastName,
     this.ocrFirstName,
     this.ocrMiddleName,
+    this.ocrSuggestionWillBeSaved = false,
   });
 
   /// What is missing for a person to compare the two photos, or empty when
@@ -332,9 +338,15 @@ class _RescanComparisonScreenState extends State<RescanComparisonScreen> {
                 style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _ink),
               ),
               const SizedBox(height: 2),
-              const Text(
-                'A machine guess at the handwriting. It is not the saved name and is never saved by a rescan.',
-                style: TextStyle(fontSize: 10.5, color: _muted),
+              Text(
+                key: const ValueKey('rescan-ocr-note'),
+                data.ocrSuggestionWillBeSaved
+                    ? 'A machine guess at the handwriting. This sheet has no confirmed name yet, so '
+                        'when you confirm, it will be saved into the blank name fields only. '
+                        'Check it afterwards with Edit student.'
+                    : 'A machine guess at the handwriting. It is not the saved name and will not be '
+                        'saved: this sheet already has a name, and typed names are never overwritten.',
+                style: const TextStyle(fontSize: 10.5, color: _muted),
               ),
             ],
           ),
