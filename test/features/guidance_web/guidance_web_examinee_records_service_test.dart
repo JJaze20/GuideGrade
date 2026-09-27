@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:guidegrade/core/sync/retake_client.dart';
 import 'package:guidegrade/core/sync/sync_client.dart';
 import 'package:guidegrade/core/sync/sync_job.dart';
 import 'package:guidegrade/core/sync/sync_outcome.dart';
@@ -7,7 +8,57 @@ import 'package:guidegrade/models/examinee_record.dart';
 import 'package:guidegrade/models/local_batch.dart';
 import 'package:guidegrade/models/omr_scan_result.dart';
 
-class _FakeSyncClient implements SyncClient {
+class _FakeSyncClient implements SyncClient, RetakeClient {
+  final Map<String, List<CloudRetakeRequestRow>> retakeRequestsByKey = {};
+  SyncOutcome createRetakeResult = const SyncOutcome.success();
+  SyncOutcome reviewRetakeResult = const SyncOutcome.success();
+  SyncOutcome archiveRetakeResult = const SyncOutcome.success();
+  final List<Map<String, Object?>> retakeCalls = [];
+
+  String _retakeKey(String examineeId, String examCode) => '$examineeId/$examCode';
+
+  @override
+  Future<CloudRetakeRequestsRead> readRetakeRequests({
+    required String examineeId,
+    required String examCode,
+  }) async {
+    calls.add('readRetakeRequests:${_retakeKey(examineeId, examCode)}');
+    return CloudRetakeRequestsRead.found(
+      retakeRequestsByKey[_retakeKey(examineeId, examCode)] ?? const [],
+    );
+  }
+
+  @override
+  Future<SyncOutcome> createRetakeRequest({
+    required String examineeId,
+    required String examCode,
+    required String reason,
+  }) async {
+    calls.add('createRetakeRequest:${_retakeKey(examineeId, examCode)}');
+    retakeCalls.add({'op': 'create', 'examineeId': examineeId, 'examCode': examCode, 'reason': reason});
+    return createRetakeResult;
+  }
+
+  @override
+  Future<SyncOutcome> reviewRetakeRequest({
+    required String requestId,
+    required bool approve,
+    String? reviewNote,
+  }) async {
+    calls.add('reviewRetakeRequest:$requestId/$approve');
+    retakeCalls.add({'op': 'review', 'requestId': requestId, 'approve': approve, 'reviewNote': reviewNote});
+    return reviewRetakeResult;
+  }
+
+  @override
+  Future<SyncOutcome> archiveRetakeAttempt({
+    required String requestId,
+    required String archiveReason,
+  }) async {
+    calls.add('archiveRetakeAttempt:$requestId');
+    retakeCalls.add({'op': 'archive', 'requestId': requestId, 'archiveReason': archiveReason});
+    return archiveRetakeResult;
+  }
   CloudExamineesRead examineesToReturn = CloudExamineesRead.found(const []);
   CloudBatchesRead batchesToReturn = CloudBatchesRead.found(const []);
   final Map<String, CloudScansRead> scansByExamineeId = {};
@@ -307,6 +358,9 @@ CloudScanRow _scanRow({
   String? firstName = 'Juan',
   String? lastName = 'Dela Cruz',
   String? examineeNumber = 'EX-legacy-1',
+  int attemptNo = 1,
+  String attemptStatus = 'active',
+  String? archiveReason,
 }) =>
     CloudScanRow(
       id: id,
@@ -324,6 +378,9 @@ CloudScanRow _scanRow({
       firstName: firstName,
       lastName: lastName,
       examineeNumber: examineeNumber,
+      attemptNo: attemptNo,
+      attemptStatus: attemptStatus,
+      archiveReason: archiveReason,
     );
 
 /// A minimal [LocalScan], the shape [GuidanceWebExamineeRecordsService]'s
@@ -1030,4 +1087,210 @@ void main() {
       expect(call, isNot(startsWith('delete')));
     }
   });
+
+group('Applicant Retake Management', () {
+  test('loadHistoryFor carries attempt fields through into ExamineeHistoryItem', () async {
+    client.batchesToReturn = CloudBatchesRead.found([
+      _batchRow(id: 'b-at1', examCode: 'AT'),
+      _batchRow(id: 'b-at2', examCode: 'AT'),
+    ]);
+    client.scansByExamineeId['e1'] = CloudScansRead.found([
+      _scanRow(
+        id: 's-at1',
+        batchId: 'b-at1',
+        examCode: 'AT',
+        capturedAt: DateTime.utc(2026, 1, 1),
+        attemptNo: 1,
+        attemptStatus: 'archived',
+        archiveReason: 'Approved retake',
+      ),
+      _scanRow(
+        id: 's-at2',
+        batchId: 'b-at2',
+        examCode: 'AT',
+        capturedAt: DateTime.utc(2027, 1, 1),
+        attemptNo: 2,
+        attemptStatus: 'active',
+      ),
+    ]);
+
+    final history = await service.loadHistoryFor(_examinee());
+
+    expect(history, hasLength(2));
+    final attempt2 = history.firstWhere((h) => h.attemptNo == 2);
+    final attempt1 = history.firstWhere((h) => h.attemptNo == 1);
+    expect(attempt2.isArchivedAttempt, isFalse);
+    expect(attempt1.isArchivedAttempt, isTrue);
+    expect(attempt1.archiveReason, 'Approved retake');
+  });
+
+  test('an ARCHIVED existing attempt does not block linking a new AT scan to the same examinee', () async {
+    client.scansByExamineeId['e1'] = CloudScansRead.found([
+      _scanRow(id: 'old-at', batchId: 'b-old', examCode: 'AT', attemptNo: 1, attemptStatus: 'archived'),
+    ]);
+    client.unlinkedScansToReturn =
+        CloudScansRead.found([_scanRow(id: 's-new', batchId: 'b-new', examCode: 'AT')]);
+
+    await service.linkScanToExaminee(
+      batchId: 'b-new',
+      scan: _localScan(id: 's-new'),
+      examinee: _examinee(),
+      examCode: 'AT',
+    );
+
+    expect(client.calls.where((c) => c.startsWith('linkScanToExaminee')), isNotEmpty);
+    expect(client.lastLinkArgs, {'batchId': 'b-new', 'scanId': 's-new', 'examineeId': 'e1'});
+  });
+
+  test('an ARCHIVED existing attempt does not block linking a new TAT scan to the same examinee', () async {
+    client.scansByExamineeId['e1'] = CloudScansRead.found([
+      _scanRow(id: 'old-tat', batchId: 'b-old', examCode: 'TAT', attemptNo: 1, attemptStatus: 'archived'),
+    ]);
+    client.unlinkedScansToReturn =
+        CloudScansRead.found([_scanRow(id: 's-new', batchId: 'b-new', examCode: 'TAT')]);
+
+    await service.linkScanToExaminee(
+      batchId: 'b-new',
+      scan: _localScan(id: 's-new'),
+      examinee: _examinee(),
+      examCode: 'TAT',
+    );
+
+    expect(client.calls.where((c) => c.startsWith('linkScanToExaminee')), isNotEmpty);
+  });
+
+  test('an ACTIVE (unarchived) existing AT attempt still blocks a second AT link at the app level', () async {
+    client.scansByExamineeId['e1'] = CloudScansRead.found([
+      _scanRow(id: 'active-at', batchId: 'b-old', examCode: 'AT', attemptNo: 1, attemptStatus: 'active'),
+    ]);
+    client.unlinkedScansToReturn =
+        CloudScansRead.found([_scanRow(id: 's-new', batchId: 'b-new', examCode: 'AT')]);
+
+    await expectLater(
+      service.linkScanToExaminee(
+        batchId: 'b-new',
+        scan: _localScan(id: 's-new'),
+        examinee: _examinee(),
+        examCode: 'AT',
+      ),
+      throwsA(isA<GuidanceWebExamineeRecordsException>()),
+    );
+    expect(client.calls.where((c) => c.startsWith('linkScanToExaminee')), isEmpty);
+  });
+
+  test('a third-attempt link the database rejects surfaces a sanitized message, never the raw code', () async {
+    client.scansByExamineeId['e1'] = CloudScansRead.found([
+      _scanRow(id: 'old-at', batchId: 'b-old', examCode: 'AT', attemptNo: 1, attemptStatus: 'archived'),
+    ]);
+    client.unlinkedScansToReturn =
+        CloudScansRead.found([_scanRow(id: 's-new', batchId: 'b-new', examCode: 'AT')]);
+    client.linkResultToReturn = const SyncOutcome.permanent('23514');
+
+    Object? error;
+    try {
+      await service.linkScanToExaminee(
+        batchId: 'b-new',
+        scan: _localScan(id: 's-new'),
+        examinee: _examinee(),
+        examCode: 'AT',
+      );
+    } catch (e) {
+      error = e;
+    }
+    expect(error, isA<GuidanceWebExamineeRecordsException>());
+    expect((error as GuidanceWebExamineeRecordsException).message, isNot(contains('23514')));
+  });
+
+  test('requestRetake rejects a blank reason before calling the database', () async {
+    await expectLater(
+      service.requestRetake(examineeId: 'e1', examCode: 'AT', reason: '   '),
+      throwsA(isA<GuidanceWebExamineeRecordsException>()),
+    );
+    expect(client.retakeCalls, isEmpty);
+  });
+
+  test('requestRetake trims the reason and calls createRetakeRequest', () async {
+    await service.requestRetake(examineeId: 'e1', examCode: 'TAT', reason: '  Family emergency  ');
+    expect(client.retakeCalls.single, {
+      'op': 'create',
+      'examineeId': 'e1',
+      'examCode': 'TAT',
+      'reason': 'Family emergency',
+    });
+  });
+
+  test('requestRetake surfaces a sanitized message when the database refuses (e.g. ineligible)', () async {
+    client.createRetakeResult = const SyncOutcome.permanent('42501');
+    await expectLater(
+      service.requestRetake(examineeId: 'e1', examCode: 'AT', reason: 'Valid reason'),
+      throwsA(isA<GuidanceWebExamineeRecordsException>()
+          .having((e) => e.message, 'message', isNot(contains('42501')))),
+    );
+  });
+
+  test('a REJECTED review does not throw and does not special-case anything -- the retake is not consumed', () async {
+    await service.reviewRetakeRequest(requestId: 'r1', approve: false, reviewNote: 'Not a valid reason');
+    expect(client.retakeCalls.single, {
+      'op': 'review',
+      'requestId': 'r1',
+      'approve': false,
+      'reviewNote': 'Not a valid reason',
+    });
+  });
+
+  test('an APPROVE review passes approve: true through unchanged', () async {
+    await service.reviewRetakeRequest(requestId: 'r1', approve: true);
+    expect(client.retakeCalls.single['approve'], true);
+  });
+
+  test('archiveRetakeAttempt rejects a blank reason before calling the database', () async {
+    await expectLater(
+      service.archiveRetakeAttempt(requestId: 'r1', archiveReason: ''),
+      throwsA(isA<GuidanceWebExamineeRecordsException>()),
+    );
+    expect(client.retakeCalls, isEmpty);
+  });
+
+  test('archiveRetakeAttempt calls archiveRetakeAttempt with the trimmed reason', () async {
+    await service.archiveRetakeAttempt(requestId: 'r1', archiveReason: '  Approved retake, archiving  ');
+    expect(client.retakeCalls.single, {
+      'op': 'archive',
+      'requestId': 'r1',
+      'archiveReason': 'Approved retake, archiving',
+    });
+  });
+
+  test('retakeRequestsFor maps every cloud row to the app-level ExamRetakeRequest', () async {
+    client.retakeRequestsByKey['e1/AT'] = [
+      CloudRetakeRequestRow(
+        id: 'r1',
+        examineeId: 'e1',
+        examCode: 'AT',
+        reason: 'Medical emergency',
+        status: 'APPROVED',
+        requestedAt: DateTime.utc(2026, 1, 2),
+        eligibleOn: DateTime.utc(2026, 7, 2),
+        createdAt: DateTime.utc(2026, 1, 2),
+        updatedAt: DateTime.utc(2026, 1, 3),
+      ),
+    ];
+    final requests = await service.retakeRequestsFor(examineeId: 'e1', examCode: 'AT');
+    expect(requests, hasLength(1));
+    expect(requests.single.isApproved, isTrue);
+    expect(requests.single.eligibleOn, DateTime.utc(2026, 7, 2));
+  });
+
+  test('never calls a push/upload/delete method for any retake operation', () async {
+    await service.retakeRequestsFor(examineeId: 'e1', examCode: 'AT');
+    await service.requestRetake(examineeId: 'e1', examCode: 'AT', reason: 'x');
+    await service.reviewRetakeRequest(requestId: 'r1', approve: true);
+    await service.archiveRetakeAttempt(requestId: 'r1', archiveReason: 'x');
+    for (final call in client.calls) {
+      expect(call, isNot(startsWith('push')));
+      expect(call, isNot(startsWith('upload')));
+      expect(call, isNot(startsWith('delete')));
+    }
+  });
+});
+
 }

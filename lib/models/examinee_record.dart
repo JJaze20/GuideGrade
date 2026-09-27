@@ -162,12 +162,39 @@ class ExamineeRecord {
 /// examinee yet) — the pairing itself carries no assumption about whether
 /// [scan] is linked to anyone.
 class ExamineeHistoryItem {
-  const ExamineeHistoryItem({required this.batch, required this.scan});
+  const ExamineeHistoryItem({
+    required this.batch,
+    required this.scan,
+    this.attemptNo = 1,
+    this.attemptStatus = 'active',
+    this.archivedAt,
+    this.archivedByName,
+    this.archiveReason,
+  });
 
   final LocalBatch batch;
   final LocalScan scan;
 
+  /// Applicant Retake Management (additive) -- which attempt this is for its
+  /// exam type (QTM is always 1; TAT/AT are 1 or 2), taken directly from the
+  /// cloud `scans` row (see `CloudScanRow.attemptNo`), never recomputed
+  /// here. Every item this app builds without a retake-aware read (there are
+  /// none left after this feature) defaults to "attempt 1, active", so an
+  /// older/legacy scan displays exactly as it always has.
+  final int attemptNo;
+
+  /// 'active' | 'archived'.
+  final String attemptStatus;
+  final DateTime? archivedAt;
+  final String? archivedByName;
+  final String? archiveReason;
+
   String get examCode => batch.examCode;
   LocalScanResult? get result => scan.result;
   bool get isGraded => scan.result?.status == 'Graded';
+
+  /// Whether this is the previous attempt of an approved, archived retake --
+  /// read-only, and must never be shown as the examinee's current result for
+  /// [examCode].
+  bool get isArchivedAttempt => attemptStatus.toUpperCase() == 'ARCHIVED';
 }

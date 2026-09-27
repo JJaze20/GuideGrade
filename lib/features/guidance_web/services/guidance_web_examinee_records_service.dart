@@ -5,8 +5,10 @@ import '../../../core/services/local_storage_service.dart';
 import '../../../core/sync/cloud_batch_mapper.dart';
 import '../../../core/sync/supabase_sync_client.dart';
 import '../../../core/sync/sync_client.dart';
+import '../../../core/sync/retake_client.dart';
 import '../../../core/sync/sync_outcome.dart';
 import '../../../core/sync/sync_queue.dart' show SyncState;
+import '../../../models/exam_retake_request.dart';
 import '../../../models/examinee_record.dart';
 import '../../../models/local_batch.dart';
 
@@ -43,16 +45,32 @@ const String archivedExamineeLinkMessage =
 /// history entry's score/percentage/status is always identical to what the
 /// existing Result Detail view would show for that same scan.
 class GuidanceWebExamineeRecordsService {
-  GuidanceWebExamineeRecordsService({SyncClient? client})
-      : _client = client ?? _buildDefaultClient();
+  /// [retakeClient] is only for tests. In production, [SupabaseSyncClient]
+  /// implements both `SyncClient` and [RetakeClient], so a caller that
+  /// passes only [client] still gets real retake behavior when that
+  /// [client] happens to be one (i.e. always, in production); [retakeClient]
+  /// need only be supplied explicitly when a test's fake [client] does not
+  /// also implement [RetakeClient].
+  GuidanceWebExamineeRecordsService({SyncClient? client, RetakeClient? retakeClient})
+      : _client = client ?? _buildDefaultClient(),
+        _explicitRetakeClient = retakeClient;
 
   final SyncClient _client;
+  final RetakeClient? _explicitRetakeClient;
+
+  /// Resolved lazily (never at construction) so a caller that supplies
+  /// neither [retakeClient] nor a [client] implementing [RetakeClient] --
+  /// every existing caller and test, which never touches a retake method --
+  /// never pays for (or crashes on) building a real [SupabaseSyncClient]
+  /// just to satisfy this field.
+  late final RetakeClient _retakeClient = _explicitRetakeClient ??
+      (_client is RetakeClient ? _client as RetakeClient : _buildDefaultClient());
 
   /// See `GuidanceWebResultsService._buildDefaultClient`'s doc comment —
   /// identical reasoning: [LocalBatchRepository]/[LocalStorageService] are
   /// required constructor params [SupabaseSyncClient] never actually reads
   /// for the methods this service calls.
-  static SyncClient _buildDefaultClient() {
+  static SupabaseSyncClient _buildDefaultClient() {
     return SupabaseSyncClient(
       batches: LocalBatchRepository(),
       localStorage: LocalStorageService(),
@@ -121,7 +139,15 @@ class GuidanceWebExamineeRecordsService {
     for (final row in scans) {
       final batch = batchesById[row.batchId];
       if (batch == null) continue;
-      items.add(ExamineeHistoryItem(batch: batch, scan: mapCloudScan(row)));
+      items.add(ExamineeHistoryItem(
+        batch: batch,
+        scan: mapCloudScan(row),
+        attemptNo: row.attemptNo,
+        attemptStatus: row.attemptStatus,
+        archivedAt: row.archivedAt,
+        archivedByName: row.archivedByName,
+        archiveReason: row.archiveReason,
+      ));
     }
     items.sort((a, b) => b.scan.capturedAt.compareTo(a.scan.capturedAt));
     return items;
@@ -229,6 +255,7 @@ class GuidanceWebExamineeRecordsService {
     final alreadyHasType = existing.scans.any(
       (s) =>
           s.examCode.trim().toUpperCase() == wanted &&
+          !s.isArchivedAttempt &&
           !(s.batchId == batchId && s.id == scan.id),
     );
     if (alreadyHasType) {
@@ -288,6 +315,111 @@ class GuidanceWebExamineeRecordsService {
     throw GuidanceWebExamineeRecordsException(
       'Could not remove this link. Please try again.',
     );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Applicant Retake Management -- additive. Every write below calls a
+  // database SECURITY DEFINER function (see retake_client.dart); none of
+  // these ever writes `exam_retake_requests` or a scan's attempt columns
+  // directly. Max-attempts and the waiting period are never recomputed
+  // here -- the database is the sole authority on eligibility; these
+  // methods only report success/failure and the caller re-reads the
+  // affected rows (the same "re-read the truth from the database"
+  // convention [removeExamLink] already uses).
+  // ---------------------------------------------------------------------------
+
+  /// Every retake request recorded for [examineeId]/[examCode], newest
+  /// first. Read-only.
+  Future<List<ExamRetakeRequest>> retakeRequestsFor({
+    required String examineeId,
+    required String examCode,
+  }) async {
+    final read = await _retakeClient.readRetakeRequests(
+      examineeId: examineeId,
+      examCode: examCode,
+    );
+    if (!read.isSuccess) {
+      throw GuidanceWebExamineeRecordsException(_messageFor(read.error));
+    }
+    return read.requests.map(examRetakeRequestFromCloudRow).toList();
+  }
+
+  /// Submits a PENDING retake request for [examineeId]/[examCode]. [reason]
+  /// is required -- QTM is never a valid [examCode] here (QTM has no retake
+  /// at all; the UI never offers this action for it, and the database would
+  /// reject it too). The database alone decides whether this examinee may
+  /// actually request a retake right now.
+  Future<void> requestRetake({
+    required String examineeId,
+    required String examCode,
+    required String reason,
+  }) async {
+    final trimmed = reason.trim();
+    if (trimmed.isEmpty) {
+      throw GuidanceWebExamineeRecordsException('A reason is required to request a retake.');
+    }
+    final outcome = await _retakeClient.createRetakeRequest(
+      examineeId: examineeId,
+      examCode: examCode,
+      reason: trimmed,
+    );
+    if (!outcome.isSuccess) {
+      throw GuidanceWebExamineeRecordsException(_retakeMessageFor(outcome));
+    }
+  }
+
+  /// Approves or rejects [requestId]. A rejected request does not consume
+  /// the applicant's retake -- the database allows a fresh request to be
+  /// submitted afterward, this method does not need to do anything special
+  /// for that case.
+  Future<void> reviewRetakeRequest({
+    required String requestId,
+    required bool approve,
+    String? reviewNote,
+  }) async {
+    final trimmedNote = reviewNote?.trim();
+    final outcome = await _retakeClient.reviewRetakeRequest(
+      requestId: requestId,
+      approve: approve,
+      reviewNote: (trimmedNote == null || trimmedNote.isEmpty) ? null : trimmedNote,
+    );
+    if (!outcome.isSuccess) {
+      throw GuidanceWebExamineeRecordsException(_retakeMessageFor(outcome));
+    }
+  }
+
+  /// Archives the previous attempt behind an approved [requestId].
+  /// [archiveReason] is required. Never deletes the scan, its batch, or
+  /// unlinks the examinee -- see [RetakeClient.archiveRetakeAttempt].
+  Future<void> archiveRetakeAttempt({
+    required String requestId,
+    required String archiveReason,
+  }) async {
+    final trimmed = archiveReason.trim();
+    if (trimmed.isEmpty) {
+      throw GuidanceWebExamineeRecordsException('A reason is required to archive this attempt.');
+    }
+    final outcome = await _retakeClient.archiveRetakeAttempt(
+      requestId: requestId,
+      archiveReason: trimmed,
+    );
+    if (!outcome.isSuccess) {
+      throw GuidanceWebExamineeRecordsException(_retakeMessageFor(outcome));
+    }
+  }
+
+  /// Deliberately generic -- the database is the authority on WHY a retake
+  /// write was refused (max attempts reached, not yet eligible, wrong
+  /// request status, ...); this never repeats a raw database code or
+  /// message, matching [_messageFor]'s same convention.
+  String _retakeMessageFor(SyncOutcome outcome) {
+    if (outcome.isTransient) {
+      return 'Could not reach Supabase. Check your connection and try again.';
+    }
+    if (outcome.isConflict) {
+      return 'This request has already changed. Please refresh and try again.';
+    }
+    return 'This could not be completed. Please check the retake eligibility and try again.';
   }
 
   /// Throws unless [examinee] exists and is currently active. A held copy
