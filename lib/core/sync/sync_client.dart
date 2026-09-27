@@ -122,6 +122,12 @@ class CloudScanRow {
     this.rectifiedImagePath,
     this.imageUploaded = false,
     this.rectifiedImageUploaded = false,
+    this.attemptNo = 1,
+    this.attemptStatus = 'active',
+    this.archivedAt,
+    this.archivedByUid,
+    this.archivedByName,
+    this.archiveReason,
   });
 
   final String id;
@@ -168,6 +174,28 @@ class CloudScanRow {
   final String? rectifiedImagePath;
   final bool imageUploaded;
   final bool rectifiedImageUploaded;
+
+  /// Applicant Retake Management (additive; see `retake_client.dart`). Which
+  /// attempt this scan is for the examinee/exam-code pair it is linked to --
+  /// QTM is always 1 (no retake); TAT/AT are 1 or 2. Defaults to 1 for any
+  /// row selected without these columns, so this class stays backward
+  /// compatible with every existing call site.
+  final int attemptNo;
+
+  /// 'active' | 'archived' (default 'active'). Compared case-insensitively
+  /// via [isArchivedAttempt] -- see that getter's doc comment.
+  final String attemptStatus;
+  final DateTime? archivedAt;
+  final String? archivedByUid;
+  final String? archivedByName;
+  final String? archiveReason;
+
+  /// Whether this attempt has been archived as part of an approved retake --
+  /// the previous attempt in the Maria-style example. An archived attempt is
+  /// read-only (the database blocks changing its score/OMR data/image/tag
+  /// columns and its examinee link) and must never be re-shown as the
+  /// examinee's current result for its exam type.
+  bool get isArchivedAttempt => attemptStatus.toUpperCase() == 'ARCHIVED';
 }
 
 /// The result of [SyncClient.readCloudScans].

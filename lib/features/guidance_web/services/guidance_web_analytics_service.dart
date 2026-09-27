@@ -403,9 +403,18 @@ class GuidanceWebAnalyticsService {
     final rows = <CloudScanRow>[];
     for (final b in selected) {
       final data = _cache[b.id]!;
+      // Completeness is a sync signal (did every physical scan row
+      // arrive), independent of Applicant Retake Management -- an
+      // archived attempt still counts as "retrieved" here, so archiving
+      // one never makes an otherwise-fully-synced batch look incomplete.
       if (data.rows.length == data.expected) {
         complete.add(b);
-        rows.addAll(data.rows);
+        // The aggregate itself excludes an archived retake attempt (the
+        // previous attempt of an approved, archived retake) by default,
+        // so it always reflects the current attempt, never a superseded
+        // one. QTM scans are never archived, so this never changes QTM's
+        // own numbers; a batch with no retake activity is unaffected.
+        rows.addAll(data.rows.where((r) => !r.isArchivedAttempt));
       } else {
         incomplete.add(IncompleteBatch(
           batch: b,

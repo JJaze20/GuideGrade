@@ -118,13 +118,39 @@ class GuidanceWebResultsService {
   /// view; the headline `rawScore`/`totalItems`/percentage/status are
   /// always authoritative regardless — see [mapCloudScan]'s doc comment).
   /// Throws [GuidanceWebResultsException] on failure.
-  Future<List<LocalScan>> loadScansForBatch(LocalBatch batch) async {
+  /// Every scan belonging to [batch], mapped the same way
+  /// [CloudRestoreService] maps a scan — recomputed official percentage,
+  /// TAT breakdown left null here (no answer key is fetched for this list
+  /// view; the headline `rawScore`/`totalItems`/percentage/status are
+  /// always authoritative regardless — see [mapCloudScan]'s doc comment).
+  ///
+  /// Applicant Retake Management (additive): an archived retake attempt —
+  /// the previous attempt of an approved, archived retake, see
+  /// `CloudScanRow.isArchivedAttempt` — is excluded by default
+  /// ([includeArchivedAttempts] = false), so the normal Results list always
+  /// shows the current attempt, never a superseded one. The scan itself is
+  /// never deleted or hidden anywhere else; Examination History
+  /// (`GuidanceWebExamineeRecordsService.loadHistoryFor`) is the one place
+  /// that still shows it, unaffected by this filter. QTM is never archived,
+  /// so this never changes QTM's own results. [includeArchivedAttempts] is
+  /// kept as an explicit opt-in (never defaulted to true anywhere in this
+  /// app today) for a future view that deliberately wants archived attempts
+  /// too, without duplicating this method.
+  /// Throws [GuidanceWebResultsException] on failure.
+  Future<List<LocalScan>> loadScansForBatch(
+    LocalBatch batch, {
+    bool includeArchivedAttempts = false,
+  }) async {
     final read = await _client.readCloudScans(batch.id);
     if (!read.isSuccess) {
       throw GuidanceWebResultsException(_messageFor(read.error));
     }
-    return read.scans.map(mapCloudScan).toList();
+    final rows = includeArchivedAttempts
+        ? read.scans
+        : read.scans.where((s) => !s.isArchivedAttempt).toList();
+    return rows.map(mapCloudScan).toList();
   }
+
 
   /// [loadScansForBatch] plus each linked scan's canonical examinee, resolved
   /// through the relationship the database actually stores: `scans.examinee_id`
@@ -136,18 +162,29 @@ class GuidanceWebResultsService {
   /// a batch with no linked scans makes no extra request. If that lookup
   /// fails this throws (like a failed scan read) rather than silently showing
   /// linked scans as "Unnamed" again.
-  Future<WebBatchResults> loadResultsForBatch(LocalBatch batch) async {
+  ///
+  /// Applicant Retake Management (additive): same
+  /// [includeArchivedAttempts] default-exclusion as [loadScansForBatch] —
+  /// an archived attempt is left out of the normal batch view by default.
+  Future<WebBatchResults> loadResultsForBatch(
+    LocalBatch batch, {
+    bool includeArchivedAttempts = false,
+  }) async {
     final read = await _client.readCloudScans(batch.id);
     if (!read.isSuccess) {
       throw GuidanceWebResultsException(_messageFor(read.error));
     }
-    final scans = read.scans.map(mapCloudScan).toList();
+    final rows = includeArchivedAttempts
+        ? read.scans
+        : read.scans.where((s) => !s.isArchivedAttempt).toList();
+    final scans = rows.map(mapCloudScan).toList();
 
     final examineeIdByScanId = <String, String>{
-      for (final row in read.scans)
+      for (final row in rows)
         if (row.examineeId != null && row.examineeId!.isNotEmpty)
           row.id: row.examineeId!,
     };
+
     if (examineeIdByScanId.isEmpty) return WebBatchResults(scans: scans);
 
     final examinees = await _client.readCloudExaminees();

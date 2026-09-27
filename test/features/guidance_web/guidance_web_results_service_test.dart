@@ -166,6 +166,8 @@ CloudScanRow _scanRow({
   String? lastName,
   String? examineeNumber,
   String? examineeId,
+  int attemptNo = 1,
+  String attemptStatus = 'active',
 }) =>
     CloudScanRow(
       id: id,
@@ -184,6 +186,8 @@ CloudScanRow _scanRow({
       lastName: lastName,
       examineeNumber: examineeNumber,
       examineeId: examineeId,
+      attemptNo: attemptNo,
+      attemptStatus: attemptStatus,
     );
 
 CloudExamineeRow _examineeRow({
@@ -492,5 +496,73 @@ void main() {
       );
     });
   });
+
+
+group('Applicant Retake Management -- archived attempts excluded by default', () {
+  test('loadScansForBatch excludes an archived attempt by default', () async {
+    client.batchesToReturn = CloudBatchesRead.found([_batchRow(id: 'b1', examCode: 'AT')]);
+    client.scansByBatchId['b1'] = CloudScansRead.found([
+      _scanRow(id: 's-old', batchId: 'b1', attemptNo: 1, attemptStatus: 'archived'),
+      _scanRow(id: 's-new', batchId: 'b1', attemptNo: 2, attemptStatus: 'active'),
+    ]);
+
+    final scans = await service.loadScansForBatch(mapCloudBatch(_batchRow(id: 'b1', examCode: 'AT')));
+
+    expect(scans.map((s) => s.id), ['s-new']);
+  });
+
+  test('loadScansForBatch includes an archived attempt when explicitly asked', () async {
+    client.batchesToReturn = CloudBatchesRead.found([_batchRow(id: 'b1', examCode: 'AT')]);
+    client.scansByBatchId['b1'] = CloudScansRead.found([
+      _scanRow(id: 's-old', batchId: 'b1', attemptNo: 1, attemptStatus: 'archived'),
+      _scanRow(id: 's-new', batchId: 'b1', attemptNo: 2, attemptStatus: 'active'),
+    ]);
+
+    final scans = await service.loadScansForBatch(
+      mapCloudBatch(_batchRow(id: 'b1', examCode: 'AT')),
+      includeArchivedAttempts: true,
+    );
+
+    expect(scans.map((s) => s.id).toSet(), {'s-old', 's-new'});
+  });
+
+  test('loadResultsForBatch excludes an archived attempt by default, including its examinee lookup', () async {
+    client.batchesToReturn = CloudBatchesRead.found([_batchRow(id: 'b1', examCode: 'AT')]);
+    client.scansByBatchId['b1'] = CloudScansRead.found([
+      _scanRow(id: 's-old', batchId: 'b1', attemptNo: 1, attemptStatus: 'archived', examineeId: 'e1'),
+      _scanRow(id: 's-new', batchId: 'b1', attemptNo: 2, attemptStatus: 'active', examineeId: 'e1'),
+    ]);
+    client.examineesToReturn = CloudExamineesRead.found([
+      _examineeRow(id: 'e1', temporaryId: 'EX-1', first: 'Juan', last: 'Dela Cruz'),
+    ]);
+
+    final results = await service.loadResultsForBatch(mapCloudBatch(_batchRow(id: 'b1', examCode: 'AT')));
+
+    expect(results.scans.map((s) => s.id), ['s-new']);
+    expect(results.linkedExamineeByScanId.keys, ['s-new']);
+  });
+
+  test('an applicant with only Attempt 1 (no retake) is unchanged -- still shown', () async {
+    client.batchesToReturn = CloudBatchesRead.found([_batchRow(id: 'b1', examCode: 'AT')]);
+    client.scansByBatchId['b1'] = CloudScansRead.found([
+      _scanRow(id: 's1', batchId: 'b1'), // defaults: attempt 1, active
+    ]);
+
+    final scans = await service.loadScansForBatch(mapCloudBatch(_batchRow(id: 'b1', examCode: 'AT')));
+
+    expect(scans.map((s) => s.id), ['s1']);
+  });
+
+  test('QTM (never archived) is unchanged', () async {
+    client.batchesToReturn = CloudBatchesRead.found([_batchRow(id: 'b1', examCode: 'QTM')]);
+    client.scansByBatchId['b1'] = CloudScansRead.found([
+      _scanRow(id: 's1', batchId: 'b1', examCode: 'QTM'),
+    ]);
+
+    final scans = await service.loadScansForBatch(mapCloudBatch(_batchRow(id: 'b1', examCode: 'QTM')));
+
+    expect(scans.map((s) => s.id), ['s1']);
+  });
+});
 
 }
