@@ -918,9 +918,10 @@ class AppState extends ChangeNotifier {
   /// after the real decode, and are the only part the "How it was read"
   /// viewer needs.
   ///
-  /// Opt-in review images. This adds one decode per page; verbose contour
-  /// diagnostics remain separately controlled by [diagnosticsEnabled].
-  bool debugImagesEnabled = false;
+  /// Enabled during scanner development for the "How it was read" viewer.
+  /// Remove this diagnostic feature before merging to main. It adds one
+  /// decode per page; verbose logging stays controlled by [diagnosticsEnabled].
+  bool debugImagesEnabled = true;
 
   /// Tells [AppLockGate] to ignore an `AppLifecycleState.resumed` event
   /// instead of re-locking, for as long as this is true. Set by a screen

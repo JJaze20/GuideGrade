@@ -271,9 +271,9 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
   /// verbose per-contour logging, which is what made dim-light scanning
   /// crawl and stays behind [_diagnosticsEnabled].
   ///
-  /// Mirrors [AppState.debugImagesEnabled]; review images are opt-in because
-  /// generating them adds an extra decode per page.
-  bool _debugImagesEnabled = false;
+  /// Mirrors [AppState.debugImagesEnabled], enabled during scanner development
+  /// so the "How it was read" viewer has diagnostic images available.
+  bool _debugImagesEnabled = true;
 
   /// Populated only while [_diagnosticsEnabled] is true (see
   /// [_LiveCornersRequest.includeDiagnostics]); null otherwise, same as
@@ -1772,7 +1772,7 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
             children: [
               // Available in release, unlike the bug icon below: staff need
               // to be able to capture how a sheet was read without a special
-              // build. Off by default so an ordinary session pays nothing.
+              // build. Enabled by default during scanner development.
               Padding(
                 padding: const EdgeInsets.only(right: 8),
                 child: InkWell(
