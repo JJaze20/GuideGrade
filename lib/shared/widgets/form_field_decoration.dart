@@ -80,7 +80,7 @@ class FormFieldStyle {
     String? counterText,
     Widget? prefixIcon,
   }) {
-    return InputDecoration(
+    return _outlines(InputDecoration(
       label: required
           ? Text.rich(
               TextSpan(
@@ -102,15 +102,7 @@ class FormFieldStyle {
       filled: true,
       fillColor: fill,
       contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 13),
-      border: _border(restingBorder, restingWidth),
-      enabledBorder: _border(restingBorder, restingWidth),
-      focusedBorder: _border(focusedBorder, focusedWidth),
-      disabledBorder: _border(disabledBorder, restingWidth),
-      errorBorder: _border(errorBorder, errorWidth),
-      focusedErrorBorder: _border(errorBorder, errorWidth),
-      helperStyle: const TextStyle(fontSize: 11, color: AppColors.textGray),
-      errorStyle: const TextStyle(fontSize: 11.5, color: errorBorder, fontWeight: FontWeight.w600),
-    );
+    ));
   }
 
   /// The same decoration for a disabled/read-only field (tinted fill, lighter

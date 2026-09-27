@@ -79,14 +79,8 @@ void _saveDebugVisualization(_DebugVizRequest request) {
   const OmrDecoder().saveDebugVisualization(request.imagePath, request.template, request.outputDir, request.pageIndex);
 }
 
-// _rectifyOmrPage/_RectifyRequest (a separate isolate call into
-// OmrDecoder.rectifyForOverlay) removed 2026-09-19 -- decode() now writes
-// the review/overlay image itself, for every exam type, reusing its own
-// already-fitted registration instead of a second independent corner
-// search (see decode()'s doc comment and processCapturedPages' reviewOutput
-// local). rectifyForOverlay itself is left defined in
-// omr_decoder_native.dart in case something else needs a standalone
-// rectify later; nothing in this app calls it any more.
+// Review images are produced during decode() using the registration already
+// fitted for scoring, so no separate rectification pass is needed.
 
 class _CropNameFieldsRequest {
   final String imagePath;
@@ -924,16 +918,9 @@ class AppState extends ChangeNotifier {
   /// after the real decode, and are the only part the "How it was read"
   /// viewer needs.
   ///
-  /// ON by default while scan accuracy is still being worked on, so every
-  /// scan can be inspected afterwards without anyone having to predict which
-  /// sheet would be worth looking at -- the sheet that reads badly is
-  /// exactly the one nobody thought to enable this for. Reachable in a
-  /// release build, unlike [diagnosticsEnabled], since the people reviewing
-  /// the reads are running release builds.
-  ///
-  /// Costs one extra decode per page. Flip back to false once the accuracy
-  /// work is finished and this stops earning that.
-  bool debugImagesEnabled = true;
+  /// Opt-in review images. This adds one decode per page; verbose contour
+  /// diagnostics remain separately controlled by [diagnosticsEnabled].
+  bool debugImagesEnabled = false;
 
   /// Tells [AppLockGate] to ignore an `AppLifecycleState.resumed` event
   /// instead of re-locking, for as long as this is true. Set by a screen

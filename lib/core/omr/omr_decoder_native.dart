@@ -1922,7 +1922,7 @@ class OmrDecoder {
                           // local contrast hard enough that measuring after
                           // it would feed the model a different statistic
                           // than the one it was trained on.
-                          normalizedGray ?? warped,
+                          normalizedGray,
                           template,
                           canonicalWidth,
                           canonicalHeight,
@@ -4298,11 +4298,11 @@ class OmrDecoder {
                         localRoi.dispose();
                       }
 
-                      void log(String s) {
+                      void log(String Function() message) {
                         if (_kFiducialDebug && debugTag != null) {
                           _fidLog('q=$debugTag c#$ci '
                               'bbox=(${rect.x},${rect.y},${rect.width},${rect.height}) '
-                              'area=${area.toStringAsFixed(0)} contrast=${contrast.toStringAsFixed(1)} $s');
+                              'area=${area.toStringAsFixed(0)} contrast=${contrast.toStringAsFixed(1)} ${message()}');
                         }
                       }
 
@@ -4310,7 +4310,7 @@ class OmrDecoder {
                       // heavier shape metrics) ----
                       if (area < 8 || area > imageAreaCap) {
                         reject(rect, 0, 0, 'area', area: area, contrast: contrast);
-                        log('REJECT area (need 8..${imageAreaCap.toStringAsFixed(0)})');
+                        log(() => 'REJECT area (need 8..${imageAreaCap.toStringAsFixed(0)})');
                         continue;
                       }
                       // Deliberately loose: a genuinely rotated square fills
@@ -4331,12 +4331,12 @@ class OmrDecoder {
                       // bubble-as-fiducial problem.
                       if (boxArea <= 0 || extent < _markerMinFillRatio) {
                         reject(rect, 0, 0, 'fill_ratio', area: area, contrast: contrast);
-                        log('REJECT fill_ratio (extent=${extent.toStringAsFixed(3)}<$_markerMinFillRatio)');
+                        log(() => 'REJECT fill_ratio (extent=${extent.toStringAsFixed(3)}<$_markerMinFillRatio)');
                         continue;
                       }
                       if (aspect > _markerMaxAspect) {
                         reject(rect, 0, 0, 'aspect', area: area, contrast: contrast);
-                        log('REJECT aspect (${aspect.toStringAsFixed(2)}>$_markerMaxAspect)');
+                        log(() => 'REJECT aspect (${aspect.toStringAsFixed(2)}>$_markerMaxAspect)');
                         continue;
                       }
 
@@ -4440,7 +4440,7 @@ class OmrDecoder {
                           0.32 * positionScore +
                           0.18 * contrastScore;
 
-                      log('extent=${extent.toStringAsFixed(3)} aspect=${aspect.toStringAsFixed(2)} '
+                      log(() => 'extent=${extent.toStringAsFixed(3)} aspect=${aspect.toStringAsFixed(2)} '
                           'circ=${circularity.toStringAsFixed(3)} rect=${rectangularity.toStringAsFixed(3)} '
                           'ink=${inkDensity.toStringAsFixed(3)} solid=${solidity.toStringAsFixed(3)} '
                           'verts=$approxVerts sq=${squareness.toStringAsFixed(3)} '

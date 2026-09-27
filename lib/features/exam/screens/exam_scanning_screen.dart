@@ -271,10 +271,9 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
   /// verbose per-contour logging, which is what made dim-light scanning
   /// crawl and stays behind [_diagnosticsEnabled].
   ///
-  /// Mirrors [AppState.debugImagesEnabled], which is ON by default during
-  /// the accuracy work; the toggle stays so a session that needs the speed
-  /// back can still turn it off.
-  bool _debugImagesEnabled = true;
+  /// Mirrors [AppState.debugImagesEnabled]; review images are opt-in because
+  /// generating them adds an extra decode per page.
+  bool _debugImagesEnabled = false;
 
   /// Populated only while [_diagnosticsEnabled] is true (see
   /// [_LiveCornersRequest.includeDiagnostics]); null otherwise, same as
@@ -508,6 +507,7 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
     // itself throws, since the widget isn't fully attached to the tree
     // yet at that point.
     _appState = AppStateScope.of(context);
+    _debugImagesEnabled = _appState.debugImagesEnabled;
     // All exams use the portrait camera UI. TAT's printed page is rotated
     // into canonical coordinates by measured fiducials after capture.
     _isLandscapeExam = false;

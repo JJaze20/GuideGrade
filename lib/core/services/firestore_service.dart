@@ -3,7 +3,6 @@ import 'package:firebase_auth/firebase_auth.dart';
 
 import '../../models/user.dart';
 import '../../models/exam.dart';
-import '../../models/answer_key.dart';
 import '../../models/answer_key_model.dart';
 import '../../models/batch.dart';
 import '../../models/result.dart';
