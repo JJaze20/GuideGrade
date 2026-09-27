@@ -870,6 +870,20 @@ void main() {
     expectNoNetworkOrDrain();
   });
 
+  test('replaceScan local failure enqueues no cloud work', () async {
+    fakeLocal.failWith['replaceScan'] = const FileSystemException('replacement write failed');
+    await expectLater(
+      repo.replaceScan(
+        batchId: 'b1', scanId: 's1', decoded: _decoded,
+        sourceImage: File('src.jpg'),
+      ),
+      throwsA(isA<FileSystemException>()),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(queue.jobs, isEmpty);
+    expectNoNetworkOrDrain();
+  });
+
   test('8. attachResult enqueues PUSH_SCAN then PUSH_BATCH', () async {
     await repo.attachResult(batchId: 'b1', scanId: 's1', result: _result);
     await waitForJobs(2);

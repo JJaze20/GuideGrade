@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:path_provider/path_provider.dart';
@@ -151,10 +152,11 @@ class LocalBatchRepository implements BatchRepository {
     await temp.writeAsBytes(encrypted, flush: true);
     try {
       await temp.rename(target.path);
-    } on FileSystemException {
-      // Some platforms refuse to rename over an existing file.
-      if (target.existsSync()) target.deleteSync();
-      await temp.rename(target.path);
+    } catch (_) {
+      // Never delete the live manifest to retry a failed rename: interruption
+      // between delete and rename would lose the only committed record.
+      _deleteIfExists(temp);
+      rethrow;
     }
 
     final legacy = File('${dir.path}/$_legacyManifestName');
@@ -438,29 +440,32 @@ class LocalBatchRepository implements BatchRepository {
     final imagesDir = Directory('$batchDirPath/$_imagesDirName');
     if (!imagesDir.existsSync()) imagesDir.createSync(recursive: true);
 
-    // Stage, then commit. Every new file is first written beside its final
-    // name as `<name>.new`; the manifest write below is the single commit
-    // point, and only after it succeeds are the staged files moved over the
-    // originals. So a failure anywhere before that point (an unreadable
-    // photo, a full disk, a failed manifest write) deletes just the staged
-    // files and leaves the original record and every original image exactly
-    // as they were.
-    final staged = <({String rel, File file})>[];
+    // Copy-on-write: write complete encrypted files at unique final paths
+    // BEFORE publishing them in the manifest. Old paths remain untouched
+    // throughout preparation. A killed process can leave orphan encrypted
+    // files, but the committed manifest still points to a complete capture.
+    // Randomness also avoids reusing an orphan's path after a restart/retry.
+    final random = Random.secure();
+    final version = List.generate(16, (_) => random.nextInt(256)
+        .toRadixString(16).padLeft(2, '0')).join();
+    final prefix = '${scanId}_r${existing.captureRevision + 1}_$version';
+    final staged = <File>[];
     Future<String?> stage(String fileName, File? image, {bool required = false}) async {
       if (image == null || !image.existsSync()) {
         if (required) throw FileSystemException('Replacement photo is missing', image?.path);
         return null;
       }
       final rel = '$_imagesDirName/$fileName';
-      final temp = File('$batchDirPath/$rel.new');
+      final target = File('$batchDirPath/$rel');
       final encrypted = await _crypto.encrypt(await image.readAsBytes());
-      await temp.writeAsBytes(encrypted, flush: true);
-      staged.add((rel: rel, file: temp));
+      // Register before writing so even a partial write is cleaned on failure.
+      staged.add(target);
+      await target.writeAsBytes(encrypted, flush: true);
       return rel;
     }
 
-    // Always the canonical encrypted filename, regardless of what the
-    // previous file was named -- a plaintext-era `.jpg` silently upgrades to
+    // Always an encrypted filename, regardless of what the previous file
+    // was named -- a plaintext-era `.jpg` silently upgrades to
     // `.enc` on this rescan, same as a manifest upgrades on its next write.
     // The rectified overlay copy and the 3 name crops are deliberately
     // refreshed-to-null rather than kept when this rescan didn't produce a
@@ -470,11 +475,11 @@ class LocalBatchRepository implements BatchRepository {
     final LocalBatch updated;
     final LocalScan updatedScan;
     try {
-      final newImageRel = (await stage('$scanId.enc', sourceImage, required: true))!;
-      final rectifiedRelPath = await stage('${scanId}_rectified.enc', rectifiedImage);
-      final nameCropLastRelPath = await stage('${scanId}_name_last.enc', nameCropLastImage);
-      final nameCropFirstRelPath = await stage('${scanId}_name_first.enc', nameCropFirstImage);
-      final nameCropMiddleRelPath = await stage('${scanId}_name_mi.enc', nameCropMiddleImage);
+      final newImageRel = (await stage('$prefix.enc', sourceImage, required: true))!;
+      final rectifiedRelPath = await stage('${prefix}_rectified.enc', rectifiedImage);
+      final nameCropLastRelPath = await stage('${prefix}_name_last.enc', nameCropLastImage);
+      final nameCropFirstRelPath = await stage('${prefix}_name_first.enc', nameCropFirstImage);
+      final nameCropMiddleRelPath = await stage('${prefix}_name_mi.enc', nameCropMiddleImage);
 
       updatedScan = LocalScan(
         id: existing.id,
@@ -503,16 +508,13 @@ class LocalBatchRepository implements BatchRepository {
       await _writeManifest(updated); // commit point
     } catch (_) {
       for (final s in staged) {
-        _deleteIfExists(s.file);
+        _deleteIfExists(s);
       }
       rethrow;
     }
 
-    // Committed. Move the staged files into place, then drop whatever the old
-    // record referenced that the new one no longer does.
-    for (final s in staged) {
-      await _promoteStaged(s.file, File('$batchDirPath/${s.rel}'));
-    }
+    // All referenced images already exist. Only obsolete files are removed
+    // after commit; failed cleanup cannot invalidate the new record.
     final newRefs = <String?>{
       updatedScan.imageFileName,
       updatedScan.rectifiedImageFileName,
@@ -786,22 +788,4 @@ class LocalBatchRepository implements BatchRepository {
     return relPath;
   }
 
-  /// Moves a staged `<name>.new` file over its final name once the manifest
-  /// that references it is safely written. A same-directory rename replaces
-  /// the target atomically on Android/iOS; platforms that refuse to rename
-  /// over an existing file get a delete-then-rename instead. Best-effort by
-  /// design: this runs after the commit point, so it must never throw.
-  Future<void> _promoteStaged(File staged, File target) async {
-    try {
-      await staged.rename(target.path);
-    } on FileSystemException {
-      try {
-        if (target.existsSync()) target.deleteSync();
-        await staged.rename(target.path);
-      } catch (e) {
-        // ignore: avoid_print
-        print('LocalBatchRepository: could not move staged file into place (${e.runtimeType})');
-      }
-    }
-  }
 }
