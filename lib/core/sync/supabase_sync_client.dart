@@ -9,6 +9,7 @@ import '../services/local_batch_repository.dart';
 import '../services/local_storage_service.dart';
 import 'retake_client.dart';
 import 'scan_cloud_extensions.dart';
+import 'scan_delete_client.dart';
 import 'sync_client.dart';
 import 'sync_job.dart';
 import 'sync_outcome.dart';
@@ -103,7 +104,7 @@ class AnswerKeyDecision {
 /// It performs no retries or backoff of its own beyond a single
 /// token-refresh retry on an auth error; scheduling is the sync manager's
 /// job.
-class SupabaseSyncClient implements SyncClient, RetakeClient {
+class SupabaseSyncClient implements SyncClient, RetakeClient, ScanDeleteClient {
   SupabaseSyncClient({
     required this.batches,
     required this.localStorage,
@@ -1840,6 +1841,71 @@ class SupabaseSyncClient implements SyncClient, RetakeClient {
       return const SyncOutcome.success();
     });
     if (!storageOutcome.isSuccess) return storageOutcome;
+    syncState.forget(SyncState.scanKey(batchId, scanId));
+    return const SyncOutcome.success();
+  }
+
+  // ---------------------------------------------------------------------------
+  // G0a. deleteUnlinkedScan (Guidance Council Web Console only -- see
+  // ScanDeleteClient. Deliberately separate from deleteScan above, which is
+  // only ever dispatched by SyncManager for the mobile Batch Archive.)
+  // ---------------------------------------------------------------------------
+
+  /// See [ScanDeleteClient.deleteUnlinkedScan]. The DELETE itself carries
+  /// `.isFilter('examinee_id', null)` AND `.not('attempt_status', 'ilike',
+  /// 'ARCHIVED')` so the database -- not the caller's already-displayed
+  /// snapshot, and not a prior read -- is what decides at the moment of the
+  /// write; `.select('id')` reports how many rows actually matched, so a
+  /// zero-row no-op can never masquerade as success (mirrors
+  /// [unlinkScanFromExaminee]'s same guard pattern). `ilike` without a `%`
+  /// wildcard is an exact, case-insensitive match, so `not(... 'ilike',
+  /// 'ARCHIVED')` excludes exactly the rows [CloudScanRow.isArchivedAttempt]
+  /// would call archived -- the same rule, enforced one layer down, not a
+  /// new one. A scan still referenced by `exam_retake_requests.previous_scan_id`
+  /// (`ON DELETE RESTRICT`) surfaces here as a `23503` from Postgres, already
+  /// handled generically by [classifyPostgrestCode] -- no special-casing
+  /// needed. Row first, then Storage (original, rectified, and the three
+  /// name-crop variants) -- same ordering/reasoning as [deleteScan].
+  @override
+  Future<SyncOutcome> deleteUnlinkedScan({
+    required String batchId,
+    required String scanId,
+  }) async {
+    final rowOutcome = await _guardPostgrest(() async {
+      final deleted = await _client
+          .from('scans')
+          .delete()
+          .eq('batch_id', batchId)
+          .eq('id', scanId)
+          .isFilter('examinee_id', null)
+          .not('attempt_status', 'ilike', 'ARCHIVED')
+          .select('id');
+      if (deleted.length != 1) {
+        return const SyncOutcome.conflict('scan_not_unlinked');
+      }
+      return const SyncOutcome.success();
+    });
+    if (!rowOutcome.isSuccess) return rowOutcome;
+    final storageOutcome = await _guardStorage(StorageOp.delete, () async {
+      await _client.storage.from(storageBucket).remove([
+        originalImageKey(batchId, scanId),
+        rectifiedImageKey(batchId, scanId),
+        nameCropImageKey(batchId, scanId, variantNameLast),
+        nameCropImageKey(batchId, scanId, variantNameFirst),
+        nameCropImageKey(batchId, scanId, variantNameMiddle),
+      ]);
+      return const SyncOutcome.success();
+    });
+    if (!storageOutcome.isSuccess) {
+      // The row is already permanently gone -- never return the raw Storage
+      // failure verbatim here, or a caller further up (which no longer has
+      // any way to know the row succeeded) would report this exactly like
+      // a full failure. scanDeletedStorageIncompleteCode is the one signal
+      // that lets the caller tell the two apart.
+      return storageOutcome.isTransient
+          ? const SyncOutcome.transient(scanDeletedStorageIncompleteCode)
+          : const SyncOutcome.permanent(scanDeletedStorageIncompleteCode);
+    }
     syncState.forget(SyncState.scanKey(batchId, scanId));
     return const SyncOutcome.success();
   }
