@@ -272,6 +272,7 @@ class AnalyticsResult {
     this.qtm,
     this.tatOverall,
     this.tatDetail,
+    this.allActiveAttemptsArchived = false,
   });
 
   final String examCode;
@@ -287,6 +288,17 @@ class AnalyticsResult {
   final QtmBatchAnalytics? qtm;
   final TatOverallStats? tatOverall;
   final TatDetail? tatDetail;
+
+  /// Applicant Retake Management (additive): true when [analyzedBatches] is
+  /// non-empty (every selected batch's scans were fully retrieved) but
+  /// EVERY one of those scans is an archived retake attempt, so there is
+  /// nothing active left to analyze. [at]/[qtm]/[tatOverall]/[tatDetail]
+  /// are all null in this case -- deliberately never computed as an
+  /// all-zero result, which would look like a real (if unusually poor)
+  /// outcome rather than "nothing active to show". Completeness itself is
+  /// unaffected: these batches are still physically complete and still
+  /// appear in [analyzedBatches].
+  final bool allActiveAttemptsArchived;
 
   bool get hasData => analyzedBatches.isNotEmpty;
 }
@@ -401,6 +413,7 @@ class GuidanceWebAnalyticsService {
     final complete = <LocalBatch>[];
     final incomplete = <IncompleteBatch>[];
     final rows = <CloudScanRow>[];
+    var archivedExcludedCount = 0;
     for (final b in selected) {
       final data = _cache[b.id]!;
       // Completeness is a sync signal (did every physical scan row
@@ -414,7 +427,9 @@ class GuidanceWebAnalyticsService {
         // so it always reflects the current attempt, never a superseded
         // one. QTM scans are never archived, so this never changes QTM's
         // own numbers; a batch with no retake activity is unaffected.
-        rows.addAll(data.rows.where((r) => !r.isArchivedAttempt));
+        final active = data.rows.where((r) => !r.isArchivedAttempt).toList();
+        archivedExcludedCount += data.rows.length - active.length;
+        rows.addAll(active);
       } else {
         incomplete.add(IncompleteBatch(
           batch: b,
@@ -430,6 +445,21 @@ class GuidanceWebAnalyticsService {
         selectedBatches: selected,
         analyzedBatches: const [],
         incompleteBatches: incomplete,
+      );
+    }
+
+    // Physically complete, but every scan in those batches is an archived
+    // retake attempt -- nothing active is left to analyze. Reported as its
+    // own state rather than computing an all-zero AT/QTM/TAT result, which
+    // would look like a genuine (if unusually poor) outcome instead of
+    // "no active attempts". [lib/core/analytics/*] is never called here.
+    if (rows.isEmpty && archivedExcludedCount > 0) {
+      return AnalyticsResult(
+        examCode: examCode,
+        selectedBatches: selected,
+        analyzedBatches: complete,
+        incompleteBatches: incomplete,
+        allActiveAttemptsArchived: true,
       );
     }
 

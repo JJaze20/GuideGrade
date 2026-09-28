@@ -337,6 +337,14 @@ class _GuidanceWebBatchAnalyticsViewState extends State<GuidanceWebBatchAnalytic
               height: 160,
               key: const Key('noCompleteData'),
             )
+          else if (result.allActiveAttemptsArchived)
+            _message(
+              FontAwesomeIcons.boxArchive,
+              'All examination attempts in this batch are archived. '
+              'No active attempts to analyze.',
+              height: 160,
+              key: const Key('allAttemptsArchived'),
+            )
           else ...[
             Text(
               'Analyzing ${result.analyzedBatches.length} batch'

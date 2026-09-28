@@ -126,11 +126,17 @@ class _FakeSyncClient implements SyncClient {
   Future<CloudScansRead> readUnlinkedScans() => _no('readUnlinkedScans');
 }
 
-CloudBatchRow _batchRow({String description = ''}) => CloudBatchRow(
-  id: 'b1',
-  batchCode: 'B-1',
-  examCode: 'AT',
-  examTitle: 'Admission Test',
+CloudBatchRow _batchRow({
+  String description = '',
+  String id = 'b1',
+  String batchCode = 'B-1',
+  String examCode = 'AT',
+  String examTitle = 'Admission Test',
+}) => CloudBatchRow(
+  id: id,
+  batchCode: batchCode,
+  examCode: examCode,
+  examTitle: examTitle,
   description: description,
   expectedCount: 2,
   status: 'Active',
@@ -152,12 +158,16 @@ CloudScanRow _scanRow({
   // string 'Ungraded' (which still produces a real, zero-percent result).
   String? resultStatus = 'Graded',
   String? examineeId,
+  String batchId = 'b1',
+  String examCode = 'AT',
+  int attemptNo = 1,
+  String attemptStatus = 'active',
 }) => CloudScanRow(
   id: id,
-  batchId: 'b1',
-  examCode: 'AT',
+  batchId: batchId,
+  examCode: examCode,
   capturedAt: DateTime.utc(2026, 1, 1),
-  decoded: const {'examCode': 'AT', 'items': <dynamic>[]},
+  decoded: {'examCode': examCode, 'items': <dynamic>[]},
   rawScore: resultStatus == null ? null : rawScore,
   totalGraded: resultStatus == null ? null : 72,
   totalItems: resultStatus == null ? null : 72,
@@ -168,6 +178,8 @@ CloudScanRow _scanRow({
   firstName: firstName,
   lastName: lastName,
   examineeNumber: number,
+  attemptNo: attemptNo,
+  attemptStatus: attemptStatus,
   examineeId: examineeId,
 );
 
@@ -818,5 +830,85 @@ void main() {
         expect(find.text('Unnamed'), findsNothing);
       },
     );
+  });
+
+  group('Applicant Retake Management -- archived attempts excluded by default', () {
+    testWidgets('an archived Attempt 1 does not appear in the Results table', (tester) async {
+      client.scansByBatchId['b1'] = CloudScansRead.found([
+        _scanRow(
+          id: 's-old',
+          firstName: 'Juan',
+          lastName: 'Cruz',
+          number: 'A-1',
+          attemptNo: 1,
+          attemptStatus: 'archived',
+        ),
+      ]);
+      await pumpResultsView(tester);
+      await selectTheOnlyBatch(tester);
+
+      expect(find.text('Cruz, Juan'), findsNothing);
+    });
+
+    testWidgets('an active Attempt 2 appears in the Results table', (tester) async {
+      client.scansByBatchId['b1'] = CloudScansRead.found([
+        _scanRow(
+          id: 's-old',
+          firstName: 'Juan',
+          lastName: 'Cruz',
+          number: 'A-1',
+          attemptNo: 1,
+          attemptStatus: 'archived',
+        ),
+        _scanRow(
+          id: 's-new',
+          firstName: 'Juan',
+          lastName: 'Cruz',
+          number: 'A-1',
+          attemptNo: 2,
+          attemptStatus: 'active',
+        ),
+      ]);
+      await pumpResultsView(tester);
+      await selectTheOnlyBatch(tester);
+
+      expect(find.text('Cruz, Juan'), findsOneWidget);
+    });
+
+    testWidgets('an ordinary active Attempt 1 (no retake) appears, exactly as before', (tester) async {
+      client.scansByBatchId['b1'] = CloudScansRead.found([
+        _scanRow(id: 's1', firstName: 'Juan', lastName: 'Cruz', number: 'A-1'), // default: attempt 1, active
+      ]);
+      await pumpResultsView(tester);
+      await selectTheOnlyBatch(tester);
+
+      expect(find.text('Cruz, Juan'), findsOneWidget);
+    });
+
+    testWidgets('QTM behavior is unchanged', (tester) async {
+      client.batchesToReturn = CloudBatchesRead.found([
+        _batchRow(id: 'q1', batchCode: 'Q-1', examCode: 'QTM', examTitle: 'QTM'),
+      ]);
+      client.scansByBatchId['q1'] = CloudScansRead.found([
+        _scanRow(
+          id: 'sq1',
+          firstName: 'Ana',
+          lastName: 'Reyes',
+          number: 'Q-A1',
+          batchId: 'q1',
+          examCode: 'QTM',
+        ),
+      ]);
+      await pumpResultsView(tester);
+
+      await tester.tap(find.byKey(const Key('examTab_QTM')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byType(DropdownButtonFormField<LocalBatch>).first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Q-1 — QTM (Jan 1, 2026)').last);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Reyes, Ana'), findsOneWidget);
+    });
   });
 }
