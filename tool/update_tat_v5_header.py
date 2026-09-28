@@ -2,7 +2,7 @@
 
 Run from the repository root: python tool/update_tat_v5_header.py
 Requires pypdf and reportlab. The v5 sheet is a checked-in vector PDF, not
-an output of generate_sheets.dart. Only two known drawing commands change;
+an output of generate_sheets.dart. Only the title, instruction and border change;
 all other content bytes (including bubbles and fiducials) are preserved.
 """
 from io import BytesIO
@@ -22,16 +22,26 @@ def update(path: Path):
     title = 'TEACHING APTITUDE TEST (TAT)'
     width = stringWidth(title, 'Helvetica-Bold', 10)
     above_header_transform = f'1 0 0 1 {303 - width / 2:.4f} 896 cm'.encode('ascii')
-    # Right-aligned with the fields, on the pencil instruction's baseline.
-    new_transform = f'1 0 0 1 {558 - width:.4f} 760 cm'.encode('ascii')
-    if border not in content and new_transform in content:
+    right_title_transform = f'1 0 0 1 {558 - width:.4f} 760 cm'.encode('ascii')
+    # Title on the left; pencil instruction right-aligned on the same baseline.
+    new_transform = b'1 0 0 1 48 760 cm'
+    instruction = 'Use a No. 2 pencil. Fill the circle completely.'
+    instruction_x = 558 - stringWidth(instruction, 'Helvetica', 7)
+    old_instruction = b'1 0 0 1 48 760 Tm'
+    new_instruction = f'1 0 0 1 {instruction_x:.4f} 760 Tm'.encode('ascii')
+    if border not in content and new_transform in content and new_instruction in content:
         print('TAT v5 header already updated')
         return
-    old_transform = rotated_transform if rotated_transform in content else above_header_transform
+    candidates = [rotated_transform, above_header_transform, right_title_transform]
+    matches = [value for value in candidates if value in content]
+    assert len(matches) == 1, 'Unexpected TAT title position'
+    old_transform = matches[0]
     assert content.count(border) <= 1, 'Unexpected TAT letterhead border'
     assert content.count(old_transform) == 1, 'Unexpected TAT title transform'
+    assert content.count(old_instruction) == 1, 'Unexpected pencil instruction position'
     # Do not perform a general PDF re-layout or rasterize the sheet.
     updated = content.replace(border, b'').replace(old_transform, new_transform)
+    updated = updated.replace(old_instruction, new_instruction)
     stream = DecodedStreamObject()
     stream.set_data(updated)
     writer = PdfWriter()
