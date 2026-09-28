@@ -52,33 +52,6 @@ OmrScanResult _decodeOmrPage(_OmrDecodeRequest request) {
       rectifiedOutputPath: request.rectifiedOutputPath);
 }
 
-class _DebugVizRequest {
-  final String imagePath;
-  final OmrExamTemplate template;
-  final String outputDir;
-  final int pageIndex;
-
-  /// Whether this pass should ALSO emit the verbose per-contour/per-bubble
-  /// log. False writes the stage images alone, which is all the "How it was
-  /// read" viewer needs.
-  final bool verboseLogging;
-  const _DebugVizRequest(this.imagePath, this.template, this.outputDir, this.pageIndex,
-      {this.verboseLogging = false});
-}
-
-void _saveDebugVisualization(_DebugVizRequest request) {
-  // Only ever called (see processCapturedPages) when diagnostics are on,
-  // but set explicitly anyway rather than assuming that -- this isolate
-  // has no memory of what the calling isolate's flag was.
-  // Only the LOGGING follows this flag. saveDebugVisualization's stage
-  // images are written unconditionally -- it contains no reference to the
-  // verbose switches -- so the viewer works without paying for thousands of
-  // synchronous print() calls per sheet, which is what made dim-light
-  // scanning crawl.
-  OmrDecoder.setDiagnosticsEnabled(request.verboseLogging);
-  const OmrDecoder().saveDebugVisualization(request.imagePath, request.template, request.outputDir, request.pageIndex);
-}
-
 // Review images are produced during decode() using the registration already
 // fitted for scoring, so no separate rectification pass is needed.
 
@@ -893,35 +866,9 @@ class AppState extends ChangeNotifier {
   bool isProcessingScans = false;
   String? scanProcessingError;
 
-  /// Opt-in troubleshooting mode (2026-09-19): off by default, matching
-  /// ordinary scanning never generating full diagnostic images or verbose
-  /// per-bubble/per-candidate logs. When true, [processCapturedPages]
-  /// additionally writes [lastDebugImagesDir]'s annotated debug images for
-  /// every page and enables verbose fiducial/bubble logging in the decode
-  /// isolate (see [OmrDecoder.setDiagnosticsEnabled]). Recognition,
-  /// validation, and scoring are identical either way — this only ever
-  /// gates extra output, never an input to decoding. Mirrored by
-  /// `ExamScanningScreen._diagnosticsEnabled`, which also gates the live
-  /// preview's own diagnostic overlay and is the only current UI for
-  /// flipping this (debug builds only — see that field's doc comment).
+  /// Enables verbose decoder logging and the debug-build live overlay.
+  /// Recognition, validation and scoring do not depend on this flag.
   bool diagnosticsEnabled = false;
-
-  /// Whether to write [lastDebugImagesDir]'s per-stage images, WITHOUT the
-  /// verbose decode logging that [diagnosticsEnabled] also turns on.
-  ///
-  /// Split from [diagnosticsEnabled] because the two have very different
-  /// costs and only one of them is what staff actually want to look at. The
-  /// verbose side flips [OmrDecoder.setDiagnosticsEnabled], which re-enables
-  /// thousands of synchronous `print()` calls per sheet -- that is what made
-  /// scanning crawl in dim light, where the expensive full-quadrant fiducial
-  /// fallback runs. The images are one extra decode per page, paid once,
-  /// after the real decode, and are the only part the "How it was read"
-  /// viewer needs.
-  ///
-  /// Enabled during scanner development for the "How it was read" viewer.
-  /// Remove this diagnostic feature before merging to main. It adds one
-  /// decode per page; verbose logging stays controlled by [diagnosticsEnabled].
-  bool debugImagesEnabled = true;
 
   /// Tells [AppLockGate] to ignore an `AppLifecycleState.resumed` event
   /// instead of re-locking, for as long as this is true. Set by a screen
@@ -950,10 +897,6 @@ class AppState extends ChangeNotifier {
   /// `sheetIndex` first. Set once, right before this session's scans are
   /// appended; reset to 0 by [startScanSession]/[clearScanSession].
   int sessionScanOffset = 0;
-
-  /// Where the last processCapturedPages() run wrote debug visualization
-  /// images. Diagnostic only — never blocks or affects real scan results.
-  String? lastDebugImagesDir;
 
   void setActiveExamCode(String code) {
     activeExamCode = code;
@@ -1203,22 +1146,6 @@ class AppState extends ChangeNotifier {
     rectifiedImagePaths.clear();
     notifyListeners();
 
-    // Ordinary scanning skips debug-image generation entirely -- it isn't
-    // just gated at the write site below, the directory is never even
-    // prepared. See diagnosticsEnabled's doc comment.
-    //
-    // Each run gets its own subfolder. The decoder names its output by page
-    // slot (`sheet1_inkmap.jpg` and so on), so a shared folder meant run two
-    // silently inherited run one's images for any stage it didn't overwrite
-    // -- a decode that bailed early wrote only sheet1_FAILED.jpg and left the
-    // previous session's ink map sitting there to be shown as if it were
-    // this sheet's. Per-run folders make that impossible, and keep the older
-    // runs around to compare against instead of deleting them.
-    final debugDir = (diagnosticsEnabled || debugImagesEnabled)
-        ? await _prepareDebugImagesDir(
-            runSubfolder: 'run_${DateTime.now().millisecondsSinceEpoch}')
-        : null;
-    lastDebugImagesDir = debugDir;
     final rectifiedDir = await _prepareRectifiedImagesDir();
 
     final errors = <String>[];
@@ -1248,22 +1175,6 @@ class AppState extends ChangeNotifier {
         errors.add('Sheet $pageIndex: $e');
       }
       final decodeMs = decodeSw?.elapsedMilliseconds ?? 0;
-      final debugSw = kOmrPerfDebug ? (Stopwatch()..start()) : null;
-      // debugDir is only ever non-null when diagnosticsEnabled was true at
-      // the top of this run (see above), so this whole second decode-alike
-      // pass -- illumination-normalize + CLAHE + threshold run a second
-      // time, plus several imwrite()s -- never happens during ordinary
-      // scanning.
-      if (debugDir != null) {
-        try {
-          await compute(_saveDebugVisualization,
-              _DebugVizRequest(page.path, template, debugDir, pageIndex,
-                  verboseLogging: diagnosticsEnabled));
-        } catch (_) {
-          // Diagnostic-only; never let a debug-image failure block real results.
-        }
-      }
-      final debugMs = debugSw?.elapsedMilliseconds ?? 0;
       // Display-only; a failure here (the file was never written, e.g. a
       // decode failure, or the write itself failing) must never affect
       // scannedResults or block scanning -- just leaves no review image.
@@ -1275,7 +1186,7 @@ class AppState extends ChangeNotifier {
       rectifiedImagePaths.add(rectifiedPath);
       if (pageSw != null) {
         omrPerfLog(
-          'page pageIndex=$pageIndex decode=${decodeMs}ms debugViz=${debugMs}ms '
+          'page pageIndex=$pageIndex decode=${decodeMs}ms '
           'rectify=${rectifyMs}ms total=${pageSw.elapsedMilliseconds}ms',
         );
       }
@@ -1646,34 +1557,6 @@ class AppState extends ChangeNotifier {
       changed: true,
       scoreRecalculated: true,
     );
-  }
-
-  /// App-external "omr_debug" folder for [processCapturedPages]'s debug
-  /// visualization images. Returns null (silently) if unavailable. Public
-  /// so [ExamScanningScreen] can reuse the same folder to dump a debug
-  /// snapshot of a REJECTED capture too (see its own `_capture`'s
-  /// misalignment branch) — otherwise a "Page not fully detected" photo
-  /// leaves no trace anywhere to diagnose after the fact, since it never
-  /// reaches [processCapturedPages] at all.
-  Future<String?> prepareDebugImagesDir() => _prepareDebugImagesDir();
-
-  /// [runSubfolder] isolates one processing run's images from every other
-  /// run's — see [processCapturedPages], which passes one. Omitted for the
-  /// rejected-capture snapshot, which does its own `rejected/` nesting.
-  Future<String?> _prepareDebugImagesDir({String? runSubfolder}) async {
-    try {
-      final base = await getExternalStorageDirectory();
-      if (base == null) return null;
-      final dir = Directory(
-        runSubfolder == null
-            ? '${base.path}/omr_debug'
-            : '${base.path}/omr_debug/$runSubfolder',
-      );
-      if (!dir.existsSync()) dir.createSync(recursive: true);
-      return dir.path;
-    } catch (_) {
-      return null;
-    }
   }
 
   /// App-private cache folder for [processCapturedPages]'s rectified
