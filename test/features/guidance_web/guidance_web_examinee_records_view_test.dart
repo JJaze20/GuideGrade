@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:guidegrade/core/sync/scan_delete_client.dart';
 import 'package:guidegrade/core/sync/sync_client.dart';
 import 'package:guidegrade/core/sync/sync_job.dart';
 import 'package:guidegrade/core/sync/sync_outcome.dart';
@@ -13,7 +14,29 @@ import 'package:guidegrade/features/guidance_web/screens/guidance_web_examinee_r
 import 'package:guidegrade/features/guidance_web/services/guidance_web_examinee_records_service.dart';
 import 'package:guidegrade/features/guidance_web/services/guidance_web_results_service.dart';
 
-class _FakeSyncClient implements SyncClient {
+class _FakeSyncClient implements SyncClient, ScanDeleteClient {
+  /// When set, [deleteUnlinkedScan] returns it verbatim.
+  SyncOutcome? deleteUnlinkedScanResult;
+  final List<Map<String, String>> deleteUnlinkedScanCalls = [];
+
+  @override
+  Future<SyncOutcome> deleteUnlinkedScan({
+    required String batchId,
+    required String scanId,
+  }) async {
+    calls.add('deleteUnlinkedScan:$batchId/$scanId');
+    deleteUnlinkedScanCalls.add({'batchId': batchId, 'scanId': scanId});
+    final override = deleteUnlinkedScanResult;
+    if (override != null) return override;
+    final match = unlinkedScansToReturn.scans
+        .where((s) => s.batchId == batchId && s.id == scanId && !s.isArchivedAttempt)
+        .toList();
+    if (match.isEmpty) return const SyncOutcome.conflict('scan_not_unlinked');
+    unlinkedScansToReturn = CloudScansRead.found(
+      unlinkedScansToReturn.scans.where((s) => s != match.first).toList(),
+    );
+    return const SyncOutcome.success();
+  }
   CloudExamineesRead examineesToReturn = CloudExamineesRead.found(const []);
   CloudBatchesRead batchesToReturn = CloudBatchesRead.found(const []);
   CloudScansRead unlinkedScansToReturn = CloudScansRead.found(const []);
@@ -260,6 +283,8 @@ CloudScanRow _scanRow({
   String? firstName,
   String? lastName,
   DateTime? capturedAt,
+  int attemptNo = 1,
+  String attemptStatus = 'active',
 }) =>
     CloudScanRow(
       id: id,
@@ -271,6 +296,8 @@ CloudScanRow _scanRow({
       firstName: firstName,
       lastName: lastName,
       examineeNumber: (firstName == null && lastName == null) ? null : 'EX-legacy-1',
+      attemptNo: attemptNo,
+      attemptStatus: attemptStatus,
     );
 
 void main() {
@@ -1352,6 +1379,138 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(client.calls, contains('linkScanToExaminee:b1/s1/e1'));
+    });
+  });
+
+  group('4. Delete Unlinked Scan', () {
+    Future<void> openUnlinked(WidgetTester tester, {String attemptStatus = 'active'}) async {
+      client.batchesToReturn = CloudBatchesRead.found([_batchRow(id: 'b1', examCode: 'TAT')]);
+      client.unlinkedScansToReturn = CloudScansRead.found([
+        _scanRow(id: 's1', batchId: 'b1', examCode: 'TAT', firstName: 'Juan', lastName: 'Dela Cruz',
+            attemptStatus: attemptStatus),
+      ]);
+      await pumpView(tester);
+      await tester.tap(find.textContaining('Unlinked Scans'));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('1. a Delete action is shown for a normal unlinked scan, alongside the existing actions',
+        (tester) async {
+      await openUnlinked(tester);
+      expect(find.widgetWithText(TextButton, 'Delete'), findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'View Image'), findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'Link to Existing'), findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'Confirm and Create Examinee'), findsOneWidget);
+    });
+
+    testWidgets('2. tapping Delete opens a confirmation dialog naming the permanent deletion',
+        (tester) async {
+      await openUnlinked(tester);
+      await tester.tap(find.widgetWithText(TextButton, 'Delete'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Delete This Scan?'), findsOneWidget);
+      expect(find.textContaining('permanently'), findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'Cancel'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Delete'), findsOneWidget);
+      // Nothing is deleted just by opening the dialog.
+      expect(client.deleteUnlinkedScanCalls, isEmpty);
+    });
+
+    testWidgets('3. Cancel closes the dialog without deleting anything', (tester) async {
+      await openUnlinked(tester);
+      await tester.tap(find.widgetWithText(TextButton, 'Delete'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Delete This Scan?'), findsNothing);
+      expect(client.deleteUnlinkedScanCalls, isEmpty);
+      expect(find.text('Dela Cruz, Juan'), findsOneWidget);
+    });
+
+    testWidgets('4/7. Confirm calls deleteUnlinkedScan with the exact batch/scan id (the DB enforces '
+        'examinee_id IS NULL, never assumed from the UI)', (tester) async {
+      await openUnlinked(tester);
+      await tester.tap(find.widgetWithText(TextButton, 'Delete'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
+      await tester.pumpAndSettle();
+
+      expect(client.deleteUnlinkedScanCalls, [
+        {'batchId': 'b1', 'scanId': 's1'},
+      ]);
+    });
+
+    testWidgets('8. never falls back to the broad mobile deleteScan path', (tester) async {
+      await openUnlinked(tester);
+      await tester.tap(find.widgetWithText(TextButton, 'Delete'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
+      await tester.pumpAndSettle();
+
+      expect(client.calls, isNot(contains(startsWith('deleteScan:'))));
+    });
+
+    testWidgets('5. a successful deletion removes the row from the Unlinked Scans list', (tester) async {
+      await openUnlinked(tester);
+      expect(find.text('Dela Cruz, Juan'), findsOneWidget);
+
+      await tester.tap(find.widgetWithText(TextButton, 'Delete'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Dela Cruz, Juan'), findsNothing);
+      expect(find.text('Scan deleted.'), findsOneWidget);
+    });
+
+    testWidgets('6. a deletion failure shows an error and leaves the row in place', (tester) async {
+      await openUnlinked(tester);
+      client.deleteUnlinkedScanResult = const SyncOutcome.conflict('scan_not_unlinked');
+
+      await tester.tap(find.widgetWithText(TextButton, 'Delete'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Dela Cruz, Juan'), findsOneWidget);
+      expect(
+        find.text('This scan is no longer unlinked or no longer exists. '
+            'Refresh the Unlinked Scans list and try again.'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets(
+        'a row-deleted-but-storage-incomplete result removes the row and shows the accurate '
+        'warning, never a plain "try again" message', (tester) async {
+      await openUnlinked(tester);
+      client.deleteUnlinkedScanResult =
+          const SyncOutcome.permanent(scanDeletedStorageIncompleteCode);
+
+      await tester.tap(find.widgetWithText(TextButton, 'Delete'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
+      await tester.pumpAndSettle();
+
+      // The row is gone (the database row really was deleted)...
+      expect(find.text('Dela Cruz, Juan'), findsNothing);
+      // ...but the message is the accurate warning, never the plain success
+      // text and never a "try again" implying nothing happened.
+      expect(find.text('Scan deleted.'), findsNothing);
+      expect(find.textContaining('Please try again'), findsNothing);
+      expect(find.textContaining('will no longer appear in Unlinked Scans'), findsOneWidget);
+      expect(find.textContaining('Storage'), findsOneWidget);
+    });
+
+    testWidgets('9. an archived historical attempt has no Delete action, and cannot be deleted',
+        (tester) async {
+      await openUnlinked(tester, attemptStatus: 'archived');
+
+      expect(find.widgetWithText(TextButton, 'Delete'), findsNothing);
+      expect(client.deleteUnlinkedScanCalls, isEmpty);
     });
   });
 }

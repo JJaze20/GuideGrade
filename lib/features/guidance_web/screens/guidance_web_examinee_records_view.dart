@@ -91,6 +91,10 @@ class _GuidanceWebExamineeRecordsViewState
   DateTime? _unlinkedDateTo;
   String? _unlinkedError;
 
+  /// The scan id currently being deleted, or null -- guards against a
+  /// double-tap firing two deletes for the same row while one is in flight.
+  String? _deletingScanId;
+
   /// The examinee currently open in the Detail view, or null while a tab's
   /// own list is showing.
   ExamineeRecord? _viewingExaminee;
@@ -251,6 +255,78 @@ class _GuidanceWebExamineeRecordsViewState
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Scan attached to the selected Examinee Record.')),
     );
+  }
+
+  /// "Delete" -- permanently removes [item]'s scan (and its images) from
+  /// the Unlinked Scans queue. Refuses an archived historical attempt up
+  /// front (mirrors [GuidanceWebExamineeDetailView]'s "Remove Link" guard,
+  /// same reasoning: deleting one would permanently destroy a retake's
+  /// audit trail), before even opening the confirmation dialog.
+  Future<void> _deleteUnlinkedScan(ExamineeHistoryItem item) async {
+    if (_deletingScanId != null) return;
+    if (item.isArchivedAttempt) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Archived historical attempts are protected and cannot be deleted.'),
+        ),
+      );
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Delete This Scan?'),
+        content: const Text(
+          'This scan and its associated images (original photo, rectified '
+          'photo, and any handwritten name crops) will be permanently '
+          'deleted. This cannot be undone.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.warmRedOrange),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _deletingScanId = item.scan.id);
+    try {
+      await _service.deleteUnlinkedScan(batchId: item.batch.id, scanId: item.scan.id);
+      if (!mounted) return;
+      setState(() {
+        _unlinkedScans = [
+          for (final s in _unlinkedScans) if (s.scan.id != item.scan.id) s,
+        ];
+        _deletingScanId = null;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Scan deleted.')),
+      );
+    } on GuidanceWebExamineeRecordsException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        // scanWasDeleted: the database row is already permanently gone
+        // (only Storage cleanup failed) -- the row must leave this list
+        // even though this is the exception branch, not the success one.
+        if (e.scanWasDeleted) {
+          _unlinkedScans = [
+            for (final s in _unlinkedScans) if (s.scan.id != item.scan.id) s,
+          ];
+        }
+        _deletingScanId = null;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _deletingScanId = null);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not delete this scan. Please try again.')),
+      );
+    }
   }
 
   Future<void> _previewImage(ExamineeHistoryItem item) async {
@@ -848,6 +924,12 @@ class _GuidanceWebExamineeRecordsViewState
                   onPressed: () => _createFromScan(item),
                   child: Text('Confirm and Create Examinee', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w700, color: AppColors.primaryGreen)),
                 ),
+                if (!item.isArchivedAttempt)
+                  TextButton(
+                    style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 6)),
+                    onPressed: _deletingScanId != null ? null : () => _deleteUnlinkedScan(item),
+                    child: Text('Delete', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w700, color: AppColors.warmRedOrange)),
+                  ),
               ],
             ),
             ),
