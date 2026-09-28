@@ -62,6 +62,18 @@ def verify(ref, preview_dir=None):
 
                 old_chars, _ = split_title(a)
                 new_chars, title_chars = split_title(b)
+                if name == 'TAT-portrait-v5' and i == 0:
+                    instruction = 'Use a No. 2 pencil. Fill the circle completely.'
+                    def split_instruction(chars):
+                        text = ''.join(c['text'] for c in chars)
+                        assert text.count(instruction) == 1
+                        start = text.index(instruction)
+                        return chars[:start] + chars[start + len(instruction):], chars[start:start + len(instruction)]
+                    old_chars, old_instruction = split_instruction(old_chars)
+                    new_chars, new_instruction = split_instruction(new_chars)
+                    assert [round(c['top'], 3) for c in old_instruction] == [round(c['top'], 3) for c in new_instruction]
+                    assert min(c['x0'] for c in new_instruction) > max(c['x1'] for c in title_chars) + 20
+                    assert abs(max(c['x1'] for c in new_instruction) - 558) < .01
                 assert geometry(old_chars) == geometry(new_chars), f'{name}: other text moved'
                 if i == 0:
                     assert ''.join(c['text'] for c in title_chars) == title, name
@@ -69,7 +81,7 @@ def verify(ref, preview_dir=None):
                     top, bottom = min(c['top'] for c in title_chars), max(c['bottom'] for c in title_chars)
                     if name == 'TAT-portrait-v5':
                         assert 164 < top < bottom < 180
-                        assert min(c['x0'] for c in title_chars) > 300
+                        assert abs(min(c['x0'] for c in title_chars) - 48) < .01
                     else:
                         assert (124 if name == 'AT' else 130) < top < bottom < 165
             print(f'PASS {name}: bubbles, markers, fields, other text and back pages unchanged')
