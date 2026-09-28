@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:path_provider/path_provider.dart';
@@ -151,10 +152,11 @@ class LocalBatchRepository implements BatchRepository {
     await temp.writeAsBytes(encrypted, flush: true);
     try {
       await temp.rename(target.path);
-    } on FileSystemException {
-      // Some platforms refuse to rename over an existing file.
-      if (target.existsSync()) target.deleteSync();
-      await temp.rename(target.path);
+    } catch (_) {
+      // Never delete the live manifest to retry a failed rename: interruption
+      // between delete and rename would lose the only committed record.
+      _deleteIfExists(temp);
+      rethrow;
     }
 
     final legacy = File('${dir.path}/$_legacyManifestName');
@@ -418,6 +420,7 @@ class LocalBatchRepository implements BatchRepository {
     File? nameCropLastImage,
     File? nameCropFirstImage,
     File? nameCropMiddleImage,
+    LocalScan? expectedOriginal,
   }) => _serialized(batchId, () async {
     final root = await _root();
     final batch = await _readManifest(_batchDir(root, batchId));
@@ -426,76 +429,108 @@ class LocalBatchRepository implements BatchRepository {
     }
     final existingIndex = batch.scans.indexWhere((s) => s.id == scanId);
     if (existingIndex == -1) {
+      if (expectedOriginal != null) throw RescanOriginalChangedException(deleted: true);
       throw StateError('Scan $scanId does not exist in batch $batchId.');
     }
     final existing = batch.scans[existingIndex];
+    if (expectedOriginal != null && !existing.sameStoredStateAs(expectedOriginal)) {
+      throw RescanOriginalChangedException(deleted: false);
+    }
     final batchDirPath = _batchDir(root, batchId).path;
+    final imagesDir = Directory('$batchDirPath/$_imagesDirName');
+    if (!imagesDir.existsSync()) imagesDir.createSync(recursive: true);
 
-    // Always (re)written to the canonical encrypted filename, regardless
-    // of what the previous file was named -- a plaintext-era `.jpg`
-    // silently upgrades to `.enc` here, on this rescan, same as a
-    // manifest upgrades on its next write.
-    final newImageFileName = '$_imagesDirName/$scanId.enc';
-    final encryptedSource = await _crypto.encrypt(await sourceImage.readAsBytes());
-    await File('$batchDirPath/$newImageFileName').writeAsBytes(encryptedSource, flush: true);
-    if (existing.imageFileName != newImageFileName) {
-      _deleteIfExists(File('$batchDirPath/${existing.imageFileName}'));
+    // Copy-on-write: write complete encrypted files at unique final paths
+    // BEFORE publishing them in the manifest. Old paths remain untouched
+    // throughout preparation. A killed process can leave orphan encrypted
+    // files, but the committed manifest still points to a complete capture.
+    // Randomness also avoids reusing an orphan's path after a restart/retry.
+    final random = Random.secure();
+    final version = List.generate(16, (_) => random.nextInt(256)
+        .toRadixString(16).padLeft(2, '0')).join();
+    final prefix = '${scanId}_r${existing.captureRevision + 1}_$version';
+    final staged = <File>[];
+    Future<String?> stage(String fileName, File? image, {bool required = false}) async {
+      if (image == null || !image.existsSync()) {
+        if (required) throw FileSystemException('Replacement photo is missing', image?.path);
+        return null;
+      }
+      final rel = '$_imagesDirName/$fileName';
+      final target = File('$batchDirPath/$rel');
+      final encrypted = await _crypto.encrypt(await image.readAsBytes());
+      // Register before writing so even a partial write is cleaned on failure.
+      staged.add(target);
+      await target.writeAsBytes(encrypted, flush: true);
+      return rel;
     }
 
-    // Rectified overlay copy and the 3 name crops all follow the same rule:
-    // deliberately refreshed-to-null rather than kept when this rescan
-    // didn't produce a new one, so a stale image from the *previous*
-    // capture is never paired with this rescan's fresh photo (see
-    // ScannedImageViewerScreen's _hasOverlay, which falls back to the plain
-    // photo when the rectified path is null, and NameCropStrip, which
-    // falls back to "no crop available" the same way).
-    final rectifiedRelPath = await _replaceOptionalImage(
-      batchDirPath,
-      '${scanId}_rectified.enc',
-      rectifiedImage,
+    // Always an encrypted filename, regardless of what the previous file
+    // was named -- a plaintext-era `.jpg` silently upgrades to
+    // `.enc` on this rescan, same as a manifest upgrades on its next write.
+    // The rectified overlay copy and the 3 name crops are deliberately
+    // refreshed-to-null rather than kept when this rescan didn't produce a
+    // new one, so a stale image from the *previous* capture is never paired
+    // with this rescan's fresh photo (see ScannedImageViewerScreen's
+    // _hasOverlay and NameCropStrip, which both fall back cleanly).
+    final LocalBatch updated;
+    final LocalScan updatedScan;
+    try {
+      final newImageRel = (await stage('$prefix.enc', sourceImage, required: true))!;
+      final rectifiedRelPath = await stage('${prefix}_rectified.enc', rectifiedImage);
+      final nameCropLastRelPath = await stage('${prefix}_name_last.enc', nameCropLastImage);
+      final nameCropFirstRelPath = await stage('${prefix}_name_first.enc', nameCropFirstImage);
+      final nameCropMiddleRelPath = await stage('${prefix}_name_mi.enc', nameCropMiddleImage);
+
+      updatedScan = LocalScan(
+        id: existing.id,
+        imageFileName: newImageRel,
+        rectifiedImageFileName: rectifiedRelPath,
+        // The sheet's own date is never moved by a rescan; when the
+        // replacement happened is recorded separately.
+        capturedAt: existing.capturedAt,
+        rescannedAt: DateTime.now(),
+        decoded: decoded,
+        result: result,
+        examinee: examinee ?? existing.examinee, // default: same physical sheet -- keep its tag
+        nameCropLastFileName: nameCropLastRelPath,
+        nameCropFirstFileName: nameCropFirstRelPath,
+        nameCropMiddleFileName: nameCropMiddleRelPath,
+        // A rescan is a NEW capture of the same slot: corrections made on the
+        // old capture stay in the history (never dropped) but stop applying —
+        // see AnswerCorrection.captureRevision / LocalScan.correctionsNeedingReview.
+        captureRevision: existing.captureRevision + 1,
+        corrections: existing.corrections,
+      );
+
+      final scans = [...batch.scans];
+      scans[existingIndex] = updatedScan;
+      updated = _finalize(batch.copyWith(scans: scans), batch);
+      await _writeManifest(updated); // commit point
+    } catch (_) {
+      for (final s in staged) {
+        _deleteIfExists(s);
+      }
+      rethrow;
+    }
+
+    // All referenced images already exist. Only obsolete files are removed
+    // after commit; failed cleanup cannot invalidate the new record.
+    final newRefs = <String?>{
+      updatedScan.imageFileName,
+      updatedScan.rectifiedImageFileName,
+      updatedScan.nameCropLastFileName,
+      updatedScan.nameCropFirstFileName,
+      updatedScan.nameCropMiddleFileName,
+    };
+    for (final old in <String?>[
+      existing.imageFileName,
       existing.rectifiedImageFileName,
-    );
-    final nameCropLastRelPath = await _replaceOptionalImage(
-      batchDirPath,
-      '${scanId}_name_last.enc',
-      nameCropLastImage,
       existing.nameCropLastFileName,
-    );
-    final nameCropFirstRelPath = await _replaceOptionalImage(
-      batchDirPath,
-      '${scanId}_name_first.enc',
-      nameCropFirstImage,
       existing.nameCropFirstFileName,
-    );
-    final nameCropMiddleRelPath = await _replaceOptionalImage(
-      batchDirPath,
-      '${scanId}_name_mi.enc',
-      nameCropMiddleImage,
       existing.nameCropMiddleFileName,
-    );
-
-    final updatedScan = LocalScan(
-      id: existing.id,
-      imageFileName: newImageFileName,
-      rectifiedImageFileName: rectifiedRelPath,
-      capturedAt: DateTime.now(),
-      decoded: decoded,
-      result: result,
-      examinee: examinee ?? existing.examinee, // default: same physical sheet -- keep its tag
-      nameCropLastFileName: nameCropLastRelPath,
-      nameCropFirstFileName: nameCropFirstRelPath,
-      nameCropMiddleFileName: nameCropMiddleRelPath,
-      // A rescan is a NEW capture of the same slot: corrections made on the
-      // old capture stay in the history (never dropped) but stop applying —
-      // see AnswerCorrection.captureRevision / LocalScan.correctionsNeedingReview.
-      captureRevision: existing.captureRevision + 1,
-      corrections: existing.corrections,
-    );
-
-    final scans = [...batch.scans];
-    scans[existingIndex] = updatedScan;
-    final updated = _finalize(batch.copyWith(scans: scans), batch);
-    await _writeManifest(updated);
+    ]) {
+      if (old != null && !newRefs.contains(old)) _deleteIfExists(File('$batchDirPath/$old'));
+    }
     return updated;
   });
 
@@ -753,32 +788,4 @@ class LocalBatchRepository implements BatchRepository {
     return relPath;
   }
 
-  /// [replaceScan]'s write path for one optional per-scan image (rectified
-  /// overlay copy, or a name crop): when [newImage] is given and present on
-  /// disk, encrypts and writes it under [fileName], deletes [existingRelPath]
-  /// if it names a different file, and returns the new relative path. When
-  /// [newImage] is absent, deliberately clears to null instead of keeping
-  /// [existingRelPath] (deleting that old file too) -- see the call site's
-  /// comment for why a stale image must never survive a rescan that didn't
-  /// reproduce it.
-  Future<String?> _replaceOptionalImage(
-    String batchDirPath,
-    String fileName,
-    File? newImage,
-    String? existingRelPath,
-  ) async {
-    if (newImage != null && newImage.existsSync()) {
-      final relPath = '$_imagesDirName/$fileName';
-      final encrypted = await _crypto.encrypt(await newImage.readAsBytes());
-      await File('$batchDirPath/$relPath').writeAsBytes(encrypted, flush: true);
-      if (existingRelPath != null && existingRelPath != relPath) {
-        _deleteIfExists(File('$batchDirPath/$existingRelPath'));
-      }
-      return relPath;
-    }
-    if (existingRelPath != null) {
-      _deleteIfExists(File('$batchDirPath/$existingRelPath'));
-    }
-    return null;
-  }
 }

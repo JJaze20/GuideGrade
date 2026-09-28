@@ -3,6 +3,8 @@
 // single shared layout computation, so the two can never drift apart.
 //
 // Run with (from the repo root): cd tool && dart pub get && dart run generate_sheets.dart
+// Header-only AT/QTM edits: dart run generate_sheets.dart --pdf-only --exam=AT --exam=QTM
+// The active TAT v5 PDF is maintained separately by update_tat_v5_header.py.
 //
 // This is its own standalone Dart package (see tool/pubspec.yaml),
 // deliberately kept out of the main app's pubspec.yaml dependency graph —
@@ -275,7 +277,7 @@ const double kQtmHeaderHeight =
 // section's own item numbering, are UNCHANGED — this only touches the
 // header, adds the extra decorative fiducials, and rotates the title into
 // the page's existing right-margin slack, all mirroring AT/QTM's own
-// redesigns (see _paintAtRotatedTitle/_paintQtmRotatedTitle) but
+// redesigns (see _paintNameRowTitle/_paintNameRowTitle) but
 // implemented separately here so it can't regress either of them.
 // ---------------------------------------------------------------------------
 
@@ -499,14 +501,9 @@ class ExamSpec {
   /// coordinates).
   final String templateVersion;
 
-  /// AT only: skips drawing the title/instruction lines in their normal
-  /// horizontal spot in [_paintSimpleHeader] (the space reserved for them
-  /// — kTitleRowHeight/kInstructionRowHeight — is left blank, not
-  /// reclaimed, so nothing else moves) and instead draws them rotated 90°
-  /// in the blank margin strip beside the top-right corner marker (see
-  /// [_paintAtRotatedTitle]) — that strip exists because AT's grid doesn't
-  /// use the page's full available width (see kAtGridCols's cells), so it
-  /// was sitting unused.
+  /// Keeps the original reserved header height while drawing the title
+  /// separately. The historical flag name is retained for the legacy TAT
+  /// layout; AT/QTM now draw their titles below the name fields.
   final bool titleInRightMargin;
 
   const ExamSpec(
@@ -596,10 +593,8 @@ final List<ExamSpec> kExams = [
     // see _qtmCellHeight's fit math (kQtmHeaderHeight + 2*cellHeight +
     // kQtmSectionRowGap comfortably inside kLongHeight, verified against
     // the regenerated PDF's actual fill, not computed on paper alone).
-    // columnGap widened well past the default 40 -- like AT, the 3-column
-    // grid doesn't need the page's full available width to stay legible,
-    // and the strip that leaves on the right is exactly where
-    // _paintQtmRotatedTitle puts the rotated title, same trick AT uses.
+    // Keep the established column spacing so previously printed sheets
+    // retain identical scanning geometry. The title now sits below the name fields.
     bubbleRadius: 8,
     choicePitch: 26,
     rowPitch: 33,
@@ -708,10 +703,8 @@ final List<ExamSpec> kExams = [
     // widest ones. Purely a label draw-position change: bubble positions
     // and rowLabelWidth are untouched.
     labelGapPt: 6,
-    // The title/instruction move into the blank margin strip beside the
-    // top-right corner marker instead (see _paintAtRotatedTitle) -- the
-    // grid's 3x2 section layout doesn't use the page's full width, leaving
-    // that strip otherwise empty.
+    // Keep the reserved header height; _paintNameRowTitle draws the title in
+    // the existing blank space below the name fields.
     titleInRightMargin: true,
     templateVersion: 'AT-redesign-v1',
   ),
@@ -1507,7 +1500,7 @@ void _paintAtGridPage(PdfGraphics canvas, ExamSpec exam, ExamLayout layout, PdfF
   final headerPage = PagePlacement(exam.sections.first, 1, 1, const []);
   _paintSimpleHeader(canvas, exam, headerPage, layout, regular, bold, flip);
   if (exam.titleInRightMargin) {
-    _paintAtRotatedTitle(canvas, exam, bold);
+    _paintNameRowTitle(canvas, exam, layout.contentWidth, bold);
   }
 
   for (final page in layout.pages) {
@@ -1515,33 +1508,21 @@ void _paintAtGridPage(PdfGraphics canvas, ExamSpec exam, ExamLayout layout, PdfF
   }
 }
 
-/// AT only: draws the exam title rotated -90° (reading top-to-bottom) in
-/// the blank margin strip beside the top-right corner marker — instead of
-/// its normal horizontal spot in the header (see
-/// [ExamSpec.titleInRightMargin], which also skips drawing it there). The
-/// pencil instruction stays in its usual horizontal spot (below the First
-/// Name/MI row — see [_paintSimpleHeader]); only the title moves.
-/// The margin strip is otherwise empty because AT's 3x2 section grid
-/// doesn't use the page's full available width (see [_atGridWidth]).
-void _paintAtRotatedTitle(PdfGraphics canvas, ExamSpec exam, PdfFont bold) {
-  double flip(double topLeftY) => exam.pageHeightPt - topLeftY;
-
-  final rightCorner = exam.contentLeft + _atGridWidth(exam) + exam.markerPad;
-  final titleX = rightCorner + kAtEdgeMarkerHalf + 9;
-  // Top of the title -- level with the grid's first row (item 25's row,
-  // same headerBottom every section-row-0 item sits on), reading downward
-  // (toward bigger topLeftY) from there alongside items 25-36. topLeftY is
-  // the text's own bottom-left corner before rotation, which becomes its
-  // TOP-most point after the -90° turn.
-  final startY = exam.contentTop + headerHeightFor(exam);
-
+/// Paints the title in the blank space below the name row and above the pencil
+/// instruction, without changing bubble, name-field, or marker positions.
+void _paintNameRowTitle(PdfGraphics canvas, ExamSpec exam, double width, PdfFont bold) {
+  final title = exam.title.toUpperCase();
+  const size = 11.0;
+  final textWidth = (bold.stringMetrics(title) * size).advanceWidth;
+  final nameRowBottom = exam.contentTop +
+      (exam.code == 'AT'
+          ? kBrandRowHeight + kSubtitleRowHeight + kGapAfterSubtitle
+          : kLetterheadHeight + kGapAfterLetterhead) +
+      kTableHeight;
   canvas.setColor(kNavy);
-  canvas.saveContext();
-  canvas.setTransform(Matrix4.identity()
-    ..translateByDouble(titleX, flip(startY), 0, 1)
-    ..rotateZ(-math.pi / 2));
-  canvas.drawString(bold, 11, exam.title.toUpperCase(), 0, 0);
-  canvas.restoreContext();
+  canvas.drawString(bold, size, title,
+      exam.contentLeft + (width - textWidth) / 2,
+      exam.pageHeightPt - (nameRowBottom + 26));
 }
 
 /// QTM's redesigned front-page header: the same NDMU letterhead box as
@@ -1620,11 +1601,8 @@ void _paintQtmHeader(
   y += kTableHeight + kQtmGapBetweenIdRows;
   y += kTableHeight + kGapAfterIdTable;
 
-  // Title (+ page indicator). Skipped here when titleInRightMargin is set
-  // (QTM, like AT) -- _paintQtmRotatedTitle draws it instead, rotated in
-  // the right margin strip freed up by widening columnGap (see kExams'
-  // QTM entry). The space itself stays reserved (y still advances) so
-  // nothing below moves.
+  // The title is drawn below the name fields by _paintNameRowTitle. Keep this
+  // reserved height so the existing instruction and bubble positions stay put.
   if (!exam.titleInRightMargin) {
     canvas.setColor(kNavy);
     canvas.drawString(bold, 12, exam.title.toUpperCase(), exam.contentLeft, flip(y + 13));
@@ -1667,36 +1645,12 @@ void _paintQtmGridPage(PdfGraphics canvas, ExamSpec exam, ExamLayout layout, Pdf
 
   _paintQtmHeader(canvas, exam, layout, regular, bold, flip);
   if (exam.titleInRightMargin) {
-    _paintQtmRotatedTitle(canvas, exam, bold);
+    _paintNameRowTitle(canvas, exam, layout.contentWidth, bold);
   }
 
   for (final page in layout.pages) {
     _paintItems(canvas, page.items, exam, regular, bold, flip);
   }
-}
-
-/// QTM only: draws the exam title rotated -90° (reading top-to-bottom) in
-/// the margin strip freed up by widening columnGap (see kExams' QTM
-/// entry) — instead of its normal horizontal spot in the header (see
-/// [ExamSpec.titleInRightMargin], which also skips drawing it there in
-/// [_paintQtmHeader]). Mirrors AT's own [_paintAtRotatedTitle].
-void _paintQtmRotatedTitle(PdfGraphics canvas, ExamSpec exam, PdfFont bold) {
-  double flip(double topLeftY) => exam.pageHeightPt - topLeftY;
-
-  final rightCorner = exam.contentLeft + _qtmGridWidth(exam) + exam.markerPad;
-  final titleX = rightCorner + kAtEdgeMarkerHalf + 9;
-  // Top of the title -- level with the grid's first row, reading downward
-  // from there. topLeftY is the text's own bottom-left corner before
-  // rotation, which becomes its TOP-most point after the -90° turn.
-  final startY = exam.contentTop + headerHeightFor(exam);
-
-  canvas.setColor(kNavy);
-  canvas.saveContext();
-  canvas.setTransform(Matrix4.identity()
-    ..translateByDouble(titleX, flip(startY), 0, 1)
-    ..rotateZ(-math.pi / 2));
-  canvas.drawString(bold, 11, exam.title.toUpperCase(), 0, 0);
-  canvas.restoreContext();
 }
 
 /// QTM's back page: the fields the redesigned front page no longer has
@@ -2343,10 +2297,8 @@ void _paintSimpleHeader(
   y += kTableHeight + kAtGapBetweenIdRows;
   y += kTableHeight + kGapAfterTable;
 
-  // Title (+ page indicator for multi-page sections). Skipped here when
-  // titleInRightMargin is set (AT) -- _paintAtRotatedTitle draws it instead,
-  // rotated in the top-right margin strip. The space itself stays reserved
-  // (y still advances) so nothing below moves.
+  // AT's title is drawn below the name fields by _paintNameRowTitle. The space
+  // itself stays reserved (y still advances) so nothing below moves.
   if (!exam.titleInRightMargin) {
     canvas.setColor(kNavy);
     final sectionSuffix = exam.suppressSectionInTitle ? '' : ' - ${page.section.name}';
@@ -3037,6 +2989,7 @@ Future<void> main(List<String> args) async {
     return;
   }
 
+  final selectedExams = args.where((arg) => arg.startsWith('--exam=')).map((arg) => arg.substring(7)).toSet();
   final dartFile = StringBuffer();
   dartFile.writeln('// GENERATED by tool/generate_sheets.dart — do not hand-edit.');
   dartFile.writeln('// Bubble positions are fractions of the page (0.0-1.0), top-left origin —');
@@ -3155,12 +3108,14 @@ Future<void> main(List<String> args) async {
     // (see _paintTatHeader), and Scores was dropped entirely rather than
     // moved anywhere.
 
-    if (!args.contains('--templates-only')) {
+    if (!args.contains('--templates-only') &&
+        (selectedExams.isEmpty || selectedExams.contains(exam.code))) {
       final bytes = await pdf.save();
       File('${answerSheetsDir.path}/${exam.code}.pdf').writeAsBytesSync(bytes);
     }
     final physicalPageCount = isTatPortrait || isAtGrid || isQtmGrid ? 1 : layout.pages.length;
-    if (!args.contains('--templates-only')) {
+    if (!args.contains('--templates-only') &&
+        (selectedExams.isEmpty || selectedExams.contains(exam.code))) {
       stdout.writeln('Wrote answer_sheets/${exam.code}.pdf ($physicalPageCount page(s), content width ${layout.contentWidth.toStringAsFixed(1)}pt)');
     }
 
@@ -3179,6 +3134,8 @@ Future<void> main(List<String> args) async {
   dartFile.writeln('/// from its geometry JSON (tool/import_tat_v5_geometry.dart).');
   dartFile.writeln('final OmrExamTemplate omrTATPortraitV1 = _omrTAT;');
 
-  File('../lib/core/omr/omr_templates.dart').writeAsStringSync(dartFile.toString());
-  stdout.writeln('Wrote lib/core/omr/omr_templates.dart');
+  if (!args.contains('--pdf-only')) {
+    File('../lib/core/omr/omr_templates.dart').writeAsStringSync(dartFile.toString());
+    stdout.writeln('Wrote lib/core/omr/omr_templates.dart');
+  }
 }

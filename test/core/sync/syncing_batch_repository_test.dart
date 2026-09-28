@@ -204,6 +204,7 @@ class _FakeLocal implements LocalBatchRepository {
     File? nameCropLastImage,
     File? nameCropFirstImage,
     File? nameCropMiddleImage,
+    LocalScan? expectedOriginal,
   }) async {
     calls.add('replaceScan:$batchId/$scanId');
     _maybeThrow('replaceScan');
@@ -866,6 +867,20 @@ void main() {
       'patchImageStatus',
       'pushBatch',
     ]);
+    expectNoNetworkOrDrain();
+  });
+
+  test('replaceScan local failure enqueues no cloud work', () async {
+    fakeLocal.failWith['replaceScan'] = const FileSystemException('replacement write failed');
+    await expectLater(
+      repo.replaceScan(
+        batchId: 'b1', scanId: 's1', decoded: _decoded,
+        sourceImage: File('src.jpg'),
+      ),
+      throwsA(isA<FileSystemException>()),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(queue.jobs, isEmpty);
     expectNoNetworkOrDrain();
   });
 

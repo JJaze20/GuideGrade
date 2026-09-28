@@ -58,6 +58,15 @@ class ScannedImageViewerScreen extends StatefulWidget {
   final String? scanTemplateVersion;
   final Map<String, (double, double)>? meshInteriorMeasuredFrac;
 
+  /// A retake hint when this capture's geometry was never trustworthy --
+  /// see [ScoredResult.geometryWarning]. Null hides the banner entirely.
+  ///
+  /// Worth showing precisely here: a misregistered sheet produces a full
+  /// page of confident-looking red rings that is indistinguishable, at a
+  /// glance, from a student who simply answered badly. Staff had no way to
+  /// tell those apart.
+  final String? geometryWarning;
+
   /// When given, answers can be corrected from this screen: tap an item's
   /// bubbles/number on the sheet, or its row in the answer-key drawer. The
   /// items shown are then recomputed from the scan's corrected reading after
@@ -75,6 +84,7 @@ class ScannedImageViewerScreen extends StatefulWidget {
     this.template,
     this.scanTemplateVersion,
     this.meshInteriorMeasuredFrac,
+    this.geometryWarning,
     this.editing,
   }) : assert(
          imagePath != null || imageBytes != null,
@@ -95,6 +105,7 @@ class _ScannedImageViewerScreenState extends State<ScannedImageViewerScreen> {
   Uint8List? get rectifiedImageBytes => widget.rectifiedImageBytes;
   OmrExamTemplate? get template => widget.template;
   String? get scanTemplateVersion => widget.scanTemplateVersion;
+  String? get geometryWarning => widget.geometryWarning;
   ScanEditing? get editing => widget.editing;
 
   /// Items as they read NOW: recomputed from the detected answers plus this
@@ -247,6 +258,10 @@ class _ScannedImageViewerScreenState extends State<ScannedImageViewerScreen> {
       body: SafeArea(
         child: Column(
           children: [
+            // Above the score: if the geometry was untrustworthy, that
+            // qualifies every number and ring shown below it.
+            if (geometryWarning != null)
+              _GeometryWarningBanner(message: geometryWarning!),
             if (_currentScore(items) != null) _ScoreBanner(score: _currentScore(items)!),
             if (_hasOverlay) _GradedOverlayLegend(editable: _canEdit),
             Expanded(
@@ -284,6 +299,44 @@ class _ScannedImageViewerScreenState extends State<ScannedImageViewerScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Sits above the legend when the decode's own mesh verdict says the
+/// capture's geometry could not be trusted.
+///
+/// Amber rather than red, and non-blocking: the scan is still shown and
+/// still usable. The point is only that staff can tell a misregistered
+/// sheet from a genuinely low score, which the overlay alone cannot.
+class _GeometryWarningBanner extends StatelessWidget {
+  final String message;
+  const _GeometryWarningBanner({required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      color: const Color(0xFF78350F),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.warning_amber_rounded,
+              color: Color(0xFFFCD34D), size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              message,
+              style: const TextStyle(
+                color: Color(0xFFFEF3C7),
+                fontSize: 12.5,
+                height: 1.35,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

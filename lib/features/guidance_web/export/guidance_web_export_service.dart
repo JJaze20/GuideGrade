@@ -93,9 +93,15 @@ class GuidanceWebExportService {
     final section = includeSummary
         ? await _batchSection(batch, allScans)
         : null;
+    // Every examinee uses the same whole-batch baseline for this export.
+    final averages = selected.isNotEmpty && key != null && clusterDefsFor(batch.examCode) != null
+        ? computeClusterAverages(batch.examCode, [
+            for (final scan in allScans) scoreOmrResult(scan.decoded, key).items,
+          ])
+        : const <String, double>{};
     final examinees = [
       for (final s in selected)
-        _examineeSection(batch, s, allScans, key, includeCertificates),
+        _examineeSection(batch, s, averages, key, includeCertificates),
     ];
 
     final left = (await rootBundle.load('assets/images/ndmu_logo.png'))
@@ -315,7 +321,7 @@ class GuidanceWebExportService {
   ExportExamineeSection _examineeSection(
     LocalBatch batch,
     LocalScan scan,
-    List<LocalScan> allScans,
+    Map<String, double> averages,
     AnswerKey? key,
     bool includeCertificates,
   ) {
@@ -327,11 +333,6 @@ class GuidanceWebExportService {
 
     List<ClusterRow>? clusterRows;
     if (clusterDefsFor(batch.examCode) != null) {
-      final averages = key == null
-          ? const <String, double>{}
-          : computeClusterAverages(batch.examCode, [
-              for (final s in allScans) scoreOmrResult(s.decoded, key).items,
-            ]);
       clusterRows = computeClusterRows(
         batch.examCode,
         scoreOmrResult(scan.decoded, key).items,

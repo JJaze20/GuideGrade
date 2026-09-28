@@ -1,20 +1,8 @@
-// STOPGAP: this file did not exist in the repo — every file that references
-// AnswerKeyModel (lib/core/omr/answer_key_adapter.dart,
-// lib/core/services/firestore_service.dart,
-// lib/features/guidance/screens/answer_key_management_screen.dart,
-// lib/features/guidance/screens/edit_exam_screen.dart) already assumed this
-// shape and has since 3f2c1bc, but the model class itself was never
-// committed, so every release build fails at compile time. This
-// reconstructs the exact shape those call sites already require (see their
-// usage of the constructor, .isFinal, .isLegacy, .answers,
-// .legacyFlatAnswers, .copyWith, .toFirestore/.fromFirestore) so the app
-// compiles again — it is NOT a verified reimplementation of the intended
-// Guidance Council answer-key schema. Whoever owns that feature should
-// review this against their actual Firestore documents (especially
-// fromFirestore's legacy-document field guesses) before relying on it.
+// This model supports both the current answer-key fields and legacy Firestore
+// documents. Keep the compatibility parsing aligned with stored documents.
 
 /// A Guidance Council answer key document, as stored in Firestore's
-/// `answerKeys` collection.
+/// `answer_keys` collection.
 class AnswerKeyModel {
   /// Firestore document ID; empty string for a not-yet-created key.
   final String answerKeyId;

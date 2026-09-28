@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -8,6 +7,7 @@ import '../../models/omr_scan_result.dart';
 import 'fiducial_search_tuning.dart';
 import 'omr_alignment_check.dart';
 import 'omr_mesh_correction.dart';
+import 'omr_bubble_classifier.dart';
 import 'omr_templates.dart';
 import 'tat_marker_validation.dart';
 
@@ -26,7 +26,7 @@ typedef _QuadrantSearch = ({
 /// Ranked outcome of measuring every choice in one OMR item at a given
 /// (possibly zero) sampling shift -- see [OmrDecoder._measureItemAt].
 typedef _ItemMeasurement = ({
-  List<(String, ({double ringFill, double wholeFill, double centerFill, double score}))>
+  List<(String, ({double ringFill, double wholeFill, double centerFill, double score, double dark}))>
       measurements,
   String bestChoice,
   double bestFill,
@@ -161,11 +161,49 @@ class OmrDecoder {
   /// other exams retain stronger correction for uneven lighting.
   static double _claheClipLimitFor(String examCode) => switch (examCode) {
     'QTM' => 1.2,
+    // TAT's dense landscape layout packs 120 small oval T/F bubbles across
+    // many narrow columns — its bubble-to-bubble spacing is the tightest of
+    // any exam, so CLAHE noise amplification on blank paper between bubbles
+    // bleeds into neighboring fill readings more than on QTM/AT.  A clip
+    // limit between QTM's conservative 1.2 and the default 2.0 restores
+    // shadow/LED contrast without the speckle that inflates false positives.
+    'TAT' => 1.5,
     _ => 2.0,
   };
 
-  /// Odd threshold window spanning several bubbles to follow lighting gradients.
-  static const int _adaptiveThresholdBlockSize = 45;
+  /// How many bubble widths the adaptive-threshold window must span.
+  ///
+  /// An adaptive threshold compares each pixel against the mean of its own
+  /// window, so the window has to be dominated by PAPER for a mark to stand
+  /// out from it. Once the window is no wider than a bubble, a filled
+  /// bubble's centre is measured against a neighbourhood lying entirely
+  /// inside the same mark: the local mean is the mark's own darkness, the
+  /// centre fails `pixel < mean - C`, and the mark binarises as a ring with
+  /// a hole punched through it rather than a solid blob.
+  ///
+  /// Measured on the bench across TAT/QTM/AT, mean centre-fill of a shaded
+  /// bubble against this multiplier: 0.97x -> 0.67, 1.41x -> 0.86,
+  /// 1.88x -> 0.89, 2.50x -> 0.89, 3.44x -> 0.88. It climbs steeply out of
+  /// the hole, plateaus near 1.9x, and drifts back down as the window grows
+  /// too large to track lighting gradients. 2.5x sits on the plateau and is
+  /// what `guidegrade-omr-bench` has used all along (its 40pt window against
+  /// a 16pt bubble), which is the configuration every bench result and the
+  /// trained bubble classifier were produced under.
+  static const double _adaptiveThresholdBlockBubbleSpan = 2.5;
+
+  /// Odd threshold window, derived from the sheet's own bubble size.
+  ///
+  /// Previously hardcoded per exam (TAT 31px, others 45px) against a 32px
+  /// bubble — 0.97x and 1.41x respectively, i.e. TAT's window was narrower
+  /// than the bubble it had to measure. Deriving it keeps the ratio correct
+  /// if a redesigned sheet changes bubble size, instead of silently
+  /// reintroducing the hole.
+  static int _adaptiveThresholdBlockSizeFor(OmrExamTemplate template) {
+    final bubbleWidthPx = template.bubbleRadiusPt * 2 * _canonicalPxPerPt;
+    final raw = (bubbleWidthPx * _adaptiveThresholdBlockBubbleSpan).round();
+    // Adaptive thresholding requires an odd window of at least 3.
+    return raw < 3 ? 3 : (raw.isEven ? raw + 1 : raw);
+  }
 
   /// Constant subtracted from the local adaptive-threshold mean; higher
   /// values require darker pixels to count as "ink".
@@ -182,9 +220,20 @@ class OmrDecoder {
   static double _darknessFactor(double meanBrightness) =>
       ((_referenceBrightness - meanBrightness) / _maxDarknessRange).clamp(0.0, 1.0);
 
-  /// Increase contrast correction up to 2× for dark inputs.
+  /// Washout factor: 0 at reference brightness, 1 at near-saturation (250).
+  /// Captures the opposite problem from darkness — an overexposed image from
+  /// a low-end camera's aggressive auto-exposure, where pencil marks are
+  /// compressed to within a few gray levels of white paper.
+  static double _washoutFactor(double meanBrightness) =>
+      ((meanBrightness - _referenceBrightness) / 80.0).clamp(0.0, 1.0);
+
+  /// Increase contrast correction for both dark AND washed-out inputs.
+  /// Dark inputs: up to 2× base (unchanged from before).
+  /// Washed-out inputs: up to 1.5× base — a gentler boost because the image
+  /// already has high mean brightness and aggressive CLAHE on bright images
+  /// risks amplifying JPEG artifacts more than on dark ones.
   static double _adaptiveClipLimit(double base, double meanBrightness) =>
-      base * (1 + _darknessFactor(meanBrightness));
+      base * (1 + _darknessFactor(meanBrightness) + _washoutFactor(meanBrightness) * 0.5);
 
   /// Reduce the ink threshold offset up to 50% for dark inputs.
   static double _adaptiveThresholdCFor(double base, double meanBrightness) =>
@@ -194,7 +243,14 @@ class OmrDecoder {
   static const int _illumDownscaleDiv = 8;
 
   /// Target paper-brightness band after background division, preserving faint ink.
-  static const double _illumTargetLevelMin = 170;
+  /// Min lowered from 170 → 150: on washed-out low-end camera captures (auto-
+  /// exposure pushes paper to near-255), the background mean is very high, and
+  /// clamping the division target to 170 keeps the result too bright — faint
+  /// pencil marks end up only a few gray levels below paper, well within CLAHE
+  /// noise.  A target of 150 pulls the normalized page further from saturation,
+  /// giving CLAHE and adaptive thresholding more dynamic range to separate
+  /// genuinely marked bubbles from blank paper.
+  static const double _illumTargetLevelMin = 150;
   static const double _illumTargetLevelMax = 230;
 
   /// Normalize broad lighting variations before CLAHE and thresholding by dividing
@@ -222,8 +278,14 @@ class OmrDecoder {
       // Odd kernel ~1/3 of the downscaled short side: strong enough at this
       // scale to erase text and whole clusters of bubbles, so only the
       // lighting field survives into the estimate. Capped so an unusually
-      // large page can't make this needlessly slow.
-      final k = ((math.min(downW, downH) ~/ 3) | 1).clamp(11, 151);
+      // large page can't make this needlessly slow. Floor raised from 11 to
+      // 21 so that high-frequency LED panel banding (narrow bright/dark
+      // stripes across the page from PWM flicker or rolling-shutter
+      // interaction) gets averaged out rather than surviving into the
+      // background estimate — a visible stripe in `background` divides out
+      // as a complementary stripe in the result, producing a false lighting
+      // gradient that wasn't in the original capture.
+      final k = ((math.min(downW, downH) ~/ 3) | 1).clamp(21, 151);
       smallBlurred = cv.gaussianBlur(small, (k, k), 0);
 
       background =
@@ -261,7 +323,16 @@ class OmrDecoder {
       // (paper vs. ink). If it came out far too dark or bright, or collapsed
       // toward a single shade, discard it rather than hand the rest of the
       // pipeline something worse than the raw warp.
-      if (rMean < 30 || rMean > 250 || rStd < 3) {
+      //
+      // Upper bound relaxed from 250 → 253: under strong LED panel lighting
+      // (multiple ceiling LEDs in a defense/conference room) the paper is
+      // almost saturated white in the capture, which pushes the normalized
+      // mean into 245-252. Rejecting those and falling back to the raw warp
+      // loses the gradient correction that _normalizeIllumination provides,
+      // exactly when it's needed most. A mean above 253 still indicates a
+      // degenerate division (everything near 255) where thresholding will
+      // fail regardless.
+      if (rMean < 30 || rMean > 253 || rStd < 3) {
         return gray;
       }
 
@@ -279,18 +350,43 @@ class OmrDecoder {
 
   /// Minimum ink signal. Mark presence primarily uses same-row bubble differences
   /// so changes in overall lighting do not shift every item across a fixed floor.
-  static const double _blankFillFloor = 0.15;
+  /// Per-exam: TAT's small oval bubbles on washed-out low-end camera captures
+  /// (auto-exposure blows out pencil-vs-paper contrast) can score below the
+  /// standard 0.15 even when genuinely marked — lowered to 0.10 so faint marks
+  /// at least reach the presence/ambiguity checks instead of being silently
+  /// dismissed as blank.  Risk of false positives on dirty paper is mitigated
+  /// by the _markPresenceGap check that still requires the best bubble to
+  /// stand out from its row's floor.
+  static double _blankFillFloorFor(String examCode) => switch (examCode) {
+    'TAT' => 0.10,
+    _ => 0.15,
+  };
 
   /// Minimum best-to-runner-up gap for an unambiguous mark.
   /// AT/QTM use 0.10 for lighter, ring-shaped marks observed in real scans.
   static double _ambiguousMarginFor(String examCode) => switch (examCode) {
     'AT' || 'QTM' => 0.10,
+    // TAT's True/False items have only 2 choices per row — the runner-up is
+    // the *only* other bubble, so the absolute best-to-runner-up margin is
+    // structurally lower than on 4-5 choice exams where runner-up is a
+    // randomly blank neighbor.  A 0.15 flat cutoff flags too many genuinely
+    // single-marked T/F items as ambiguous; 0.08 matches the reduced
+    // headroom while still catching real double-marks.
+    'TAT' => 0.08,
     _ => 0.15,
   };
 
   /// Minimum best-to-lowest bubble gap for mark presence, including two-choice items.
   /// Lower than the ambiguity margin so faint marks can reach review.
-  static const double _markPresenceGap = 0.08;
+  /// Per-exam: TAT on washed-out captures (low-end camera auto-exposure) can
+  /// compress the entire fill range into a narrow band where even a genuinely
+  /// marked bubble barely exceeds its row's blank floor by 0.04-0.06.  A gap
+  /// of 0.05 lets those faint-but-real marks reach the ambiguity/margin checks
+  /// instead of being dismissed as blank.
+  static double _markPresenceGapFor(String examCode) => switch (examCode) {
+    'TAT' => 0.05,
+    _ => 0.08,
+  };
 
   /// A best-to-runner-up gap at least this fraction of the item's own
   /// presence gap (best-to-floor) counts as decisive even when it falls
@@ -303,7 +399,7 @@ class OmrDecoder {
   /// flagged ambiguous despite a visually unambiguous, single dark bubble.
   static const double _ambiguousRelativeMarginFloor = 0.55;
 
-  /// Presence gap must clear this multiple of [_markPresenceGap] before the
+  /// Presence gap must clear this multiple of [_markPresenceGapFor] before the
   /// relative-margin rescue above applies -- keeps genuinely faint marks
   /// (gap barely over the floor, so its ratio to the gap is unreliable)
   /// routed to ambiguous review as originally intended, rather than being
@@ -323,7 +419,14 @@ class OmrDecoder {
   /// second, independent path to the same "decisive" verdict, asking about
   /// the *other* choices instead: do any of them look like a real
   /// contender at all, regardless of how faint the winner itself is.
-  static const double _noCompetitorGapCeiling = _markPresenceGap * 0.5;
+  ///
+  /// Expressed as a fraction of the item's own per-exam presence gap
+  /// ([_markPresenceGapFor]) rather than a flat number, so that TAT's
+  /// deliberately compressed thresholds scale this ceiling down with them --
+  /// on a sheet where a *real* mark only has to clear its floor by 0.05, a
+  /// runner-up sitting 0.04 above that floor is a genuine contender, not
+  /// blank paper.
+  static const double _noCompetitorGapFraction = 0.5;
 
   /// Small local re-centering search tried only for items the flat/relative
   /// checks above still call blank or ambiguous. A single page-wide
@@ -340,6 +443,17 @@ class OmrDecoder {
   /// are of the bubble's own outer sampling half-width/height, kept well
   /// under half the template's own bubble-to-bubble spacing.
   static const List<double> _itemRecenterShiftFracs = [-0.35, -0.15, 0.0, 0.15, 0.35];
+
+  /// Wider recenter search grid used whenever mesh correction isn't in effect
+  /// (`!mesh.isActive`) — either the template prints no interior fiducials, or
+  /// it does but the mesh was rejected on this capture. Without the
+  /// triangulated mesh, the single global homography can leave center-of-page
+  /// bubbles off by more than the standard ±0.35 half-width — especially on
+  /// TAT's landscape layout where the sheet's longer horizontal span amplifies
+  /// any paper curl. The wider ±0.55 grid roughly doubles the candidates
+  /// (7×7 vs 5×5) but covers drift the narrower grid simply cannot reach, and
+  /// only ever runs for items already judged blank or ambiguous.
+  static const List<double> _itemRecenterShiftFracsWide = [-0.55, -0.35, -0.15, 0.0, 0.15, 0.35, 0.55];
 
   /// A fiducial blob must be at least this many gray levels darker than the
   /// local background to count as a real mark (not a shadow edge). Still a
@@ -450,7 +564,7 @@ class OmrDecoder {
   /// [OmrDecoder.setDiagnosticsEnabled], which
   /// [ExamScanningScreen]'s existing debug-build-only bug-icon toggle
   /// calls once per capture, threaded through the isolate boundary via
-  /// [_OmrDecodeRequest.diagnosticsEnabled]/[_DebugVizRequest] (see
+  /// the decode request's diagnosticsEnabled flag (see
   /// `app_state.dart`) since each `compute()` call gets its own isolate
   /// memory — a plain static set on the main isolate would never be seen
   /// there. Each isolate call sets this explicitly at its own start, so no
@@ -1789,7 +1903,7 @@ class OmrDecoder {
                         255,
                         cv.ADAPTIVE_THRESH_GAUSSIAN_C,
                         cv.THRESH_BINARY_INV,
-                        _adaptiveThresholdBlockSize,
+                        _adaptiveThresholdBlockSizeFor(template),
                         _adaptiveThresholdCFor(_adaptiveThresholdC, warpedBrightness),
                       );
                       if (threshSw != null) {
@@ -1799,6 +1913,15 @@ class OmrDecoder {
                         final bubbleSw = _kPerfDebug ? (Stopwatch()..start()) : null;
                         final result = _readBubbles(
                           inkMap,
+                          // Darkness is measured on the illumination-
+                          // normalized gray, NOT on the CLAHE output that
+                          // feeds the ink map. The bench fits the model's
+                          // darkness weights against `normalizeIllumination`'s
+                          // result with no CLAHE applied, and CLAHE rewrites
+                          // local contrast hard enough that measuring after
+                          // it would feed the model a different statistic
+                          // than the one it was trained on.
+                          normalizedGray,
                           template,
                           canonicalWidth,
                           canonicalHeight,
@@ -1869,6 +1992,7 @@ class OmrDecoder {
                           meshInteriorMeasuredFrac: mesh.verdict == OmrMeshVerdict.notApplicable
                               ? null
                               : mesh.toMeasuredFractions(canonicalWidth, canonicalHeight),
+                          meshVerdict: mesh.verdict.name,
                         );
                       } finally {
                         inkMap.dispose();
@@ -2376,465 +2500,6 @@ class OmrDecoder {
     return gray.region(cv.Rect(0, 0, trimWidth, height));
   }
 
-  /// Debug-only: writes two annotated JPEGs to [outputDir] — the detected
-  /// corner markers drawn on the original photo, and the full expected
-  /// bubble grid drawn on the warped/aligned image — so a misread sheet can
-  /// be diagnosed by looking at where the decoder actually thinks things
-  /// are, instead of guessing from decoded results alone. [outputDir] must
-  /// already exist and be writable.
-  void saveDebugVisualization(
-    String imagePath,
-    OmrExamTemplate template,
-    String outputDir,
-    int pageIndex,
-  ) {
-    final debugVizSw = _kPerfDebug ? (Stopwatch()..start()) : null;
-    final src = _imreadForTemplate(imagePath, template);
-    try {
-      if (src.isEmpty) return;
-      final gray = cv.cvtColor(src, cv.COLOR_BGR2GRAY);
-      try {
-        cv.Mat oriented;
-        _RefineResult refine;
-        int? rotationCode;
-        try {
-          (oriented, refine, rotationCode) = _orientAndFindCorners(
-            gray,
-            template,
-          );
-        } on StateError catch (e) {
-          // Corner detection itself failed — still write the raw photo so
-          // framing/lighting/orientation can be inspected, plus the exact
-          // error, instead of silently producing no debug output for
-          // precisely the failing case that needs to be seen.
-          cv.imwrite('$outputDir/sheet${pageIndex}_FAILED.jpg', src);
-          File(
-            '$outputDir/sheet${pageIndex}_error.txt',
-          ).writeAsStringSync(e.message);
-          if (debugVizSw != null) {
-            _perfLog(
-              'debugViz pageIndex=$pageIndex FAILED total=${debugVizSw.elapsedMilliseconds}ms',
-            );
-          }
-          return;
-        }
-        final corners = refine.corners;
-        try {
-          // For a landscape template that needed a rotation to align (see
-          // _orientAndFindCorners), src has to be rotated the same exact way
-          // so every debug image below — corners, color grid, grayscale
-          // stages — is drawn against the same orientation the real corners
-          // (and decode()'s real pipeline) actually use. Untouched (and
-          // undisposed separately) when no rotation was needed.
-          final orientedSrc = rotationCode == null
-              ? src
-              : cv.rotate(src, rotationCode);
-          try {
-            final cornersDebug = orientedSrc.clone();
-            try {
-              // The page-boundary estimate (yellow) is drawn separately from
-              // the final selected marks (red) so a bad final pick can be
-              // told apart from a bad *anchor* feeding into it: if the yellow
-              // quad already isn't on the sheet, _detectPageQuad is the stage
-              // to fix; if it's fine but the red circles still aren't on the
-              // marks, the problem is in _findMarkerInRegion's own filtering.
-              final pageQuad = _detectPageQuad(oriented);
-              if (pageQuad != null) {
-                // pageQuad is [topLeft, topRight, bottomLeft, bottomRight] —
-                // not already a perimeter walk — so draw it in actual
-                // clockwise order (TL, TR, BR, BL) or the "quad" comes out as
-                // a bowtie instead of an outline.
-                final perimeter = [
-                  pageQuad[0],
-                  pageQuad[1],
-                  pageQuad[3],
-                  pageQuad[2],
-                ];
-                for (var i = 0; i < perimeter.length; i++) {
-                  final (x, y) = perimeter[i];
-                  cv.circle(
-                    cornersDebug,
-                    cv.Point(x.round(), y.round()),
-                    10,
-                    cv.Scalar(0, 255, 255),
-                    thickness: 3,
-                  );
-                  final (nx, ny) = perimeter[(i + 1) % perimeter.length];
-                  cv.line(
-                    cornersDebug,
-                    cv.Point(x.round(), y.round()),
-                    cv.Point(nx.round(), ny.round()),
-                    cv.Scalar(0, 255, 255),
-                    thickness: 2,
-                  );
-                }
-              }
-              const cornerLabels = ['TL', 'TR', 'BL', 'BR'];
-              for (var i = 0; i < 4; i++) {
-                // Stage-1 search box (thin blue) — the template-expected
-                // prior, never a hard crop; useful to see it actually
-                // landed on the real marker (or didn't, explaining a
-                // Stage-2 fallback).
-                cv.rectangle(
-                  cornersDebug,
-                  refine.stage1Regions[i],
-                  cv.Scalar(255, 140, 0),
-                  thickness: 2,
-                );
-                // Expected marker position (magenta crosshair) — the exact
-                // point every candidate in this corner's search was scored
-                // against (see [_QuadrantSearch.anchorX]/`anchorY`),
-                // distinct from the Stage-1 box itself (which can get
-                // clamped at the image edge).
-                final (ax, ay) = refine.anchors[i];
-                final axi = ax.round(), ayi = ay.round();
-                cv.line(cornersDebug, cv.Point(axi - 12, ayi), cv.Point(axi + 12, ayi),
-                    cv.Scalar(255, 0, 255), thickness: 2);
-                cv.line(cornersDebug, cv.Point(axi, ayi - 12), cv.Point(axi, ayi + 12),
-                    cv.Scalar(255, 0, 255), thickness: 2);
-                // Every candidate this corner rejected — orange, sized by
-                // how highly it scored, so a near-miss (a bubble that
-                // almost won) stands out from obvious clutter. Label
-                // carries every metric requested for diagnosing a failed
-                // corner: reason, squareness, area, contrast.
-                for (final r in refine.rejectedPerCorner[i]) {
-                  final cx = r.bboxGlobal.x + r.bboxGlobal.width ~/ 2;
-                  final cy = r.bboxGlobal.y + r.bboxGlobal.height ~/ 2;
-                  cv.circle(
-                    cornersDebug,
-                    cv.Point(cx, cy),
-                    6 + (r.squareness * 10).round(),
-                    cv.Scalar(0, 140, 255),
-                    thickness: 2,
-                  );
-                  cv.putText(
-                    cornersDebug,
-                    '${r.reason} sq=${r.squareness.toStringAsFixed(2)} '
-                    'a=${r.area.toStringAsFixed(0)} '
-                    '${r.bboxGlobal.width}x${r.bboxGlobal.height} '
-                    'c=${r.contrast.toStringAsFixed(1)}',
-                    cv.Point(cx + 10, cy),
-                    cv.FONT_HERSHEY_SIMPLEX,
-                    0.4,
-                    cv.Scalar(0, 140, 255),
-                    thickness: 1,
-                  );
-                }
-              }
-              for (var i = 0; i < 4; i++) {
-                final c = corners[i];
-                final confidence = refine.confidence[i];
-                // Confident = green (the check that used to reject the real
-                // square at this pixel scale is gone); low/rescued = amber,
-                // so a Stage-4 geometry-assisted rescue is visibly distinct
-                // from a crisp detection, not indistinguishable red.
-                final color = confidence == CornerConfidence.confident
-                    ? cv.Scalar(0, 255, 0)
-                    : cv.Scalar(0, 200, 255);
-                cv.circle(
-                  cornersDebug,
-                  cv.Point(c.x.round(), c.y.round()),
-                  16,
-                  color,
-                  thickness: 5,
-                );
-                cv.putText(
-                  cornersDebug,
-                  '${cornerLabels[i]} ${confidence.name}',
-                  cv.Point(c.x.round() + 20, c.y.round() - 10),
-                  cv.FONT_HERSHEY_SIMPLEX,
-                  0.6,
-                  color,
-                  thickness: 2,
-                );
-              }
-              // The homography quad itself — connecting the 4 accepted
-              // corners in true perimeter order (TL,TR,BR,BL is a
-              // perimeter walk; index order [tl,tr,bl,br] is not), distinct
-              // in color (magenta) from the individual accept/reject
-              // markers above so the actual quad shape fed into
-              // getPerspectiveTransform2f is visible at a glance.
-              const perimeterOrder = [0, 1, 3, 2];
-              for (var i = 0; i < perimeterOrder.length; i++) {
-                final a = corners[perimeterOrder[i]];
-                final b = corners[perimeterOrder[(i + 1) % perimeterOrder.length]];
-                cv.line(
-                  cornersDebug,
-                  cv.Point(a.x.round(), a.y.round()),
-                  cv.Point(b.x.round(), b.y.round()),
-                  cv.Scalar(255, 0, 255),
-                  thickness: 2,
-                );
-              }
-              if (refine.note != null) {
-                cv.putText(
-                  cornersDebug,
-                  refine.note!,
-                  cv.Point(20, cornersDebug.height - 20),
-                  cv.FONT_HERSHEY_SIMPLEX,
-                  0.5,
-                  cv.Scalar(0, 200, 255),
-                  thickness: 1,
-                );
-              }
-              cv.imwrite(
-                '$outputDir/sheet${pageIndex}_corners.jpg',
-                cornersDebug,
-              );
-            } finally {
-              cornersDebug.dispose();
-            }
-
-            final canonicalWidth = (template.pageWidthPt * _canonicalPxPerPt)
-                .round();
-            final canonicalHeight = (template.pageHeightPt * _canonicalPxPerPt)
-                .round();
-            final dstCorners = cv.VecPoint2f.fromList([
-              for (final corner in template.cornerMarkers)
-                cv.Point2f(
-                  corner.xFrac * canonicalWidth,
-                  corner.yFrac * canonicalHeight,
-                ),
-            ]);
-            final srcCorners = cv.VecPoint2f.fromList(corners);
-            final transform = cv.getPerspectiveTransform2f(
-              srcCorners,
-              dstCorners,
-            );
-            try {
-              // The actual grayscale pipeline decode() reads bubbles from —
-              // same warp, same CLAHE, same threshold, on the grayscale image
-              // rather than color — saved at each stage so a misread can be
-              // diagnosed against what the decoder actually saw, not a
-              // reconstruction of it. sheetN_warped_gray.jpg is the flattened
-              // page before any contrast correction; sheetN_clahe.jpg is after
-              // (compare the two to see how much correction was needed);
-              // sheetN_inkmap.jpg is the final black/white result
-              // _readBubbles actually samples — white is "ink" everywhere it
-              // matters for scoring.
-              final warpedGray = cv.warpPerspective(oriented, transform, (
-                canonicalWidth,
-                canonicalHeight,
-              ));
-              // Computed from warpedGray (before any of the color drawing
-              // below) so the grid.jpg overlay can show exactly what
-              // decode()/locateCorners() would see: where each fiducial was
-              // expected after correction, where it was actually
-              // re-detected, and the resulting per-corner pixel error. See
-              // [_verifyWarpedCorners]'s doc comment for why re-detection
-              // (not re-projecting the same 4 source points) is the only
-              // meaningful post-warp check.
-              final warpVerification = _verifyWarpedCorners(
-                warpedGray,
-                template,
-                canonicalWidth,
-                canonicalHeight,
-              );
-              final warpClassified = _classifyWarpVerification(
-                warpVerification,
-                refine.confidence,
-              );
-
-              final warped = cv.warpPerspective(orientedSrc, transform, (
-                canonicalWidth,
-                canonicalHeight,
-              ));
-              try {
-                for (final section in template.sections) {
-                  for (final entry in section.items.entries) {
-                    for (final bubble in entry.value) {
-                      final x = (bubble.xFrac * canonicalWidth).round();
-                      final y = (bubble.yFrac * canonicalHeight).round();
-                      cv.circle(
-                        warped,
-                        cv.Point(x, y),
-                        3,
-                        cv.Scalar(0, 0, 255),
-                        thickness: -1,
-                      );
-                    }
-                  }
-                }
-                const warpCornerLabels = ['TL', 'TR', 'BL', 'BR'];
-                for (var i = 0; i < 4; i++) {
-                  final e = warpVerification.expected[i];
-                  final r = warpVerification.redetected[i];
-                  final err = warpVerification.errorPx[i];
-                  // Expected canonical position — magenta crosshair, always
-                  // drawn even when nothing was re-detected there.
-                  final ex = e.x.round(), ey = e.y.round();
-                  cv.line(warped, cv.Point(ex - 10, ey), cv.Point(ex + 10, ey),
-                      cv.Scalar(255, 0, 255), thickness: 2);
-                  cv.line(warped, cv.Point(ex, ey - 10), cv.Point(ex, ey + 10),
-                      cv.Scalar(255, 0, 255), thickness: 2);
-                  // Error-tier color: green within tolerance, amber past
-                  // _warpWarnPx, red past _warpRejectPx (or not found).
-                  final errColor = err > _warpRejectPx
-                      ? cv.Scalar(0, 0, 255)
-                      : err > _warpWarnPx
-                          ? cv.Scalar(0, 200, 255)
-                          : cv.Scalar(0, 255, 0);
-                  if (r != null) {
-                    final rx = r.x.round(), ry = r.y.round();
-                    cv.circle(warped, cv.Point(rx, ry), 8, errColor,
-                        thickness: 2);
-                    cv.line(warped, cv.Point(ex, ey), cv.Point(rx, ry),
-                        errColor, thickness: 1);
-                  }
-                  final label = err.isInfinite
-                      ? '${warpCornerLabels[i]} not found'
-                      // Plain ASCII — cv.FONT_HERSHEY_SIMPLEX has no glyph
-                      // for "Δ" and silently renders it as "??" (confirmed
-                      // against a real device capture).
-                      : '${warpCornerLabels[i]} err=${err.toStringAsFixed(1)}px';
-                  cv.putText(
-                    warped,
-                    label,
-                    cv.Point(ex + 14, ey + 14),
-                    cv.FONT_HERSHEY_SIMPLEX,
-                    0.5,
-                    errColor,
-                    thickness: 1,
-                  );
-                }
-                final verdictLabel = warpClassified.ok
-                    ? (warpClassified.degraded
-                        ? 'post-warp: within tolerance but degraded (max ${warpClassified.maxErrorPx.toStringAsFixed(1)}px)'
-                        : 'post-warp: OK (max ${warpClassified.maxErrorPx.toStringAsFixed(1)}px)')
-                    : 'post-warp: REJECTED - ${warpClassified.message}';
-                cv.putText(
-                  warped,
-                  verdictLabel,
-                  cv.Point(20, warped.height - 20),
-                  cv.FONT_HERSHEY_SIMPLEX,
-                  0.5,
-                  warpClassified.ok
-                      ? (warpClassified.degraded
-                          ? cv.Scalar(0, 200, 255)
-                          : cv.Scalar(0, 255, 0))
-                      : cv.Scalar(0, 0, 255),
-                  thickness: 1,
-                );
-                cv.imwrite('$outputDir/sheet${pageIndex}_grid.jpg', warped);
-              } finally {
-                warped.dispose();
-              }
-
-              // Declared out here so the `finally` can dispose it.
-              cv.Mat? normalizedDebugGray;
-              try {
-                cv.imwrite(
-                  '$outputDir/sheet${pageIndex}_warped_gray.jpg',
-                  warpedGray,
-                );
-                // Same illumination normalization decode() now applies,
-                // saved as its own stage between warped_gray and clahe so a
-                // shadow's removal is directly visible. When
-                // _normalizeIllumination declines, it hands back `warpedGray`
-                // and this image is simply identical to the previous one.
-                normalizedDebugGray = _normalizeIllumination(warpedGray);
-                cv.imwrite(
-                  '$outputDir/sheet${pageIndex}_normalized.jpg',
-                  normalizedDebugGray,
-                );
-                // Kept identical to the real decode path above (clipLimit,
-                // blur kernel, brightness-adaptive scaling, and now the
-                // illumination normalization too) so this debug output
-                // actually reflects what _readBubbles saw, not a different
-                // pipeline.
-                final warpedGrayMeanScalar = warpedGray.mean();
-                double warpedGrayBrightness;
-                try {
-                  warpedGrayBrightness = warpedGrayMeanScalar.val1;
-                } finally {
-                  warpedGrayMeanScalar.dispose();
-                }
-                // Same darkness-scaled bilateral pre-filter decode() now
-                // runs — a no-op Mat reference (not a real filter call) at/
-                // above _referenceBrightness — over the normalized image,
-                // exactly as decode() does.
-                final grayDarkness = _darknessFactor(warpedGrayBrightness);
-                final grayClaheInput = grayDarkness > 0
-                    ? cv.bilateralFilter(normalizedDebugGray, 5,
-                        50 * grayDarkness, 50 * grayDarkness)
-                    : normalizedDebugGray;
-                try {
-                  final clahe = cv.createCLAHE(
-                    clipLimit: _adaptiveClipLimit(_claheClipLimitFor(template.examCode), warpedGrayBrightness),
-                    tileGridSize: (8, 8),
-                  );
-                  try {
-                    final normalized = clahe.apply(grayClaheInput);
-                    try {
-                      cv.imwrite(
-                        '$outputDir/sheet${pageIndex}_clahe.jpg',
-                        normalized,
-                      );
-                      final blurred = cv.gaussianBlur(normalized, (5, 5), 0);
-                      try {
-                        final inkMap = cv.adaptiveThreshold(
-                          blurred,
-                          255,
-                          cv.ADAPTIVE_THRESH_GAUSSIAN_C,
-                          cv.THRESH_BINARY_INV,
-                          _adaptiveThresholdBlockSize,
-                          _adaptiveThresholdCFor(_adaptiveThresholdC, warpedGrayBrightness),
-                        );
-                        try {
-                          cv.imwrite(
-                            '$outputDir/sheet${pageIndex}_inkmap.jpg',
-                            inkMap,
-                          );
-                          if (debugVizSw != null) {
-                            _perfLog(
-                              'debugViz pageIndex=$pageIndex total=${debugVizSw.elapsedMilliseconds}ms',
-                            );
-                          }
-                        } finally {
-                          inkMap.dispose();
-                        }
-                      } finally {
-                        blurred.dispose();
-                      }
-                    } finally {
-                      normalized.dispose();
-                    }
-                  } finally {
-                    clahe.dispose();
-                  }
-                } finally {
-                  if (!identical(grayClaheInput, normalizedDebugGray)) {
-                    grayClaheInput.dispose();
-                  }
-                }
-              } finally {
-                // Only a *new* Mat from _normalizeIllumination is ours here;
-                // its bail path returns `warpedGray`, disposed just below.
-                if (normalizedDebugGray != null &&
-                    !identical(normalizedDebugGray, warpedGray)) {
-                  normalizedDebugGray.dispose();
-                }
-                warpedGray.dispose();
-              }
-            } finally {
-              transform.dispose();
-              srcCorners.dispose();
-              dstCorners.dispose();
-            }
-          } finally {
-            if (rotationCode != null) orientedSrc.dispose();
-          }
-        } finally {
-          if (rotationCode != null) oriented.dispose();
-        }
-      } finally {
-        gray.dispose();
-      }
-    } finally {
-      src.dispose();
-    }
-  }
-
   /// Finds each of the sheet's 4 fiducial corner marks.
   ///
   /// Stage 1: search a tight box around where *this exam's* own marker is
@@ -3135,8 +2800,8 @@ class OmrDecoder {
   /// was needed, otherwise a new rotated Mat the caller must separately
   /// dispose), its corners, and which rotation code was used to get there
   /// (null when [gray] needed none) — callers that also need to reproduce
-  /// the same rotation on a second image (e.g. saveDebugVisualization's
-  /// color [src]) need the exact code, not just "was it rotated": a 90°
+  /// the same rotation on a second image (e.g. the color review image) need
+  /// the exact code, not just "was it rotated": a 90°
   /// rotation in either direction changes a Mat's width/height the same
   /// way, so that alone can't tell them apart.
   (cv.Mat, _RefineResult, int?) _orientAndFindCorners(
@@ -4173,11 +3838,11 @@ class OmrDecoder {
                         localRoi.dispose();
                       }
 
-                      void log(String s) {
+                      void log(String Function() message) {
                         if (_kFiducialDebug && debugTag != null) {
                           _fidLog('q=$debugTag c#$ci '
                               'bbox=(${rect.x},${rect.y},${rect.width},${rect.height}) '
-                              'area=${area.toStringAsFixed(0)} contrast=${contrast.toStringAsFixed(1)} $s');
+                              'area=${area.toStringAsFixed(0)} contrast=${contrast.toStringAsFixed(1)} ${message()}');
                         }
                       }
 
@@ -4185,7 +3850,7 @@ class OmrDecoder {
                       // heavier shape metrics) ----
                       if (area < 8 || area > imageAreaCap) {
                         reject(rect, 0, 0, 'area', area: area, contrast: contrast);
-                        log('REJECT area (need 8..${imageAreaCap.toStringAsFixed(0)})');
+                        log(() => 'REJECT area (need 8..${imageAreaCap.toStringAsFixed(0)})');
                         continue;
                       }
                       // Deliberately loose: a genuinely rotated square fills
@@ -4206,12 +3871,12 @@ class OmrDecoder {
                       // bubble-as-fiducial problem.
                       if (boxArea <= 0 || extent < _markerMinFillRatio) {
                         reject(rect, 0, 0, 'fill_ratio', area: area, contrast: contrast);
-                        log('REJECT fill_ratio (extent=${extent.toStringAsFixed(3)}<$_markerMinFillRatio)');
+                        log(() => 'REJECT fill_ratio (extent=${extent.toStringAsFixed(3)}<$_markerMinFillRatio)');
                         continue;
                       }
                       if (aspect > _markerMaxAspect) {
                         reject(rect, 0, 0, 'aspect', area: area, contrast: contrast);
-                        log('REJECT aspect (${aspect.toStringAsFixed(2)}>$_markerMaxAspect)');
+                        log(() => 'REJECT aspect (${aspect.toStringAsFixed(2)}>$_markerMaxAspect)');
                         continue;
                       }
 
@@ -4315,7 +3980,7 @@ class OmrDecoder {
                           0.32 * positionScore +
                           0.18 * contrastScore;
 
-                      log('extent=${extent.toStringAsFixed(3)} aspect=${aspect.toStringAsFixed(2)} '
+                      log(() => 'extent=${extent.toStringAsFixed(3)} aspect=${aspect.toStringAsFixed(2)} '
                           'circ=${circularity.toStringAsFixed(3)} rect=${rectangularity.toStringAsFixed(3)} '
                           'ink=${inkDensity.toStringAsFixed(3)} solid=${solidity.toStringAsFixed(3)} '
                           'verts=$approxVerts sq=${squareness.toStringAsFixed(3)} '
@@ -4465,6 +4130,7 @@ class OmrDecoder {
   /// Equally filled choices (including all-marked rows) can read as blank.
   OmrScanResult _readBubbles(
     cv.Mat inkMap,
+    cv.Mat gray,
     OmrExamTemplate template,
     int canonicalWidth,
     int canonicalHeight,
@@ -4474,14 +4140,28 @@ class OmrDecoder {
     final bubbleSampleHalfPxX = template.bubbleRadiusPt * _canonicalPxPerPt;
     final bubbleSampleHalfPxY = template.bubbleRadiusYPt * _canonicalPxPerPt;
     final ambiguousMargin = _ambiguousMarginFor(template.examCode);
+    final blankFloor = _blankFillFloorFor(template.examCode);
+    final presenceGap = _markPresenceGapFor(template.examCode);
     final bubbleDebug = _kBubbleDebug;
+    // Use the wider recenter grid when mesh correction couldn't run (no
+    // interior fiducials on this template) — the single global homography
+    // leaves more local drift to compensate for.
+    final recenterGrid = mesh.isActive
+        ? _itemRecenterShiftFracs
+        : _itemRecenterShiftFracsWide;
     final items = <OmrItemResult>[];
+    // Kept alongside [items] so the classifier can re-decide every item once
+    // the whole sheet has been measured -- its sheet-relative feature needs a
+    // median over every bubble, which is only known after the loop.
+    final classifierBubbles = <List<BubbleScores>>[];
+    final classifierItems = <OmrItemResult>[];
     for (final section in template.sections) {
       for (final itemNumber in section.items.keys.toList()..sort()) {
         final choices = section.items[itemNumber]!;
 
         var measured = _measureItemAt(
           inkMap,
+          gray,
           choices,
           bubbleSampleHalfPxX,
           bubbleSampleHalfPxY,
@@ -4491,10 +4171,10 @@ class OmrDecoder {
           0,
           mesh,
         );
-        var hasSomething = measured.bestFill >= _blankFillFloor &&
-            (measured.bestFill - measured.floorReference) >= _markPresenceGap;
+        var hasSomething = measured.bestFill >= blankFloor &&
+            (measured.bestFill - measured.floorReference) >= presenceGap;
         var isAmbiguous = hasSomething &&
-            _isAmbiguousMargin(measured, ambiguousMargin);
+            _isAmbiguousMargin(measured, ambiguousMargin, presenceGap);
         var recentered = false;
 
         // Only spend the extra search on items the flat/relative checks
@@ -4502,11 +4182,12 @@ class OmrDecoder {
         // confidently marked item is left untouched, so this can only
         // rescue an uncertain result, never destabilize a good one.
         if (!hasSomething || isAmbiguous) {
-          for (final dxFrac in _itemRecenterShiftFracs) {
-            for (final dyFrac in _itemRecenterShiftFracs) {
+          for (final dxFrac in recenterGrid) {
+            for (final dyFrac in recenterGrid) {
               if (dxFrac == 0 && dyFrac == 0) continue;
               final candidate = _measureItemAt(
                 inkMap,
+                gray,
                 choices,
                 bubbleSampleHalfPxX,
                 bubbleSampleHalfPxY,
@@ -4525,10 +4206,10 @@ class OmrDecoder {
             }
           }
           if (recentered) {
-            hasSomething = measured.bestFill >= _blankFillFloor &&
-                (measured.bestFill - measured.floorReference) >= _markPresenceGap;
+            hasSomething = measured.bestFill >= blankFloor &&
+                (measured.bestFill - measured.floorReference) >= presenceGap;
             isAmbiguous = hasSomething &&
-                _isAmbiguousMargin(measured, ambiguousMargin);
+                _isAmbiguousMargin(measured, ambiguousMargin, presenceGap);
           }
         }
 
@@ -4546,6 +4227,26 @@ class OmrDecoder {
             isAmbiguous: isAmbiguous,
           ),
         );
+        if (OmrBubbleClassifier.enabled) {
+          classifierBubbles.add(<BubbleScores>[
+            for (final (choice, m) in measured.measurements)
+              BubbleScores(
+                choice: choice,
+                ring: m.ringFill,
+                whole: m.wholeFill,
+                center: m.centerFill,
+                score: m.score,
+                dark: m.dark,
+              ),
+          ]);
+          classifierItems.add(
+            OmrItemResult(
+              sectionName: section.name,
+              itemNumber: itemNumber,
+              markedChoice: null,
+            ),
+          );
+        }
         if (bubbleDebug) {
           final debugResult = markedChoice ?? (isAmbiguous ? 'AMBIGUOUS' : 'BLANK');
           final buf = StringBuffer('Q$itemNumber\n');
@@ -4570,6 +4271,23 @@ class OmrDecoder {
         }
       }
     }
+    if (OmrBubbleClassifier.enabled &&
+        classifierBubbles.length == items.length &&
+        classifierBubbles.isNotEmpty) {
+      final (medianScore, medianDark) =
+          OmrBubbleClassifier.sheetMedians(classifierBubbles);
+      for (var i = 0; i < classifierBubbles.length; i++) {
+        final verdict =
+            OmrBubbleClassifier.classify(
+                classifierBubbles[i], medianScore, medianDark);
+        items[i] = OmrItemResult(
+          sectionName: classifierItems[i].sectionName,
+          itemNumber: classifierItems[i].itemNumber,
+          markedChoice: verdict.markedChoice,
+          isAmbiguous: verdict.isAmbiguous,
+        );
+      }
+    }
     return OmrScanResult(examCode: template.examCode, items: items);
   }
 
@@ -4577,18 +4295,29 @@ class OmrDecoder {
   /// item decisively marked -- either by the flat per-exam [ambiguousMargin],
   /// by (see [_ambiguousRelativeMarginFloor]) falling well short of the
   /// item's own presence gap despite a comfortably strong signal, or (see
-  /// [_noCompetitorGapCeiling]) because there simply isn't a real second
+  /// [_noCompetitorGapFraction]) because there simply isn't a real second
   /// choice regardless of how faint the winner itself is.
-  bool _isAmbiguousMargin(_ItemMeasurement measured, double ambiguousMargin) {
+  ///
+  /// [markPresenceGap] is the item's per-exam presence gap
+  /// ([_markPresenceGapFor]), which both of those rescue paths scale
+  /// against so that an exam with deliberately compressed thresholds (TAT)
+  /// keeps the same relationships rather than being judged on AT/QTM's
+  /// wider absolute numbers.
+  bool _isAmbiguousMargin(
+    _ItemMeasurement measured,
+    double ambiguousMargin,
+    double markPresenceGap,
+  ) {
     final margin = measured.bestFill - measured.runnerUpFill;
     if (margin >= ambiguousMargin) return false;
     final presenceGap = measured.bestFill - measured.floorReference;
     final strongPresence =
-        presenceGap >= _markPresenceGap * _strongPresenceGapMultiplier;
+        presenceGap >= markPresenceGap * _strongPresenceGapMultiplier;
     final decisiveRelativeToOwnSignal =
         strongPresence && (margin / presenceGap) >= _ambiguousRelativeMarginFloor;
     final runnerUpGapFromFloor = measured.runnerUpFill - measured.floorReference;
-    final noRealCompetitor = runnerUpGapFromFloor < _noCompetitorGapCeiling;
+    final noRealCompetitor =
+        runnerUpGapFromFloor < markPresenceGap * _noCompetitorGapFraction;
     return !(decisiveRelativeToOwnSignal || noRealCompetitor);
   }
 
@@ -4598,6 +4327,7 @@ class OmrDecoder {
   /// fields [_readBubbles] and its recenter search need.
   _ItemMeasurement _measureItemAt(
     cv.Mat inkMap,
+    cv.Mat gray,
     List<BubblePos> choices,
     double halfPxX,
     double halfPxY,
@@ -4613,6 +4343,7 @@ class OmrDecoder {
           bubble.choice,
           _measureBubble(
             inkMap,
+            gray,
             bubble,
             halfPxX,
             halfPxY,
@@ -4644,9 +4375,10 @@ class OmrDecoder {
   /// The ring excludes the printed choice letter; center ink retains pencil evidence.
   /// These signals overlap, so the blend reweights center ink rather than adding
   /// independent votes. Separate X/Y radii match flattened printed bubbles.
-  ({double ringFill, double wholeFill, double centerFill, double score})
+  ({double ringFill, double wholeFill, double centerFill, double score, double dark})
       _measureBubble(
     cv.Mat inkMap,
+    cv.Mat gray,
     BubblePos bubble,
     double halfPxX,
     double halfPxY,
@@ -4698,12 +4430,106 @@ class OmrDecoder {
       0.55 * ringFill + 0.30 * outerFill + 0.15 * innerFill,
     );
 
+    final dark = _measureDarkness(
+      gray, cx, cy, halfPxX, halfPxY, canonicalWidth, canonicalHeight,
+    );
+
     return (
       ringFill: ringFill,
       wholeFill: outerFill,
       centerFill: innerFill,
       score: score,
+      dark: dark,
     );
+  }
+
+  /// Mean gray over a box, as a 0-255 level. Null when the box is degenerate.
+  double? _boxMeanGray(
+    cv.Mat gray,
+    double cx,
+    double cy,
+    double halfPxX,
+    double halfPxY,
+    int canonicalWidth,
+    int canonicalHeight,
+  ) {
+    final left = (cx - halfPxX).clamp(0, canonicalWidth - 1).round();
+    final top = (cy - halfPxY).clamp(0, canonicalHeight - 1).round();
+    final right = (cx + halfPxX).clamp(left + 1, canonicalWidth).round();
+    final bottom = (cy + halfPxY).clamp(top + 1, canonicalHeight).round();
+    if (right <= left || bottom <= top) return null;
+
+    final roi = gray.region(cv.Rect(left, top, right - left, bottom - top));
+    try {
+      final mean = roi.mean();
+      try {
+        return mean.val1;
+      } finally {
+        mean.dispose();
+      }
+    } finally {
+      roi.dispose();
+    }
+  }
+
+  /// How much darker a bubble's interior is than the paper immediately around
+  /// it, as a 0-1 fraction of that paper's brightness.
+  ///
+  /// Measured on the GRAY image rather than the binarised ink map, because
+  /// binarising throws away magnitude and magnitude is the entire signal for
+  /// a faint mark: a light pencil stroke is a 10-15 level shift that may
+  /// never cross the adaptive threshold at all, and worse, the local mean
+  /// that threshold uses is itself dragged down by the very mark it should
+  /// be detecting.
+  ///
+  /// Deliberately relative to a local paper reading rather than absolute:
+  /// across real captures a BLANK bubble's absolute fill ranged 0.18-0.46
+  /// with exposure, so one sheet's blanks read darker than another's marks.
+  ///
+  /// Geometry mirrors `guidegrade-omr-bench`'s `Omr::measureDarkness`
+  /// EXACTLY -- inner box at 0.62 of the bubble radius, paper ring between
+  /// 2.2x and 1.0x -- because the model weights that consume this were fitted
+  /// against that definition. Changing either constant here silently
+  /// invalidates them.
+  double _measureDarkness(
+    cv.Mat gray,
+    double cx,
+    double cy,
+    double halfPxX,
+    double halfPxY,
+    int canonicalWidth,
+    int canonicalHeight,
+  ) {
+    final inner = _boxMeanGray(
+      gray, cx, cy, halfPxX * 0.62, halfPxY * 0.62,
+      canonicalWidth, canonicalHeight,
+    );
+    if (inner == null) return 0.0;
+
+    // Local paper: the ring between a 2.2x box and the bubble itself, which
+    // on these layouts is the gap between neighbouring bubbles. Taken as the
+    // difference of two box means weighted by their areas, since a ring isn't
+    // a rectangle.
+    final outerHalfX = halfPxX * 2.2;
+    final outerHalfY = halfPxY * 2.2;
+    final outer = _boxMeanGray(
+      gray, cx, cy, outerHalfX, outerHalfY, canonicalWidth, canonicalHeight,
+    );
+    final bubble = _boxMeanGray(
+      gray, cx, cy, halfPxX, halfPxY, canonicalWidth, canonicalHeight,
+    );
+    if (outer == null || bubble == null) return 0.0;
+
+    final outerArea = outerHalfX * outerHalfY * 4;
+    final bubbleArea = halfPxX * halfPxY * 4;
+    final ringArea = outerArea - bubbleArea;
+    if (ringArea <= 0) return 0.0;
+
+    final paper = ((outer * outerArea) - (bubble * bubbleArea)) / ringArea;
+    if (paper < 1.0) return 0.0;
+
+    final dark = (paper - inner) / paper;
+    return dark < 0.0 ? 0.0 : (dark > 1.0 ? 1.0 : dark);
   }
 
   double _squareFillFraction(

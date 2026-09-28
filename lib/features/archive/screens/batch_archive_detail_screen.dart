@@ -11,6 +11,7 @@ import '../../../core/routes/app_routes.dart';
 import '../../../core/services/batch_repository.dart';
 import '../../../core/state/app_state.dart';
 import '../../../core/sync/cloud_restore_service.dart';
+import '../../../core/sync/sync_failure_hint.dart';
 import '../../../core/sync/sync_job.dart';
 import '../../../core/sync/sync_manager.dart';
 import '../../../models/local_batch.dart';
@@ -111,6 +112,8 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
   /// "Scanned Sheets & Results" section header. Built once, as item 0 of
   /// the archive's [ListView.builder] (see [build]).
   Widget _buildHeaderSection(LocalBatch batch, AppState appState) {
+    final duplicateNumbers = batch.duplicateExamineeNumbers;
+    final duplicateScans = batch.likelyDuplicateScans;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -136,7 +139,7 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
             ],
           ),
         ],
-        if (batch.duplicateExamineeNumbers.isNotEmpty) ...[
+        if (duplicateNumbers.isNotEmpty) ...[
           const SizedBox(height: 6),
           Row(
             children: [
@@ -144,14 +147,14 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
               const SizedBox(width: 6),
               Expanded(
                 child: Text(
-                  'Examinee number reused: ${batch.duplicateExamineeNumbers.join(', ')}',
+                  'Examinee number reused: ${duplicateNumbers.join(', ')}',
                   style: AppTextStyles.body(size: 9.5, color: const Color(0xFF991B1B), weight: FontWeight.w600),
                 ),
               ),
             ],
           ),
         ],
-        if (batch.likelyDuplicateScans.isNotEmpty) ...[
+        if (duplicateScans.isNotEmpty) ...[
           const SizedBox(height: 6),
           Row(
             children: [
@@ -159,9 +162,9 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
               const SizedBox(width: 6),
               Expanded(
                 child: Text(
-                  'Possible duplicate sheet${batch.likelyDuplicateScans.length == 1 ? '' : 's'} '
+                  'Possible duplicate sheet${duplicateScans.length == 1 ? '' : 's'} '
                   '(same answers scanned twice): '
-                  '${batch.likelyDuplicateScans.map((p) => '${_scanLabel(batch, p.a)} & ${_scanLabel(batch, p.b)}').join(', ')}',
+                  '${duplicateScans.map((p) => '${_scanLabel(batch, p.a)} & ${_scanLabel(batch, p.b)}').join(', ')}',
                   style: AppTextStyles.body(size: 9.5, color: const Color(0xFF991B1B), weight: FontWeight.w600),
                 ),
               ),
@@ -392,6 +395,12 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
             if (pending > 0) '$pending pending',
           ];
           statusText = parts.join(' · ');
+          // Say WHY: the distinct error codes the failed jobs recorded, with
+          // what each means, so a stuck batch can be diagnosed from the phone.
+          final reasons = summarizeSyncFailures(
+            jobs.where((j) => j.status == SyncJobStatus.failedPermanent),
+          );
+          if (reasons.isNotEmpty) statusText = '$statusText\n${reasons.join('\n')}';
           statusColor = const Color(0xFF991B1B);
         } else {
           statusText = '$pending item${pending == 1 ? '' : 's'} pending sync';

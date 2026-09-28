@@ -15,9 +15,13 @@ import '../../../core/omr/exam_score.dart';
 import '../../../core/omr/omr_decoder.dart';
 import '../../../core/omr/omr_scorer.dart';
 import '../../../core/omr/omr_templates.dart';
+import '../../../core/omr/rescan_comparison.dart';
 import '../../../core/routes/app_routes.dart';
 import '../../../core/state/app_state.dart';
+import '../../../core/state/rescan_candidate.dart';
 import '../../../core/utils/omr_perf_log.dart';
+import '../../../models/local_batch.dart';
+import 'rescan_comparison_screen.dart';
 
 class _AlignmentCheckRequest {
   final String imagePath;
@@ -27,41 +31,6 @@ class _AlignmentCheckRequest {
 
 AlignmentCheck _checkAlignment(_AlignmentCheckRequest request) {
   return const OmrDecoder().locateCorners(request.imagePath, request.template);
-}
-
-class _RejectedCaptureDebugVizRequest {
-  final String imagePath;
-  final OmrExamTemplate template;
-  final String debugDir;
-  const _RejectedCaptureDebugVizRequest(this.imagePath, this.template, this.debugDir);
-}
-
-/// Dumps the same kind of annotated debug images
-/// [AppState.processCapturedPages] writes for a SUCCESSFUL capture (see
-/// `OmrDecoder.saveDebugVisualization`'s doc comment, including its own
-/// `sheet{n}_FAILED.jpg` fallback when corner detection itself throws), but
-/// for a capture the post-capture gate just REJECTED — which otherwise
-/// leaves no trace anywhere, since a rejected photo never reaches
-/// [AppState.processCapturedPages] at all. Written to a `rejected/`
-/// subfolder of the same "omr_debug" directory so these can never collide
-/// with (or be overwritten by) a later successful capture's own debug
-/// files at the same page slot. Best-effort only: any failure here is
-/// swallowed by the caller, since this exists purely for diagnosis and
-/// must never affect the actual scanning flow.
-void _saveRejectedCaptureDebugViz(_RejectedCaptureDebugVizRequest request) {
-  final dir = Directory('${request.debugDir}/rejected');
-  if (!dir.existsSync()) dir.createSync(recursive: true);
-  // A fresh, distinguishable slot per rejection (not tied to a page index,
-  // since a rejected photo was never assigned one) -- old ones are left in
-  // place rather than overwritten, so a string of retries during one
-  // session can all still be inspected afterward.
-  final pageIndex = DateTime.now().millisecondsSinceEpoch;
-  const OmrDecoder().saveDebugVisualization(
-    request.imagePath,
-    request.template,
-    dir.path,
-    pageIndex,
-  );
 }
 
 class _NormalizeOrientationRequest {
@@ -370,6 +339,30 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
   bool get _isLowLight =>
       _meanLuma != null && _meanLuma! < _lowLightLumaThreshold && !_torchOn;
 
+  /// When the live read most recently stopped being all-four-confident, or
+  /// null while it currently is. Drives [_showCaptureAnyway] only.
+  DateTime? _nonGreenSince;
+
+  /// How long the corners may refuse to lock before the caption stops giving
+  /// advice and tells the user they can simply shoot.
+  static const Duration _captureAnywayAfter = Duration(seconds: 6);
+
+  /// Whether to tell the user they can capture without waiting for green.
+  ///
+  /// Manual capture has never actually been gated on the live read — see
+  /// [_captureReadySince]'s doc comment, and [_capture], which requires only
+  /// an initialized camera, no capture in flight, and the batch's scan
+  /// limit. But the viewfinder shows red corners and advice-shaped captions,
+  /// so in a dim room people wait for a green that is not coming. This says
+  /// the quiet part out loud once waiting has clearly stopped helping.
+  ///
+  /// Safe to act on: [_capture] re-runs the authoritative full-resolution
+  /// alignment check on the photo itself, so a capture taken on a
+  /// non-green preview is still verified before it can become a result.
+  bool get _showCaptureAnyway =>
+      _nonGreenSince != null &&
+      DateTime.now().difference(_nonGreenSince!) >= _captureAnywayAfter;
+
   /// Overall live traffic-light read, from the four independent per-corner
   /// tiers: RED if any corner is missing outright, GREEN only once all four
   /// are confidently locked, YELLOW for anything recoverable in between
@@ -388,9 +381,19 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
   static const _cornerNames = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
 
   /// Viewfinder caption text — the low-light hint takes priority over the
-  /// usual corner-alignment status when active (see [_isLowLight]).
+  /// usual corner-alignment status when active (see [_isLowLight]), and the
+  /// stuck hint (see [_showCaptureAnyway]) takes priority over both once the
+  /// corners have refused to lock for long enough that advice alone clearly
+  /// isn't working.
   String _viewfinderCaption() {
-    if (_isLowLight) return 'Low light — tap the flash icon';
+    // Ordered below the lighting hint on purpose: for the first few seconds
+    // "add light" is the more useful instruction, and only once that has
+    // visibly failed is it worth telling them to shoot regardless.
+    if (_showCaptureAnyway) {
+      return 'Corners not locked — tap the shutter anyway, '
+          'alignment is rechecked after capture';
+    }
+    if (_isLowLight) return 'Low light — flash may help, or just tap the shutter';
     final found = _liveCornersFound;
     if (found == null) return 'Align the 4 black corner squares inside the guides';
     switch (_liveVerdict!) {
@@ -677,6 +680,7 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
     _captureReadySince = null;
     _autoCaptureStableSince = null;
     _autoCaptureArmed = true;
+    _nonGreenSince = null;
     _meanLuma = null;
     _lastFrameCheckAt = null;
     _frameCheckInFlight = false;
@@ -855,6 +859,13 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
             // stopped moving between checks, not merely stayed found.
             final allConfident = result.cornersFound
                 .every((c) => c == CornerConfidence.confident);
+            // Reuses the flag above rather than recomputing: how long the
+            // corners have refused to lock is what [_showCaptureAnyway] needs.
+            if (allConfident) {
+              _nonGreenSince = null;
+            } else {
+              _nonGreenSince ??= now;
+            }
             if (!allConfident) {
               _autoCaptureStableSince = null;
               // Leaving GREEN re-arms auto-capture — the sheet was moved,
@@ -1134,21 +1145,6 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
               'errors=${check.reprojectionErrorPx} reason=${check.message}',
             );
           }
-          // Best-effort diagnostic dump so a rejection actually leaves
-          // something to inspect afterward -- a rejected photo is never
-          // added to the batch, so without this it vanishes with nothing
-          // but the dialog's own message. Fire-and-forget: must never
-          // delay the dialog or affect the scanning flow on failure.
-          unawaited(() async {
-            final debugDir = await appState.prepareDebugImagesDir();
-            if (debugDir == null) return;
-            try {
-              await compute(
-                _saveRejectedCaptureDebugViz,
-                _RejectedCaptureDebugVizRequest(file.path, template, debugDir),
-              );
-            } catch (_) {}
-          }());
           // The live check above is advisory-strength (a lower-effort
           // preview frame); this one runs the real decoder's corner search
           // against the actual captured photo and is authoritative. No
@@ -1163,6 +1159,14 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
       if (!mounted) return;
       final decoded = await appState.previewCapturedPage(file);
       if (!mounted) return;
+      if (appState.rescanScanId != null) {
+        // A rescan never saves straight from the camera: the photo has passed
+        // the alignment and decoding checks, so hand it to a person to
+        // compare against the original sheet before anything is replaced.
+        _autoCaptureArmed = false;
+        await _reviewRescanCandidate(appState);
+        return;
+      }
       final scored = scoreOmrResult(
         decoded, appState.answerKeys[decoded.examCode],
       );
@@ -1276,6 +1280,12 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
   }
 
   Future<void> _compileData(AppState appState) async {
+    // A rescan is never saved from here: it always goes through the
+    // comparison panel, which is the only path that can replace a sheet.
+    if (appState.rescanScanId != null) {
+      await _reviewRescanCandidate(appState);
+      return;
+    }
     await appState.processCapturedPages();
     if (!mounted) return;
     if (appState.scanProcessingError != null) {
@@ -1288,34 +1298,162 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
       );
       return;
     }
-    // Content-based "same physical sheet scanned twice" check — skipped
-    // while rescanning: a rescan is *expected* to match the slot it's
-    // replacing, and the wrong-sheet-in-this-slot mistake already has its
-    // own dedicated guard in AppState.finishRescan (name-mismatch check).
-    if (appState.rescanScanId == null) {
-      final warnings = _duplicateScanWarnings(appState);
-      if (warnings.isNotEmpty) {
-        final proceed = await _showDuplicateScanDialog(warnings);
-        if (!mounted) return;
-        if (!proceed) return;
-      }
-    }
-    if (appState.rescanScanId != null) {
-      // Rescanning one existing sheet in an archived batch, not building a
-      // normal multi-sheet session -- overwrite it in place and return to
-      // wherever "Rescan" was tapped from, instead of Exam Results.
-      final ok = await appState.finishRescan();
+    // Content-based "same physical sheet scanned twice" check (not used for
+    // a rescan, which is handled above and expected to match its own slot).
+    final warnings = _duplicateScanWarnings(appState);
+    if (warnings.isNotEmpty) {
+      final proceed = await _showDuplicateScanDialog(warnings);
       if (!mounted) return;
-      if (!ok) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(appState.rescanSaveError ?? 'Could not save the rescan.')),
-        );
-        return;
+      if (!proceed) return;
+    }
+    Navigator.of(context).pushReplacementNamed(AppRoutes.examResults);
+  }
+
+  /// Compare-before-replace for a rescan: shows the stored sheet next to the
+  /// new photo and only replaces the original if a person confirms it is the
+  /// same physical sheet. Nothing is saved before that; Cancel, back and
+  /// dismissal discard the candidate and leave the original untouched, and
+  /// Retake photo discards it and returns to capture.
+  ///
+  /// The candidate was already decoded when it was captured, so the panel and
+  /// the eventual save reuse that result — nothing is decoded again here.
+  /// This is a human verification safeguard, not proof of identity.
+  Future<void> _reviewRescanCandidate(AppState appState) async {
+    final batch = appState.scanBatch;
+    final scanId = appState.rescanScanId;
+    if (batch == null || scanId == null || appState.capturedPages.isEmpty) return;
+    final repo = appState.batchRepository;
+
+    // Reading the name crops takes a moment; show that instead of a frozen
+    // camera screen.
+    final rootNavigator = Navigator.of(context, rootNavigator: true);
+    unawaited(showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const PopScope(canPop: false, child: Center(child: CircularProgressIndicator())),
+    ));
+
+    LocalScan? original;
+    RescanCandidate? candidate;
+    ImageProvider? originalSheet;
+    ImageProvider? originalLast;
+    ImageProvider? originalFirst;
+    ImageProvider? originalMiddle;
+    try {
+      // The stored sheet AS IT IS NOW — this exact record is what a later save
+      // is checked against, so a change made while comparing is caught.
+      final fresh = await repo.getBatchById(batch.id);
+      original = fresh?.scans.where((s) => s.id == scanId).firstOrNull;
+      candidate = await appState.prepareRescanCandidate();
+      if (original != null) {
+        var bytes = await repo.resolveScanImage(batch.id, original);
+        if (bytes == null) {
+          // A cloud-restored sheet whose photo hasn't been downloaded yet.
+          await appState.cloudRestoreService?.restoreImageIfMissing(
+            batchId: batch.id,
+            scan: original,
+            rectified: false,
+          );
+          bytes = await repo.resolveScanImage(batch.id, original);
+        }
+        if (bytes != null) originalSheet = ResizeImage(MemoryImage(bytes), width: 1400, allowUpscaling: false);
+        Future<ImageProvider?> crop(Future<Uint8List?> Function() load) async {
+          final b = await load();
+          return b == null ? null : MemoryImage(b);
+        }
+
+        originalLast = await crop(() => repo.resolveScanNameCropLast(batch.id, original!));
+        originalFirst = await crop(() => repo.resolveScanNameCropFirst(batch.id, original!));
+        originalMiddle = await crop(() => repo.resolveScanNameCropMiddle(batch.id, original!));
       }
+    } catch (e) {
+      debugPrint('[ExamScanning] rescan comparison prep failed: $e');
+    } finally {
+      if (mounted) rootNavigator.pop();
+    }
+    if (!mounted) return;
+
+    if (original == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('The original sheet no longer exists. Nothing was replaced.')),
+      );
+      appState.cancelRescan();
       Navigator.of(context).pop();
       return;
     }
-    Navigator.of(context).pushReplacementNamed(AppRoutes.examResults);
+    if (candidate == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not prepare the new photo for comparison. Please retake it.')),
+      );
+      appState.discardRescanCandidate();
+      return;
+    }
+
+    ImageProvider? file(String? path) => path == null ? null : FileImage(File(path));
+    final stored = original;
+    final cand = candidate;
+    final data = RescanComparisonData(
+      comparison: RescanComparison.build(
+        original: stored,
+        candidate: cand.decoded,
+        answerKey: appState.answerKeys[batch.examCode],
+      ),
+      originalExaminee: stored.examinee,
+      originalCapturedAt: stored.capturedAt,
+      originalSheet: originalSheet,
+      originalCropLast: originalLast,
+      originalCropFirst: originalFirst,
+      originalCropMiddle: originalMiddle,
+      candidateSheet: ResizeImage(FileImage(File(cand.photoPath)), width: 1400, allowUpscaling: false),
+      candidateCropLast: file(cand.nameCropLastPath),
+      candidateCropFirst: file(cand.nameCropFirstPath),
+      candidateCropMiddle: file(cand.nameCropMiddlePath),
+      ocrLastName: cand.ocrLastName,
+      ocrFirstName: cand.ocrFirstName,
+      ocrMiddleName: cand.ocrMiddleName,
+      ocrSuggestionWillBeSaved: rescanWillFillNamesFromOcr(
+        existing: stored.examinee,
+        ocrLastName: cand.ocrLastName,
+        ocrFirstName: cand.ocrFirstName,
+        ocrMiddleName: cand.ocrMiddleName,
+      ),
+    );
+
+    final decision = await Navigator.of(context).push<RescanDecision>(
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (_) => RescanComparisonScreen(
+          data: data,
+          onConfirm: () async {
+            // Reuses the decode the capture already produced (no second decode).
+            await appState.processCapturedPages();
+            if (appState.scanProcessingError != null) {
+              return RescanConfirmOutcome.failed(
+                'Could not process the scan: ${appState.scanProcessingError}',
+              );
+            }
+            // Only reachable once the reviewer ticked the verification box.
+            final ok = await appState.finishRescan(expectedOriginal: stored, identityVerified: true);
+            if (ok) return const RescanConfirmOutcome.saved();
+            return RescanConfirmOutcome.failed(
+              appState.rescanSaveError ?? 'Could not save the rescan.',
+              canRetry: !appState.rescanOriginalChanged,
+            );
+          },
+        ),
+      ),
+    );
+    if (!mounted) return;
+    switch (decision) {
+      case RescanDecision.saved:
+        Navigator.of(context).pop(); // back to wherever Rescan was tapped
+      case RescanDecision.retake:
+        appState.discardRescanCandidate(); // stay on the camera
+      case RescanDecision.cancelled:
+      case null:
+        appState.cancelRescan();
+        Navigator.of(context).pop();
+    }
   }
 
   /// Human-readable warnings for every pair of decoded sheets that look
@@ -1691,7 +1829,14 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
                   child: Text(
                     _viewfinderCaption(),
                     style: TextStyle(
-                      color: _isLowLight ? AppColors.warmRedOrange : const Color(0xFF6EE7B7),
+                      // Amber for the capture-anyway hint: it is an
+                      // invitation to act, and the low-light red reads as a
+                      // prohibition.
+                      color: _showCaptureAnyway
+                          ? const Color(0xFFF59E0B)
+                          : (_isLowLight
+                              ? AppColors.warmRedOrange
+                              : const Color(0xFF6EE7B7)),
                       fontSize: 10,
                       fontFamily: 'monospace',
                     ),

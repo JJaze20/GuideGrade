@@ -100,7 +100,7 @@ void main() {
     });
 
     test('existing generated id, tag not yet complete, fresh OCR available:'
-        ' refreshes the name but PRESERVES the existing id -- never a new one', () {
+        ' fills only the BLANK fields and PRESERVES the id -- a typed name is never overwritten', () {
       final result = resolveRescanExaminee(
         existingExaminee: const ExamineeInfo(firstName: '', lastName: 'Cruz', examineeNumber: 'EX-OLD'),
         ocrLastNameGuess: 'Dela Cruz',
@@ -109,8 +109,69 @@ void main() {
       );
       expect(result, isNotNull);
       expect(result!.examineeNumber, 'EX-OLD');
+      expect(result.lastName, 'Cruz', reason: 'already typed by a person: kept');
+      expect(result.firstName, 'Juan', reason: 'was blank: filled from OCR');
+    });
+
+    test('an unnamed sheet (id, no names) gets every name OCR read, with its id unchanged', () {
+      final result = resolveRescanExaminee(
+        existingExaminee: const ExamineeInfo(firstName: '', lastName: '', examineeNumber: 'EX-OLD'),
+        ocrLastNameGuess: 'Dela Cruz',
+        ocrFirstNameGuess: 'Juan',
+        ocrMiddleNameGuess: 'M',
+        generateId: () => 'EX-SHOULD-NOT-BE-USED',
+      );
+      expect(result!.examineeNumber, 'EX-OLD');
       expect(result.lastName, 'Dela Cruz');
       expect(result.firstName, 'Juan');
+      expect(result.middleName, 'M');
+    });
+
+    test('a field OCR could not read is never blanked, and other details are carried over', () {
+      final result = resolveRescanExaminee(
+        existingExaminee: ExamineeInfo(
+          firstName: 'Ana',
+          lastName: '',
+          examineeNumber: 'EX-OLD',
+          birthDate: DateTime(2010, 3, 4),
+          manualAge: 15,
+          lastSchool: 'NDMU High',
+        ),
+        ocrLastNameGuess: 'Reyes', // OCR read the last name only
+        generateId: () => 'EX-SHOULD-NOT-BE-USED',
+      );
+      expect(result!.firstName, 'Ana', reason: 'not blanked just because OCR read nothing for it');
+      expect(result.lastName, 'Reyes');
+      expect(result.birthDate, DateTime(2010, 3, 4));
+      expect(result.manualAge, 15);
+      expect(result.lastSchool, 'NDMU High');
+    });
+
+    test('OCR that would add nothing new returns null (tag left exactly as it is)', () {
+      final result = resolveRescanExaminee(
+        existingExaminee: const ExamineeInfo(firstName: 'Ana', lastName: '', examineeNumber: 'EX-OLD'),
+        ocrFirstNameGuess: 'Someone', // first is already typed; last unread
+        generateId: () => 'EX-SHOULD-NOT-BE-USED',
+      );
+      expect(result, isNull);
+    });
+
+    test('a legacy sheet with no id keeps its details (not rebuilt from scratch) while gaining an id', () {
+      final result = resolveRescanExaminee(
+        existingExaminee: ExamineeInfo(
+          firstName: 'Ana',
+          lastName: 'Cruz',
+          examineeNumber: '',
+          birthDate: DateTime(2010, 3, 4),
+          lastSchool: 'NDMU High',
+        ),
+        ocrLastNameGuess: 'Other',
+        generateId: () => 'EX-NEW',
+      );
+      expect(result!.examineeNumber, 'EX-NEW');
+      expect(result.lastName, 'Cruz');
+      expect(result.birthDate, DateTime(2010, 3, 4));
+      expect(result.lastSchool, 'NDMU High');
     });
 
     test('existing generated id, tag not yet complete, but NO fresh OCR this'
@@ -150,6 +211,46 @@ void main() {
         },
       );
       expect(generateCalls, 0);
+    });
+  });
+
+  group('rescanWillFillNamesFromOcr (what the comparison panel announces)', () {
+    test('true only when confirming would actually write OCR names into blank fields', () {
+      expect(
+        rescanWillFillNamesFromOcr(
+          existing: const ExamineeInfo(firstName: '', lastName: '', examineeNumber: 'EX-1'),
+          ocrLastName: 'Reyes',
+        ),
+        isTrue,
+      );
+    });
+
+    test('false for a sheet that already has a full name, or when OCR read nothing', () {
+      expect(
+        rescanWillFillNamesFromOcr(
+          existing: const ExamineeInfo(firstName: 'Ana', lastName: 'Cruz', examineeNumber: 'EX-1'),
+          ocrLastName: 'Other',
+          ocrFirstName: 'Names',
+        ),
+        isFalse,
+      );
+      expect(
+        rescanWillFillNamesFromOcr(
+          existing: const ExamineeInfo(firstName: '', lastName: '', examineeNumber: 'EX-1'),
+        ),
+        isFalse,
+      );
+    });
+
+    test('agrees with what resolveRescanExaminee returns for the same inputs', () {
+      const existing = ExamineeInfo(firstName: 'Ana', lastName: '', examineeNumber: 'EX-1');
+      final resolved = resolveRescanExaminee(
+        existingExaminee: existing,
+        ocrLastNameGuess: 'Reyes',
+        generateId: () => 'x',
+      );
+      expect(resolved!.lastName, 'Reyes');
+      expect(rescanWillFillNamesFromOcr(existing: existing, ocrLastName: 'Reyes'), isTrue);
     });
   });
 }
