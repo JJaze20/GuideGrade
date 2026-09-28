@@ -1,4 +1,4 @@
-"""Move the v5 TAT title above the letterhead and remove its border.
+"""Move the v5 TAT title beside the pencil instruction and remove its border.
 
 Run from the repository root: python tool/update_tat_v5_header.py
 Requires pypdf and reportlab. The v5 sheet is a checked-in vector PDF, not
@@ -18,15 +18,17 @@ def update(path: Path):
     page = reader.pages[0]
     content = page.get_contents().get_data()
     border = b'n 48 844 510 46 re S'
-    old_transform = b'0 -1 1 0 584 832 cm'
+    rotated_transform = b'0 -1 1 0 584 832 cm'
     title = 'TEACHING APTITUDE TEST (TAT)'
-    # Center over the existing 48..558pt letterhead, baseline 40pt from top.
-    x = 303 - stringWidth(title, 'Helvetica-Bold', 10) / 2
-    new_transform = f'1 0 0 1 {x:.4f} 896 cm'.encode('ascii')
+    width = stringWidth(title, 'Helvetica-Bold', 10)
+    above_header_transform = f'1 0 0 1 {303 - width / 2:.4f} 896 cm'.encode('ascii')
+    # Right-aligned with the fields, on the pencil instruction's baseline.
+    new_transform = f'1 0 0 1 {558 - width:.4f} 760 cm'.encode('ascii')
     if border not in content and new_transform in content:
         print('TAT v5 header already updated')
         return
-    assert content.count(border) == 1, 'Unexpected TAT letterhead border'
+    old_transform = rotated_transform if rotated_transform in content else above_header_transform
+    assert content.count(border) <= 1, 'Unexpected TAT letterhead border'
     assert content.count(old_transform) == 1, 'Unexpected TAT title transform'
     # Do not perform a general PDF re-layout or rasterize the sheet.
     updated = content.replace(border, b'').replace(old_transform, new_transform)
