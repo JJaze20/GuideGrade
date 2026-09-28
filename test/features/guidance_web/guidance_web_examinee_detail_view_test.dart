@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:guidegrade/core/sync/retake_client.dart';
 import 'package:guidegrade/core/sync/sync_client.dart';
 import 'package:guidegrade/core/sync/sync_job.dart';
 import 'package:guidegrade/core/sync/sync_outcome.dart';
@@ -8,7 +9,57 @@ import 'package:guidegrade/features/guidance_web/services/guidance_web_examinee_
 import 'package:guidegrade/features/guidance_web/services/guidance_web_results_service.dart';
 import 'package:guidegrade/models/examinee_record.dart';
 
-class _FakeSyncClient implements SyncClient {
+class _FakeSyncClient implements SyncClient, RetakeClient {
+  final Map<String, List<CloudRetakeRequestRow>> retakeRequestsByKey = {};
+  SyncOutcome createRetakeResult = const SyncOutcome.success();
+  SyncOutcome reviewRetakeResult = const SyncOutcome.success();
+  SyncOutcome archiveRetakeResult = const SyncOutcome.success();
+  final List<Map<String, Object?>> retakeCalls = [];
+
+  String _retakeKey(String examineeId, String examCode) => '$examineeId/$examCode';
+
+  @override
+  Future<CloudRetakeRequestsRead> readRetakeRequests({
+    required String examineeId,
+    required String examCode,
+  }) async {
+    calls.add('readRetakeRequests:${_retakeKey(examineeId, examCode)}');
+    return CloudRetakeRequestsRead.found(
+      retakeRequestsByKey[_retakeKey(examineeId, examCode)] ?? const [],
+    );
+  }
+
+  @override
+  Future<SyncOutcome> createRetakeRequest({
+    required String examineeId,
+    required String examCode,
+    required String reason,
+  }) async {
+    calls.add('createRetakeRequest:${_retakeKey(examineeId, examCode)}');
+    retakeCalls.add({'op': 'create', 'examineeId': examineeId, 'examCode': examCode, 'reason': reason});
+    return createRetakeResult;
+  }
+
+  @override
+  Future<SyncOutcome> reviewRetakeRequest({
+    required String requestId,
+    required bool approve,
+    String? reviewNote,
+  }) async {
+    calls.add('reviewRetakeRequest:$requestId/$approve');
+    retakeCalls.add({'op': 'review', 'requestId': requestId, 'approve': approve, 'reviewNote': reviewNote});
+    return reviewRetakeResult;
+  }
+
+  @override
+  Future<SyncOutcome> archiveRetakeAttempt({
+    required String requestId,
+    required String archiveReason,
+  }) async {
+    calls.add('archiveRetakeAttempt:$requestId');
+    retakeCalls.add({'op': 'archive', 'requestId': requestId, 'archiveReason': archiveReason});
+    return archiveRetakeResult;
+  }
   CloudBatchesRead batchesToReturn = CloudBatchesRead.found(const []);
   final Map<String, CloudScansRead> scansByExamineeId = {};
   CloudScansRead unlinkedScansToReturn = CloudScansRead.found(const []);
@@ -210,6 +261,9 @@ CloudScanRow _scanRow({
   String? firstName = 'Juan',
   String? lastName = 'Dela Cruz',
   String? examineeNumber = 'EX-1',
+  int attemptNo = 1,
+  String attemptStatus = 'active',
+  String? archiveReason,
 }) =>
     CloudScanRow(
       id: id,
@@ -227,6 +281,9 @@ CloudScanRow _scanRow({
       firstName: firstName,
       lastName: lastName,
       examineeNumber: examineeNumber,
+      attemptNo: attemptNo,
+      attemptStatus: attemptStatus,
+      archiveReason: archiveReason,
     );
 
 ExamineeRecord _examinee({String status = 'active'}) => ExamineeRecord(
@@ -239,6 +296,26 @@ ExamineeRecord _examinee({String status = 'active'}) => ExamineeRecord(
       createdByUid: 'uid1',
       updatedAt: DateTime.utc(2026, 1, 1),
       updatedByUid: 'uid1',
+    );
+
+CloudRetakeRequestRow _retakeRequest({
+  String id = 'r1',
+  String examineeId = 'e1',
+  String examCode = 'AT',
+  String reason = 'Medical emergency',
+  String status = 'PENDING',
+  DateTime? eligibleOn,
+}) =>
+    CloudRetakeRequestRow(
+      id: id,
+      examineeId: examineeId,
+      examCode: examCode,
+      reason: reason,
+      status: status,
+      requestedAt: DateTime.utc(2026, 1, 2),
+      eligibleOn: eligibleOn,
+      createdAt: DateTime.utc(2026, 1, 2),
+      updatedAt: DateTime.utc(2026, 1, 2),
     );
 
 void main() {
@@ -627,4 +704,183 @@ void main() {
       expect(client.lastLinkArgs, {'batchId': 'b-tat', 'scanId': 's-tat', 'examineeId': 'e1'});
     });
   });
+
+group('Applicant Retake Management', () {
+  testWidgets('QTM never offers Request Retake', (tester) async {
+    client.batchesToReturn = CloudBatchesRead.found([_batchRow(id: 'b-qtm', examCode: 'QTM')]);
+    client.scansByExamineeId['e1'] =
+        CloudScansRead.found([_scanRow(id: 's-qtm', batchId: 'b-qtm', examCode: 'QTM')]);
+    await pumpDetail(tester);
+
+    expect(find.byKey(const Key('requestRetake_s-qtm')), findsNothing);
+  });
+
+  testWidgets('AT Attempt 1 (active, graded, no request) offers Request Retake', (tester) async {
+    client.batchesToReturn = CloudBatchesRead.found([_batchRow(id: 'b-at', examCode: 'AT')]);
+    client.scansByExamineeId['e1'] =
+        CloudScansRead.found([_scanRow(id: 's-at', batchId: 'b-at', examCode: 'AT')]);
+    await pumpDetail(tester);
+
+    expect(find.byKey(const Key('requestRetake_s-at')), findsOneWidget);
+    expect(find.textContaining('Attempt 1'), findsOneWidget);
+  });
+
+  testWidgets('a blank reason is rejected before a request is submitted', (tester) async {
+    client.batchesToReturn = CloudBatchesRead.found([_batchRow(id: 'b-at', examCode: 'AT')]);
+    client.scansByExamineeId['e1'] =
+        CloudScansRead.found([_scanRow(id: 's-at', batchId: 'b-at', examCode: 'AT')]);
+    await pumpDetail(tester);
+
+    await tester.tap(find.byKey(const Key('requestRetake_s-at')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Submit Request'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('A reason is required'), findsOneWidget);
+    expect(client.calls.where((c) => c.startsWith('createRetakeRequest')), isEmpty);
+  });
+
+  testWidgets('a valid reason submits the request via createRetakeRequest', (tester) async {
+    client.batchesToReturn = CloudBatchesRead.found([_batchRow(id: 'b-at', examCode: 'AT')]);
+    client.scansByExamineeId['e1'] =
+        CloudScansRead.found([_scanRow(id: 's-at', batchId: 'b-at', examCode: 'AT')]);
+    await pumpDetail(tester);
+
+    await tester.tap(find.byKey(const Key('requestRetake_s-at')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('retakeReasonField')), 'Family emergency during the exam');
+    await tester.tap(find.widgetWithText(FilledButton, 'Submit Request'));
+    await tester.pumpAndSettle();
+
+    expect(client.retakeCalls.single['op'], 'create');
+    expect(client.retakeCalls.single['reason'], 'Family emergency during the exam');
+    expect(client.retakeCalls.single['examCode'], 'AT');
+  });
+
+  testWidgets('a pending request shows the review banner with Approve and Reject', (tester) async {
+    client.batchesToReturn = CloudBatchesRead.found([_batchRow(id: 'b-at', examCode: 'AT')]);
+    client.scansByExamineeId['e1'] =
+        CloudScansRead.found([_scanRow(id: 's-at', batchId: 'b-at', examCode: 'AT')]);
+    client.retakeRequestsByKey['e1/AT'] = [_retakeRequest(status: 'PENDING')];
+    await pumpDetail(tester);
+
+    expect(find.text('A retake request must be reviewed and approved.'), findsOneWidget);
+    expect(find.byKey(const Key('approveRetake_r1')), findsOneWidget);
+    expect(find.byKey(const Key('rejectRetake_r1')), findsOneWidget);
+    expect(find.byKey(const Key('requestRetake_s-at')), findsNothing);
+  });
+
+  testWidgets('Approve calls reviewRetakeRequest with approve: true', (tester) async {
+    client.batchesToReturn = CloudBatchesRead.found([_batchRow(id: 'b-at', examCode: 'AT')]);
+    client.scansByExamineeId['e1'] =
+        CloudScansRead.found([_scanRow(id: 's-at', batchId: 'b-at', examCode: 'AT')]);
+    client.retakeRequestsByKey['e1/AT'] = [_retakeRequest(status: 'PENDING')];
+    await pumpDetail(tester);
+
+    await tester.tap(find.byKey(const Key('approveRetake_r1')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Approve'));
+    await tester.pumpAndSettle();
+
+    expect(client.retakeCalls.single['op'], 'review');
+    expect(client.retakeCalls.single['requestId'], 'r1');
+    expect(client.retakeCalls.single['approve'], true);
+  });
+
+  testWidgets('a rejected request offers Request Retake again (the retake is not consumed)', (tester) async {
+    client.batchesToReturn = CloudBatchesRead.found([_batchRow(id: 'b-at', examCode: 'AT')]);
+    client.scansByExamineeId['e1'] =
+        CloudScansRead.found([_scanRow(id: 's-at', batchId: 'b-at', examCode: 'AT')]);
+    client.retakeRequestsByKey['e1/AT'] = [_retakeRequest(status: 'REJECTED')];
+    await pumpDetail(tester);
+
+    expect(find.byKey(const Key('requestRetake_s-at')), findsOneWidget);
+    expect(find.byKey(const Key('approveRetake_r1')), findsNothing);
+  });
+
+  testWidgets('an approved request not yet eligible shows the earliest eligible date and Archive Attempt', (tester) async {
+    client.batchesToReturn = CloudBatchesRead.found([_batchRow(id: 'b-at', examCode: 'AT')]);
+    client.scansByExamineeId['e1'] =
+        CloudScansRead.found([_scanRow(id: 's-at', batchId: 'b-at', examCode: 'AT')]);
+    client.retakeRequestsByKey['e1/AT'] = [
+      _retakeRequest(status: 'APPROVED', eligibleOn: DateTime.utc(2027, 3, 25)),
+    ];
+    await pumpDetail(tester);
+
+    expect(find.textContaining('not yet eligible'), findsOneWidget);
+    expect(find.textContaining('Mar 25, 2027'), findsOneWidget);
+    expect(find.byKey(const Key('archiveAttempt_r1')), findsOneWidget);
+  });
+
+  testWidgets('Archive Attempt requires a reason and calls archiveRetakeAttempt', (tester) async {
+    client.batchesToReturn = CloudBatchesRead.found([_batchRow(id: 'b-at', examCode: 'AT')]);
+    client.scansByExamineeId['e1'] =
+        CloudScansRead.found([_scanRow(id: 's-at', batchId: 'b-at', examCode: 'AT')]);
+    client.retakeRequestsByKey['e1/AT'] = [
+      _retakeRequest(status: 'APPROVED', eligibleOn: DateTime.utc(2027, 3, 25)),
+    ];
+    await pumpDetail(tester);
+
+    await tester.tap(find.byKey(const Key('archiveAttempt_r1')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Archive Attempt'));
+    await tester.pumpAndSettle();
+    expect(find.text('A reason is required'), findsOneWidget);
+    expect(client.retakeCalls, isEmpty);
+
+    await tester.enterText(find.byKey(const Key('archiveAttemptReasonField')), 'Approved retake, archiving the first attempt');
+    await tester.tap(find.widgetWithText(FilledButton, 'Archive Attempt'));
+    await tester.pumpAndSettle();
+
+    expect(client.retakeCalls.single['op'], 'archive');
+    expect(client.retakeCalls.single['requestId'], 'r1');
+  });
+
+  testWidgets('an archived attempt shows its badge and reason, and hides Remove Link', (tester) async {
+    client.batchesToReturn = CloudBatchesRead.found([_batchRow(id: 'b-at', examCode: 'AT')]);
+    client.scansByExamineeId['e1'] = CloudScansRead.found([
+      _scanRow(
+        id: 's-at1',
+        batchId: 'b-at',
+        examCode: 'AT',
+        attemptNo: 1,
+        attemptStatus: 'archived',
+        archiveReason: 'Approved retake -- previous attempt archived',
+      ),
+    ]);
+    await pumpDetail(tester);
+
+    expect(find.textContaining('Attempt 1'), findsOneWidget);
+    expect(find.textContaining('Archived'), findsWidgets);
+    expect(find.textContaining('Approved retake -- previous attempt archived'), findsOneWidget);
+    expect(find.widgetWithText(TextButton, 'Remove Link'), findsNothing);
+  });
+
+  testWidgets('Attempt 1 (archived) and Attempt 2 (active) both appear, and Attempt 2 shows the max-attempts notice', (tester) async {
+    client.batchesToReturn = CloudBatchesRead.found([
+      _batchRow(id: 'b-at1', examCode: 'AT'),
+      _batchRow(id: 'b-at2', examCode: 'AT'),
+    ]);
+    client.scansByExamineeId['e1'] = CloudScansRead.found([
+      _scanRow(
+        id: 's-at1',
+        batchId: 'b-at1',
+        examCode: 'AT',
+        attemptNo: 1,
+        attemptStatus: 'archived',
+        archiveReason: 'Approved retake',
+      ),
+      _scanRow(id: 's-at2', batchId: 'b-at2', examCode: 'AT', attemptNo: 2, attemptStatus: 'active'),
+    ]);
+    await pumpDetail(tester);
+
+    expect(find.byKey(const Key('maxAttemptsNotice_s-at2')), findsOneWidget);
+    expect(find.text('Maximum number of AT attempts has been reached.'), findsOneWidget);
+    expect(find.byKey(const Key('requestRetake_s-at2')), findsNothing);
+    // Both attempts are visible -- the same examinee, same examCode.
+    expect(find.textContaining('Attempt 1'), findsOneWidget);
+    expect(find.textContaining('Attempt 2'), findsOneWidget);
+  });
+});
+
 }

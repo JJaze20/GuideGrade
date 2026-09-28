@@ -7,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../models/local_batch.dart';
 import '../services/local_batch_repository.dart';
 import '../services/local_storage_service.dart';
+import 'retake_client.dart';
 import 'scan_cloud_extensions.dart';
 import 'sync_client.dart';
 import 'sync_job.dart';
@@ -102,7 +103,7 @@ class AnswerKeyDecision {
 /// It performs no retries or backoff of its own beyond a single
 /// token-refresh retry on an auth error; scheduling is the sync manager's
 /// job.
-class SupabaseSyncClient implements SyncClient {
+class SupabaseSyncClient implements SyncClient, RetakeClient {
   SupabaseSyncClient({
     required this.batches,
     required this.localStorage,
@@ -1016,6 +1017,12 @@ class SupabaseSyncClient implements SyncClient {
         rectifiedImagePath: row['rectified_image_path'] as String?,
         imageUploaded: row['image_uploaded'] == true,
         rectifiedImageUploaded: row['rectified_image_uploaded'] == true,
+        attemptNo: (row['attempt_no'] as num?)?.toInt() ?? 1,
+        attemptStatus: row['attempt_status'] as String? ?? 'active',
+        archivedAt: _dateOrNull(row['archived_at']),
+        archivedByUid: row['archived_by_uid'] as String?,
+        archivedByName: row['archived_by_name'] as String?,
+        archiveReason: row['archive_reason'] as String?,
       );
 
   /// Read-only, metadata-only fetch of every cloud `batches` row visible
@@ -1067,7 +1074,9 @@ class SupabaseSyncClient implements SyncClient {
               'total_graded, total_items, result_status, scanned_at, '
               'processed_by_uid, processed_by_name, first_name, last_name, '
               'middle_name, examinee_number, examinee_id, image_path, '
-              'image_uploaded, rectified_image_path, rectified_image_uploaded',
+              'image_uploaded, rectified_image_path, rectified_image_uploaded, '
+              'attempt_no, attempt_status, archived_at, archived_by_uid, '
+              'archived_by_name, archive_reason',
             )
             .eq('batch_id', batchId);
         return CloudScansRead.found(
@@ -1182,7 +1191,9 @@ class SupabaseSyncClient implements SyncClient {
               'total_graded, total_items, result_status, scanned_at, '
               'processed_by_uid, processed_by_name, first_name, last_name, '
               'middle_name, examinee_number, image_path, image_uploaded, '
-              'rectified_image_path, rectified_image_uploaded',
+              'rectified_image_path, rectified_image_uploaded, attempt_no, '
+              'attempt_status, archived_at, archived_by_uid, archived_by_name, '
+              'archive_reason',
             )
             .eq('examinee_id', examineeId);
         return CloudScansRead.found(
@@ -1222,7 +1233,9 @@ class SupabaseSyncClient implements SyncClient {
               'total_graded, total_items, result_status, scanned_at, '
               'processed_by_uid, processed_by_name, first_name, last_name, '
               'middle_name, examinee_number, image_path, image_uploaded, '
-              'rectified_image_path, rectified_image_uploaded',
+              'rectified_image_path, rectified_image_uploaded, attempt_no, '
+              'attempt_status, archived_at, archived_by_uid, archived_by_name, '
+              'archive_reason',
             )
             .isFilter('examinee_id', null);
         return CloudScansRead.found(
@@ -1434,6 +1447,177 @@ class SupabaseSyncClient implements SyncClient {
       if (changed.length != 1) {
         return const SyncOutcome.conflict('scan_not_linked_to_examinee');
       }
+      return const SyncOutcome.success();
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Applicant Retake Management (`exam_retake_requests`, see
+  // retake_client.dart). Every write below calls a SECURITY DEFINER database
+  // function -- never a plain insert/update on `exam_retake_requests` or the
+  // `scans` attempt columns (both are blocked for direct client mutation).
+  // The actor's uid/name are resolved from [identity], exactly like
+  // [archiveBatch] resolves the Web Archive's actor -- never a caller-
+  // supplied parameter, so a request/review/archive can never be attributed
+  // to anyone other than the signed-in Guidance Council user.
+  // ---------------------------------------------------------------------------
+
+  static const List<String> _retakeRequestColumns = [
+    'id',
+    'examinee_id',
+    'exam_code',
+    'previous_scan_batch_id',
+    'previous_scan_id',
+    'reason',
+    'status',
+    'requested_by_uid',
+    'requested_by_name',
+    'requested_at',
+    'reviewed_by_uid',
+    'reviewed_by_name',
+    'reviewed_at',
+    'review_note',
+    'eligible_on',
+    'created_at',
+    'updated_at',
+  ];
+
+  /// Parses one raw `exam_retake_requests` row (as returned by
+  /// `.select()`) into a [CloudRetakeRequestRow].
+  static CloudRetakeRequestRow parseCloudRetakeRequestRow(Map<String, dynamic> row) =>
+      CloudRetakeRequestRow(
+        id: row['id'] as String,
+        examineeId: row['examinee_id'] as String? ?? '',
+        examCode: row['exam_code'] as String? ?? '',
+        previousScanBatchId: row['previous_scan_batch_id'] as String?,
+        previousScanId: row['previous_scan_id'] as String?,
+        reason: row['reason'] as String? ?? '',
+        status: row['status'] as String? ?? 'PENDING',
+        requestedByUid: row['requested_by_uid'] as String?,
+        requestedByName: row['requested_by_name'] as String?,
+        requestedAt: _dateOrNull(row['requested_at']) ?? DateTime.now().toUtc(),
+        reviewedByUid: row['reviewed_by_uid'] as String?,
+        reviewedByName: row['reviewed_by_name'] as String?,
+        reviewedAt: _dateOrNull(row['reviewed_at']),
+        reviewNote: row['review_note'] as String?,
+        eligibleOn: _dateOrNull(row['eligible_on']),
+        createdAt: _dateOrNull(row['created_at']) ?? DateTime.now().toUtc(),
+        updatedAt: _dateOrNull(row['updated_at']) ?? DateTime.now().toUtc(),
+      );
+
+  /// Read-only fetch of every `exam_retake_requests` row for
+  /// [examineeId]/[examCode], newest first -- Guidance Council RLS grants
+  /// SELECT on this table directly (only INSERT/UPDATE are function-only).
+  @override
+  Future<CloudRetakeRequestsRead> readRetakeRequests({
+    required String examineeId,
+    required String examCode,
+  }) async {
+    var refreshed = false;
+    while (true) {
+      try {
+        final rows = await _client
+            .from('exam_retake_requests')
+            .select(_retakeRequestColumns.join(', '))
+            .eq('examinee_id', examineeId)
+            .eq('exam_code', examCode)
+            .order('created_at', ascending: false);
+        return CloudRetakeRequestsRead.found(
+          rows.map((r) => parseCloudRetakeRequestRow(r)).toList(),
+        );
+      } on PostgrestException catch (e) {
+        final code = _sanitizeCode(e.code);
+        if ((code == '401' || code == 'PGRST301') && !refreshed) {
+          refreshed = true;
+          if (await _safeRefresh()) continue;
+        }
+        return CloudRetakeRequestsRead.failed(classifyPostgrestCode(code));
+      } on TimeoutException {
+        return const CloudRetakeRequestsRead.failed(SyncOutcome.transient('network'));
+      } on SocketException {
+        return const CloudRetakeRequestsRead.failed(SyncOutcome.transient('network'));
+      } catch (e) {
+        _logUnclassified(e);
+        return CloudRetakeRequestsRead.failed(classifyUnexpectedError(e));
+      }
+    }
+  }
+
+  /// Creates a PENDING retake request via the `create_exam_retake_request`
+  /// RPC. The database is the sole judge of eligibility (attempt count, an
+  /// already-open request, ...) -- this never pre-validates that itself, and
+  /// never inserts into `exam_retake_requests` directly.
+  @override
+  Future<SyncOutcome> createRetakeRequest({
+    required String examineeId,
+    required String examCode,
+    required String reason,
+  }) {
+    final uid = identity.uid;
+    if (uid == null || uid.isEmpty) {
+      return Future.value(const SyncOutcome.permanent('no_uid'));
+    }
+    final name = identity.displayName?.trim();
+    return _guardPostgrest(() async {
+      await _client.rpc('create_exam_retake_request', params: {
+        'p_examinee_id': examineeId,
+        'p_exam_code': examCode,
+        'p_reason': reason,
+        'p_requested_by_uid': uid,
+        'p_requested_by_name': (name == null || name.isEmpty) ? null : name,
+      });
+      return const SyncOutcome.success();
+    });
+  }
+
+  /// Approves or rejects [requestId] via the `review_exam_retake_request`
+  /// RPC (`p_action` is the literal 'APPROVE'/'REJECT' that function
+  /// accepts). Never updates `exam_retake_requests.status` directly -- the
+  /// database blocks that independently.
+  @override
+  Future<SyncOutcome> reviewRetakeRequest({
+    required String requestId,
+    required bool approve,
+    String? reviewNote,
+  }) {
+    final uid = identity.uid;
+    if (uid == null || uid.isEmpty) {
+      return Future.value(const SyncOutcome.permanent('no_uid'));
+    }
+    final name = identity.displayName?.trim();
+    return _guardPostgrest(() async {
+      await _client.rpc('review_exam_retake_request', params: {
+        'p_request_id': requestId,
+        'p_action': approve ? 'APPROVE' : 'REJECT',
+        'p_reviewer_uid': uid,
+        'p_reviewer_name': (name == null || name.isEmpty) ? null : name,
+        'p_review_note': reviewNote,
+      });
+      return const SyncOutcome.success();
+    });
+  }
+
+  /// Archives the previous attempt behind an APPROVED [requestId] via the
+  /// `archive_approved_retake_attempt` RPC. Never deletes the scan, its
+  /// batch, or its examinee link, and never updates `scans.attempt_status`
+  /// directly -- the database blocks that independently.
+  @override
+  Future<SyncOutcome> archiveRetakeAttempt({
+    required String requestId,
+    required String archiveReason,
+  }) {
+    final uid = identity.uid;
+    if (uid == null || uid.isEmpty) {
+      return Future.value(const SyncOutcome.permanent('no_uid'));
+    }
+    final name = identity.displayName?.trim();
+    return _guardPostgrest(() async {
+      await _client.rpc('archive_approved_retake_attempt', params: {
+        'p_request_id': requestId,
+        'p_archived_by_uid': uid,
+        'p_archived_by_name': (name == null || name.isEmpty) ? null : name,
+        'p_archive_reason': archiveReason,
+      });
       return const SyncOutcome.success();
     });
   }

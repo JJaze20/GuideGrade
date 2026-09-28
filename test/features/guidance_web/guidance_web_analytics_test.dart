@@ -181,6 +181,8 @@ CloudScanRow _scan(
   String examCode,
   int? raw, {
   Map<String, dynamic>? decoded,
+  int attemptNo = 1,
+  String attemptStatus = 'active',
 }) =>
     CloudScanRow(
       id: id,
@@ -199,6 +201,8 @@ CloudScanRow _scan(
       firstName: 'First$id',
       lastName: 'Last$id',
       examineeNumber: 'EX-$id',
+      attemptNo: attemptNo,
+      attemptStatus: attemptStatus,
     );
 
 /// A TAT decoded sheet: the first [c] items of each template section are
@@ -919,4 +923,82 @@ void main() {
     expect(GuidanceWebAnalyticsService.qtmPercentOf(30), qtmPercentage(30));
     expect(GuidanceWebAnalyticsService.qtmPercentOf(null), isNull);
   });
+
+group('Applicant Retake Management -- archived attempts excluded by default', () {
+  test('AT: an archived Attempt 1 is excluded from the aggregate, the active Attempt 2 is included', () async {
+    client.batches.add(_batch('b1', 'AT'));
+    client.scansByBatch['b1'] = [
+      _scan('s-old', 'b1', 'AT', 50, attemptNo: 1, attemptStatus: 'archived'),
+      _scan('s-new', 'b1', 'AT', 65, attemptNo: 2, attemptStatus: 'active'),
+    ];
+
+    final r = await run('AT');
+
+    expect(r.at!.totalExaminees, 1);
+    expect(r.at!.averageRawScore, 65);
+  });
+
+  test('AT: the batch is still marked complete -- archiving an attempt never looks like a missing scan', () async {
+    client.batches.add(_batch('b1', 'AT'));
+    client.scansByBatch['b1'] = [
+      _scan('s-old', 'b1', 'AT', 50, attemptNo: 1, attemptStatus: 'archived'),
+      _scan('s-new', 'b1', 'AT', 65, attemptNo: 2, attemptStatus: 'active'),
+    ];
+
+    final r = await run('AT');
+
+    expect(r.incompleteBatches, isEmpty);
+    expect(r.analyzedBatches.map((b) => b.id), ['b1']);
+  });
+
+  test('TAT: an archived Attempt 1 is excluded from the overall stats', () async {
+    client.batches.add(_batch('t1', 'TAT'));
+    client.scansByBatch['t1'] = [
+      _scan('s-old', 't1', 'TAT', 40, attemptNo: 1, attemptStatus: 'archived'),
+      _scan('s-new', 't1', 'TAT', 150, attemptNo: 2, attemptStatus: 'active'),
+    ];
+
+    final o = (await run('TAT')).tatOverall!;
+
+    expect(o.totalExaminees, 1);
+    expect(o.averageTotal, 150);
+  });
+
+  test('an applicant with only Attempt 1 (no retake) is unchanged', () async {
+    client.batches.add(_batch('b1', 'AT'));
+    client.scansByBatch['b1'] = [_scan('s1', 'b1', 'AT', 60)]; // default: attempt 1, active
+
+    final r = await run('AT');
+
+    expect(r.at!.totalExaminees, 1);
+    expect(r.at!.averageRawScore, 60);
+  });
+
+  test('QTM is unchanged for an ordinary batch (no retake activity at all)', () async {
+    client.batches.add(_batch('q1', 'QTM'));
+    client.scansByBatch['q1'] = [
+      _scan('1', 'q1', 'QTM', 10),
+      _scan('2', 'q1', 'QTM', 20),
+    ];
+
+    final q = (await run('QTM')).qtm!;
+
+    expect(q.totalExaminees, 2);
+    expect(q.averageRawScore, 15);
+  });
+
+  test('the archived-attempt filter applies uniformly regardless of exam code', () async {
+    client.batches.add(_batch('q1', 'QTM'));
+    client.scansByBatch['q1'] = [
+      _scan('1', 'q1', 'QTM', 10, attemptNo: 1, attemptStatus: 'archived'),
+      _scan('2', 'q1', 'QTM', 20),
+    ];
+
+    final q = (await run('QTM')).qtm!;
+
+    expect(q.totalExaminees, 1);
+    expect(q.averageRawScore, 20);
+  });
+});
+
 }
