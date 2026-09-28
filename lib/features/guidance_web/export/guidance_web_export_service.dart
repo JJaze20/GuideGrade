@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter/services.dart' show rootBundle;
 
 import '../../../core/omr/admission_category.dart';
@@ -71,12 +72,16 @@ class GuidanceWebExportService {
   late final GuidanceWebResultsService _results =
       _resultsOverride ?? GuidanceWebResultsService();
 
-  /// Builds the PDF: the Batch Analytics page when [includeSummary], then one
-  /// Examinee Analytics page per scan in [selected] (in the given order).
-  /// [allScans] is every scan of [batch] — the batch averages and the
-  /// category distribution are computed over all of them, never only the
-  /// selected ones.
-  Future<Uint8List> buildPdf({
+  /// Builds the [ExportDocument] (Batch Analytics section + one Examinee
+  /// Analytics section per scan in [selected]) WITHOUT rendering it to PDF
+  /// bytes or loading any asset -- the exact same content [buildPdf] would
+  /// print, just stopped one step earlier so a test can inspect the plain
+  /// [ExportBatchSection]/[ExportExamineeSection] data instead of parsing
+  /// PDF bytes. [allScans] is every scan of [batch] -- the batch averages
+  /// and the category distribution are computed over all of them, never
+  /// only the selected ones.
+  @visibleForTesting
+  Future<ExportDocument> buildExportDocument({
     required LocalBatch batch,
     required bool includeSummary,
     required List<LocalScan> selected,
@@ -97,6 +102,25 @@ class GuidanceWebExportService {
       for (final s in selected)
         _examineeSection(batch, s, allScans, key, includeCertificates),
     ];
+    return ExportDocument(batch: section, examinees: examinees);
+  }
+
+  /// Builds the PDF: [buildExportDocument] rendered to bytes via
+  /// [buildExportPdf], with the two logo assets loaded.
+  Future<Uint8List> buildPdf({
+    required LocalBatch batch,
+    required bool includeSummary,
+    required List<LocalScan> selected,
+    required List<LocalScan> allScans,
+    bool includeCertificates = false,
+  }) async {
+    final document = await buildExportDocument(
+      batch: batch,
+      includeSummary: includeSummary,
+      selected: selected,
+      allScans: allScans,
+      includeCertificates: includeCertificates,
+    );
 
     final left = (await rootBundle.load('assets/images/ndmu_logo.png'))
         .buffer
@@ -105,10 +129,26 @@ class GuidanceWebExportService {
         (await rootBundle.load('assets/images/guidance_council_logo.png'))
             .buffer
             .asUint8List();
-    return buildExportPdf(
-      ExportDocument(batch: section, examinees: examinees),
-      leftLogo: left,
-      rightLogo: right,
+    return buildExportPdf(document, leftLogo: left, rightLogo: right);
+  }
+
+  /// The whole-batch [ExportDocument] used by [buildDefaultPdf]: every scan
+  /// [GuidanceWebResultsService.loadScansForBatch] returns for [batch]
+  /// (its own default exclusion of an archived retake attempt applies here
+  /// unchanged -- this never passes `includeArchivedAttempts: true`), used
+  /// as both the batch summary's scope and the per-examinee pages.
+  @visibleForTesting
+  Future<ExportDocument> buildDefaultExportDocument(
+    LocalBatch batch, {
+    bool includeCertificates = false,
+  }) async {
+    final scans = await _results.loadScansForBatch(batch);
+    return buildExportDocument(
+      batch: batch,
+      includeSummary: true,
+      selected: scans,
+      allScans: scans,
+      includeCertificates: includeCertificates,
     );
   }
 
@@ -118,14 +158,19 @@ class GuidanceWebExportService {
     LocalBatch batch, {
     bool includeCertificates = false,
   }) async {
-    final scans = await _results.loadScansForBatch(batch);
-    return buildPdf(
-      batch: batch,
-      includeSummary: true,
-      selected: scans,
-      allScans: scans,
+    final document = await buildDefaultExportDocument(
+      batch,
       includeCertificates: includeCertificates,
     );
+
+    final left = (await rootBundle.load('assets/images/ndmu_logo.png'))
+        .buffer
+        .asUint8List();
+    final right =
+        (await rootBundle.load('assets/images/guidance_council_logo.png'))
+            .buffer
+            .asUint8List();
+    return buildExportPdf(document, leftLogo: left, rightLogo: right);
   }
 
   // --- batch page ------------------------------------------------------------
@@ -160,6 +205,23 @@ class GuidanceWebExportService {
           categoryBars: categoryBars,
           unavailableNote:
               'Statistics unavailable: this batch could not be fully retrieved.',
+        );
+      }
+      // Applicant Retake Management (additive): the batch is physically
+      // complete, but every scan in it is an archived retake attempt --
+      // there is nothing active to summarize. Stated plainly instead of
+      // printing an all-zero Batch Analytics page, which would read as a
+      // real (if unusually poor) result rather than "nothing active here".
+      if (r.allActiveAttemptsArchived) {
+        return ExportBatchSection(
+          examLabel: examLabel,
+          batchLabel: _batchLabel(batch),
+          batchDate: _date(batch.createdAt),
+          stats: const [],
+          scoreBars: const [],
+          categoryBars: categoryBars,
+          unavailableNote: 'All examination attempts in this batch are '
+              'archived. No active attempts are included in this export.',
         );
       }
       final (stats, bars) = _statsFrom(r);

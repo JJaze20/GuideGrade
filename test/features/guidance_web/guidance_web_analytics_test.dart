@@ -896,6 +896,26 @@ void main() {
       expect(find.text('Overall Statistics'), findsNothing);
     });
 
+    testWidgets('a batch whose only attempt is archived shows the archived-only message, not zero statistics',
+        (tester) async {
+      client.batches.add(_batch('b1', 'AT'));
+      client.scansByBatch['b1'] = [_scan('s-old', 'b1', 'AT', 50, attemptNo: 1, attemptStatus: 'archived')];
+      await pump(tester);
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('allAttemptsArchived')), findsOneWidget);
+      expect(
+        find.text('All examination attempts in this batch are archived. No active attempts to analyze.'),
+        findsOneWidget,
+      );
+      expect(find.text('Overall Statistics'), findsNothing);
+      expect(find.text('Total'), findsNothing);
+      // Not the "no complete batch data" message either -- the batch WAS
+      // fully retrieved, it's simply all-archived.
+      expect(find.byKey(const Key('noCompleteData')), findsNothing);
+      expect(find.byKey(const Key('incompleteBatchWarning')), findsNothing);
+    });
+
     testWidgets('the refresh action clears the cache and re-reads', (tester) async {
       client.batches.add(_batch('a1', 'AT'));
       client.scansByBatch['a1'] = [_scan('1', 'a1', 'AT', 60)];
@@ -998,6 +1018,80 @@ group('Applicant Retake Management -- archived attempts excluded by default', ()
 
     expect(q.totalExaminees, 1);
     expect(q.averageRawScore, 20);
+  });
+
+  group('archived-only batch (physically complete, nothing active)', () {
+    test('AT: recognized -- completeness stays true, but at/qtm/tatOverall stay null', () async {
+      client.batches.add(_batch('b1', 'AT', day: 1));
+      client.scansByBatch['b1'] = [
+        _scan('s-old', 'b1', 'AT', 50, attemptNo: 1, attemptStatus: 'archived'),
+      ];
+
+      final r = await run('AT');
+
+      // Completeness still uses the physical scan count -- this batch was
+      // fully retrieved (1 expected, 1 retrieved), so it is NOT reported as
+      // incomplete even though nothing in it is active.
+      expect(r.incompleteBatches, isEmpty);
+      expect(r.analyzedBatches.map((b) => b.id), ['b1']);
+      expect(r.allActiveAttemptsArchived, isTrue);
+      // Archived scans never reach the pure AT/QTM/TAT calculators: no
+      // all-zero result is fabricated for them to report on.
+      expect(r.at, isNull);
+      expect(r.qtm, isNull);
+      expect(r.tatOverall, isNull);
+      expect(r.tatDetail, isNull);
+    });
+
+    test('TAT: recognized the same way', () async {
+      client.batches.add(_batch('t1', 'TAT', day: 1));
+      client.scansByBatch['t1'] = [
+        _scan('s-old', 't1', 'TAT', 40, attemptNo: 1, attemptStatus: 'archived'),
+      ];
+
+      final r = await run('TAT');
+
+      expect(r.incompleteBatches, isEmpty);
+      expect(r.allActiveAttemptsArchived, isTrue);
+      expect(r.tatOverall, isNull);
+      expect(r.tatDetail, isNull);
+    });
+
+    test('a batch with at least one active scan is never reported archived-only', () async {
+      client.batches.add(_batch('b1', 'AT', day: 1));
+      client.scansByBatch['b1'] = [
+        _scan('s-old', 'b1', 'AT', 50, attemptNo: 1, attemptStatus: 'archived'),
+        _scan('s-new', 'b1', 'AT', 65, attemptNo: 2, attemptStatus: 'active'),
+      ];
+
+      final r = await run('AT');
+
+      expect(r.allActiveAttemptsArchived, isFalse);
+      expect(r.at, isNotNull);
+    });
+
+    test('an ordinary batch with no retake activity is never reported archived-only', () async {
+      client.batches.add(_batch('b1', 'AT', day: 1));
+      client.scansByBatch['b1'] = [_scan('s1', 'b1', 'AT', 60)];
+
+      final r = await run('AT');
+
+      expect(r.allActiveAttemptsArchived, isFalse);
+      expect(r.at, isNotNull);
+    });
+
+    test('an incomplete batch (not fully synced) is never reported archived-only', () async {
+      client.batches.add(_batch('b1', 'AT', day: 1));
+      client.scansByBatch['b1'] = [
+        _scan('s-old', 'b1', 'AT', 50, attemptNo: 1, attemptStatus: 'archived'),
+      ];
+      client.countsOverride['b1'] = 5; // server reports 5 expected, only 1 retrieved
+
+      final r = await run('AT');
+
+      expect(r.incompleteBatches, hasLength(1));
+      expect(r.allActiveAttemptsArchived, isFalse);
+    });
   });
 });
 
