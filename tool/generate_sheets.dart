@@ -277,7 +277,7 @@ const double kQtmHeaderHeight =
 // section's own item numbering, are UNCHANGED — this only touches the
 // header, adds the extra decorative fiducials, and rotates the title into
 // the page's existing right-margin slack, all mirroring AT/QTM's own
-// redesigns (see _paintTopTitle/_paintTopTitle) but
+// redesigns (see _paintNameRowTitle/_paintNameRowTitle) but
 // implemented separately here so it can't regress either of them.
 // ---------------------------------------------------------------------------
 
@@ -503,7 +503,7 @@ class ExamSpec {
 
   /// Keeps the original reserved header height while drawing the title
   /// separately. The historical flag name is retained for the legacy TAT
-  /// layout; AT/QTM now draw their titles above the letterhead.
+  /// layout; AT/QTM now draw their titles below the name fields.
   final bool titleInRightMargin;
 
   const ExamSpec(
@@ -594,7 +594,7 @@ final List<ExamSpec> kExams = [
     // kQtmSectionRowGap comfortably inside kLongHeight, verified against
     // the regenerated PDF's actual fill, not computed on paper alone).
     // Keep the established column spacing so previously printed sheets
-    // retain identical scanning geometry. The title now sits above the header.
+    // retain identical scanning geometry. The title now sits below the name fields.
     bubbleRadius: 8,
     choicePitch: 26,
     rowPitch: 33,
@@ -703,8 +703,8 @@ final List<ExamSpec> kExams = [
     // widest ones. Purely a label draw-position change: bubble positions
     // and rowLabelWidth are untouched.
     labelGapPt: 6,
-    // Keep the reserved header height; _paintTopTitle draws the title in
-    // the existing blank space above the letterhead.
+    // Keep the reserved header height; _paintNameRowTitle draws the title in
+    // the existing blank space below the name fields.
     titleInRightMargin: true,
     templateVersion: 'AT-redesign-v1',
   ),
@@ -1500,7 +1500,7 @@ void _paintAtGridPage(PdfGraphics canvas, ExamSpec exam, ExamLayout layout, PdfF
   final headerPage = PagePlacement(exam.sections.first, 1, 1, const []);
   _paintSimpleHeader(canvas, exam, headerPage, layout, regular, bold, flip);
   if (exam.titleInRightMargin) {
-    _paintTopTitle(canvas, exam, layout.contentWidth, bold);
+    _paintNameRowTitle(canvas, exam, layout.contentWidth, bold);
   }
 
   for (final page in layout.pages) {
@@ -1508,16 +1508,21 @@ void _paintAtGridPage(PdfGraphics canvas, ExamSpec exam, ExamLayout layout, PdfF
   }
 }
 
-/// Paints the title in the existing space above the letterhead. This does not
-/// consume layout height or change any bubble, name-field, or marker positions.
-void _paintTopTitle(PdfGraphics canvas, ExamSpec exam, double width, PdfFont bold) {
+/// Paints the title in the blank space below the name row and above the pencil
+/// instruction, without changing bubble, name-field, or marker positions.
+void _paintNameRowTitle(PdfGraphics canvas, ExamSpec exam, double width, PdfFont bold) {
   final title = exam.title.toUpperCase();
   const size = 11.0;
   final textWidth = (bold.stringMetrics(title) * size).advanceWidth;
+  final nameRowBottom = exam.contentTop +
+      (exam.code == 'AT'
+          ? kBrandRowHeight + kSubtitleRowHeight + kGapAfterSubtitle
+          : kLetterheadHeight + kGapAfterLetterhead) +
+      kTableHeight;
   canvas.setColor(kNavy);
   canvas.drawString(bold, size, title,
       exam.contentLeft + (width - textWidth) / 2,
-      exam.pageHeightPt - (exam.contentTop - 4));
+      exam.pageHeightPt - (nameRowBottom + 26));
 }
 
 /// QTM's redesigned front-page header: the same NDMU letterhead box as
@@ -1596,7 +1601,7 @@ void _paintQtmHeader(
   y += kTableHeight + kQtmGapBetweenIdRows;
   y += kTableHeight + kGapAfterIdTable;
 
-  // The title is drawn above the letterhead by _paintTopTitle. Keep this
+  // The title is drawn below the name fields by _paintNameRowTitle. Keep this
   // reserved height so the existing instruction and bubble positions stay put.
   if (!exam.titleInRightMargin) {
     canvas.setColor(kNavy);
@@ -1640,7 +1645,7 @@ void _paintQtmGridPage(PdfGraphics canvas, ExamSpec exam, ExamLayout layout, Pdf
 
   _paintQtmHeader(canvas, exam, layout, regular, bold, flip);
   if (exam.titleInRightMargin) {
-    _paintTopTitle(canvas, exam, layout.contentWidth, bold);
+    _paintNameRowTitle(canvas, exam, layout.contentWidth, bold);
   }
 
   for (final page in layout.pages) {
@@ -2292,7 +2297,7 @@ void _paintSimpleHeader(
   y += kTableHeight + kAtGapBetweenIdRows;
   y += kTableHeight + kGapAfterTable;
 
-  // AT's title is drawn above the letterhead by _paintTopTitle. The space
+  // AT's title is drawn below the name fields by _paintNameRowTitle. The space
   // itself stays reserved (y still advances) so nothing below moves.
   if (!exam.titleInRightMargin) {
     canvas.setColor(kNavy);

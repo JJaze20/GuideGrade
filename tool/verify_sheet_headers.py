@@ -48,17 +48,30 @@ def verify(ref, preview_dir=None):
                     rects = [r for r in rects if not (
                         r['x0'] == 48 and r['top'] == 46 and
                         r['width'] == 510 and r['height'] == 46)]
-                    assert len(a.rects) - len(rects) == 1
+                    assert len(a.rects) - len(rects) in (0, 1)
                 assert geometry(rects) == geometry(b.rects), f'{name}: markers/fields changed'
-                # The old title was vertical; the new title occupies only
-                # the previously blank strip above the letterhead.
-                old_chars = [c for c in a.chars if i != 0 or c['upright']]
-                new_chars = [c for c in b.chars if i != 0 or c['top'] > 44]
+                def split_title(page):
+                    chars = page.chars
+                    if i != 0:
+                        return chars, []
+                    text = ''.join(c['text'] for c in chars)
+                    assert text.count(title) == 1, name
+                    start = text.index(title)
+                    assert all(len(c['text']) == 1 for c in chars)
+                    return chars[:start] + chars[start + len(title):], chars[start:start + len(title)]
+
+                old_chars, _ = split_title(a)
+                new_chars, title_chars = split_title(b)
                 assert geometry(old_chars) == geometry(new_chars), f'{name}: other text moved'
                 if i == 0:
-                    title_chars = [c for c in b.chars if c['top'] < 44]
                     assert ''.join(c['text'] for c in title_chars) == title, name
-                    assert all(c['upright'] and c['top'] >= 24 for c in title_chars)
+                    assert all(c['upright'] for c in title_chars)
+                    top, bottom = min(c['top'] for c in title_chars), max(c['bottom'] for c in title_chars)
+                    if name == 'TAT-portrait-v5':
+                        assert 164 < top < bottom < 180
+                        assert min(c['x0'] for c in title_chars) > 300
+                    else:
+                        assert (124 if name == 'AT' else 130) < top < bottom < 165
             print(f'PASS {name}: bubbles, markers, fields, other text and back pages unchanged')
         if preview_dir:
             import pypdfium2 as pdfium
