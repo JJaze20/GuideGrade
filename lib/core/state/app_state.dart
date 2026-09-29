@@ -293,6 +293,18 @@ class AppState extends ChangeNotifier {
 
   void _onSyncStateChanged() {
     if (_reconnectDisposed) return;
+    // SyncManager only calls its own notifyListeners() on a genuine job-
+    // state transition (enqueued -> inProgress -> settled/blocked), so
+    // propagating that straight to AppState's own listeners is safe and is
+    // what any screen reading sync status directly from the queue needs --
+    // e.g. AnswerKeyEntryScreen.build() reads answerKeySyncStatusFor/
+    // answerKeySyncLabelFor via AppStateScope, which only rebuilds when
+    // AppState itself notifies. Relying solely on refreshBatchArchiveStatus's
+    // own conditional notify below (fired only once a batch is actually
+    // confirmed archived) left any screen whose relevant sync state doesn't
+    // involve batch archival -- an answer-key-only push never archives a
+    // batch -- stale until some unrelated event happened to rebuild it.
+    notifyListeners();
     unawaited(refreshBatchArchiveStatus());
   }
 
