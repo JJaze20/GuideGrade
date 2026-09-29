@@ -106,6 +106,97 @@ void main() {
     });
   });
 
+  group('UserModel.isProfileComplete', () {
+    UserModel complete() => UserModel(
+          userId: 'u1',
+          email: 'staff@ndmu.edu.ph',
+          displayName: 'Juan Dela Cruz',
+          role: 'guidance_council',
+          isActive: true,
+          createdAt: DateTime.utc(2026, 1, 2),
+          firstName: 'Juan',
+          middleInitial: 'D.',
+          lastName: 'Dela Cruz',
+          guidancePosition: 'guidance_staff',
+        );
+
+    test('true when structured name, display name, and a valid Position are all present', () {
+      expect(complete().isProfileComplete, isTrue);
+    });
+
+    test('false for a legacy account with no structured name at all', () {
+      final user = complete().copyWith(firstName: '', middleInitial: '', lastName: '');
+      // copyWith cannot set a field back to null (existing, documented
+      // behavior -- see "copyWith with no name arguments keeps the existing
+      // ones" above), so build directly instead, matching how a real legacy
+      // Firestore document actually reads (UserModel.fromFirestore never
+      // produces an empty-string name part, only null).
+      final legacy = UserModel(
+        userId: user.userId,
+        email: user.email,
+        displayName: user.displayName,
+        role: user.role,
+        isActive: user.isActive,
+        createdAt: user.createdAt,
+        guidancePosition: user.guidancePosition,
+      );
+      expect(legacy.hasStructuredName, isFalse);
+      expect(legacy.isProfileComplete, isFalse);
+    });
+
+    test('false when guidancePosition is missing, even with a complete name', () {
+      final user = UserModel(
+        userId: 'u1',
+        email: 'staff@ndmu.edu.ph',
+        displayName: 'Juan Dela Cruz',
+        role: 'guidance_council',
+        isActive: true,
+        createdAt: DateTime.utc(2026, 1, 2),
+        firstName: 'Juan',
+        middleInitial: 'D.',
+        lastName: 'Dela Cruz',
+      );
+      expect(user.isProfileComplete, isFalse);
+    });
+
+    test('false when displayName is blank, even with everything else present', () {
+      final user = UserModel(
+        userId: 'u1',
+        email: 'staff@ndmu.edu.ph',
+        displayName: '   ',
+        role: 'guidance_council',
+        isActive: true,
+        createdAt: DateTime.utc(2026, 1, 2),
+        firstName: 'Juan',
+        middleInitial: 'D.',
+        lastName: 'Dela Cruz',
+        guidancePosition: 'guidance_staff',
+      );
+      expect(user.isProfileComplete, isFalse);
+    });
+
+    test('false when the structured name is present but invalid (a full middle name, not an initial)', () {
+      final user = complete().copyWith(middleInitial: 'Dela');
+      expect(user.isProfileComplete, isFalse);
+    });
+
+    test(
+        'true when guidancePosition holds a value outside the original three -- a System-Admin-added '
+        'position (e.g. from config/guidancePositions) must not be treated as incomplete', () {
+      final user = complete().copyWith(guidancePosition: 'auditing');
+      expect(user.isProfileComplete, isTrue);
+    });
+
+    test('false when guidancePosition is present but blank', () {
+      final user = complete().copyWith(guidancePosition: '   ');
+      expect(user.isProfileComplete, isFalse);
+    });
+
+    test('guidancePositionValues still holds exactly the three original values', () {
+      expect(UserModel.guidancePositionValues, {'guidance_head', 'psychometrician', 'guidance_staff'});
+    });
+  });
+
   group('UserNameRules', () {
     test('First and Last Name are required', () {
       expect(UserNameRules.validateFirstName(null), isNotNull);

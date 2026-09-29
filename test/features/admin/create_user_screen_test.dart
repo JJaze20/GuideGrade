@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:guidegrade/core/services/batch_repository.dart';
+import 'package:guidegrade/core/services/firestore_service.dart';
 import 'package:guidegrade/core/services/user_provisioning_service.dart';
 import 'package:guidegrade/core/state/app_state.dart';
 import 'package:guidegrade/features/admin/screens/create_user_screen.dart';
+import 'package:guidegrade/models/guidance_position.dart';
 import 'package:guidegrade/models/local_batch.dart';
 import 'package:guidegrade/models/user.dart';
 import 'package:guidegrade/shared/widgets/primary_button.dart';
@@ -32,10 +34,10 @@ class _FakeProvisioningService implements UserProvisioningService {
   @override
   Future<UserModel> createGuidanceCouncilUser({
     required String email,
-    required String displayName,
-    required String firstName,
-    required String middleInitial,
-    required String lastName,
+    String displayName = '',
+    String firstName = '',
+    String middleInitial = '',
+    String lastName = '',
     required UserModel actor,
     String? guidancePosition,
     String institution = 'NDMU',
@@ -69,12 +71,45 @@ class _FakeBatchRepository implements BatchRepository {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
+/// Never reaches real Firestore -- returns a fixed position list, and
+/// records every [addGuidancePosition] call so tests can assert on it
+/// without touching Firebase.
+class _FakeFirestoreService implements FirestoreService {
+  _FakeFirestoreService([List<GuidancePosition>? positions]) : _positions = positions ?? GuidancePositions.defaults;
+
+  List<GuidancePosition> _positions;
+  final addedLabels = <String>[];
+  Object? addErrorToThrow;
+
+  @override
+  Future<List<GuidancePosition>> loadGuidancePositions() async => _positions;
+
+  @override
+  Future<void> ensureDefaultGuidancePositionsSeeded() async {}
+
+  @override
+  Future<GuidancePosition> addGuidancePosition(String label, List<GuidancePosition> existingPositions) async {
+    if (addErrorToThrow != null) throw addErrorToThrow!;
+    final error = GuidancePositions.validateNewLabel(label, existingPositions);
+    if (error != null) throw ArgumentError(error);
+    final added = GuidancePositions.build(label);
+    addedLabels.add(label);
+    _positions = [..._positions, added];
+    return added;
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
 void main() {
   late _FakeProvisioningService service;
+  late _FakeFirestoreService firestoreService;
   late AppState appState;
 
   setUp(() {
     service = _FakeProvisioningService();
+    firestoreService = _FakeFirestoreService();
     appState = AppState(batchRepository: _FakeBatchRepository());
     appState.setCurrentUser(UserModel(
       userId: 'admin-1',
@@ -107,7 +142,10 @@ void main() {
               child: ElevatedButton(
                 onPressed: () => Navigator.of(context).push(
                   MaterialPageRoute<void>(
-                    builder: (_) => CreateUserScreen(provisioningService: service),
+                    builder: (_) => CreateUserScreen(
+                      provisioningService: service,
+                      firestoreService: firestoreService,
+                    ),
                   ),
                 ),
                 child: const Text('open'),
@@ -210,7 +248,40 @@ void main() {
     expect(call.middleInitial, 'D.');
     expect(call.lastName, 'Dela Cruz');
     expect(call.email, 'staff@ndmu.edu.ph');
-    expect(call.guidancePosition, 'guidance_staff');
+    expect(call.guidancePosition, isNull, reason: 'Position is optional now and no longer defaults to a value');
+  });
+
+  testWidgets('leaving the WHOLE personal profile blank (name, Display Name, Position) is accepted -- '
+      'the account holder completes it themselves on Mobile Profile Setup', (tester) async {
+    await openScreen(tester);
+    await tester.enterText(find.byKey(const Key('createUser.email')), 'staff@ndmu.edu.ph');
+    await submit(tester);
+
+    expect(service.calls, hasLength(1));
+    final call = service.calls.single;
+    expect(call.firstName, isEmpty);
+    expect(call.middleInitial, isEmpty);
+    expect(call.lastName, isEmpty);
+    expect(call.displayName, isEmpty);
+    expect(call.guidancePosition, isNull);
+    expect(find.text('First Name is required'), findsNothing);
+    expect(find.text('Last Name is required'), findsNothing);
+    expect(find.text('Middle Initial is required'), findsNothing);
+  });
+
+  testWidgets('Position can be selected from the three canonical choices', (tester) async {
+    await openScreen(tester);
+    await fill(tester);
+    await tester.tap(find.byKey(const Key('createUser.position')));
+    await tester.pumpAndSettle();
+    expect(find.text('Guidance Head'), findsWidgets);
+    expect(find.text('Psychometrician'), findsWidgets);
+    expect(find.text('Guidance Staff'), findsWidgets);
+    await tester.tap(find.text('Psychometrician').last);
+    await tester.pumpAndSettle();
+    await submit(tester);
+
+    expect(service.calls.single.guidancePosition, 'psychometrician');
   });
 
   testWidgets('typing the name does not fill in the Display Name', (tester) async {
@@ -221,5 +292,64 @@ void main() {
 
     final display = tester.widget<TextFormField>(find.byKey(const Key('createUser.displayName')));
     expect(display.controller!.text, isEmpty);
+  });
+
+  testWidgets('a System Admin can add a new position through the "+" action, and it becomes selectable',
+      (tester) async {
+    await openScreen(tester);
+
+    await tester.tap(find.byKey(const Key('createUser.addPosition')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('addGuidancePosition.label')), 'Auditing');
+    await tester.tap(find.byKey(const Key('addGuidancePosition.add')));
+    await tester.pumpAndSettle();
+
+    expect(firestoreService.addedLabels, ['Auditing']);
+
+    await tester.tap(find.byKey(const Key('createUser.position')));
+    await tester.pumpAndSettle();
+    expect(find.text('Auditing'), findsWidgets);
+    await tester.tap(find.text('Auditing').last);
+    await tester.pumpAndSettle();
+    await fill(tester);
+    await submit(tester);
+
+    expect(service.calls.single.guidancePosition, 'auditing');
+  });
+
+  testWidgets('cancelling the "+" dialog adds nothing', (tester) async {
+    await openScreen(tester);
+
+    await tester.tap(find.byKey(const Key('createUser.addPosition')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('addGuidancePosition.cancel')));
+    await tester.pumpAndSettle();
+
+    expect(firestoreService.addedLabels, isEmpty);
+  });
+
+  testWidgets('a blank position name is rejected without adding anything', (tester) async {
+    await openScreen(tester);
+
+    await tester.tap(find.byKey(const Key('createUser.addPosition')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('addGuidancePosition.add')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Position name is required'), findsOneWidget);
+    expect(firestoreService.addedLabels, isEmpty);
+  });
+
+  testWidgets('adding a position that duplicates an existing label shows an error', (tester) async {
+    await openScreen(tester);
+
+    await tester.tap(find.byKey(const Key('createUser.addPosition')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('addGuidancePosition.label')), 'Guidance Head');
+    await tester.tap(find.byKey(const Key('addGuidancePosition.add')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('A position with this name already exists'), findsOneWidget);
+    expect(firestoreService.addedLabels, isEmpty);
   });
 }
