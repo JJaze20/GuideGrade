@@ -57,10 +57,17 @@ class _FakeLoggingService implements LoggingService {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
-UserModel _staff({String? first, String? mi, String? last, String? position = 'guidance_staff'}) => UserModel(
+UserModel _staff({
+  String? first,
+  String? mi,
+  String? last,
+  String? position = 'guidance_staff',
+  String displayName = 'J. Dela Cruz',
+}) =>
+    UserModel(
       userId: 'staff-1',
       email: 'staff@ndmu.edu.ph',
-      displayName: 'J. Dela Cruz',
+      displayName: displayName,
       role: 'guidance_council',
       guidancePosition: position,
       isActive: true,
@@ -254,5 +261,39 @@ void main() {
     await save(tester);
 
     expect(firestore.updates.single.guidancePosition, 'auditing');
+  });
+
+  // --- Display Name is optional, matching Create User (regression) ----
+
+  testWidgets(
+      'a user with a blank Display Name (not yet completed Mobile Profile Setup) can still '
+      'be edited and saved by System Admin -- Display Name is optional here too, matching '
+      'Create User', (tester) async {
+    final firestore = await openScreen(tester, _staff(displayName: ''));
+
+    // An unrelated field (Institution) can be changed and saved without
+    // ever having to type a Display Name. Institution has no fieldKey of
+    // its own in EditUserScreen -- it's the last plain TextFormField in
+    // the form (firstName, middleInitial, lastName, displayName, then
+    // institution; Position is a DropdownButtonFormField, not a
+    // TextFormField, so it doesn't affect this ordering).
+    await tester.enterText(find.byType(TextFormField).last, 'NDMU Annex');
+    await save(tester);
+
+    expect(find.text('This field is required'), findsNothing);
+    final saved = firestore.updates.single;
+    expect(saved.displayName, isEmpty);
+    expect(saved.institution, 'NDMU Annex');
+  });
+
+  testWidgets('existing behavior for a populated Display Name is unchanged -- it can still be '
+      'edited and is still saved verbatim', (tester) async {
+    final firestore = await openScreen(tester, _staff());
+
+    await tester.enterText(find.byKey(const Key('editUser.displayName')), 'Sir Juan');
+    await save(tester);
+
+    expect(find.text('This field is required'), findsNothing);
+    expect(firestore.updates.single.displayName, 'Sir Juan');
   });
 }

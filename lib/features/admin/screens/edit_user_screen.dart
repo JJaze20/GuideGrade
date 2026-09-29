@@ -389,7 +389,6 @@ class _EditUserScreenState extends State<EditUserScreen> {
               _buildTextField(
                 label: 'Display Name',
                 controller: _displayNameController,
-                required: true,
                 fieldKey: const Key('editUser.displayName'),
               ),
               const SizedBox(height: 12),
