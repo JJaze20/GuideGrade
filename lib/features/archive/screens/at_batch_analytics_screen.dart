@@ -4,6 +4,7 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import '../../../core/analytics/at_batch_analytics.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
+import '../../../core/constants/exam_catalog.dart';
 import '../../../core/omr/admission_category.dart';
 import '../../../core/state/app_state.dart';
 import '../../../models/local_batch.dart';
@@ -211,7 +212,7 @@ class _AtBatchAnalyticsScreenState extends State<AtBatchAnalyticsScreen> {
             ),
             const SizedBox(height: 4),
             _kv('Batch Code', batch.batchCode),
-            _kv('Exam Type', 'Admission Test (AT)'),
+            _kv('Exam Type', examTypeDisplayLabel('AT')),
           ],
         ),
       );

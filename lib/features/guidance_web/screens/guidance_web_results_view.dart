@@ -5,6 +5,7 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
+import '../../../core/constants/exam_catalog.dart';
 import '../../../models/examinee_record.dart';
 import '../../../models/local_batch.dart';
 import '../services/guidance_web_archive_service.dart';
@@ -72,11 +73,12 @@ const List<String> _statusFilterOptions = ['All', 'Graded', 'Ungraded'];
 /// Matches the exam
 /// codes the mobile app itself already produces
 /// (`LocalBatch.examCode` — 'AT' | 'QTM' | 'TAT'); no other exam code is
-/// given special handling.
-const List<(String examCode, String label)> _examGroups = [
-  ('AT', 'Admission Test (AT)'),
-  ('TAT', 'Teaching Aptitude Test (TAT)'),
-  ('QTM', 'Quantitative Math Test (QTM)'),
+/// given special handling. Labels read from the canonical
+/// exam_catalog.dart via examTypeDisplayLabel, not a separately
+/// hand-maintained copy -- only the display ORDER (AT, TAT, QTM) is
+/// specific to this page.
+final List<(String examCode, String label)> _examGroups = [
+  for (final code in ['AT', 'TAT', 'QTM']) (code, examTypeDisplayLabel(code)),
 ];
 
 /// Sorts scans by their already-computed official percentage
