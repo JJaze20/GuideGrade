@@ -125,7 +125,7 @@ const Map<String, CertificateSpec> certificateSpecs = {
     },
   ),
   'QTM': CertificateSpec(
-    intro: 'You have successfully passed the Quantitative Test for Mathematics of the Notre Dame of Marbel University.',
+    intro: 'You have successfully passed the Qualifying Test for Mathematics of the Notre Dame of Marbel University.',
     verb: 'take the',
     categories: {
       'D': CertificateCategory(
