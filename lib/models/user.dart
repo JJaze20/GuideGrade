@@ -134,6 +134,50 @@ class UserModel {
 
   /// Helper to check if user is Guidance Council
   bool get isGuidanceCouncil => role == 'guidance_council';
+
+  /// The three original Guidance Position values this app shipped with.
+  /// Retained for existing callers/tests, but no longer the authoritative
+  /// list of what [guidancePosition] may hold -- a System Admin can add
+  /// further positions at runtime (`config/guidancePositions`; see
+  /// `GuidancePositions`, the current source of truth for the full,
+  /// possibly-admin-extended set). [isProfileComplete] deliberately does
+  /// NOT check membership in this Set -- see its own doc comment.
+  static const Set<String> guidancePositionValues = {
+    'guidance_head',
+    'psychometrician',
+    'guidance_staff',
+  };
+
+  /// Whether Mobile Profile Setup's requirements are already satisfied for
+  /// this account: a valid structured name (per [UserNameRules] -- the same
+  /// rules Create User/Edit User already enforce, so "invalid" is treated
+  /// the same as "missing", never as complete by accident), a non-blank
+  /// [displayName] (mirrors the required-field validator
+  /// `CreateUserScreen._buildTextField` already uses), and a non-blank
+  /// [guidancePosition].
+  ///
+  /// [guidancePosition] is checked for non-blank only, NOT membership in
+  /// [guidancePositionValues] -- the Guidance Position list is now
+  /// System-Admin-extensible (`config/guidancePositions`, see
+  /// `GuidancePositions`), so an account holding an admin-added position
+  /// (e.g. "auditing") must still read as complete. Checking against
+  /// [guidancePositionValues] here would incorrectly treat every such
+  /// account as incomplete and re-trigger the mandatory Profile Setup
+  /// redirect -- and doing that check would require an asynchronous
+  /// Firestore read, which this getter (and the synchronous `AppRoutes`
+  /// gate built on it) must never depend on.
+  ///
+  /// Only meaningful for a `guidance_council` account -- a `system_admin`
+  /// account is never profile-gated (see `AppRoutes`), so a caller that
+  /// cares about that distinction should check [isGuidanceCouncil] itself;
+  /// this getter does not assume anything about [role].
+  bool get isProfileComplete =>
+      UserNameRules.validateFirstName(firstName) == null &&
+      UserNameRules.validateLastName(lastName) == null &&
+      UserNameRules.validateMiddleInitial(middleInitial) == null &&
+      displayName.trim().isNotEmpty &&
+      guidancePosition != null &&
+      guidancePosition!.trim().isNotEmpty;
 }
 
 /// Validation and normalization for a Guidance Council account's structured

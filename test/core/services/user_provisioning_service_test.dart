@@ -83,6 +83,47 @@ void main() {
       expect(user.institution, 'NDMU');
       expect(user.lastLoginAt, isNull);
     });
+
+    test('an account created with no personal profile info stores every name '
+        'part as null (never a placeholder string) and is not profile-complete', () {
+      final user = UserProvisioningService.buildGuidanceCouncilUser(
+        userId: 'new-uid',
+        email: 'staff@ndmu.edu.ph',
+        createdBy: 'admin-1',
+        createdAt: DateTime.utc(2026, 1, 2),
+      );
+      expect(user.firstName, isNull);
+      expect(user.middleInitial, isNull);
+      expect(user.lastName, isNull);
+      expect(user.displayName, '');
+      expect(user.guidancePosition, isNull);
+      expect(user.hasStructuredName, isFalse);
+      expect(user.isProfileComplete, isFalse);
+      // toFirestore() must never write an empty-string/placeholder name --
+      // the optional-name fields are simply omitted, exactly like a legacy
+      // pre-structured-name document.
+      final doc = user.toFirestore();
+      expect(doc.containsKey('firstName'), isFalse);
+      expect(doc.containsKey('middleInitial'), isFalse);
+      expect(doc.containsKey('lastName'), isFalse);
+    });
+
+    test('whitespace-only profile fields are treated exactly like blank ones', () {
+      final user = UserProvisioningService.buildGuidanceCouncilUser(
+        userId: 'new-uid',
+        email: 'staff@ndmu.edu.ph',
+        displayName: '   ',
+        firstName: '   ',
+        middleInitial: '   ',
+        lastName: '   ',
+        createdBy: 'admin-1',
+        createdAt: DateTime.utc(2026, 1, 2),
+      );
+      expect(user.firstName, isNull);
+      expect(user.middleInitial, isNull);
+      expect(user.lastName, isNull);
+      expect(user.displayName, '');
+    });
   });
 
   group('createGuidanceCouncilUser rejects an invalid structured name before creating anything', () {
@@ -109,5 +150,20 @@ void main() {
     test('blank Last Name', () => expectRejected(last: ''));
     test('blank Middle Initial', () => expectRejected(mi: ''));
     test('a full middle name in Middle Initial', () => expectRejected(mi: 'Dela'));
+
+    test('leaving the WHOLE structured name blank is never rejected as an invalid name -- '
+        'it proceeds past the name check (proven by reaching the forbidden Firestore call, '
+        'not a UserProvisioningException about the name)', () async {
+      await expectLater(
+        service.createGuidanceCouncilUser(
+          email: 'staff@ndmu.edu.ph',
+          actor: _admin,
+          firstName: '',
+          middleInitial: '',
+          lastName: '',
+        ),
+        throwsA(isA<StateError>()),
+      );
+    });
   });
 }

@@ -5,6 +5,7 @@ import '../../core/services/logging_service.dart';
 import '../../core/state/app_state.dart';
 import '../../core/utils/platform_utils.dart';
 import '../../features/authentication/screens/mobile_login_screen.dart';
+import '../../features/authentication/screens/profile_setup_screen.dart';
 import '../../features/splash/screens/splash_screen.dart';
 import '../../features/admin/screens/admin_login_screen.dart';
 import '../../features/home/screens/staff_home_screen.dart';
@@ -45,6 +46,7 @@ class AppRoutes {
   static const String adminLogin = '/admin-login';
   static const String staffHome = '/staff-home';
   static const String profile = '/profile';
+  static const String profileSetup = '/profile-setup';
   static const String examHub = '/exam-hub';
   static const String examSetup = '/exam-setup';
   static const String examScanning = '/exam-scanning';
@@ -90,6 +92,7 @@ class AppRoutes {
   /// deliberately excluded from this set — it stays open to both roles.
   static const Set<String> _guidanceOnlyRoutes = {
     staffHome,
+    profileSetup,
     examHub,
     examSetup,
     examScanning,
@@ -171,6 +174,20 @@ class AppRoutes {
         return _fade(PlatformUtils.isWeb ? const AdminLoginScreen() : const MobileLoginScreen());
       }
 
+      // Mandatory Mobile Profile Setup: an approved, active guidance_council
+      // account whose profile (structured name, display name, Position --
+      // see UserModel.isProfileComplete) is not yet complete is redirected
+      // here for every named route except profileSetup itself (avoiding a
+      // redirect loop). Mobile only -- the Guidance Council Web Console is
+      // untouched by this feature. Checked BEFORE the role gates below, so
+      // it takes priority over (and is never bypassed by) any of them.
+      if (!PlatformUtils.isWeb &&
+          approvedUser.role == 'guidance_council' &&
+          !approvedUser.isProfileComplete &&
+          name != profileSetup) {
+        return _fade(const ProfileSetupScreen());
+      }
+
       if (_adminOnlyRoutes.contains(name) && approvedUser.role != 'system_admin') {
         return _fade(_guidanceHomeScreen());
       }
@@ -210,6 +227,8 @@ class AppRoutes {
         return _fade(const StaffHomeScreen());
       case profile:
         return _slide(const ProfileScreen());
+      case profileSetup:
+        return _fade(const ProfileSetupScreen());
       case examHub:
         return _fade(const ExamHubScreen());
       case examSetup:
@@ -269,7 +288,17 @@ class AppRoutes {
     if (!isApproved) {
       return PlatformUtils.isWeb ? const AdminLoginScreen() : const MobileLoginScreen();
     }
-    return approvedUser.role == 'system_admin' ? const AdminDashboardScreen() : _guidanceHomeScreen();
+    if (approvedUser.role == 'system_admin') return const AdminDashboardScreen();
+    // Same mandatory Mobile Profile Setup check as onGenerateRoute's central
+    // guard, duplicated here deliberately: this function is the OTHER
+    // dashboard-entry path (cold start / session restore via the public
+    // `login` route), which never runs through that guard at all -- see its
+    // own doc comment above. Skipping this check here would let an
+    // incomplete profile reach the dashboard directly on every app restart.
+    if (!PlatformUtils.isWeb && approvedUser.role == 'guidance_council' && !approvedUser.isProfileComplete) {
+      return const ProfileSetupScreen();
+    }
+    return _guidanceHomeScreen();
   }
 
   /// The Guidance Council's own home screen, platform-appropriate: the

@@ -6,8 +6,10 @@ import '../../../core/constants/app_text_styles.dart';
 import '../../../core/services/firestore_service.dart';
 import '../../../core/services/logging_service.dart';
 import '../../../core/state/app_state.dart';
+import '../../../models/guidance_position.dart';
 import '../../../models/user.dart';
 import '../../../shared/widgets/primary_button.dart';
+import '../widgets/add_guidance_position_dialog.dart';
 
 /// Edit User screen for the System Administrator.
 ///
@@ -66,6 +68,54 @@ class _EditUserScreenState extends State<EditUserScreen> {
   void initState() {
     super.initState();
     _loadUser();
+  }
+
+  bool _positionsInitialized = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Guarded, one-time trigger -- didChangeDependencies can run more than
+    // once, but this must only fire the load a single time per screen.
+    // AppStateScope.of(context) is only safe here (or in build()), never in
+    // initState() itself -- Flutter asserts if an inherited widget is
+    // looked up before initState() has completed.
+    if (_positionsInitialized) return;
+    _positionsInitialized = true;
+    _loadPositions();
+  }
+
+  /// Ensures `config/guidancePositions` exists (seeding the three original
+  /// positions on the very first call after this feature shipped -- see
+  /// [FirestoreService.ensureDefaultGuidancePositionsSeeded]'s own doc
+  /// comment), then loads the current list into [AppState] so the Position
+  /// dropdown below reflects it, including anything already added. Best
+  /// effort and independent of [_loadUser]: both already fall back safely
+  /// on their own failure.
+  Future<void> _loadPositions() async {
+    final appState = AppStateScope.of(context);
+    await _firestoreService.ensureDefaultGuidancePositionsSeeded();
+    await appState.loadGuidancePositions(_firestoreService);
+  }
+
+  Future<void> _addPosition() async {
+    final label = await showAddGuidancePositionDialog(context);
+    if (label == null) return; // cancelled
+    if (!mounted) return;
+    final appState = AppStateScope.of(context);
+    try {
+      await _firestoreService.addGuidancePosition(label, appState.guidancePositions);
+      if (!mounted) return;
+      await appState.loadGuidancePositions(_firestoreService);
+    } on ArgumentError catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message.toString())));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not add the position. Please try again.')),
+      );
+    }
   }
 
   Future<void> _loadUser() async {
@@ -485,19 +535,48 @@ class _EditUserScreenState extends State<EditUserScreen> {
     );
   }
 
+  /// The Guidance Position dropdown, with a "+" action beside its label so a
+  /// System Admin can add a new position without leaving this screen. Reads
+  /// the current list from [AppState] (see [AppState.guidancePositions])
+  /// rather than a hardcoded map. [GuidancePositions.ensureIncludes] makes
+  /// sure this account's own already-saved position is always a selectable
+  /// item -- including a custom one the freshly loaded list doesn't (yet, or
+  /// ever) recognize -- so it can never be silently dropped from the
+  /// dropdown's selection just because of a stale or failed configuration
+  /// read.
   Widget _buildGuidancePositionDropdown() {
-    const items = {
-      'guidance_head': 'Guidance Head',
-      'psychometrician': 'Psychometrician',
-      'guidance_staff': 'Guidance Staff',
-    };
+    final positions = GuidancePositions.ensureIncludes(
+      AppStateScope.of(context).guidancePositions,
+      _guidancePosition,
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Guidance Position', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600)),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text('Guidance Position', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600)),
+            InkWell(
+              key: const Key('editUser.addPosition'),
+              onTap: _addPosition,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.add_circle_outline, size: 14, color: AppColors.primaryGreen),
+                    const SizedBox(width: 4),
+                    Text('Add Position', style: AppTextStyles.body(size: 10.5, color: AppColors.primaryGreen, weight: FontWeight.w600)),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
         const SizedBox(height: 6),
         DropdownButtonFormField<String>(
-          value: items.containsKey(_guidancePosition) ? _guidancePosition : null,
+          key: const Key('editUser.position'),
+          initialValue: _guidancePosition,
           decoration: InputDecoration(
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(10),
@@ -513,8 +592,8 @@ class _EditUserScreenState extends State<EditUserScreen> {
             ),
             contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
           ),
-          items: items.entries
-              .map((e) => DropdownMenuItem(value: e.key, child: Text(e.value, style: AppTextStyles.body(size: 11))))
+          items: positions
+              .map((p) => DropdownMenuItem(value: p.value, child: Text(p.label, style: AppTextStyles.body(size: 11))))
               .toList(),
           onChanged: (value) => setState(() => _guidancePosition = value),
         ),

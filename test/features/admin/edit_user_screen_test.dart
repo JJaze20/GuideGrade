@@ -5,6 +5,7 @@ import 'package:guidegrade/core/services/firestore_service.dart';
 import 'package:guidegrade/core/services/logging_service.dart';
 import 'package:guidegrade/core/state/app_state.dart';
 import 'package:guidegrade/features/admin/screens/edit_user_screen.dart';
+import 'package:guidegrade/models/guidance_position.dart';
 import 'package:guidegrade/models/local_batch.dart';
 import 'package:guidegrade/models/user.dart';
 import 'package:guidegrade/shared/widgets/primary_button.dart';
@@ -17,16 +18,35 @@ class _FakeBatchRepository implements BatchRepository {
 }
 
 class _FakeFirestoreService implements FirestoreService {
-  _FakeFirestoreService(this.stored);
+  _FakeFirestoreService(this.stored, [List<GuidancePosition>? positions])
+      : _positions = positions ?? GuidancePositions.defaults;
 
   final UserModel stored;
   final updates = <UserModel>[];
+  List<GuidancePosition> _positions;
+  final addedLabels = <String>[];
 
   @override
   Future<UserModel?> getUserById(String userId) async => stored;
 
   @override
   Future<void> updateUser(UserModel user) async => updates.add(user);
+
+  @override
+  Future<List<GuidancePosition>> loadGuidancePositions() async => _positions;
+
+  @override
+  Future<void> ensureDefaultGuidancePositionsSeeded() async {}
+
+  @override
+  Future<GuidancePosition> addGuidancePosition(String label, List<GuidancePosition> existingPositions) async {
+    final error = GuidancePositions.validateNewLabel(label, existingPositions);
+    if (error != null) throw ArgumentError(error);
+    final added = GuidancePositions.build(label);
+    addedLabels.add(label);
+    _positions = [..._positions, added];
+    return added;
+  }
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
@@ -37,12 +57,12 @@ class _FakeLoggingService implements LoggingService {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
-UserModel _staff({String? first, String? mi, String? last}) => UserModel(
+UserModel _staff({String? first, String? mi, String? last, String? position = 'guidance_staff'}) => UserModel(
       userId: 'staff-1',
       email: 'staff@ndmu.edu.ph',
       displayName: 'J. Dela Cruz',
       role: 'guidance_council',
-      guidancePosition: 'guidance_staff',
+      guidancePosition: position,
       isActive: true,
       createdAt: DateTime.utc(2026),
       institution: 'NDMU',
@@ -72,13 +92,17 @@ void main() {
     } catch (_) {/* AppState.dispose may touch unused camera handles */}
   });
 
-  Future<_FakeFirestoreService> openScreen(WidgetTester tester, UserModel user) async {
+  Future<_FakeFirestoreService> openScreen(
+    WidgetTester tester,
+    UserModel user, {
+    List<GuidancePosition>? positions,
+  }) async {
     tester.view.physicalSize = const Size(1200, 2400);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
 
-    final firestore = _FakeFirestoreService(user);
+    final firestore = _FakeFirestoreService(user, positions);
     await tester.pumpWidget(
       MaterialApp(
         builder: (context, child) => AppStateScope(notifier: appState, child: child!),
@@ -197,5 +221,38 @@ void main() {
     expect(find.text('Enter a single letter, e.g. D or D.'), findsOneWidget);
     expect(find.text('Last Name is required'), findsOneWidget);
     expect(firestore.updates, isEmpty);
+  });
+
+  testWidgets(
+      'a user already holding a custom position (not one of the original three) keeps it selected, '
+      'even though the loaded configuration only returns the three defaults', (tester) async {
+    await openScreen(tester, _staff(position: 'auditing'));
+
+    // GuidancePositions.ensureIncludes must add a synthetic "auditing" entry
+    // so the dropdown's own assertion (initialValue must match an item)
+    // doesn't crash, and so the account's real stored value is still shown
+    // as selected rather than silently reset to nothing.
+    expect(find.text('auditing'), findsOneWidget);
+  });
+
+  testWidgets('a System Admin can add a new position through the "+" action here too', (tester) async {
+    final firestore = await openScreen(tester, _staff());
+
+    await tester.tap(find.byKey(const Key('editUser.addPosition')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('addGuidancePosition.label')), 'Auditing');
+    await tester.tap(find.byKey(const Key('addGuidancePosition.add')));
+    await tester.pumpAndSettle();
+
+    expect(firestore.addedLabels, ['Auditing']);
+
+    await tester.tap(find.byKey(const Key('editUser.position')));
+    await tester.pumpAndSettle();
+    expect(find.text('Auditing'), findsWidgets);
+    await tester.tap(find.text('Auditing').last);
+    await tester.pumpAndSettle();
+    await save(tester);
+
+    expect(firestore.updates.single.guidancePosition, 'auditing');
   });
 }

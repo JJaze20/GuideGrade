@@ -13,14 +13,33 @@ import '../widgets/user_list_item.dart';
 /// search and filtering. Shows only account/administrative fields --
 /// nothing examination-related, since [UserModel] has no such fields.
 class UserManagementScreen extends StatefulWidget {
-  const UserManagementScreen({super.key});
+  /// [firestoreService] is only for tests; the app uses the real one.
+  const UserManagementScreen({super.key, this.firestoreService});
+
+  final FirestoreService? firestoreService;
 
   @override
   State<UserManagementScreen> createState() => _UserManagementScreenState();
 }
 
 class _UserManagementScreenState extends State<UserManagementScreen> {
-  final FirestoreService _firestoreService = FirestoreService();
+  late final FirestoreService _firestoreService =
+      widget.firestoreService ?? FirestoreService();
+
+  // A single, stable Stream for this screen's whole lifetime. Search text
+  // and the role/status filter chips are handled entirely client-side (see
+  // _applyFilters) via plain setState -- they never need a new Firestore
+  // query. Calling _firestoreService.usersStream() fresh inside build()
+  // (as this used to) hands StreamBuilder a new Stream object on every one
+  // of those setState calls; StreamBuilder treats that as an entirely
+  // different stream, cancels the live Firestore subscription, resets to
+  // ConnectionState.waiting, and the whole screen -- including the search
+  // TextField itself -- is briefly unmounted and replaced by a spinner.
+  // That's what made typing feel like the screen kept "refreshing" and
+  // losing focus: the fix is simply to never call usersStream() more than
+  // once.
+  late final Stream<List<UserModel>> _usersStream = _firestoreService.usersStream();
+
   final TextEditingController _searchController = TextEditingController();
 
   String _roleFilter = 'All'; // All, System Admin, Guidance Council
@@ -74,8 +93,10 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
       body: SafeArea(
         child: StreamBuilder<List<UserModel>>(
           // Live updates (a created/edited/deactivated user is reflected
-          // immediately) rather than manual pull-to-refresh.
-          stream: _firestoreService.usersStream(),
+          // immediately) rather than manual pull-to-refresh. Reuses the
+          // one stable _usersStream (see its own doc comment) -- never
+          // calls usersStream() here directly.
+          stream: _usersStream,
           builder: (context, snapshot) {
             if (snapshot.connectionState == ConnectionState.waiting) {
               return const Center(child: CircularProgressIndicator());

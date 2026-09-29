@@ -14,6 +14,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../../models/answer_correction.dart';
 import '../../models/answer_key.dart';
+import '../../models/guidance_position.dart';
 import '../../models/local_batch.dart';
 import '../../models/omr_scan_result.dart';
 import '../../models/user.dart';
@@ -24,6 +25,7 @@ import '../omr/omr_scorer.dart';
 import '../omr/scan_rescoring.dart';
 import '../omr/omr_templates.dart';
 import '../services/batch_repository.dart';
+import '../services/firestore_service.dart';
 import '../services/local_batch_repository.dart';
 import 'rescan_candidate.dart';
 import '../services/local_storage_service.dart';
@@ -333,6 +335,28 @@ class AppState extends ChangeNotifier {
   void setCurrentUser(UserModel? user) {
     currentUser = user;
     _applySyncRunStateFor(user);
+    notifyListeners();
+  }
+
+  /// The current Guidance Position choices (`config/guidancePositions`),
+  /// cached here for this app session so Create User, Edit User, Profile
+  /// Setup and the mobile Profile screen all read the one list instead of
+  /// each issuing its own Firestore read. Starts as
+  /// [GuidancePositions.defaults] -- a synchronous, always-available
+  /// fallback -- until/unless [loadGuidancePositions] succeeds, so no screen
+  /// ever has to gate its build on this being loaded yet.
+  List<GuidancePosition> guidancePositions = GuidancePositions.defaults;
+
+  /// Refreshes [guidancePositions] from Firestore via [firestoreService]
+  /// (test-injectable; the app passes its own [FirestoreService] instance).
+  /// Best effort: [FirestoreService.loadGuidancePositions] already falls
+  /// back to [GuidancePositions.defaults] on any failure, so this never
+  /// throws and never leaves [guidancePositions] empty. Call once when a
+  /// screen that shows the Position control opens, and again after adding a
+  /// new position.
+  Future<void> loadGuidancePositions(FirestoreService firestoreService) async {
+    final positions = await firestoreService.loadGuidancePositions();
+    guidancePositions = positions;
     notifyListeners();
   }
 

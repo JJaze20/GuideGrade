@@ -5,6 +5,7 @@ import '../../models/user.dart';
 import '../../models/exam.dart';
 import '../../models/answer_key_model.dart';
 import '../../models/batch.dart';
+import '../../models/guidance_position.dart';
 import '../../models/result.dart';
 import '../omr/answer_key_adapter.dart';
 
@@ -26,6 +27,7 @@ class FirestoreService {
   CollectionReference get _answerKeysCollection => _firestore.collection('answer_keys');
   CollectionReference get _batchesCollection => _firestore.collection('batches');
   CollectionReference get _resultsCollection => _firestore.collection('results');
+  CollectionReference get _configCollection => _firestore.collection('config');
 
   // ============================================
   // USER OPERATIONS
@@ -157,6 +159,132 @@ class FirestoreService {
       print('User updated: ${user.userId}');
     } catch (e) {
       print('Error updating user: $e');
+      rethrow;
+    }
+  }
+
+  /// Updates ONLY the CURRENT signed-in user's own personal profile fields
+  /// on their own `users/{uid}` document -- used by the Mobile Profile Setup
+  /// screen. Sends exactly these five keys and nothing else -- never
+  /// `role`, `isActive`, `email`, `createdBy`, or any
+  /// other field -- matching `firestore.rules`' self-update allowlist for
+  /// `users/{userId}` exactly, so this can never attempt (and never needs to
+  /// rely on the rule alone to block) a write outside what a Guidance
+  /// Council member is allowed to change about themselves.
+  ///
+  /// Targets `_auth.currentUser.uid`, never a caller-supplied ID -- there is
+  /// no way to call this for anyone other than the signed-in user, matching
+  /// `isSelf(userId)` in the security rule. Throws [StateError] if nobody is
+  /// signed in (this should never happen in practice: Profile Setup is only
+  /// ever reachable after a successful, approved sign-in).
+  Future<void> updateOwnProfile({
+    required String firstName,
+    required String lastName,
+    required String middleInitial,
+    required String displayName,
+    required String guidancePosition,
+  }) async {
+    final user = _auth.currentUser;
+    if (user == null) {
+      throw StateError('updateOwnProfile called with no signed-in user.');
+    }
+    try {
+      await _usersCollection.doc(user.uid).update({
+        'firstName': firstName,
+        'lastName': lastName,
+        'middleInitial': middleInitial,
+        'displayName': displayName,
+        'guidancePosition': guidancePosition,
+      });
+      print('Own profile updated: ${user.uid}');
+    } catch (e) {
+      print('Error updating own profile: $e');
+      rethrow;
+    }
+  }
+
+  // ============================================
+  // GUIDANCE POSITION CONFIGURATION
+  // (config/guidancePositions -- System-Admin-managed, add-only)
+  // ============================================
+
+  static const String _guidancePositionsDocId = 'guidancePositions';
+
+  /// Loads the current Guidance Position choices from
+  /// `config/guidancePositions`'s `positions` map field. Never throws and
+  /// never returns an empty list -- a missing document, a malformed field,
+  /// or any read failure (offline, permission-denied, etc.) all fall back to
+  /// [GuidancePositions.defaults], so every caller (Create User, Edit User,
+  /// Profile Setup, mobile Profile) always has at least the three original
+  /// positions to show.
+  Future<List<GuidancePosition>> loadGuidancePositions() async {
+    try {
+      final doc = await _configCollection.doc(_guidancePositionsDocId).get();
+      final data = doc.data() as Map<String, dynamic>?;
+      return GuidancePositions.fromFirestoreField(data?['positions']);
+    } catch (e) {
+      print('Error loading guidance positions, using defaults: $e');
+      return GuidancePositions.defaults;
+    }
+  }
+
+  /// One-time (but safe-to-repeat) initialization: ensures
+  /// `config/guidancePositions` exists and holds at least the three original
+  /// positions. Uses `merge: true`, so this can only ever ADD those three
+  /// keys -- it never removes or overwrites a position a System Admin has
+  /// since added (e.g. "auditing" survives every call), and creates the
+  /// document on its very first call if it doesn't exist yet, rather than
+  /// depending on an undocumented manual database step.
+  ///
+  /// Only ever called from a System-Admin-reachable screen (Create User /
+  /// Edit User's initial load) -- a Guidance Council session (Profile Setup,
+  /// mobile Profile) never calls this, only [loadGuidancePositions]. This is
+  /// also independently enforced by `firestore.rules`' `config` match block
+  /// (`create`/`update` require `system_admin`), so a compromised or
+  /// modified Guidance Council client still can't reach this write. Best
+  /// effort: a failure here is swallowed, since [loadGuidancePositions]
+  /// already falls back to the same three defaults on its own.
+  Future<void> ensureDefaultGuidancePositionsSeeded() async {
+    try {
+      await _configCollection.doc(_guidancePositionsDocId).set({
+        'positions': {for (final p in GuidancePositions.defaults) p.value: p.label},
+      }, SetOptions(merge: true));
+    } catch (e) {
+      print('Error seeding default guidance positions: $e');
+    }
+  }
+
+  /// Adds one new Guidance Position. [existingPositions] is the caller's
+  /// most recently loaded list, used only for the duplicate-label/
+  /// duplicate-value check below (see [GuidancePositions.validateNewLabel])
+  /// -- this does not itself re-read Firestore first. Two admins adding
+  /// different positions at nearly the same moment can each pass this
+  /// client-side check before the other's write lands, but the write below
+  /// can never lose either one: `merge: true` on a nested map only adds/
+  /// overwrites the one new key, so both writes still land distinctly (a
+  /// second admin should still refresh -- [loadGuidancePositions] -- before
+  /// re-checking for a duplicate, since the check itself is not atomic).
+  ///
+  /// Throws [ArgumentError] (its `message` is the exact user-facing reason)
+  /// if the label is blank or already used. Only a `system_admin` session
+  /// can actually make this write succeed -- see `firestore.rules`' `config`
+  /// match block; nothing here re-checks the caller's role, since the rule
+  /// is the real enforcement.
+  Future<GuidancePosition> addGuidancePosition(
+    String label,
+    List<GuidancePosition> existingPositions,
+  ) async {
+    final error = GuidancePositions.validateNewLabel(label, existingPositions);
+    if (error != null) throw ArgumentError(error);
+    final position = GuidancePositions.build(label);
+    try {
+      await _configCollection.doc(_guidancePositionsDocId).set({
+        'positions': {position.value: position.label},
+      }, SetOptions(merge: true));
+      print('Guidance position added: ${position.value}');
+      return position;
+    } catch (e) {
+      print('Error adding guidance position: $e');
       rethrow;
     }
   }
