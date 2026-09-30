@@ -49,7 +49,10 @@ class ExamHubScreen extends StatelessWidget {
                     borderRadius: BorderRadius.circular(16),
                   ),
                   child: Text(
-                    '1. Choose an exam   →   2. Select a batch   →   3. Scan sheets',
+                    '1. Choose an exam\n'
+                    '2. Select a batch\n'
+                    '3. Add/Verify Answer Key\n'
+                    '4. Scan sheets',
                     style: AppTextStyles.body(size: 14, color: AppColors.primaryGreen),
                   ),
                 ),

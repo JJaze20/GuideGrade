@@ -94,8 +94,18 @@ class _CloudArchiveScreenState extends State<CloudArchiveScreen> {
     await _load();
     if (!mounted) return;
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(_summaryMessage(summary))),
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(summary.isSuccess ? 'Restore complete' : 'Restore unsuccessful'),
+        content: Text(_summaryMessage(summary)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
     );
   }
 
@@ -130,12 +140,16 @@ class _CloudArchiveScreenState extends State<CloudArchiveScreen> {
               ? null
               : IconButton(
                   tooltip: 'Restore from Cloud',
+                  padding: EdgeInsets.zero,
                   onPressed: _restoring ? null : _restoreFromCloud,
                   icon: _restoring
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                      ? const Center(
+                          widthFactor: 1,
+                          heightFactor: 1,
+                          child: SizedBox.square(
+                            dimension: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                          ),
                         )
                       : const FaIcon(FontAwesomeIcons.cloudArrowDown, size: 16, color: Colors.white),
                 ),
