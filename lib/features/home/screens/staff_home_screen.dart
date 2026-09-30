@@ -62,136 +62,130 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.lightBg,
+      backgroundColor: const Color(0xFFF4F7F5),
+      appBar: AppBar(
+        title: const Text('GuideGrade'),
+        backgroundColor: Colors.white,
+        foregroundColor: AppColors.primaryGreen,
+        elevation: 0,
+        actions: [
+          IconButton(
+            tooltip: 'Your profile',
+            onPressed: () => Navigator.of(context).pushNamed(AppRoutes.profile),
+            icon: const Icon(Icons.account_circle_outlined),
+          ),
+          const SizedBox(width: 8),
+        ],
+      ),
       body: SafeArea(
-        child: Column(
-          children: [
-            Container(
-              color: AppColors.primaryGreen,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 960),
+            child: RefreshIndicator(
+              onRefresh: _load,
+              child: ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.all(24),
                 children: [
-                  Row(
-                    children: [
-                      Text('G', style: AppTextStyles.logo(size: 20, color: Colors.amber.shade300)),
-                      const SizedBox(width: 6),
-                      Text(
-                        'GUIDE GRADE',
-                        style: AppTextStyles.heading(size: 12, color: Colors.white, weight: FontWeight.w800)
-                            .copyWith(letterSpacing: 1.1),
-                      ),
-                    ],
+                  Text('Your workspace', style: AppTextStyles.heading(size: 28)),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Prepare exams, manage batches, and review your results.',
+                    style: AppTextStyles.body(size: 15, color: AppColors.textGray),
                   ),
-                  InkWell(
-                    onTap: () => Navigator.of(context).pushNamed(AppRoutes.profile),
-                    child: Container(
-                      width: 30,
-                      height: 30,
-                      alignment: Alignment.center,
-                      decoration: const BoxDecoration(color: Color(0xFF1B5E20), shape: BoxShape.circle),
-                      child: const FaIcon(FontAwesomeIcons.userTie, size: 12, color: Colors.white),
-                    ),
+                  const SizedBox(height: 24),
+                  _workspaceAction(
+                    title: 'Exam Management',
+                    description: 'Preview questionnaires and print answer sheets',
+                    icon: Icons.description_outlined,
+                    onTap: () => Navigator.of(context).pushNamed(AppRoutes.examManagement),
                   ),
+                  const SizedBox(height: 12),
+                  _workspaceAction(
+                    title: 'Batch Management',
+                    description: 'Organize examinees and prepare batches for scanning',
+                    icon: Icons.folder_outlined,
+                    onTap: () => Navigator.of(context)
+                        .pushNamed(AppRoutes.batchManagement).then((_) => _load()),
+                  ),
+                  const SizedBox(height: 32),
+                  Text('Batches & results', style: AppTextStyles.heading(size: 21)),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Open a batch to continue scanning or view its saved results.',
+                    style: AppTextStyles.body(size: 14, color: AppColors.textGray),
+                  ),
+                  const SizedBox(height: 16),
+                  if (_loading)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 24),
+                      child: Center(child: CircularProgressIndicator()),
+                    )
+                  else if (_batches.isEmpty)
+                    _buildEmpty()
+                  else
+                    ..._batches.map(_buildBatchRow),
                 ],
               ),
             ),
-            Expanded(
-              child: RefreshIndicator(
-                onRefresh: _load,
-                child: ListView(
-                  padding: const EdgeInsets.all(16),
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(color: AppColors.cardBorder),
-                      ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'WELCOME BACK',
-                                style: AppTextStyles.body(size: 9.5, weight: FontWeight.w800, color: AppColors.primaryGreen)
-                                    .copyWith(letterSpacing: 0.6),
-                              ),
-                              Text('NDMU Staff Officer', style: AppTextStyles.heading(size: 13)),
-                            ],
-                          ),
-                          Text('Marbel, PH', style: AppTextStyles.body(size: 9, color: AppColors.textGray)),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton.icon(
-                        onPressed: () => Navigator.of(context).pushNamed(AppRoutes.examManagement),
-                        icon: const FaIcon(FontAwesomeIcons.fileLines, size: 14, color: Colors.amber),
-                        label: const Text('EXAM MANAGEMENT'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppColors.primaryGreen,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 13),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                          textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, letterSpacing: 0.4),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton.icon(
-                        onPressed: () =>
-                            Navigator.of(context).pushNamed(AppRoutes.batchManagement).then((_) => _load()),
-                        icon: const FaIcon(FontAwesomeIcons.folderPlus, size: 14, color: Colors.amber),
-                        label: const Text('BATCH MANAGEMENT'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppColors.darkNavy,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 13),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                          textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, letterSpacing: 0.4),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 18),
-                    Row(
-                      children: [
-                        const FaIcon(FontAwesomeIcons.layerGroup, size: 12, color: AppColors.primaryGreen),
-                        const SizedBox(width: 6),
-                        Text('Batches & Results Registry', style: AppTextStyles.heading(size: 12)),
-                      ],
-                    ),
-                    const SizedBox(height: 10),
-                    if (_loading)
-                      const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 24),
-                        child: Center(child: CircularProgressIndicator()),
-                      )
-                    else if (_batches.isEmpty)
-                      _buildEmpty()
-                    else
-                      ..._batches.map(_buildBatchRow),
-                  ],
-                ),
-              ),
-            ),
-          ],
+          ),
         ),
       ),
       bottomNavigationBar: const AppBottomNav(activeTab: 'home'),
     );
   }
 
+  Widget _workspaceAction({
+    required String title,
+    required String description,
+    required IconData icon,
+    required VoidCallback onTap,
+  }) {
+    return Material(
+      color: Colors.white,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(20),
+        side: const BorderSide(color: Color(0xFFDCE5DF)),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEAF4EC),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Icon(icon, color: AppColors.primaryGreen),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title, style: AppTextStyles.heading(size: 18)),
+                    const SizedBox(height: 4),
+                    Text(description,
+                        style: AppTextStyles.body(size: 14, color: AppColors.textGray)),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              const Icon(Icons.chevron_right, color: AppColors.primaryGreen),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildEmpty() {
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(14),
@@ -201,12 +195,12 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
         children: [
           const FaIcon(FontAwesomeIcons.folderOpen, size: 28, color: AppColors.textGray),
           const SizedBox(height: 8),
-          Text('No batches yet', style: AppTextStyles.body(size: 11, weight: FontWeight.w700)),
+          Text('No batches yet', style: AppTextStyles.body(size: 17, weight: FontWeight.w700)),
           const SizedBox(height: 4),
           Text(
             'Create a batch in Batch Management, then scan it.',
             textAlign: TextAlign.center,
-            style: AppTextStyles.body(size: 9.5, color: AppColors.textGray),
+            style: AppTextStyles.body(size: 14, color: AppColors.textGray),
           ),
         ],
       ),
@@ -234,7 +228,7 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
                 children: [
                   Text(
                     '${batch.examTitle.toUpperCase()} · ${batch.examCode}',
-                    style: AppTextStyles.body(size: 8.5, weight: FontWeight.w800, color: AppColors.primaryGreen)
+                    style: AppTextStyles.body(size: 12, weight: FontWeight.w700, color: AppColors.primaryGreen)
                         .copyWith(letterSpacing: 0.6),
                   ),
                   const SizedBox(height: 2),
@@ -243,8 +237,8 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
                       Flexible(
                         child: Text(
                           batch.description.isNotEmpty ? batch.description : batch.batchCode,
-                          style: AppTextStyles.body(size: 12.5, weight: FontWeight.w700),
-                          maxLines: 1,
+                          style: AppTextStyles.body(size: 16, weight: FontWeight.w700),
+                          maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
@@ -260,7 +254,7 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
                           ),
                           child: Text(
                             batch.status.toUpperCase(),
-                            style: const TextStyle(fontSize: 8, color: Color(0xFF92400E), fontWeight: FontWeight.w700),
+                            style: const TextStyle(fontSize: 11, color: Color(0xFF92400E), fontWeight: FontWeight.w700),
                           ),
                         ),
                     ],
@@ -269,7 +263,7 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
                   Text(
                     '${batch.scanCount}/${batch.expectedCount} sheets'
                     '${batch.resultsAvailable ? ' · results ready' : ''}',
-                    style: AppTextStyles.body(size: 9, color: AppColors.textGray),
+                    style: AppTextStyles.body(size: 13, color: AppColors.textGray),
                   ),
                   if (batch.needsReview) ...[
                     const SizedBox(height: 6),

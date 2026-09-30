@@ -3,6 +3,7 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
+import '../../../core/constants/exam_catalog.dart';
 import '../../../core/routes/app_routes.dart';
 import '../../../core/state/app_state.dart';
 import '../../../shared/widgets/app_bottom_nav.dart';
@@ -28,50 +29,48 @@ class ExamHubScreen extends StatelessWidget {
       appBar: const AppHeaderBar(title: 'GUIDE GRADE'),
       body: SafeArea(
         top: false,
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Select Exam Category', style: AppTextStyles.heading(size: 15)),
-              const SizedBox(height: 2),
-              Text(
-                'Choose an assessment framework layout blueprint:',
-                style: AppTextStyles.body(size: 10.5, color: AppColors.textGray),
-              ),
-              const SizedBox(height: 16),
-              Expanded(
-                child: GridView.count(
-                  crossAxisCount: 2,
-                  mainAxisSpacing: 14,
-                  crossAxisSpacing: 14,
-                  childAspectRatio: 1.35,
-                  children: [
-                    ExamCategoryCard(
-                      icon: FontAwesomeIcons.graduationCap,
-                      label: 'Admission Exam',
-                      iconColor: AppColors.primaryGreen,
-                      iconBg: const Color(0xFFECFDF5),
-                      onTap: () => selectAndGo('AT'),
-                    ),
-                    ExamCategoryCard(
-                      icon: FontAwesomeIcons.chalkboardUser,
-                      label: 'TAT Test',
-                      iconColor: const Color(0xFFD97706),
-                      iconBg: const Color(0xFFFFFBEB),
-                      onTap: () => selectAndGo('TAT'),
-                    ),
-                    ExamCategoryCard(
-                      icon: FontAwesomeIcons.calculator,
-                      label: 'QTM Test',
-                      iconColor: const Color(0xFF7C3AED),
-                      iconBg: const Color(0xFFF5F3FF),
-                      onTap: () => selectAndGo('QTM'),
-                    ),
-                  ],
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 760),
+            child: ListView(
+              padding: const EdgeInsets.all(24),
+              children: [
+                Text('Start scanning', style: AppTextStyles.heading(size: 28)),
+                const SizedBox(height: 8),
+                Text(
+                  'Choose the exam printed on your answer sheets.',
+                  style: AppTextStyles.body(size: 15, color: AppColors.textGray),
                 ),
-              ),
-            ],
+                const SizedBox(height: 20),
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFEAF4EC),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Text(
+                    '1. Choose an exam   →   2. Select a batch   →   3. Scan sheets',
+                    style: AppTextStyles.body(size: 14, color: AppColors.primaryGreen),
+                  ),
+                ),
+                const SizedBox(height: 24),
+                for (final entry in examCatalog)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 14),
+                    child: ExamCategoryCard(
+                      icon: entry.examCode == 'AT'
+                          ? FontAwesomeIcons.graduationCap
+                          : entry.examCode == 'TAT'
+                              ? FontAwesomeIcons.chalkboardUser
+                              : FontAwesomeIcons.calculator,
+                      label: '${entry.title} (${entry.examCode})',
+                      iconColor: AppColors.primaryGreen,
+                      iconBg: const Color(0xFFEAF4EC),
+                      onTap: () => selectAndGo(entry.examCode),
+                    ),
+                  ),
+              ],
+            ),
           ),
         ),
       ),
