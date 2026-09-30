@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:guidegrade/core/services/batch_repository.dart';
@@ -315,6 +316,36 @@ void main() {
     final firstNameField = tester.widget<TextFormField>(find.byKey(const Key('profile.firstName')));
     expect(firstNameField.controller!.text, 'Maria', reason: 'entered data is preserved after a failed save');
     expect(appState.currentUser!.firstName, 'Juan', reason: 'AppState is untouched until a save succeeds');
+  });
+
+  testWidgets('a permission-denied save failure shows an authorization '
+      'message, never the old "check your connection" wording', (tester) async {
+    firestoreService.errorToThrow =
+        FirebaseException(plugin: 'firestore', code: 'permission-denied');
+    appState.setCurrentUser(completeUser());
+    await pumpScreen(tester);
+    await enterEditMode(tester);
+
+    await tester.enterText(find.byKey(const Key('profile.firstName')), 'Maria');
+    await tapSave(tester);
+
+    expect(find.textContaining('permission'), findsOneWidget);
+    expect(find.textContaining('connection'), findsNothing);
+  });
+
+  testWidgets('an unavailable/network save failure shows a connectivity '
+      'message', (tester) async {
+    firestoreService.errorToThrow =
+        FirebaseException(plugin: 'firestore', code: 'unavailable');
+    appState.setCurrentUser(completeUser());
+    await pumpScreen(tester);
+    await enterEditMode(tester);
+
+    await tester.enterText(find.byKey(const Key('profile.firstName')), 'Maria');
+    await tapSave(tester);
+
+    expect(find.textContaining('server'), findsOneWidget);
+    expect(find.textContaining('permission'), findsNothing);
   });
 
   testWidgets('Cancel discards changes and does not save', (tester) async {

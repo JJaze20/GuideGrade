@@ -17,17 +17,24 @@ class LogPage {
   /// even though both otherwise have the same empty shape as [empty].
   final bool isError;
 
+  /// The original error [LogPage.error] was built from, or null for every
+  /// non-error page. Lets a caller classify the failure (e.g. via
+  /// [FirestoreService.messageFor]) without `getRecentLogs` itself having
+  /// to know anything about how that message should read.
+  final Object? cause;
+
   const LogPage({
     required this.entries,
     required this.lastDocument,
     required this.hasMore,
     this.isError = false,
+    this.cause,
   });
 
   static const empty = LogPage(entries: [], lastDocument: null, hasMore: false);
 
   /// A failed read -- same empty shape as [empty], but [isError] is true.
-  const LogPage.error()
+  LogPage.error({this.cause})
       : entries = const [],
         lastDocument = null,
         hasMore = false,
@@ -237,7 +244,7 @@ class LoggingService {
       );
     } catch (e) {
       print('LoggingService: failed to load logs: $e');
-      return const LogPage.error();
+      return LogPage.error(cause: e);
     }
   }
 }

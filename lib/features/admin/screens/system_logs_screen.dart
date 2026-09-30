@@ -4,6 +4,7 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
+import '../../../core/services/firestore_service.dart';
 import '../../../core/services/logging_service.dart';
 import '../../../models/log_entry.dart';
 import '../widgets/log_list_item.dart';
@@ -37,6 +38,10 @@ class _SystemLogsScreenState extends State<SystemLogsScreen> {
   bool _isLoadingMore = false;
   bool _hasError = false;
 
+  /// The original error behind [_hasError], for message classification via
+  /// [FirestoreService.messageFor]. Null whenever [_hasError] is false.
+  Object? _errorCause;
+
   static const int _pageSize = 100;
 
   @override
@@ -56,6 +61,7 @@ class _SystemLogsScreenState extends State<SystemLogsScreen> {
     setState(() {
       _isLoading = true;
       _hasError = false;
+      _errorCause = null;
     });
     final page = await _loggingService.getRecentLogs(limit: _pageSize);
     if (!mounted) return;
@@ -70,6 +76,7 @@ class _SystemLogsScreenState extends State<SystemLogsScreen> {
       // so this is the one signal that distinguishes a genuinely empty
       // result from a failed read -- see LogPage.isError's doc comment.
       _hasError = page.isError;
+      _errorCause = page.cause;
     });
   }
 
@@ -321,13 +328,17 @@ class _SystemLogsScreenState extends State<SystemLogsScreen> {
   }
 
   Widget _buildErrorState() {
+    final cause = _errorCause;
+    final message = cause == null
+        ? 'Could not load logs'
+        : FirestoreService.messageFor(cause, fallback: 'Could not load logs');
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           const FaIcon(FontAwesomeIcons.triangleExclamation, size: 40, color: AppColors.warmRedOrange),
           const SizedBox(height: 12),
-          Text('Could not load logs', style: AppTextStyles.body(size: 12, weight: FontWeight.w600)),
+          Text(message, style: AppTextStyles.body(size: 12, weight: FontWeight.w600)),
         ],
       ),
     );

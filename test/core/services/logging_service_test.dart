@@ -6,8 +6,8 @@ import 'package:guidegrade/models/log_entry.dart';
 /// instance with no injectable query abstraction, and this project has no
 /// Firestore-faking dependency -- so these tests exercise [LogPage] itself:
 /// the exact contract `getRecentLogs`'s success and catch paths now return
-/// (a plain `return page;`/`return const LogPage.error();`, nothing else to
-/// unit-test on that method without adding a new test dependency).
+/// (a plain `return page;`/`return LogPage.error(cause: e);`, nothing else
+/// to unit-test on that method without adding a new test dependency).
 void main() {
   LogEntry entry(String id) => LogEntry(
         logId: id,
@@ -40,7 +40,7 @@ void main() {
 
     test('C. the representation getRecentLogs\' catch block returns on a '
         'simulated exception has isError == true', () {
-      const page = LogPage.error();
+      final page = LogPage.error();
       expect(page.isError, isTrue);
       // Same empty shape as a genuine empty success -- isError is the only
       // field that tells the two apart.
@@ -52,12 +52,24 @@ void main() {
     test('LogPage.empty and LogPage.error() are structurally identical '
         'except for isError -- proving the bug this fix closes', () {
       const empty = LogPage.empty;
-      const error = LogPage.error();
+      final error = LogPage.error();
       expect(empty.entries, error.entries);
       expect(empty.lastDocument, error.lastDocument);
       expect(empty.hasMore, error.hasMore);
       expect(empty.isError, isFalse);
       expect(error.isError, isTrue);
+    });
+
+    test('LogPage.error carries the original error as cause, for message '
+        'classification, and every non-error page has a null cause', () {
+      final original = Exception('boom');
+      final page = LogPage.error(cause: original);
+      expect(page.cause, same(original));
+      expect(LogPage.empty.cause, isNull);
+      expect(
+        const LogPage(entries: [], lastDocument: null, hasMore: false).cause,
+        isNull,
+      );
     });
   });
 }
