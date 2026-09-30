@@ -14,14 +14,17 @@ import '../widgets/log_list_item.dart';
 /// append-only for every role, including `system_admin`, so no such action
 /// could ever succeed even if a control existed for it.
 class SystemLogsScreen extends StatefulWidget {
-  const SystemLogsScreen({super.key});
+  /// [loggingService] is only for tests; the app uses the real one.
+  const SystemLogsScreen({super.key, this.loggingService});
+
+  final LoggingService? loggingService;
 
   @override
   State<SystemLogsScreen> createState() => _SystemLogsScreenState();
 }
 
 class _SystemLogsScreenState extends State<SystemLogsScreen> {
-  final _loggingService = LoggingService();
+  late final LoggingService _loggingService = widget.loggingService ?? LoggingService();
   final _searchController = TextEditingController();
 
   String _categoryFilter = 'All';
@@ -63,10 +66,10 @@ class _SystemLogsScreenState extends State<SystemLogsScreen> {
       _lastDocument = page.lastDocument;
       _hasMore = page.hasMore;
       _isLoading = false;
-      // getRecentLogs never throws (it swallows and returns LogPage.empty),
-      // so an empty first page with hasMore == false is treated as "no logs
-      // yet" rather than an error -- there's no separate error signal to
-      // distinguish the two, which is an accepted limitation for v1.
+      // getRecentLogs never throws (it swallows and returns LogPage.error()),
+      // so this is the one signal that distinguishes a genuinely empty
+      // result from a failed read -- see LogPage.isError's doc comment.
+      _hasError = page.isError;
     });
   }
 
@@ -75,6 +78,17 @@ class _SystemLogsScreenState extends State<SystemLogsScreen> {
     setState(() => _isLoadingMore = true);
     final page = await _loggingService.getRecentLogs(limit: _pageSize, startAfter: _lastDocument);
     if (!mounted) return;
+    if (page.isError) {
+      // A pagination failure must not disturb the logs already loaded and
+      // showing, or the whole-screen error state -- only the initial load
+      // does that. _hasMore is left as-is, so the existing "Load More"
+      // button just reappears for the user to retry.
+      setState(() => _isLoadingMore = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not load more logs. Please try again.')),
+      );
+      return;
+    }
     setState(() {
       _logs.addAll(page.entries);
       _lastDocument = page.lastDocument;
