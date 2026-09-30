@@ -142,8 +142,17 @@ class _FakeClient implements SyncClient {
   Future<SyncOutcome> deleteScan(String batchId, String scanId) => _no('deleteScan');
   @override
   Future<SyncOutcome> deleteStoragePrefix(String batchId) => _no('deleteStoragePrefix');
+
+  /// Registered examinees, resolved by [GuidanceWebResultsService.
+  /// loadResultsForBatch] for any scan seeded with a matching `examineeId`
+  /// (see [_scan]). Only called at all when at least one scan is linked.
+  final List<CloudExamineeRow> examinees = [];
+
   @override
-  Future<CloudExamineesRead> readCloudExaminees() => _no('readCloudExaminees');
+  Future<CloudExamineesRead> readCloudExaminees() async {
+    calls.add('readCloudExaminees');
+    return CloudExamineesRead.found(List.of(examinees));
+  }
   @override
   Future<CloudExamineeWrite> createExamineeFromScan({
     required String batchId,
@@ -199,7 +208,14 @@ CloudBatchRow _batch({
       updatedAt: DateTime.utc(2026, 1, 2),
     );
 
-CloudScanRow _scan(String id, String batchId, {String examCode = 'AT', int rawScore = 50, String first = 'Juan'}) =>
+CloudScanRow _scan(
+  String id,
+  String batchId, {
+  String examCode = 'AT',
+  int rawScore = 50,
+  String first = 'Juan',
+  String? examineeId,
+}) =>
     CloudScanRow(
       id: id,
       batchId: batchId,
@@ -216,6 +232,20 @@ CloudScanRow _scan(String id, String batchId, {String examCode = 'AT', int rawSc
       firstName: first,
       lastName: 'Dela Cruz',
       examineeNumber: 'EX-legacy-$id',
+      examineeId: examineeId,
+    );
+
+CloudExamineeRow _examinee(String id, String temporaryId, String first, String last) =>
+    CloudExamineeRow(
+      id: id,
+      temporaryExamineeId: temporaryId,
+      firstName: first,
+      lastName: last,
+      status: 'active',
+      createdAt: DateTime.utc(2026, 1, 1),
+      createdByUid: 'uid',
+      updatedAt: DateTime.utc(2026, 1, 1),
+      updatedByUid: 'uid',
     );
 
 void main() {
@@ -236,8 +266,16 @@ void main() {
       _batch(id: 'b3', code: 'BATCH-ACTIVE', status: 'Active'),
       _batch(id: 'b4', code: 'BATCH-DRAFT', status: 'Draft'),
     ]);
-    client.scansByBatch['b1'] = [_scan('s1', 'b1', rawScore: 61), _scan('s2', 'b1', first: 'Maria')];
-    client.scansByBatch['b2'] = [_scan('s3', 'b2')];
+    client.scansByBatch['b1'] = [
+      _scan('s1', 'b1', rawScore: 61, examineeId: 'e1'),
+      _scan('s2', 'b1', first: 'Maria', examineeId: 'e2'),
+    ];
+    client.scansByBatch['b2'] = [_scan('s3', 'b2', examineeId: 'e3')];
+    client.examinees.addAll([
+      _examinee('e1', 'EX-000001', 'Juan', 'Dela Cruz'),
+      _examinee('e2', 'EX-000002', 'Maria', 'Dela Cruz'),
+      _examinee('e3', 'EX-000003', 'Juan', 'Dela Cruz'),
+    ]);
   }
 
   Future<dynamic> localBatch(String id) async =>

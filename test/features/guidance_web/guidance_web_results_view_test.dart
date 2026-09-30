@@ -210,9 +210,29 @@ void main() {
   setUp(() {
     client = _FakeSyncClient();
     client.batchesToReturn = CloudBatchesRead.found([_batchRow()]);
+    // Linked by default (examineeId set + a matching examinee registered),
+    // so every test in this file that isn't specifically about linking
+    // still sees its rows in Results -- see the "linked examinees" group
+    // below for the tests that exercise the official-identity filter itself.
     client.scansByBatchId['b1'] = CloudScansRead.found([
-      _scanRow(id: 's1', firstName: 'Juan', lastName: 'Cruz', number: 'A-1'),
-      _scanRow(id: 's2', firstName: 'Maria', lastName: 'Santos', number: 'A-2'),
+      _scanRow(
+        id: 's1',
+        firstName: 'Juan',
+        lastName: 'Cruz',
+        number: 'A-1',
+        examineeId: 'e1',
+      ),
+      _scanRow(
+        id: 's2',
+        firstName: 'Maria',
+        lastName: 'Santos',
+        number: 'A-2',
+        examineeId: 'e2',
+      ),
+    ]);
+    client.examineesToReturn = CloudExamineesRead.found([
+      _examineeRow(id: 'e1', temporaryId: 'EX-000001', first: 'Juan', last: 'Cruz'),
+      _examineeRow(id: 'e2', temporaryId: 'EX-000002', first: 'Maria', last: 'Santos'),
     ]);
   });
 
@@ -561,6 +581,7 @@ void main() {
           lastName: 'Cruz',
           number: 'A-1',
           rawScore: 30,
+          examineeId: 'e1',
         ),
         _scanRow(
           id: 's2',
@@ -568,6 +589,7 @@ void main() {
           lastName: 'Santos',
           number: 'A-2',
           rawScore: 80,
+          examineeId: 'e2',
         ),
         _scanRow(
           id: 's3',
@@ -575,7 +597,13 @@ void main() {
           lastName: 'Reyes',
           number: 'A-3',
           rawScore: 50,
+          examineeId: 'e3',
         ),
+      ]);
+      client.examineesToReturn = CloudExamineesRead.found([
+        _examineeRow(id: 'e1', temporaryId: 'EX-000001', first: 'Juan', last: 'Cruz'),
+        _examineeRow(id: 'e2', temporaryId: 'EX-000002', first: 'Maria', last: 'Santos'),
+        _examineeRow(id: 'e3', temporaryId: 'EX-000003', first: 'Pedro', last: 'Reyes'),
       ]);
       await pumpResultsView(tester);
       await selectTheOnlyBatch(tester);
@@ -648,6 +676,7 @@ void main() {
           lastName: 'Cruz',
           number: 'A-1',
           rawScore: 30,
+          examineeId: 'e1',
         ),
         _scanRow(
           id: 's2',
@@ -655,8 +684,10 @@ void main() {
           lastName: 'Santos',
           number: 'A-2',
           resultStatus: null,
+          examineeId: 'e2',
         ),
       ]);
+      // client.examineesToReturn keeps setUp()'s default e1/e2 registration.
       await pumpResultsView(tester);
       await selectTheOnlyBatch(tester);
 
@@ -714,8 +745,10 @@ void main() {
     }
 
     testWidgets(
-      'a scan linked to an existing examinee, and one created with Confirm and Create, '
-      'show the examinee\'s name instead of Unnamed; an unlinked scan keeps its tag',
+      '1. UNLINKED SCAN EXCLUDED -- a scan linked to an existing examinee, '
+      'and one created with Confirm and Create, show the official examinee\'s '
+      'name; the unlinked scan (with its own OCR/staff tag and a score) does '
+      'not appear at all',
       (tester) async {
         seedLinkedBatch();
         await pumpResultsView(tester);
@@ -725,15 +758,18 @@ void main() {
         expect(find.text('Santos, Maria'), findsOneWidget);
         expect(
           find.text('Cruz, Juan'),
-          findsOneWidget,
-          reason: 'the unlinked scan is unchanged',
+          findsNothing,
+          reason: 'the unlinked scan\'s OCR/staff tag is not an official '
+              'identity and must never be shown as a Results row',
         );
-        expect(find.text('Unnamed'), findsNothing);
+        expect(find.text('Untagged'), findsNothing);
       },
     );
 
     testWidgets(
-      'without the link (same scan data) the row is still Unnamed -- the name comes from the relationship',
+      'an entirely unlinked, untagged scan does not appear in Results and '
+      'the page shows the normal empty state -- the name comes from the '
+      'relationship, never invented',
       (tester) async {
         client.scansByBatchId['b1'] = CloudScansRead.found([
           _scanRow(
@@ -746,7 +782,8 @@ void main() {
         await pumpResultsView(tester);
         await selectTheOnlyBatch(tester);
 
-        expect(find.text('Unnamed'), findsOneWidget);
+        expect(find.text('Untagged'), findsNothing);
+        expect(find.text('No results found for this batch.'), findsOneWidget);
         expect(
           client.examineeReads,
           0,
@@ -795,7 +832,9 @@ void main() {
     );
 
     testWidgets(
-      'a linked examinee whose record has no usable name falls back to the scan\'s own tag',
+      '3. OFFICIAL IDENTITY USED -- a scan linked to a resolvable examinee '
+      'whose record has no usable name still appears (it IS officially '
+      'linked) but shows "Untagged", never the scan\'s own OCR/staff tag',
       (tester) async {
         client.scansByBatchId['b1'] = CloudScansRead.found([
           _scanRow(
@@ -812,7 +851,8 @@ void main() {
         await pumpResultsView(tester);
         await selectTheOnlyBatch(tester);
 
-        expect(find.text('Cruz, Juan'), findsOneWidget);
+        expect(find.text('Cruz, Juan'), findsNothing);
+        expect(find.text('Untagged'), findsOneWidget);
       },
     );
 
@@ -867,8 +907,10 @@ void main() {
           number: 'A-1',
           attemptNo: 2,
           attemptStatus: 'active',
+          examineeId: 'e1',
         ),
       ]);
+      // client.examineesToReturn keeps setUp()'s default e1 = Juan Cruz.
       await pumpResultsView(tester);
       await selectTheOnlyBatch(tester);
 
@@ -877,8 +919,15 @@ void main() {
 
     testWidgets('an ordinary active Attempt 1 (no retake) appears, exactly as before', (tester) async {
       client.scansByBatchId['b1'] = CloudScansRead.found([
-        _scanRow(id: 's1', firstName: 'Juan', lastName: 'Cruz', number: 'A-1'), // default: attempt 1, active
+        _scanRow(
+          id: 's1',
+          firstName: 'Juan',
+          lastName: 'Cruz',
+          number: 'A-1',
+          examineeId: 'e1',
+        ), // default: attempt 1, active
       ]);
+      // client.examineesToReturn keeps setUp()'s default e1 = Juan Cruz.
       await pumpResultsView(tester);
       await selectTheOnlyBatch(tester);
 
@@ -897,7 +946,11 @@ void main() {
           number: 'Q-A1',
           batchId: 'q1',
           examCode: 'QTM',
+          examineeId: 'e_qtm',
         ),
+      ]);
+      client.examineesToReturn = CloudExamineesRead.found([
+        _examineeRow(id: 'e_qtm', temporaryId: 'EX-Q1', first: 'Ana', last: 'Reyes'),
       ]);
       await pumpResultsView(tester);
 
@@ -909,6 +962,72 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Reyes, Ana'), findsOneWidget);
+    });
+  });
+
+  group('8. Archived Results -- the shared GuidanceWebResultsView/'
+      'GuidanceWebResultsService official-identity filter applies '
+      'identically for an archived batch', () {
+    Future<void> pumpArchivedBatch(WidgetTester tester) async {
+      tester.view.physicalSize = const Size(1400, 1600);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final batch = LocalBatch(
+        id: 'b1',
+        batchCode: 'B-1',
+        examCode: 'AT',
+        examTitle: 'Admission Test',
+        description: '',
+        expectedCount: 2,
+        status: 'Completed',
+        createdByUid: 'uid',
+        createdByName: 'Officer',
+        createdAt: DateTime.utc(2026, 1, 1),
+        updatedAt: DateTime.utc(2026, 1, 1),
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: GuidanceWebResultsView(
+              service: GuidanceWebResultsService(client: client),
+              archivedBatch: batch,
+              onBackToArchive: () {},
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('a linked scan is shown with its official identity, and an '
+        'unlinked scan is excluded, exactly as in the normal (non-archived) '
+        'Results view -- no special-case archive behavior exists or is '
+        'needed', (tester) async {
+      client.scansByBatchId['b1'] = CloudScansRead.found([
+        _scanRow(
+          id: 's_linked',
+          firstName: '',
+          lastName: '',
+          number: 'EX-1',
+          examineeId: 'e1',
+        ),
+        _scanRow(
+          id: 's_unlinked',
+          firstName: 'Ana',
+          lastName: 'Lim',
+          number: 'OLD-7',
+        ),
+      ]);
+      client.examineesToReturn = CloudExamineesRead.found([
+        _examineeRow(id: 'e1', temporaryId: 'EX-000004', first: 'Merch', last: 'Andulana'),
+      ]);
+
+      await pumpArchivedBatch(tester);
+
+      expect(find.text('Andulana, Merch'), findsOneWidget);
+      expect(find.text('Lim, Ana'), findsNothing);
+      expect(find.widgetWithText(TextButton, 'View'), findsNWidgets(1));
     });
   });
 }

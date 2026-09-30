@@ -136,9 +136,11 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
   List<LocalScan> _scans = [];
   String? _scansError;
 
-  /// The canonical examinee for each LINKED scan (keyed by scan id), read
-  /// through `scans.examinee_id` -> `examinees.id`. A scan with no entry is
-  /// unlinked/legacy and shows its own tag, exactly as before.
+  /// The canonical examinee for each scan in [_scans] (keyed by scan id),
+  /// read through `scans.examinee_id` -> `examinees.id`. Every scan in
+  /// [_scans] has an entry here -- [GuidanceWebResultsService.
+  /// loadResultsForBatch] never returns an unlinked scan or one whose
+  /// `examinee_id` doesn't resolve (see its own doc comment).
   Map<String, ExamineeRecord> _linkedExaminees = {};
 
   String _statusFilter = 'All';
@@ -1006,9 +1008,9 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
 
   Widget _buildResultRow(int index, LocalScan scan, LocalBatch batch) {
     final linked = _linkedExaminees[scan.id];
-    final hasIdentity = linked != null || scan.examinee != null;
+    final hasIdentity = linked != null;
     final result = scan.result;
-    final name = resultExamineeName(scan, linked) ?? 'Untagged';
+    final name = resultExamineeName(linked) ?? 'Untagged';
     final score = result == null
         ? '—'
         : '${result.rawScore} / ${_denominatorFor(batch, result)}';
@@ -1119,18 +1121,23 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
   String _fmtDate(DateTime d) => '${_months[d.month - 1]} ${d.day}, ${d.year}';
 }
 
-/// The name the Results table shows for [scan]: the LINKED canonical examinee
-/// when the scan is linked to one (`scans.examinee_id` -> `examinees`) and
-/// that record has a usable name (first or last non-blank), otherwise the
-/// scan's own tag, otherwise null (the caller shows "Untagged"). One source
-/// at a time -- fields are never mixed -- and nothing is written anywhere.
-String? resultExamineeName(LocalScan scan, ExamineeRecord? linked) {
+/// The name the Results table shows for a row: the LINKED canonical
+/// examinee's name (`scans.examinee_id` -> `examinees`) when it has a usable
+/// name (first or last non-blank), otherwise null. Every row this is called
+/// for has already passed [GuidanceWebResultsService.loadResultsForBatch]'s
+/// official-identity filter, so [linked] is expected to always be non-null
+/// here -- this null-safety is defensive only, never a second, silent
+/// "official" identity source. Deliberately does NOT fall back to the scan's
+/// own OCR/staff-tagged [LocalScan.examinee] -- that is not an official
+/// identity and must never be shown as though it were one in Results (it
+/// remains available and correctly used elsewhere, e.g. Unlinked Scans).
+String? resultExamineeName(ExamineeRecord? linked) {
   if (linked != null &&
       (linked.firstName.trim().isNotEmpty ||
           linked.lastName.trim().isNotEmpty)) {
     return linked.displayName;
   }
-  return scan.examinee?.displayName;
+  return null;
 }
 
 class _ExamTab extends StatelessWidget {

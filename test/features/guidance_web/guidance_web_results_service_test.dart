@@ -3,6 +3,7 @@ import 'package:guidegrade/core/sync/cloud_batch_mapper.dart';
 import 'package:guidegrade/core/sync/sync_client.dart';
 import 'package:guidegrade/core/sync/sync_job.dart';
 import 'package:guidegrade/core/sync/sync_outcome.dart';
+import 'package:guidegrade/features/guidance_web/services/guidance_web_examinee_records_service.dart';
 import 'package:guidegrade/features/guidance_web/services/guidance_web_results_service.dart';
 
 /// Records whether any push/write method is ever called -- the Web
@@ -132,6 +133,162 @@ class _FakeSyncClient implements SyncClient {
   @override
   Future<CloudScansRead> readCloudScansForExaminee(String examineeId) =>
       _no('readCloudScansForExaminee');
+  @override
+  Future<CloudScansRead> readUnlinkedScans() => _no('readUnlinkedScans');
+}
+
+/// A STATEFUL fake, unlike [_FakeSyncClient] above: [createExamineeFromScan]
+/// actually mutates its own [scans]/[examinees] the way the real
+/// `create_examinee_from_scan` transaction does (new examinees row +
+/// scans.examinee_id set, atomically, from the caller's point of view) --
+/// used to prove the real Confirm & Create -> Results-visibility state
+/// transition through the actual public
+/// GuidanceWebExamineeRecordsService/GuidanceWebResultsService APIs, no
+/// private-method or reflection hack.
+class _StatefulFakeSyncClient implements SyncClient {
+  final List<CloudScanRow> scans;
+  final List<CloudExamineeRow> examinees = [];
+  int _nextExamineeSeq = 1;
+
+  _StatefulFakeSyncClient(this.scans);
+
+  Never _no(String label) => throw StateError('must never call $label');
+
+  @override
+  Future<CloudScansRead> readCloudScans(String batchId) async =>
+      CloudScansRead.found(scans.where((s) => s.batchId == batchId).toList());
+
+  @override
+  Future<CloudExamineesRead> readCloudExaminees() async =>
+      CloudExamineesRead.found(List.of(examinees));
+
+  @override
+  Future<CloudExamineeWrite> createExamineeFromScan({
+    required String batchId,
+    required String scanId,
+    required String firstName,
+    String? middleName,
+    required String lastName,
+  }) async {
+    final index = scans.indexWhere((s) => s.batchId == batchId && s.id == scanId);
+    if (index == -1) return const CloudExamineeWrite.failed(SyncOutcome.permanent('23503'));
+    final newId = 'e_new_${_nextExamineeSeq++}';
+    final examinee = CloudExamineeRow(
+      id: newId,
+      temporaryExamineeId: 'EX-NEW-$newId',
+      firstName: firstName,
+      middleName: middleName,
+      lastName: lastName,
+      status: 'active',
+      createdAt: DateTime.utc(2026, 1, 1),
+      createdByUid: 'uid',
+      updatedAt: DateTime.utc(2026, 1, 1),
+      updatedByUid: 'uid',
+    );
+    examinees.add(examinee);
+    // The atomic part the real RPC does in one transaction: the same scan
+    // row, now with examinee_id set -- never a second/different scan.
+    final old = scans[index];
+    scans[index] = CloudScanRow(
+      id: old.id,
+      batchId: old.batchId,
+      examCode: old.examCode,
+      capturedAt: old.capturedAt,
+      decoded: old.decoded,
+      rawScore: old.rawScore,
+      totalGraded: old.totalGraded,
+      totalItems: old.totalItems,
+      resultStatus: old.resultStatus,
+      scannedAt: old.scannedAt,
+      processedByUid: old.processedByUid,
+      processedByName: old.processedByName,
+      firstName: old.firstName,
+      lastName: old.lastName,
+      middleName: old.middleName,
+      examineeNumber: old.examineeNumber,
+      examineeId: newId,
+      imagePath: old.imagePath,
+      rectifiedImagePath: old.rectifiedImagePath,
+      imageUploaded: old.imageUploaded,
+      rectifiedImageUploaded: old.rectifiedImageUploaded,
+      attemptNo: old.attemptNo,
+      attemptStatus: old.attemptStatus,
+      archivedAt: old.archivedAt,
+      archivedByUid: old.archivedByUid,
+      archivedByName: old.archivedByName,
+      archiveReason: old.archiveReason,
+    );
+    return CloudExamineeWrite.success(examinee);
+  }
+
+  @override
+  Future<CloudBatchesRead> readCloudBatches() => _no('readCloudBatches');
+  @override
+  Future<SyncOutcome> pushBatch(String batchId) => _no('pushBatch');
+  @override
+  Future<SyncOutcome> pushScan(String batchId, String scanId, {Map<String, String> meta = const {}}) =>
+      _no('pushScan');
+  @override
+  Future<SyncOutcome> uploadImage(SyncJob job) => _no('uploadImage');
+  @override
+  Future<SyncOutcome> patchImageStatus(String batchId, String scanId) => _no('patchImageStatus');
+  @override
+  Future<SyncOutcome> pushAnswerKey(String examCode, {Map<String, String> meta = const {}}) =>
+      _no('pushAnswerKey');
+  @override
+  Future<CloudAnswerKeyRead> readAnswerKey(String examCode) => _no('readAnswerKey');
+  @override
+  Future<CloudImageRead> downloadScanImage({
+    required String batchId,
+    required String scanId,
+    required bool rectified,
+  }) =>
+      _no('downloadScanImage');
+  @override
+  Future<CloudImageRead> downloadNameCropImage({
+    required String batchId,
+    required String scanId,
+    required String variant,
+  }) =>
+      _no('downloadNameCropImage');
+  @override
+  Future<SyncOutcome> deleteBatch(String batchId) => _no('deleteBatch');
+  @override
+  Future<SyncOutcome> deleteScan(String batchId, String scanId) => _no('deleteScan');
+  @override
+  Future<SyncOutcome> deleteStoragePrefix(String batchId) => _no('deleteStoragePrefix');
+  @override
+  Future<CloudExamineeWrite> updateCloudExaminee({
+    required String id,
+    required String firstName,
+    String? middleName,
+    required String lastName,
+  }) =>
+      _no('updateCloudExaminee');
+  @override
+  Future<CloudExamineeWrite> setExamineeArchived(String id, bool archived) => _no('setExamineeArchived');
+  @override
+  Future<SyncOutcome> linkScanToExaminee({
+    required String batchId,
+    required String scanId,
+    required String? examineeId,
+  }) =>
+      _no('linkScanToExaminee');
+  @override
+  Future<SyncOutcome> unlinkScanFromExaminee({
+    required String batchId,
+    required String scanId,
+    required String examineeId,
+  }) =>
+      _no('unlinkScanFromExaminee');
+  @override
+  Future<CloudBatchArchivesRead> readBatchArchives() async => CloudBatchArchivesRead.found(const []);
+  @override
+  Future<SyncOutcome> archiveBatch({required String batchId, String? reason}) => _no('archiveBatch');
+  @override
+  Future<CloudScanCountsRead> readScanCounts(List<String> batchIds) => _no('readScanCounts');
+  @override
+  Future<CloudScansRead> readCloudScansForExaminee(String examineeId) => _no('readCloudScansForExaminee');
   @override
   Future<CloudScansRead> readUnlinkedScans() => _no('readUnlinkedScans');
 }
@@ -428,8 +585,9 @@ void main() {
   group('loadResultsForBatch -- resolves each scan\'s examinee through scans.examinee_id', () {
     final batch = mapCloudBatch(_batchRow());
 
-    test('a linked scan gets the canonical examinee (link-to-existing and confirm-and-create alike); '
-        'the scan itself is not modified', () async {
+    test('only scans linked to a resolvable canonical examinee are returned '
+        '(link-to-existing and confirm-and-create alike); the scan itself is '
+        'not modified', () async {
       client.scansByBatchId['b1'] = CloudScansRead.found([
         // The verified data shape: scan-level names NULL, generated scan number.
         _scanRow(id: 's_linked', batchId: 'b1', examineeNumber: 'EX-1790006562335-3', examineeId: 'e1'),
@@ -444,7 +602,9 @@ void main() {
 
       final results = await service.loadResultsForBatch(batch);
 
-      expect(results.scans, hasLength(3));
+      // 1. UNLINKED SCAN EXCLUDED -- s_unlinked (examinee_id null) never
+      // appears, even though it has its own OCR/staff tag.
+      expect(results.scans.map((s) => s.id), unorderedEquals(['s_linked', 's_created']));
       expect(results.linkedExamineeByScanId.keys, unorderedEquals(['s_linked', 's_created']));
       final linked = results.linkedExamineeByScanId['s_linked']!;
       expect(linked.temporaryExamineeId, 'EX-000004');
@@ -452,26 +612,31 @@ void main() {
       expect(linked.middleName, 'Valdez');
       expect(linked.lastName, 'Andulana');
       expect(results.linkedExamineeByScanId['s_created']!.displayName, 'Santos, Maria');
-      // The unlinked / legacy scan simply has no entry and keeps its own tag.
       expect(results.linkedExamineeByScanId.containsKey('s_unlinked'), isFalse);
-      // Reference only: the scan's own tag is exactly what the row held.
+      // Reference only: the scan's own tag is exactly what the row held --
+      // linking/this filter never writes to or clears it.
       final linkedScan = results.scans.firstWhere((s) => s.id == 's_linked');
       expect(linkedScan.examinee?.examineeNumber, 'EX-1790006562335-3');
       expect(linkedScan.examinee?.firstName, '');
     });
 
-    test('a batch with no linked scans never reads the examinees table', () async {
+    test('a batch with no linked scans never reads the examinees table and '
+        'returns zero results', () async {
       client.scansByBatchId['b1'] = CloudScansRead.found([
         _scanRow(id: 's1', batchId: 'b1', firstName: 'Ana', lastName: 'Lim', examineeNumber: 'OLD-7'),
       ]);
 
       final results = await service.loadResultsForBatch(batch);
 
+      // 1. UNLINKED SCAN EXCLUDED, even when it's the only scan in the batch.
+      expect(results.scans, isEmpty);
       expect(results.linkedExamineeByScanId, isEmpty);
       expect(client.calls, isNot(contains('readCloudExaminees')));
     });
 
-    test('a scan pointing at an examinee that cannot be found falls back to its own tag', () async {
+    test('4. DANGLING/MISSING EXAMINEE RECORD -- a scan pointing at an '
+        'examinee that cannot be found is excluded, not shown with its own '
+        'tag', () async {
       client.scansByBatchId['b1'] = CloudScansRead.found([
         _scanRow(id: 's1', batchId: 'b1', examineeNumber: 'EX-1', examineeId: 'e_gone'),
       ]);
@@ -481,7 +646,113 @@ void main() {
 
       final results = await service.loadResultsForBatch(batch);
 
+      expect(results.scans, isEmpty);
       expect(results.linkedExamineeByScanId, isEmpty);
+    });
+
+    test('2. LINKED SCAN INCLUDED -- a scan whose examinee_id resolves to an '
+        'existing ExamineeRecord appears in Results', () async {
+      client.scansByBatchId['b1'] = CloudScansRead.found([
+        _scanRow(id: 's1', batchId: 'b1', examineeNumber: 'EX-1', examineeId: 'e1'),
+      ]);
+      client.examineesToReturn = CloudExamineesRead.found([
+        _examineeRow(id: 'e1', temporaryId: 'EX-000004', first: 'Merch', last: 'Andulana'),
+      ]);
+
+      final results = await service.loadResultsForBatch(batch);
+
+      expect(results.scans.map((s) => s.id), ['s1']);
+      expect(results.linkedExamineeByScanId['s1']!.id, 'e1');
+    });
+
+    test('3. OFFICIAL IDENTITY USED -- when the OCR/staff tag differs from '
+        'the official ExamineeRecord, the official record is what resolves', () async {
+      client.scansByBatchId['b1'] = CloudScansRead.found([
+        // Scan-level tag says "Ana Lim" -- deliberately different from the
+        // official record it is linked to, simulating a corrected/updated
+        // official name after linking.
+        _scanRow(
+          id: 's1',
+          batchId: 'b1',
+          firstName: 'Ana',
+          lastName: 'Lim',
+          examineeNumber: 'OLD-TAG',
+          examineeId: 'e1',
+        ),
+      ]);
+      client.examineesToReturn = CloudExamineesRead.found([
+        _examineeRow(id: 'e1', temporaryId: 'EX-000004', first: 'Merch', last: 'Andulana'),
+      ]);
+
+      final results = await service.loadResultsForBatch(batch);
+
+      expect(results.scans.map((s) => s.id), ['s1']);
+      final official = results.linkedExamineeByScanId['s1']!;
+      expect(official.firstName, 'Merch');
+      expect(official.lastName, 'Andulana');
+      // The scan's own (stale) tag is untouched, but is never what Results
+      // should read -- resultExamineeName (view-level) only ever reads
+      // linkedExamineeByScanId, never scan.examinee, for a Results row.
+      final scan = results.scans.single;
+      expect(scan.examinee?.firstName, 'Ana');
+      expect(scan.examinee?.lastName, 'Lim');
+    });
+
+    test('6. MULTIPLE EXAM TYPES -- the same ExamineeRecord resolves '
+        'correctly for QTM, TAT and AT results independently', () async {
+      client.scansByBatchId['b_qtm'] = CloudScansRead.found([
+        _scanRow(id: 's_qtm', batchId: 'b_qtm', examCode: 'QTM', examineeId: 'e1'),
+      ]);
+      client.scansByBatchId['b_tat'] = CloudScansRead.found([
+        _scanRow(id: 's_tat', batchId: 'b_tat', examCode: 'TAT', examineeId: 'e1'),
+      ]);
+      client.scansByBatchId['b_at'] = CloudScansRead.found([
+        _scanRow(id: 's_at', batchId: 'b_at', examCode: 'AT', examineeId: 'e1'),
+      ]);
+      client.examineesToReturn = CloudExamineesRead.found([
+        _examineeRow(id: 'e1', temporaryId: 'EX-000004', first: 'Merch', last: 'Andulana'),
+      ]);
+
+      final qtmResults = await service.loadResultsForBatch(
+        mapCloudBatch(_batchRow(id: 'b_qtm', examCode: 'QTM')),
+      );
+      final tatResults = await service.loadResultsForBatch(
+        mapCloudBatch(_batchRow(id: 'b_tat', examCode: 'TAT')),
+      );
+      final atResults = await service.loadResultsForBatch(
+        mapCloudBatch(_batchRow(id: 'b_at', examCode: 'AT')),
+      );
+
+      // Same official examinee id resolves identically across all three
+      // independent exam-type batches -- never a second/different record.
+      expect(qtmResults.linkedExamineeByScanId['s_qtm']!.id, 'e1');
+      expect(tatResults.linkedExamineeByScanId['s_tat']!.id, 'e1');
+      expect(atResults.linkedExamineeByScanId['s_at']!.id, 'e1');
+      expect(
+        {
+          qtmResults.linkedExamineeByScanId['s_qtm']!.displayName,
+          tatResults.linkedExamineeByScanId['s_tat']!.displayName,
+          atResults.linkedExamineeByScanId['s_at']!.displayName,
+        },
+        {'Andulana, Merch'},
+        reason: 'all three resolve to the exact same official identity',
+      );
+    });
+
+    test('7. UNLINKED SCANS query (readUnlinkedScans) is never called by '
+        'GuidanceWebResultsService -- this filtering never touches the '
+        'separate Unlinked Scans data path', () async {
+      client.scansByBatchId['b1'] = CloudScansRead.found([
+        _scanRow(id: 's1', batchId: 'b1', examineeId: 'e1'),
+        _scanRow(id: 's2', batchId: 'b1'), // unlinked
+      ]);
+      client.examineesToReturn = CloudExamineesRead.found([
+        _examineeRow(id: 'e1', temporaryId: 'EX-000004', first: 'Merch', last: 'Andulana'),
+      ]);
+
+      await service.loadResultsForBatch(batch);
+
+      expect(client.calls, isNot(contains('readUnlinkedScans')));
     });
 
     test('a failed examinee lookup fails loudly instead of silently showing linked scans as Unnamed', () async {
@@ -562,6 +833,94 @@ group('Applicant Retake Management -- archived attempts excluded by default', ()
     final scans = await service.loadScansForBatch(mapCloudBatch(_batchRow(id: 'b1', examCode: 'QTM')));
 
     expect(scans.map((s) => s.id), ['s1']);
+  });
+});
+
+group('5. CONFIRM & CREATE PATH -- Confirm & Create Examinee makes the '
+    'result visible in Results, through the real public service APIs '
+    '(GuidanceWebExamineeRecordsService.createExamineeFromScan then '
+    'GuidanceWebResultsService.loadResultsForBatch), never a reflection/'
+    'private-method hack', () {
+  test('unlinked scored scan -> excluded; Confirm & Create -> official '
+      'ExamineeRecord created and linked -> Results reload includes it '
+      'under the official identity, never the OCR/staff tag', () async {
+    // Starting state: a scored, unlinked scan with only OCR/staff-tagged
+    // identity information -- examinee_id is null.
+    final sharedClient = _StatefulFakeSyncClient([
+      CloudScanRow(
+        id: 's_unlinked',
+        batchId: 'b1',
+        examCode: 'AT',
+        capturedAt: DateTime.utc(2026, 1, 1),
+        decoded: const {'examCode': 'AT', 'items': <dynamic>[]},
+        rawScore: 54,
+        totalGraded: 72,
+        totalItems: 72,
+        resultStatus: 'Graded',
+        scannedAt: DateTime.utc(2026, 1, 1),
+        processedByUid: 'uid',
+        processedByName: 'Officer',
+        firstName: 'Ana',
+        lastName: 'Lim',
+        examineeNumber: 'OCR-TAG-1',
+        // examineeId intentionally omitted -- unlinked.
+      ),
+    ]);
+    final resultsService = GuidanceWebResultsService(client: sharedClient);
+    final examineeRecordsService =
+        GuidanceWebExamineeRecordsService(client: sharedClient);
+    final batch = mapCloudBatch(_batchRow(id: 'b1', examCode: 'AT'));
+
+    // G. Results visibility BEFORE creation: excluded.
+    final before = await resultsService.loadResultsForBatch(batch);
+    expect(before.scans, isEmpty);
+    expect(before.linkedExamineeByScanId, isEmpty);
+
+    // D. Exercise the actual Confirm & Create action through the real,
+    // public service method -- the same one the UI calls.
+    final localScan = mapCloudScan(sharedClient.scans.single);
+    final created = await examineeRecordsService.createExamineeFromScan(
+      batchId: 'b1',
+      scan: localScan,
+      firstName: 'Maria', // deliberately different from the OCR tag
+      lastName: 'Santos', // ("Ana Lim") to prove which identity wins
+    );
+
+    // E. Resulting Examinee ID: a new, official examinees.id exists.
+    expect(created.id, isNotEmpty);
+    expect(sharedClient.examinees.single.id, created.id);
+    expect(created.firstName, 'Maria');
+    expect(created.lastName, 'Santos');
+
+    // F. Resulting scan link state: the SAME scan row now carries that
+    // official examinee_id -- proven by reading it back through the fake's
+    // own state (the atomic part of the real RPC), not asserted separately.
+    expect(sharedClient.scans.single.id, 's_unlinked');
+    expect(sharedClient.scans.single.examineeId, created.id);
+    // The OCR/staff tag columns are untouched by linking (same invariant
+    // proven elsewhere for Link-to-Existing).
+    expect(sharedClient.scans.single.firstName, 'Ana');
+    expect(sharedClient.scans.single.lastName, 'Lim');
+
+    // H. Results visibility AFTER creation (a fresh reload, exactly what
+    // the UI does after Confirm & Create completes): included.
+    final after = await resultsService.loadResultsForBatch(batch);
+    expect(after.scans.map((s) => s.id), ['s_unlinked']);
+
+    // I. Official identity assertion: the resolved ExamineeRecord is the
+    // one just created.
+    final resolved = after.linkedExamineeByScanId['s_unlinked']!;
+    expect(resolved.id, created.id);
+    expect(resolved.firstName, 'Maria');
+    expect(resolved.lastName, 'Santos');
+
+    // J. OCR identity assertion: the original OCR/staff tag ("Ana Lim")
+    // never becomes -- and is not shown as -- the authoritative identity.
+    expect(resolved.firstName, isNot('Ana'));
+    expect(resolved.lastName, isNot('Lim'));
+    expect(after.scans.single.examinee?.firstName, 'Ana',
+        reason: 'the OCR tag itself is still there on the scan (never '
+            'erased) -- it is simply not what Results treats as official');
   });
 });
 
