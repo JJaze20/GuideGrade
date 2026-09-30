@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:guidegrade/core/services/firestore_service.dart';
@@ -26,6 +27,8 @@ class _FakeFirestoreService implements FirestoreService {
   }
 
   void emit(List<UserModel> users) => _controller.add(users);
+
+  void emitError(Object error) => _controller.addError(error);
 
   void close() => _controller.close();
 
@@ -197,5 +200,27 @@ void main() {
 
     expect(find.text('Maria Santos'), findsOneWidget);
     expect(find.text('Jeric Ryan Caday'), findsOneWidget);
+  });
+
+  testWidgets('I. a permission-denied stream error shows an '
+      'authorization-specific message', (tester) async {
+    await pumpScreen(tester, [jeric]);
+
+    firestoreService.emitError(FirebaseException(plugin: 'firestore', code: 'permission-denied'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('permission'), findsOneWidget);
+    expect(find.text('Could not load users'), findsNothing);
+  });
+
+  testWidgets('J. an unavailable/network stream error shows a '
+      'connectivity-specific message', (tester) async {
+    await pumpScreen(tester, [jeric]);
+
+    firestoreService.emitError(FirebaseException(plugin: 'firestore', code: 'unavailable'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('server'), findsOneWidget);
+    expect(find.text('Could not load users'), findsNothing);
   });
 }

@@ -772,4 +772,31 @@ class FirestoreService {
       ).toList()
     );
   }
+
+  // ============================================
+  // ERROR MESSAGING
+  // ============================================
+
+  /// User-facing message for a failed Firestore operation -- classifies by
+  /// [FirebaseException.code] the same way [AuthService.messageFor]
+  /// classifies a [FirebaseAuthException], so a permission-denied
+  /// rejection is never shown as though it were a connectivity problem, or
+  /// the reverse. [fallback] lets each call site keep its own existing
+  /// generic wording for every other code; only permission-denied and the
+  /// two connectivity-related codes this app's Firebase usage actually
+  /// produces (`unavailable`, `network-request-failed`) are classified.
+  /// Only chooses a message -- never throws, retries, or otherwise changes
+  /// what the caller already decided to do about the failure.
+  static String messageFor(Object error, {String? fallback}) {
+    if (error is FirebaseException) {
+      switch (error.code) {
+        case 'permission-denied':
+          return 'You do not have permission to do this. Please contact the System Administrator.';
+        case 'unavailable':
+        case 'network-request-failed':
+          return 'Could not reach the server. Check your connection and try again.';
+      }
+    }
+    return fallback ?? 'Could not complete the request. Please try again.';
+  }
 }

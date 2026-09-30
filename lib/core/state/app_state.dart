@@ -284,10 +284,11 @@ class AppState extends ChangeNotifier {
     this.cloudRestoreService,
     LocalStorageService? localStorage,
     Stream<List<ConnectivityResult>>? connectivityStream,
+    Future<List<ConnectivityResult>> Function()? initialConnectivityCheck,
     this.reconnectSyncDebounce = const Duration(seconds: 2),
   })  : batchRepository = batchRepository ?? LocalBatchRepository(),
         _localStorage = localStorage ?? LocalStorageService() {
-    _wireReconnectSync(connectivityStream);
+    _wireReconnectSync(connectivityStream, initialConnectivityCheck);
     _wireArchiveCoordinator();
   }
 
@@ -320,6 +321,18 @@ class AppState extends ChangeNotifier {
 
   void _onSyncStateChanged() {
     if (_reconnectDisposed) return;
+    // SyncManager only calls its own notifyListeners() on a genuine job-
+    // state transition (enqueued -> inProgress -> settled/blocked), so
+    // propagating that straight to AppState's own listeners is safe and is
+    // what any screen reading sync status directly from the queue needs --
+    // e.g. AnswerKeyEntryScreen.build() reads answerKeySyncStatusFor/
+    // answerKeySyncLabelFor via AppStateScope, which only rebuilds when
+    // AppState itself notifies. Relying solely on refreshBatchArchiveStatus's
+    // own conditional notify below (fired only once a batch is actually
+    // confirmed archived) left any screen whose relevant sync state doesn't
+    // involve batch archival -- an answer-key-only push never archives a
+    // batch -- stale until some unrelated event happened to rebuild it.
+    notifyListeners();
     unawaited(refreshBatchArchiveStatus());
   }
 
@@ -432,14 +445,26 @@ class AppState extends ChangeNotifier {
 
   /// Assume online at startup so only a genuine offline->online transition
   /// (not the first event on an already-online device) triggers a drain.
+  /// Corrected by [initialConnectivityCheck] (if provided) once it resolves,
+  /// and by every subsequent event on the connectivity stream.
   bool _wasOnline = true;
 
+  /// Set as soon as the connectivity stream reports its first event, so a
+  /// slower in-flight [initialConnectivityCheck] result -- which can only
+  /// ever be stale by the time it resolves -- is discarded instead of
+  /// overwriting what the stream has already reported.
+  bool _connectivityStreamFired = false;
+
   /// Best-effort "device has a network" flag for UI (e.g. greying out the
-  /// load-from-cloud button). Only updated from connectivity events, so it
-  /// assumes online until the first change is reported.
+  /// load-from-cloud button). Assumes online until [initialConnectivityCheck]
+  /// resolves or the first connectivity-stream event arrives, whichever
+  /// comes first.
   bool get isOnline => _wasOnline;
 
-  void _wireReconnectSync(Stream<List<ConnectivityResult>>? stream) {
+  void _wireReconnectSync(
+    Stream<List<ConnectivityResult>>? stream,
+    Future<List<ConnectivityResult>> Function()? initialConnectivityCheck,
+  ) {
     // No cloud data plane -> nothing to drain, so never subscribe.
     if (stream == null || syncManager == null) return;
     _connectivitySub = stream.listen(
@@ -449,6 +474,32 @@ class AppState extends ChangeNotifier {
         // engine; connectivity is a best-effort nudge only.
       },
     );
+    if (initialConnectivityCheck != null) {
+      unawaited(_settleInitialConnectivity(initialConnectivityCheck));
+    }
+  }
+
+  /// Reads the device's actual connectivity once at startup (e.g.
+  /// `Connectivity().checkConnectivity`) so a device that starts offline
+  /// doesn't sit at the `_wasOnline = true` default -- possibly for the rest
+  /// of the session -- until some later change happens to be reported.
+  Future<void> _settleInitialConnectivity(
+    Future<List<ConnectivityResult>> Function() check,
+  ) async {
+    final List<ConnectivityResult> results;
+    try {
+      results = await check();
+    } catch (_) {
+      return; // best-effort; keep the existing assume-online default
+    }
+    // A real-time event already arrived while the check was in flight --
+    // it is more current than this result, so leave it alone.
+    if (_reconnectDisposed || _connectivityStreamFired) return;
+    final online = results.any((r) => r != ConnectivityResult.none);
+    if (online != _wasOnline) {
+      _wasOnline = online;
+      notifyListeners();
+    }
   }
 
   /// connectivity_plus 7.3.1: `onConnectivityChanged` is
@@ -459,6 +510,7 @@ class AppState extends ChangeNotifier {
   /// simultaneously.
   void _onConnectivityChanged(List<ConnectivityResult> results) {
     if (_reconnectDisposed) return;
+    _connectivityStreamFired = true;
     final online = results.any((r) => r != ConnectivityResult.none);
     final wasOnline = _wasOnline;
     _wasOnline = online;

@@ -6,16 +6,18 @@ import 'package:printing/printing.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
+import '../../../core/constants/exam_catalog.dart';
 import '../../../models/local_batch.dart';
 import '../export/guidance_web_export_service.dart';
 import '../services/guidance_web_analytics_service.dart';
 import '../services/guidance_web_results_service.dart';
 import 'guidance_web_export_batch_view.dart';
 
-const List<(String, String)> _exportExamTypes = [
-  ('AT', 'Admission Test (AT)'),
-  ('QTM', 'Quantitative Math Test (QTM)'),
-  ('TAT', 'Teaching Aptitude Test (TAT)'),
+/// (code, "Title (CODE)") pairs for every exam in the canonical catalog,
+/// in the catalog's own order (AT, QTM, TAT) -- reads exam_catalog.dart's
+/// examTypeDisplayLabel instead of a separately hand-maintained copy.
+final List<(String, String)> _exportExamTypes = [
+  for (final entry in examCatalog) (entry.examCode, examTypeDisplayLabel(entry.examCode)),
 ];
 
 /// The Guidance Council Web Console's Export page — READ-ONLY listing of the

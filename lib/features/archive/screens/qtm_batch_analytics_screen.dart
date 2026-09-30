@@ -4,6 +4,7 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import '../../../core/analytics/qtm_batch_analytics.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
+import '../../../core/constants/exam_catalog.dart';
 import '../../../core/omr/qtm_result.dart';
 import '../../../core/state/app_state.dart';
 import '../../../models/local_batch.dart';
@@ -169,7 +170,7 @@ class _QtmBatchAnalyticsScreenState extends State<QtmBatchAnalyticsScreen> {
             ),
             const SizedBox(height: 4),
             _kv('Batch Code', batch.batchCode),
-            _kv('Exam Type', 'Qualifying Test in Mathematics (QTM)'),
+            _kv('Exam Type', examTypeDisplayLabel('QTM')),
           ],
         ),
       );

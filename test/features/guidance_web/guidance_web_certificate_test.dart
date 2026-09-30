@@ -137,4 +137,44 @@ void main() {
       );
     });
   });
+
+  group('certificate intro text -- formal exam name, not the legacy OMR '
+      'section identifier or the old incorrect catalog title', () {
+    test('QTM intro uses the formal name "Qualifying Test for Mathematics"', () {
+      final intro = cert('QTM', 55)!.intro;
+      expect(intro, contains('Qualifying Test for Mathematics'));
+    });
+
+    test('QTM intro does not contain "Quantitative"', () {
+      final intro = cert('QTM', 55)!.intro;
+      expect(intro, isNot(contains('Quantitative')));
+    });
+
+    test('QTM intro does not need a "(QTM)" suffix -- certificate wording '
+        'reads as a plain exam name, matching AT/TAT\'s own intro format', () {
+      final intro = cert('QTM', 55)!.intro;
+      expect(intro, isNot(contains('(QTM)')));
+    });
+
+    test('QTM intro is NOT the legacy OMR section identifier '
+        '("in Mathematics") -- that string is frozen for physical-sheet/'
+        'legacy-scan compatibility and must never appear here', () {
+      final intro = cert('QTM', 55)!.intro;
+      expect(intro, isNot(contains('Qualifying Test in Mathematics')));
+    });
+
+    test('AT certificate intro remains unchanged', () {
+      expect(
+        cert('AT', 70)!.intro,
+        'You have successfully passed the Admission Test of the Notre Dame of Marbel University.',
+      );
+    });
+
+    test('TAT certificate intro remains unchanged', () {
+      expect(
+        cert('TAT', 150)!.intro,
+        'You have successfully passed the Teaching Aptitude Test of the Notre Dame of Marbel University.',
+      );
+    });
+  });
 }

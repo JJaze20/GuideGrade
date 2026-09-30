@@ -147,6 +147,10 @@ Future<void> main() async {
     // when a SyncManager exists, and on a disconnected -> connected edge
     // asks it to drain the existing queue (SyncManager.syncNow).
     connectivityStream: Connectivity().onConnectivityChanged,
+    // Reads the actual state once at startup so a device that's already
+    // offline when the app launches doesn't read as online until some
+    // later connectivity change happens to be reported.
+    initialConnectivityCheck: Connectivity().checkConnectivity,
   );
   await appState.loadPersistedData();
 

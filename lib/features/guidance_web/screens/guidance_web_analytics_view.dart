@@ -6,6 +6,7 @@ import '../../../core/analytics/qtm_batch_analytics.dart';
 import '../../../core/analytics/tat_batch_analytics.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
+import '../../../core/constants/exam_catalog.dart';
 import '../../../core/omr/admission_category.dart';
 import '../../../core/omr/qtm_result.dart';
 import '../../../core/omr/tat_result.dart';
@@ -30,10 +31,11 @@ class GuidanceWebBatchAnalyticsView extends StatefulWidget {
   State<GuidanceWebBatchAnalyticsView> createState() => _GuidanceWebBatchAnalyticsViewState();
 }
 
-const List<(String, String)> _examTypes = [
-  ('AT', 'Admission Test (AT)'),
-  ('QTM', 'Quantitative Math Test (QTM)'),
-  ('TAT', 'Teaching Aptitude Test (TAT)'),
+/// (code, "Title (CODE)") pairs in the canonical catalog's own order
+/// (AT, QTM, TAT) -- reads exam_catalog.dart's examTypeDisplayLabel
+/// instead of a separately hand-maintained copy.
+final List<(String, String)> _examTypes = [
+  for (final entry in examCatalog) (entry.examCode, examTypeDisplayLabel(entry.examCode)),
 ];
 
 class _GuidanceWebBatchAnalyticsViewState extends State<GuidanceWebBatchAnalyticsView> {

@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter/services.dart' show rootBundle;
 
+import '../../../core/constants/exam_catalog.dart';
 import '../../../core/omr/admission_category.dart';
 import '../../../core/omr/cluster_analysis.dart';
 import '../../../core/omr/omr_scorer.dart';
@@ -16,12 +17,6 @@ import '../services/guidance_web_results_service.dart';
 import 'guidance_web_certificate.dart';
 import 'guidance_web_export_models.dart';
 import 'guidance_web_export_pdf.dart';
-
-const Map<String, String> _examLabels = {
-  'AT': 'Admission Test (AT)',
-  'QTM': 'Quantitative Math Test (QTM)',
-  'TAT': 'Teaching Aptitude Test (TAT)',
-};
 
 /// Category bands as printed, D first. Same score ranges the Analytics
 /// detail screen shows; QTM and TAT carry the template's percentage labels.
@@ -190,7 +185,7 @@ class GuidanceWebExportService {
     LocalBatch batch,
     List<LocalScan> allScans,
   ) async {
-    final examLabel = _examLabels[batch.examCode] ?? batch.examCode;
+    final examLabel = examTypeDisplayLabel(batch.examCode);
     final categoryBars = _categoryBars(batch.examCode, allScans);
 
     try {
@@ -410,7 +405,7 @@ class GuidanceWebExportService {
     final age = e?.ageOn(examDate);
 
     return ExportExamineeSection(
-      examLabel: _examLabels[batch.examCode] ?? batch.examCode,
+      examLabel: examTypeDisplayLabel(batch.examCode),
       batchLabel: _batchLabel(batch),
       examineeId: dash(e?.examineeNumber),
       firstName: dash(e?.firstName),
