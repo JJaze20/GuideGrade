@@ -19,6 +19,17 @@ subprojects {
     project.evaluationDependsOn(":app")
 }
 
+subprojects {
+    if (name == "camera_android_camerax") {
+        pluginManager.withPlugin("com.android.library") {
+            // CameraX 1.6.1 exposes CallbackToFutureAdapter in annotated class
+            // metadata, but supplies it only at runtime. Match that version
+            // on the plugin's compile path without changing runtime resolution.
+            dependencies.add("compileOnly", "androidx.concurrent:concurrent-futures:1.1.0")
+        }
+    }
+}
+
 tasks.register<Delete>("clean") {
     delete(rootProject.layout.buildDirectory)
 }
