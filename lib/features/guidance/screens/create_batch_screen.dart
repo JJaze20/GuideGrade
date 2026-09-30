@@ -163,12 +163,10 @@ class _CreateBatchScreenState extends State<CreateBatchScreen> {
                 ),
               _buildSection('Basic Information'),
               const SizedBox(height: 16),
-              _buildTextField(
+              _buildReadOnlyField(
                 label: 'Batch Code',
-                controller: TextEditingController(text: _generatedBatchCode),
-                hint: 'Auto-generated',
+                value: _generatedBatchCode,
                 required: true,
-                enabled: false,
               ),
               const SizedBox(height: 12),
               _buildTextField(
@@ -206,6 +204,45 @@ class _CreateBatchScreenState extends State<CreateBatchScreen> {
     return Text(
       title,
       style: AppTextStyles.body(size: 11, weight: FontWeight.w700, color: AppColors.primaryGreen),
+    );
+  }
+
+  /// A fixed, program-generated value the user never edits (e.g. Batch
+  /// Code) -- shown as plain text in an outlined box rather than a disabled
+  /// [TextField], so there is no [TextEditingController] to own/dispose for
+  /// a field that never collects input. Mirrors the read-only field style
+  /// already used for this kind of value in `EditUserScreen`.
+  Widget _buildReadOnlyField({
+    required String label,
+    required String value,
+    bool required = false,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Text(label, style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600)),
+            if (required)
+              Text(' *', style: AppTextStyles.body(size: 10.5, color: Colors.red)),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            color: AppColors.lightBg,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: AppColors.cardBorder),
+          ),
+          child: Text(
+            value,
+            key: const Key('createBatch.batchCode'),
+            style: AppTextStyles.body(size: 11, color: AppColors.textGray),
+          ),
+        ),
+      ],
     );
   }
 

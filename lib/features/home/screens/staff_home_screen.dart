@@ -61,6 +61,14 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // The Firestore-approved UserModel (AppState.currentUser), not
+    // FirebaseAuth's own User.displayName -- mirrors the exact fallback
+    // ProfileScreen already uses, so a signed-in user with a completed
+    // profile sees their real name here too, not the generic placeholder.
+    final user = AppStateScope.of(context).currentUser;
+    final displayName = user?.displayName.trim();
+    final name = (displayName != null && displayName.isNotEmpty) ? displayName : 'NDMU Staff Officer';
+
     return Scaffold(
       backgroundColor: AppColors.lightBg,
       body: SafeArea(
@@ -120,7 +128,7 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
                                 style: AppTextStyles.body(size: 9.5, weight: FontWeight.w800, color: AppColors.primaryGreen)
                                     .copyWith(letterSpacing: 0.6),
                               ),
-                              Text('NDMU Staff Officer', style: AppTextStyles.heading(size: 13)),
+                              Text(name, style: AppTextStyles.heading(size: 13)),
                             ],
                           ),
                           Text('Marbel, PH', style: AppTextStyles.body(size: 9, color: AppColors.textGray)),

@@ -25,12 +25,20 @@ class _FakeFirestoreService implements FirestoreService {
   final updates = <UserModel>[];
   List<GuidancePosition> _positions;
   final addedLabels = <String>[];
+  final deactivateCalls = <String>[];
+  final activateCalls = <String>[];
 
   @override
   Future<UserModel?> getUserById(String userId) async => stored;
 
   @override
   Future<void> updateUser(UserModel user) async => updates.add(user);
+
+  @override
+  Future<void> deactivateUser(String userId) async => deactivateCalls.add(userId);
+
+  @override
+  Future<void> activateUser(String userId) async => activateCalls.add(userId);
 
   @override
   Future<List<GuidancePosition>> loadGuidancePositions() async => _positions;
@@ -54,13 +62,28 @@ class _FakeFirestoreService implements FirestoreService {
 
 class _FakeLoggingService implements LoggingService {
   @override
+  Future<void> logUserActivated(UserModel actor,
+          {required String targetUserId, required String targetUserEmail}) async {}
+
+  @override
+  Future<void> logUserDeactivated(UserModel actor,
+          {required String targetUserId, required String targetUserEmail}) async {}
+
+  @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
-UserModel _staff({String? first, String? mi, String? last, String? position = 'guidance_staff'}) => UserModel(
+UserModel _staff({
+  String? first,
+  String? mi,
+  String? last,
+  String? position = 'guidance_staff',
+  String displayName = 'J. Dela Cruz',
+}) =>
+    UserModel(
       userId: 'staff-1',
       email: 'staff@ndmu.edu.ph',
-      displayName: 'J. Dela Cruz',
+      displayName: displayName,
       role: 'guidance_council',
       guidancePosition: position,
       isActive: true,
@@ -69,6 +92,18 @@ UserModel _staff({String? first, String? mi, String? last, String? position = 'g
       firstName: first,
       middleInitial: mi,
       lastName: last,
+    );
+
+/// Matches the `admin-1` user set as `appState.currentUser` in `setUp` --
+/// opening EditUserScreen with this as the target user is what makes
+/// `_isEditingSelf` true.
+UserModel _admin() => UserModel(
+      userId: 'admin-1',
+      email: 'admin@ndmu.edu.ph',
+      displayName: 'Admin',
+      role: 'system_admin',
+      isActive: true,
+      createdAt: DateTime.utc(2026),
     );
 
 void main() {
@@ -254,5 +289,117 @@ void main() {
     await save(tester);
 
     expect(firestore.updates.single.guidancePosition, 'auditing');
+  });
+
+  // --- Display Name is optional, matching Create User (regression) ----
+
+  testWidgets(
+      'a user with a blank Display Name (not yet completed Mobile Profile Setup) can still '
+      'be edited and saved by System Admin -- Display Name is optional here too, matching '
+      'Create User', (tester) async {
+    final firestore = await openScreen(tester, _staff(displayName: ''));
+
+    // An unrelated field (Institution) can be changed and saved without
+    // ever having to type a Display Name. Institution has no fieldKey of
+    // its own in EditUserScreen -- it's the last plain TextFormField in
+    // the form (firstName, middleInitial, lastName, displayName, then
+    // institution; Position is a DropdownButtonFormField, not a
+    // TextFormField, so it doesn't affect this ordering).
+    await tester.enterText(find.byType(TextFormField).last, 'NDMU Annex');
+    await save(tester);
+
+    expect(find.text('This field is required'), findsNothing);
+    final saved = firestore.updates.single;
+    expect(saved.displayName, isEmpty);
+    expect(saved.institution, 'NDMU Annex');
+  });
+
+  testWidgets('existing behavior for a populated Display Name is unchanged -- it can still be '
+      'edited and is still saved verbatim', (tester) async {
+    final firestore = await openScreen(tester, _staff());
+
+    await tester.enterText(find.byKey(const Key('editUser.displayName')), 'Sir Juan');
+    await save(tester);
+
+    expect(find.text('This field is required'), findsNothing);
+    expect(firestore.updates.single.displayName, 'Sir Juan');
+  });
+
+  // --- Self-protection (P2-5 regression) -------------------------------
+
+  group('self-protection: the signed-in admin can never deactivate/re-role '
+      'their own account from this screen', () {
+    testWidgets('1. self account: the warning banner is shown and the '
+        'Deactivate/Activate button is disabled', (tester) async {
+      await openScreen(tester, _admin());
+
+      expect(
+        find.text('This is your own account. Role changes and deactivation '
+            'are disabled here to prevent losing access.'),
+        findsOneWidget,
+      );
+      final button = tester.widget<OutlinedButton>(
+          find.widgetWithText(OutlinedButton, 'Deactivate Account'));
+      expect(button.onPressed, isNull);
+    });
+
+    testWidgets('2. another user: no self-account banner, and the Deactivate '
+        'button is enabled', (tester) async {
+      await openScreen(tester, _staff());
+
+      expect(
+        find.text('This is your own account. Role changes and deactivation '
+            'are disabled here to prevent losing access.'),
+        findsNothing,
+      );
+      final button = tester.widget<OutlinedButton>(
+          find.widgetWithText(OutlinedButton, 'Deactivate Account'));
+      expect(button.onPressed, isNotNull);
+    });
+
+    testWidgets('3. self account: interacting with the disabled control never '
+        'reaches deactivateUser', (tester) async {
+      final firestore = await openScreen(tester, _admin());
+
+      await tester.tap(find.widgetWithText(OutlinedButton, 'Deactivate Account'));
+      await tester.pumpAndSettle();
+
+      expect(firestore.deactivateCalls, isEmpty);
+      expect(firestore.activateCalls, isEmpty);
+    });
+
+    testWidgets('4. another user: the existing deactivate flow still reaches '
+        'deactivateUser', (tester) async {
+      final firestore = await openScreen(tester, _staff());
+
+      await tester.tap(find.widgetWithText(OutlinedButton, 'Deactivate Account'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(TextButton, 'Deactivate'));
+      await tester.pumpAndSettle();
+
+      expect(firestore.deactivateCalls, ['staff-1']);
+    });
+
+    testWidgets('5a. role is read-only for the self (system_admin) account -- '
+        'no editable role control exists', (tester) async {
+      await openScreen(tester, _admin());
+
+      expect(find.text('System Admin'), findsOneWidget);
+      expect(find.byKey(const Key('editUser.role')), findsNothing);
+      // system_admin has no Guidance Position section either -- there is no
+      // dropdown of any kind on this screen for a self-viewed admin account.
+      expect(find.byType(DropdownButtonFormField<String>), findsNothing);
+    });
+
+    testWidgets('5b. role is read-only for another (guidance_council) account '
+        '-- the only dropdown present is Guidance Position, never role',
+        (tester) async {
+      await openScreen(tester, _staff());
+
+      expect(find.text('Guidance Council'), findsOneWidget);
+      expect(find.byKey(const Key('editUser.role')), findsNothing);
+      expect(find.byType(DropdownButtonFormField<String>), findsOneWidget);
+      expect(find.byKey(const Key('editUser.position')), findsOneWidget);
+    });
   });
 }

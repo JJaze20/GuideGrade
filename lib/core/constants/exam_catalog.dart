@@ -34,7 +34,7 @@ const List<ExamCatalogEntry> examCatalog = [
   ),
   ExamCatalogEntry(
     examCode: 'QTM',
-    title: 'Quantitative Math Test',
+    title: 'Qualifying Test for Mathematics',
     pdfAsset: 'answer_sheets/QTM.pdf',
     questionnairePdfAsset: 'questionnaires/QTM.pdf',
   ),
@@ -45,3 +45,22 @@ const List<ExamCatalogEntry> examCatalog = [
     questionnairePdfAsset: 'questionnaires/TAT.pdf',
   ),
 ];
+
+/// The human-facing "Title (CODE)" label for [examCode], e.g.
+/// "Qualifying Test for Mathematics (QTM)" -- the single canonical source
+/// every screen showing an exam-type label should read from, instead of
+/// its own separately hand-maintained copy of these three names. Falls
+/// back to the bare code if [examCode] isn't in [examCatalog] (never
+/// throws -- an unrecognized code is a legitimate, if unexpected, value
+/// wherever it flows from user or historical data).
+///
+/// NOT the same string as `lib/core/omr/omr_templates.dart`'s legacy
+/// single-section OMR identifier "Qualifying Test in Mathematics" ("in",
+/// not "for") -- that's a frozen, historical scan-decoding identifier and
+/// must never be derived from or reconciled with this display label.
+String examTypeDisplayLabel(String examCode) {
+  for (final entry in examCatalog) {
+    if (entry.examCode == examCode) return '${entry.title} ($examCode)';
+  }
+  return examCode;
+}

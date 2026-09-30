@@ -5,6 +5,7 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
+import '../../../core/constants/exam_catalog.dart';
 import '../../../core/omr/admission_category.dart';
 import '../../../core/omr/cluster_analysis.dart';
 import '../../../core/omr/exam_score.dart';
@@ -1250,11 +1251,7 @@ class _GuidanceWebResultDetailViewState
     bool tatMeets,
   ) {
     final isTat = widget.batch.examCode == 'TAT';
-    final title = isQtm
-        ? 'Qualifying Test for Mathematics (QTM)'
-        : isTat
-        ? 'Teaching Aptitude Test (TAT)'
-        : 'Admission Test (AT)';
+    final title = examTypeDisplayLabel(widget.batch.examCode);
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
