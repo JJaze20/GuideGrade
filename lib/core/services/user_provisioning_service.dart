@@ -56,6 +56,22 @@ class UserProvisioningService {
   /// to. Never accept this as an arbitrary string; it must be the actually
   /// signed-in admin's own [UserModel] (e.g. `AppState.currentUser`).
   ///
+  /// [displayName] / [firstName] / [middleInitial] / [lastName] /
+  /// [guidancePosition] are the account holder's own personal profile --
+  /// the System Administrator no longer has to provide any of them here
+  /// (Mobile Profile Setup is the primary way they get filled in, on first
+  /// sign-in -- see `AppRoutes`/`ProfileSetupScreen`/
+  /// `UserModel.isProfileComplete`). Leaving all of [firstName]/
+  /// [middleInitial]/[lastName] blank is valid and simply defers the
+  /// structured name to later; providing ANY part of it still requires all
+  /// three to be individually valid (the exact same "required once any part
+  /// is filled in" convention `EditUserScreen._structuredNameRequired`
+  /// already uses), so a half-typed name can never be silently saved. An
+  /// account created with nothing filled in here is `!isProfileComplete`
+  /// from the moment it's created, and Mobile Profile Setup is exactly
+  /// where that gets resolved -- this method never invents placeholder
+  /// values to make it look complete.
+  ///
   /// Order of operations (see class doc for why): create the Firebase Auth
   /// account on a secondary app instance, email the new user a
   /// password-setup link, then write the Firestore `users/{uid}` document
@@ -72,21 +88,28 @@ class UserProvisioningService {
   /// surfaces as a failure of this method -- see [LoggingService.createLog].
   Future<UserModel> createGuidanceCouncilUser({
     required String email,
-    required String displayName,
-    required String firstName,
-    required String middleInitial,
-    required String lastName,
+    String displayName = '',
+    String firstName = '',
+    String middleInitial = '',
+    String lastName = '',
     required UserModel actor,
     String? guidancePosition,
     String institution = 'NDMU',
   }) async {
-    // The structured name is required for a Guidance Council account. Checked
-    // first, before anything is looked up or created, so a bad name never
-    // leaves an Auth account behind.
-    final nameError = UserNameRules.validateFirstName(firstName) ??
-        UserNameRules.validateMiddleInitial(middleInitial) ??
-        UserNameRules.validateLastName(lastName);
-    if (nameError != null) throw UserProvisioningException(nameError);
+    // The structured name is validated only once ANY part of it is
+    // provided -- an admin who leaves all three blank is deferring to
+    // Mobile Profile Setup, not making a mistake, so that case is never
+    // rejected. Checked first, before anything is looked up or created, so
+    // a bad (partially-typed) name never leaves an Auth account behind.
+    final anyNamePartProvided = firstName.trim().isNotEmpty ||
+        middleInitial.trim().isNotEmpty ||
+        lastName.trim().isNotEmpty;
+    if (anyNamePartProvided) {
+      final nameError = UserNameRules.validateFirstName(firstName) ??
+          UserNameRules.validateMiddleInitial(middleInitial) ??
+          UserNameRules.validateLastName(lastName);
+      if (nameError != null) throw UserProvisioningException(nameError);
+    }
 
     final normalizedEmail = email.trim();
 
@@ -197,20 +220,29 @@ class UserProvisioningService {
   ///
   /// [displayName] is stored exactly as the System Administrator entered it
   /// (only trimmed) -- it is an independent field and is NEVER derived from
-  /// the structured name. The names are trimmed, and the middle initial is
-  /// normalized to "X." (see [UserNameRules.normalizeMiddleInitial]).
+  /// the structured name. A blank [displayName]/[firstName]/[middleInitial]/
+  /// [lastName] is stored as an absent value -- `''` for [displayName] (it
+  /// has no nullable form on [UserModel]), `null` for the other three,
+  /// mirroring [UserModel.fromFirestore]'s own `_optionalName` convention --
+  /// never as a placeholder string, so [UserModel.isProfileComplete]
+  /// correctly reports this account as incomplete until Mobile Profile
+  /// Setup fills them in. A non-blank name part is trimmed, and the middle
+  /// initial is normalized to "X." (see [UserNameRules.normalizeMiddleInitial]).
   static UserModel buildGuidanceCouncilUser({
     required String userId,
     required String email,
-    required String displayName,
-    required String firstName,
-    required String middleInitial,
-    required String lastName,
+    String displayName = '',
+    String firstName = '',
+    String middleInitial = '',
+    String lastName = '',
     required String createdBy,
     required DateTime createdAt,
     String? guidancePosition,
     String institution = 'NDMU',
   }) {
+    final trimmedFirstName = firstName.trim();
+    final trimmedMiddleInitial = middleInitial.trim();
+    final trimmedLastName = lastName.trim();
     return UserModel(
       userId: userId,
       email: email.trim(),
@@ -223,9 +255,11 @@ class UserProvisioningService {
       passwordResetRequired: true,
       createdBy: createdBy,
       institution: institution,
-      firstName: firstName.trim(),
-      middleInitial: UserNameRules.normalizeMiddleInitial(middleInitial),
-      lastName: lastName.trim(),
+      firstName: trimmedFirstName.isEmpty ? null : trimmedFirstName,
+      middleInitial: trimmedMiddleInitial.isEmpty
+          ? null
+          : UserNameRules.normalizeMiddleInitial(trimmedMiddleInitial),
+      lastName: trimmedLastName.isEmpty ? null : trimmedLastName,
     );
   }
 

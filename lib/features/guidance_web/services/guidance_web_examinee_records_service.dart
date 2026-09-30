@@ -6,6 +6,7 @@ import '../../../core/sync/cloud_batch_mapper.dart';
 import '../../../core/sync/supabase_sync_client.dart';
 import '../../../core/sync/sync_client.dart';
 import '../../../core/sync/retake_client.dart';
+import '../../../core/sync/scan_delete_client.dart';
 import '../../../core/sync/sync_outcome.dart';
 import '../../../core/sync/sync_queue.dart' show SyncState;
 import '../../../models/exam_retake_request.dart';
@@ -17,8 +18,17 @@ import '../../../models/local_batch.dart';
 /// Supabase error code, or a stack trace. Mirrors
 /// `GuidanceWebResultsException` exactly.
 class GuidanceWebExamineeRecordsException implements Exception {
-  GuidanceWebExamineeRecordsException(this.message);
+  GuidanceWebExamineeRecordsException(this.message, {this.scanWasDeleted = false});
   final String message;
+
+  /// Set only by [GuidanceWebExamineeRecordsService.deleteUnlinkedScan] for
+  /// its one partial-success case: the scan's database row was already
+  /// permanently deleted before this exception was thrown (Storage cleanup
+  /// afterward failed). A caller must still remove the scan from whatever
+  /// list it is holding -- the database no longer has it -- even though this
+  /// is an exception, not a plain successful return. False for every other
+  /// throw site in this file.
+  final bool scanWasDeleted;
 
   @override
   String toString() => message;
@@ -51,12 +61,19 @@ class GuidanceWebExamineeRecordsService {
   /// [client] happens to be one (i.e. always, in production); [retakeClient]
   /// need only be supplied explicitly when a test's fake [client] does not
   /// also implement [RetakeClient].
-  GuidanceWebExamineeRecordsService({SyncClient? client, RetakeClient? retakeClient})
-      : _client = client ?? _buildDefaultClient(),
-        _explicitRetakeClient = retakeClient;
+  /// [scanDeleteClient] is only for tests, same reasoning as [retakeClient]
+  /// -- see [_scanDeleteClient]'s doc comment.
+  GuidanceWebExamineeRecordsService({
+    SyncClient? client,
+    RetakeClient? retakeClient,
+    ScanDeleteClient? scanDeleteClient,
+  })  : _client = client ?? _buildDefaultClient(),
+        _explicitRetakeClient = retakeClient,
+        _explicitScanDeleteClient = scanDeleteClient;
 
   final SyncClient _client;
   final RetakeClient? _explicitRetakeClient;
+  final ScanDeleteClient? _explicitScanDeleteClient;
 
   /// Resolved lazily (never at construction) so a caller that supplies
   /// neither [retakeClient] nor a [client] implementing [RetakeClient] --
@@ -65,6 +82,14 @@ class GuidanceWebExamineeRecordsService {
   /// just to satisfy this field.
   late final RetakeClient _retakeClient = _explicitRetakeClient ??
       (_client is RetakeClient ? _client as RetakeClient : _buildDefaultClient());
+
+  /// Same lazy-resolution reasoning as [_retakeClient]: a caller that
+  /// supplies neither [scanDeleteClient] nor a [client] implementing
+  /// [ScanDeleteClient] -- every existing caller and test, which never
+  /// touches [deleteUnlinkedScan] -- never pays for (or crashes on)
+  /// building a real [SupabaseSyncClient] just to satisfy this field.
+  late final ScanDeleteClient _scanDeleteClient = _explicitScanDeleteClient ??
+      (_client is ScanDeleteClient ? _client as ScanDeleteClient : _buildDefaultClient());
 
   /// See `GuidanceWebResultsService._buildDefaultClient`'s doc comment —
   /// identical reasoning: [LocalBatchRepository]/[LocalStorageService] are
@@ -314,6 +339,64 @@ class GuidanceWebExamineeRecordsService {
     }
     throw GuidanceWebExamineeRecordsException(
       'Could not remove this link. Please try again.',
+    );
+  }
+
+  /// "Delete" (Unlinked Scans tab only): permanently removes one unlinked
+  /// scan's row and its Storage images. Both the unlinked condition
+  /// (`scans.examinee_id IS NULL`) and the archived-attempt protection
+  /// (`attempt_status` not, case-insensitively, `'ARCHIVED'`) are enforced
+  /// by the database write itself -- see [ScanDeleteClient.deleteUnlinkedScan]
+  /// -- never assumed from the caller's already-displayed snapshot, so a
+  /// scan that became linked to an examinee, or that is an archived
+  /// attempt, between page load and this call is never deleted.
+  ///
+  /// A scan still referenced by an `exam_retake_requests` row is rejected
+  /// by the database's own foreign key and reported here as a specific,
+  /// friendly message -- never bypassed, and `exam_retake_requests` is
+  /// never touched by this method.
+  Future<void> deleteUnlinkedScan({
+    required String batchId,
+    required String scanId,
+  }) async {
+    final outcome = await _scanDeleteClient.deleteUnlinkedScan(
+      batchId: batchId,
+      scanId: scanId,
+    );
+    if (outcome.isSuccess) return;
+    // Checked before the isTransient/isPermanent branches below: this code
+    // can arrive with either kind (whichever the Storage failure itself
+    // was), and either way the row is ALREADY gone -- this must never fall
+    // into the generic "could not delete" message, which would wrongly
+    // imply nothing happened.
+    if (outcome.code == scanDeletedStorageIncompleteCode) {
+      throw GuidanceWebExamineeRecordsException(
+        'The scan was deleted and will no longer appear in Unlinked Scans, '
+        'but cleanup of one or more of its images in Storage failed. This '
+        'cannot be retried from here -- please report it so the remaining '
+        'image(s) can be removed manually.',
+        scanWasDeleted: true,
+      );
+    }
+    if (outcome.isConflict) {
+      throw GuidanceWebExamineeRecordsException(
+        'This scan is no longer unlinked or no longer exists. '
+        'Refresh the Unlinked Scans list and try again.',
+      );
+    }
+    if (outcome.isPermanent && outcome.code == '23503') {
+      throw GuidanceWebExamineeRecordsException(
+        'This scan cannot be deleted because it is referenced by an '
+        'existing retake request. Resolve that retake request first.',
+      );
+    }
+    if (outcome.isTransient) {
+      throw GuidanceWebExamineeRecordsException(
+        'Could not reach Supabase. Check your connection and try again.',
+      );
+    }
+    throw GuidanceWebExamineeRecordsException(
+      'Could not delete this scan. Please try again.',
     );
   }
 

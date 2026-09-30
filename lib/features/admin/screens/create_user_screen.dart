@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
+import '../../../core/services/firestore_service.dart';
 import '../../../core/services/user_provisioning_service.dart';
 import '../../../core/state/app_state.dart';
 import '../../../models/user.dart';
 import '../../../shared/widgets/primary_button.dart';
+import '../widgets/add_guidance_position_dialog.dart';
 
 /// Create User screen for the System Administrator.
 ///
@@ -18,11 +20,24 @@ import '../../../shared/widgets/primary_button.dart';
 /// creates the Firebase Authentication account with a single-use random
 /// password the admin never has access to, then emails the new user a
 /// password-setup link.
+///
+/// The account holder's own personal profile (First Name / Last Name /
+/// Middle Initial / Display Name / Position) is OPTIONAL here -- the admin
+/// only authorizes the account (email, role, active status); the new user
+/// completes their own profile on Mobile Profile Setup at first sign-in
+/// (see `AppRoutes`/`ProfileSetupScreen`). Leaving these blank is the
+/// normal case, not an error. Providing any part of the structured name
+/// still requires the whole name to be valid -- same "required once any
+/// part is filled in" rule [UserNameRules] already enforces on
+/// `EditUserScreen`, so a half-typed name can never be silently saved here
+/// either.
 class CreateUserScreen extends StatefulWidget {
-  /// [provisioningService] is only for tests; the app uses the real one.
-  const CreateUserScreen({super.key, this.provisioningService});
+  /// [provisioningService]/[firestoreService] are only for tests; the app
+  /// uses the real ones.
+  const CreateUserScreen({super.key, this.provisioningService, this.firestoreService});
 
   final UserProvisioningService? provisioningService;
+  final FirestoreService? firestoreService;
 
   @override
   State<CreateUserScreen> createState() => _CreateUserScreenState();
@@ -31,6 +46,8 @@ class CreateUserScreen extends StatefulWidget {
 class _CreateUserScreenState extends State<CreateUserScreen> {
   late final UserProvisioningService _provisioningService =
       widget.provisioningService ?? UserProvisioningService();
+  late final FirestoreService _firestoreService =
+      widget.firestoreService ?? FirestoreService();
 
   final _formKey = GlobalKey<FormState>();
 
@@ -41,10 +58,68 @@ class _CreateUserScreenState extends State<CreateUserScreen> {
   final _displayNameController = TextEditingController();
   final _institutionController = TextEditingController(text: 'NDMU');
 
-  String _guidancePosition = 'guidance_staff';
+  String? _guidancePosition;
   bool _isSaving = false;
 
   static const _emailPattern = r'^[^@\s]+@[^@\s]+\.[^@\s]+$';
+
+  /// Same "required once any part is filled in, optional when all three are
+  /// left untouched" rule [EditUserScreen] already uses (see its own
+  /// `_structuredNameRequired`) -- an admin who leaves the whole name blank
+  /// is deferring it to Mobile Profile Setup, not making a mistake.
+  bool get _structuredNameProvided =>
+      _firstNameController.text.trim().isNotEmpty ||
+      _middleInitialController.text.trim().isNotEmpty ||
+      _lastNameController.text.trim().isNotEmpty;
+
+  bool _positionsInitialized = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Guarded, one-time trigger -- didChangeDependencies can run more than
+    // once, but this must only fire the load a single time per screen.
+    // AppStateScope.of(context) is only safe here (or in build()), never in
+    // initState() itself -- Flutter asserts if an inherited widget is
+    // looked up before initState() has completed.
+    if (_positionsInitialized) return;
+    _positionsInitialized = true;
+    _loadPositions();
+  }
+
+  /// Ensures `config/guidancePositions` exists (seeding the three original
+  /// positions if this is the very first time it's been opened after this
+  /// feature shipped -- see
+  /// [FirestoreService.ensureDefaultGuidancePositionsSeeded]'s own doc
+  /// comment), then loads the current list into [AppState] so the Position
+  /// dropdown below reflects it -- including anything a System Admin has
+  /// already added. Best effort: both calls already fall back safely on
+  /// their own failure, so this never blocks or breaks the form.
+  Future<void> _loadPositions() async {
+    final appState = AppStateScope.of(context);
+    await _firestoreService.ensureDefaultGuidancePositionsSeeded();
+    await appState.loadGuidancePositions(_firestoreService);
+  }
+
+  Future<void> _addPosition() async {
+    final label = await showAddGuidancePositionDialog(context);
+    if (label == null) return; // cancelled
+    if (!mounted) return;
+    final appState = AppStateScope.of(context);
+    try {
+      await _firestoreService.addGuidancePosition(label, appState.guidancePositions);
+      if (!mounted) return;
+      await appState.loadGuidancePositions(_firestoreService);
+    } on ArgumentError catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message.toString())));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not add the position. Please try again.')),
+      );
+    }
+  }
 
   @override
   void dispose() {
@@ -125,13 +200,17 @@ class _CreateUserScreenState extends State<CreateUserScreen> {
             children: [
               _buildSection('Name'),
               const SizedBox(height: 16),
+              Text(
+                'Optional -- the account holder can complete this themselves in the app.',
+                style: AppTextStyles.body(size: 9.5, color: AppColors.textGray),
+              ),
+              const SizedBox(height: 8),
               _buildTextField(
                 label: 'First Name',
                 controller: _firstNameController,
                 hint: 'e.g., Juan',
-                required: true,
                 fieldKey: const Key('createUser.firstName'),
-                validator: UserNameRules.validateFirstName,
+                validator: (v) => _structuredNameProvided ? UserNameRules.validateFirstName(v) : null,
               ),
               const SizedBox(height: 12),
               Align(
@@ -142,9 +221,8 @@ class _CreateUserScreenState extends State<CreateUserScreen> {
                     label: 'Middle Initial',
                     controller: _middleInitialController,
                     hint: 'e.g., D.',
-                    required: true,
                     fieldKey: const Key('createUser.middleInitial'),
-                    validator: UserNameRules.validateMiddleInitial,
+                    validator: (v) => _structuredNameProvided ? UserNameRules.validateMiddleInitial(v) : null,
                   ),
                 ),
               ),
@@ -153,9 +231,8 @@ class _CreateUserScreenState extends State<CreateUserScreen> {
                 label: 'Last Name',
                 controller: _lastNameController,
                 hint: 'e.g., Dela Cruz',
-                required: true,
                 fieldKey: const Key('createUser.lastName'),
-                validator: UserNameRules.validateLastName,
+                validator: (v) => _structuredNameProvided ? UserNameRules.validateLastName(v) : null,
               ),
               const SizedBox(height: 16),
               _buildSection('Account'),
@@ -190,24 +267,12 @@ class _CreateUserScreenState extends State<CreateUserScreen> {
                 label: 'Display Name',
                 controller: _displayNameController,
                 hint: 'e.g., Juan Dela Cruz',
-                required: true,
                 fieldKey: const Key('createUser.displayName'),
               ),
               const SizedBox(height: 16),
               _buildSection('Guidance Details'),
               const SizedBox(height: 16),
-              _buildDropdown(
-                label: 'Guidance Position',
-                value: _guidancePosition,
-                items: const {
-                  'guidance_head': 'Guidance Head',
-                  'psychometrician': 'Psychometrician',
-                  'guidance_staff': 'Guidance Staff',
-                },
-                onChanged: (value) {
-                  if (value != null) setState(() => _guidancePosition = value);
-                },
-              ),
+              _buildGuidancePositionField(),
               const SizedBox(height: 12),
               _buildTextField(
                 label: 'Institution',
@@ -286,19 +351,45 @@ class _CreateUserScreenState extends State<CreateUserScreen> {
     );
   }
 
-  Widget _buildDropdown({
-    required String label,
-    required String value,
-    required Map<String, String> items,
-    required void Function(String?) onChanged,
-  }) {
+  /// The Guidance Position dropdown, with a "+" action beside its label so a
+  /// System Admin can add a new position without leaving this screen. Reads
+  /// the current position list from [AppState] (see
+  /// [AppState.guidancePositions]) rather than a hardcoded map, so a
+  /// position added here -- or on Edit User -- is immediately reflected.
+  Widget _buildGuidancePositionField() {
+    final positions = AppStateScope.of(context).guidancePositions;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label, style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600)),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text('Guidance Position', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600)),
+            InkWell(
+              key: const Key('createUser.addPosition'),
+              onTap: _addPosition,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.add_circle_outline, size: 14, color: AppColors.primaryGreen),
+                    const SizedBox(width: 4),
+                    Text('Add Position', style: AppTextStyles.body(size: 10.5, color: AppColors.primaryGreen, weight: FontWeight.w600)),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
         const SizedBox(height: 6),
         DropdownButtonFormField<String>(
-          value: value,
+          key: const Key('createUser.position'),
+          initialValue: _guidancePosition,
+          hint: Text(
+            'Not set (the account holder can choose this later)',
+            style: AppTextStyles.body(size: 10.5, color: AppColors.textGray),
+          ),
           decoration: InputDecoration(
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(10),
@@ -314,10 +405,10 @@ class _CreateUserScreenState extends State<CreateUserScreen> {
             ),
             contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
           ),
-          items: items.entries
-              .map((e) => DropdownMenuItem(value: e.key, child: Text(e.value, style: AppTextStyles.body(size: 11))))
+          items: positions
+              .map((p) => DropdownMenuItem(value: p.value, child: Text(p.label, style: AppTextStyles.body(size: 11))))
               .toList(),
-          onChanged: onChanged,
+          onChanged: (value) => setState(() => _guidancePosition = value),
         ),
       ],
     );

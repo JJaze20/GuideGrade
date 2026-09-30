@@ -85,16 +85,49 @@ service cloud.firestore {
       allow create: if isSystemAdmin();
 
       // A system_admin may update anything on any user (role, isActive,
-      // etc). Anyone may update ONLY their own lastLoginAt on their own
-      // doc -- the single field AuthService touches on every successful
-      // sign-in (FirestoreService.updateLastLogin). This is intentionally
-      // narrow so a user can never grant themselves a role or reactivate
-      // their own deactivated account by writing to themselves.
+      // etc). Anyone may update ONLY their own lastLoginAt and their own
+      // personal profile fields (firstName, lastName, middleInitial,
+      // displayName, guidancePosition) on their own doc -- lastLoginAt is
+      // the field AuthService touches on every successful sign-in
+      // (FirestoreService.updateLastLogin), and the five profile fields are
+      // what the Mobile Profile Setup screen writes
+      // (FirestoreService.updateOwnProfile). This is intentionally narrow
+      // so a user can never grant themselves a role, reactivate their own
+      // deactivated account, change their own email, or alter who created
+      // them, by writing to themselves -- role/isActive/email/createdBy and
+      // every other field are NOT in this list, so `hasOnly` rejects any
+      // self-write that touches them, exactly as it already rejected
+      // anything but lastLoginAt before this change.
       allow update: if isSystemAdmin()
         || (isSelf(userId)
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastLoginAt']));
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                 'lastLoginAt', 'firstName', 'lastName', 'middleInitial',
+                 'displayName', 'guidancePosition'
+               ]));
 
       // No code path in the app deletes a user document.
+      allow delete: if false;
+    }
+
+    // ------------------------------------------------------------------
+    // config/{configId} -- small set of System-Admin-managed reference
+    // data. Currently just `guidancePositions` (the `positions` map field
+    // FirestoreService.loadGuidancePositions/addGuidancePosition read and
+    // write). Every active, signed-in user may READ it -- all four
+    // Guidance Position dropdowns (System Admin Create/Edit User, mobile
+    // Profile Setup, mobile Profile) need it, including Guidance Council
+    // sessions. Only system_admin may create/update it, so a Guidance
+    // Council client can never add or alter a position definition itself,
+    // even if it tried (FirestoreService.ensureDefaultGuidancePositionsSeeded/
+    // addGuidancePosition are only ever called from System-Admin-reachable
+    // screens, but this rule is the actual enforcement either way). This
+    // feature is add-only -- delete stays denied, matching every other
+    // collection in this file; there is no deletion path anywhere in the
+    // app for a position definition.
+    // ------------------------------------------------------------------
+    match /config/{configId} {
+      allow read: if isActiveUser();
+      allow create, update: if isSystemAdmin();
       allow delete: if false;
     }
 

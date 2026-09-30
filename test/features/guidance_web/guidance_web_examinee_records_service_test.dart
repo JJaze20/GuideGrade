@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:guidegrade/core/sync/retake_client.dart';
+import 'package:guidegrade/core/sync/scan_delete_client.dart';
 import 'package:guidegrade/core/sync/sync_client.dart';
 import 'package:guidegrade/core/sync/sync_job.dart';
 import 'package:guidegrade/core/sync/sync_outcome.dart';
@@ -8,7 +9,34 @@ import 'package:guidegrade/models/examinee_record.dart';
 import 'package:guidegrade/models/local_batch.dart';
 import 'package:guidegrade/models/omr_scan_result.dart';
 
-class _FakeSyncClient implements SyncClient, RetakeClient {
+class _FakeSyncClient implements SyncClient, RetakeClient, ScanDeleteClient {
+  /// When set, [deleteUnlinkedScan] returns it verbatim.
+  SyncOutcome? deleteUnlinkedScanResult;
+  final List<Map<String, String>> deleteUnlinkedScanCalls = [];
+
+  @override
+  Future<SyncOutcome> deleteUnlinkedScan({
+    required String batchId,
+    required String scanId,
+  }) async {
+    calls.add('deleteUnlinkedScan:$batchId/$scanId');
+    deleteUnlinkedScanCalls.add({'batchId': batchId, 'scanId': scanId});
+    final override = deleteUnlinkedScanResult;
+    if (override != null) return override;
+    // Simulates `DELETE FROM scans WHERE batch_id = ? AND id = ? AND
+    // examinee_id IS NULL AND attempt_status NOT ILIKE 'ARCHIVED'` -- zero
+    // matching rows (not in the unlinked queue, missing, or an archived
+    // attempt) is a conflict, never success.
+    final match = unlinkedScansToReturn.scans
+        .where((s) => s.batchId == batchId && s.id == scanId && !s.isArchivedAttempt)
+        .toList();
+    if (match.isEmpty) return const SyncOutcome.conflict('scan_not_unlinked');
+    unlinkedScansToReturn = CloudScansRead.found(
+      unlinkedScansToReturn.scans.where((s) => s != match.first).toList(),
+    );
+    return const SyncOutcome.success();
+  }
+
   final Map<String, List<CloudRetakeRequestRow>> retakeRequestsByKey = {};
   SyncOutcome createRetakeResult = const SyncOutcome.success();
   SyncOutcome reviewRetakeResult = const SyncOutcome.success();
@@ -1031,6 +1059,123 @@ void main() {
         throwsA(isA<GuidanceWebExamineeRecordsException>()
             .having((e) => e.message, 'message', contains('Could not reach Supabase'))),
       );
+    });
+  });
+
+  group('Delete Unlinked Scan (deleteUnlinkedScan)', () {
+    test('calls the dedicated delete operation with batchId + scanId', () async {
+      client.unlinkedScansToReturn = CloudScansRead.found([
+        _scanRow(id: 's1', batchId: 'b1', examCode: 'TAT'),
+      ]);
+      await service.deleteUnlinkedScan(batchId: 'b1', scanId: 's1');
+      expect(client.deleteUnlinkedScanCalls, [
+        {'batchId': 'b1', 'scanId': 's1'},
+      ]);
+      // Never reuses the broad mobile deleteScan path.
+      expect(client.calls, isNot(contains(startsWith('deleteScan'))));
+    });
+
+    test('a successful delete removes the scan from the unlinked queue', () async {
+      client.batchesToReturn = CloudBatchesRead.found([_batchRow(id: 'b1', examCode: 'TAT')]);
+      client.unlinkedScansToReturn = CloudScansRead.found([
+        _scanRow(id: 's1', batchId: 'b1', examCode: 'TAT'),
+        _scanRow(id: 's2', batchId: 'b1', examCode: 'AT'),
+      ]);
+      await service.deleteUnlinkedScan(batchId: 'b1', scanId: 's1');
+      final remaining = await service.loadUnlinkedScans();
+      expect(remaining.map((h) => h.scan.id), ['s2']);
+    });
+
+    test('a scan that is no longer unlinked (or missing) is a failure, not success', () async {
+      client.unlinkedScansToReturn = CloudScansRead.found(const []);
+      await expectLater(
+        service.deleteUnlinkedScan(batchId: 'b1', scanId: 's-gone'),
+        throwsA(isA<GuidanceWebExamineeRecordsException>()),
+      );
+    });
+
+    test('an archived attempt is refused by the DELETE condition itself, not merely by a prior read',
+        () async {
+      client.unlinkedScansToReturn = CloudScansRead.found([
+        _scanRow(id: 's1', batchId: 'b1', examCode: 'TAT', attemptStatus: 'ARCHIVED'),
+      ]);
+      await expectLater(
+        service.deleteUnlinkedScan(batchId: 'b1', scanId: 's1'),
+        throwsA(isA<GuidanceWebExamineeRecordsException>()),
+      );
+      // Nothing was removed -- the archived row is still exactly where it was.
+      expect(client.unlinkedScansToReturn.scans, hasLength(1));
+    });
+
+    test('a row-deleted-but-storage-incomplete outcome is reported clearly, never as a plain '
+        'retryable failure, and marks scanWasDeleted so the caller removes the row', () async {
+      client.unlinkedScansToReturn = CloudScansRead.found([
+        _scanRow(id: 's1', batchId: 'b1', examCode: 'TAT'),
+      ]);
+      client.deleteUnlinkedScanResult =
+          const SyncOutcome.permanent(scanDeletedStorageIncompleteCode);
+      Object? error;
+      try {
+        await service.deleteUnlinkedScan(batchId: 'b1', scanId: 's1');
+      } catch (e) {
+        error = e;
+      }
+      expect(error, isA<GuidanceWebExamineeRecordsException>());
+      final ex = error as GuidanceWebExamineeRecordsException;
+      expect(ex.scanWasDeleted, isTrue);
+      expect(ex.message, contains('deleted'));
+      expect(ex.message, contains('Storage'));
+      expect(ex.message, isNot(contains('Please try again')));
+    });
+
+    test('a scan referenced by an existing retake request (FK RESTRICT / 23503) fails with a '
+        'specific, friendly message and never touches exam_retake_requests', () async {
+      client.unlinkedScansToReturn = CloudScansRead.found([
+        _scanRow(id: 's1', batchId: 'b1', examCode: 'TAT'),
+      ]);
+      client.deleteUnlinkedScanResult = const SyncOutcome.permanent('23503');
+      Object? error;
+      try {
+        await service.deleteUnlinkedScan(batchId: 'b1', scanId: 's1');
+      } catch (e) {
+        error = e;
+      }
+      expect(error, isA<GuidanceWebExamineeRecordsException>());
+      expect(
+        (error as GuidanceWebExamineeRecordsException).message,
+        contains('retake request'),
+      );
+      expect(error.message, isNot(contains('23503')));
+      expect(client.calls, isNot(contains(startsWith('createRetakeRequest'))));
+      expect(client.calls, isNot(contains(startsWith('reviewRetakeRequest'))));
+      expect(client.calls, isNot(contains(startsWith('archiveRetakeAttempt'))));
+    });
+
+    test('a transient failure reports a connection message', () async {
+      client.unlinkedScansToReturn = CloudScansRead.found([
+        _scanRow(id: 's1', batchId: 'b1', examCode: 'TAT'),
+      ]);
+      client.deleteUnlinkedScanResult = const SyncOutcome.transient('network');
+      await expectLater(
+        service.deleteUnlinkedScan(batchId: 'b1', scanId: 's1'),
+        throwsA(isA<GuidanceWebExamineeRecordsException>()
+            .having((e) => e.message, 'message', contains('Could not reach Supabase'))),
+      );
+    });
+
+    test('an unrelated permanent failure throws a sanitized message', () async {
+      client.unlinkedScansToReturn = CloudScansRead.found([
+        _scanRow(id: 's1', batchId: 'b1', examCode: 'TAT'),
+      ]);
+      client.deleteUnlinkedScanResult = const SyncOutcome.permanent('42501');
+      Object? error;
+      try {
+        await service.deleteUnlinkedScan(batchId: 'b1', scanId: 's1');
+      } catch (e) {
+        error = e;
+      }
+      expect(error, isA<GuidanceWebExamineeRecordsException>());
+      expect((error as GuidanceWebExamineeRecordsException).message, isNot(contains('42501')));
     });
   });
 
