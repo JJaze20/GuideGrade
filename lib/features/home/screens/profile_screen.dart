@@ -167,7 +167,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = 'Could not save your profile. Please check your connection and try again.';
+        _error = FirestoreService.messageFor(
+          e,
+          fallback: 'Could not save your profile. Please try again.',
+        );
       });
     } finally {
       if (mounted) setState(() => _isSaving = false);

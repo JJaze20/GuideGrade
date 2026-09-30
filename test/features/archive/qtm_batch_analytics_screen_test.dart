@@ -185,7 +185,7 @@ void main() {
     testWidgets('header shows the QTM exam type', (tester) async {
       await _pump(tester, batch: batch);
       expect(find.text('QTM August 2026 — Morning'), findsOneWidget);
-      expect(find.text('Qualifying Test in Mathematics (QTM)'), findsOneWidget);
+      expect(find.text('Qualifying Test for Mathematics (QTM)'), findsOneWidget);
     });
   });
 

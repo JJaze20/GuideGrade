@@ -7,10 +7,21 @@ import 'package:guidegrade/core/services/local_batch_repository.dart';
 import 'package:guidegrade/core/services/local_storage_service.dart';
 import 'package:guidegrade/core/state/app_state.dart';
 import 'package:guidegrade/core/sync/sync_client.dart';
+import 'package:guidegrade/core/sync/sync_manager.dart';
 import 'package:guidegrade/core/sync/sync_outcome.dart';
+import 'package:guidegrade/core/sync/sync_queue.dart';
 import 'package:guidegrade/features/exam/screens/answer_key_entry_screen.dart';
 import 'package:guidegrade/models/activity_model.dart';
 import 'package:guidegrade/models/answer_key.dart';
+
+/// A [SyncClient] the Load-from-Cloud button tests must never reach -- the
+/// dummy [SyncManager] below exists only to satisfy the app bar's
+/// `syncManager != null` render gate and is never started or invoked.
+class _NeverSyncClient implements SyncClient {
+  @override
+  dynamic noSuchMethod(Invocation invocation) => throw StateError(
+      'the Load-from-Cloud button tests must not touch the sync client');
+}
 
 /// The local (unsynced) answer key the officer has on this device.
 const _localAnswers = {'Test I|1': 'A', 'Test I|2': 'B'};
@@ -56,13 +67,31 @@ class _FakeLocalStorage implements LocalStorageService {
 
 /// [AppState] with the answer-key conflict surface faked out: no
 /// [SyncManager] / [SyncQueue] (whose real file I/O would hang the widget
-/// binding's fake-async zone). It records what the screen asked it to do so
-/// the tests can assert the UI wiring without a real cloud or queue.
+/// binding's fake-async zone) unless a test explicitly supplies one via
+/// [syncManagerOverride] -- see the Load-from-Cloud button tests, which need
+/// a non-null `syncManager` only to satisfy the app bar's render gate and
+/// never tap SAVE ANSWER KEY (the only path that would actually use it). It
+/// records what the screen asked it to do so the tests can assert the UI
+/// wiring without a real cloud or queue.
 class _FakeAppState extends AppState {
-  _FakeAppState({required super.batchRepository, required super.localStorage});
+  _FakeAppState({
+    required LocalBatchRepository batchRepository,
+    required LocalStorageService localStorage,
+    SyncManager? syncManagerOverride,
+  }) : super(
+          batchRepository: batchRepository,
+          localStorage: localStorage,
+          syncManager: syncManagerOverride,
+        );
 
   AnswerKeySyncStatus status = AnswerKeySyncStatus.upToDate;
   CloudAnswerKeyRead cloudRead = _defaultCloud();
+
+  /// Overrides the real connectivity-driven flag so tests can drive the
+  /// Load-from-Cloud button's enabled/tooltip state directly.
+  bool online = true;
+  @override
+  bool get isOnline => online;
 
   final List<String> effects = [];
   int adoptCalls = 0;
@@ -524,6 +553,108 @@ void main() {
       expect(fakeStorage.savedAnswerKeys, isNotEmpty);
       expect(find.text('SAVE ANSWER KEY'), findsNothing); // now popped
       expect(tester.takeException(), isNull);
+    });
+  });
+
+  // The button only renders when `appState.syncManager != null` (its own
+  // pre-existing render gate, unrelated to this fix), so this group builds
+  // its own AppState with a dummy SyncManager -- never started, never
+  // invoked -- instead of reusing the shared no-syncManager `appState`.
+  // SAVE ANSWER KEY is never tapped here, so the dummy SyncManager's
+  // `_NeverSyncClient` is never reached.
+  group('Load from Cloud button reflects AppState.isOnline', () {
+    late Directory syncTempDir;
+    late _FakeAppState syncAppState;
+
+    setUp(() {
+      syncTempDir = Directory.systemTemp.createTempSync('ak_screen_sync_test_');
+      syncAppState = _FakeAppState(
+        batchRepository: LocalBatchRepository(
+            rootOverride: Directory('${syncTempDir.path}/repo')),
+        localStorage: _FakeLocalStorage(),
+        syncManagerOverride: SyncManager(
+          queue:
+              SyncQueue(rootOverride: Directory('${syncTempDir.path}/queue')),
+          client: _NeverSyncClient(),
+          batchRepository: LocalBatchRepository(
+              rootOverride: Directory('${syncTempDir.path}/repo')),
+          loadAnswerKeys: () async => <String, AnswerKey>{},
+        ),
+      );
+      syncAppState.answerKeys['AT'] =
+          AnswerKey(examCode: 'AT', correctChoices: Map.of(_localAnswers));
+    });
+
+    tearDown(() {
+      try {
+        syncAppState.dispose();
+      } catch (_) {/* AppState.dispose may touch unused camera handles */}
+      try {
+        if (syncTempDir.existsSync()) syncTempDir.deleteSync(recursive: true);
+      } catch (_) {/* Windows may briefly hold a handle */}
+    });
+
+    Finder loadCloudButton() =>
+        find.byKey(const Key('loadCloudAnswerKeyButton'));
+
+    Future<void> pumpSyncScreen(WidgetTester tester) async {
+      tester.view.physicalSize = const Size(1400, 1600);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: AppStateScope(
+            notifier: syncAppState,
+            child: const AnswerKeyEntryScreen(),
+          ),
+        ),
+      );
+      await tester.pump();
+    }
+
+    testWidgets('17. offline: button disabled with the offline tooltip',
+        (tester) async {
+      syncAppState.online = false;
+      await pumpSyncScreen(tester);
+
+      expect(loadCloudButton(), findsOneWidget);
+      expect(find.byTooltip('Offline — cloud answer key unavailable'),
+          findsOneWidget);
+      expect(find.byTooltip('Load answer key from cloud'), findsNothing);
+      final inkWell = tester.widget<InkWell>(find.descendant(
+          of: loadCloudButton(), matching: find.byType(InkWell)));
+      expect(inkWell.onTap, isNull);
+    });
+
+    testWidgets('18. online: button enabled with the online tooltip',
+        (tester) async {
+      syncAppState.online = true;
+      await pumpSyncScreen(tester);
+
+      expect(find.byTooltip('Load answer key from cloud'), findsOneWidget);
+      expect(find.byTooltip('Offline — cloud answer key unavailable'),
+          findsNothing);
+      final inkWell = tester.widget<InkWell>(find.descendant(
+          of: loadCloudButton(), matching: find.byType(InkWell)));
+      expect(inkWell.onTap, isNotNull);
+    });
+
+    testWidgets('19. a live offline -> online transition re-enables the '
+        'button without rebuilding the screen', (tester) async {
+      syncAppState.online = false;
+      await pumpSyncScreen(tester);
+      expect(find.byTooltip('Offline — cloud answer key unavailable'),
+          findsOneWidget);
+
+      syncAppState.online = true;
+      syncAppState.notifyListeners();
+      await tester.pump();
+
+      expect(find.byTooltip('Load answer key from cloud'), findsOneWidget);
+      final inkWell = tester.widget<InkWell>(find.descendant(
+          of: loadCloudButton(), matching: find.byType(InkWell)));
+      expect(inkWell.onTap, isNotNull);
     });
   });
 }

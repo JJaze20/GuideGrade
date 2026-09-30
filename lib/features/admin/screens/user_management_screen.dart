@@ -102,7 +102,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
               return const Center(child: CircularProgressIndicator());
             }
             if (snapshot.hasError) {
-              return _buildErrorState();
+              return _buildErrorState(snapshot.error);
             }
 
             final users = _applyFilters(snapshot.data ?? []);
@@ -247,14 +247,17 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     );
   }
 
-  Widget _buildErrorState() {
+  Widget _buildErrorState(Object? error) {
+    final message = error == null
+        ? 'Could not load users'
+        : FirestoreService.messageFor(error, fallback: 'Could not load users');
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           const FaIcon(FontAwesomeIcons.triangleExclamation, size: 40, color: AppColors.warmRedOrange),
           const SizedBox(height: 12),
-          Text('Could not load users', style: AppTextStyles.body(size: 12, weight: FontWeight.w600)),
+          Text(message, style: AppTextStyles.body(size: 12, weight: FontWeight.w600)),
         ],
       ),
     );

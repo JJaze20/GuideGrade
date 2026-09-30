@@ -43,7 +43,7 @@ void main() {
   test('within half an item of the average counts as Average', () {
     expect(clusterBandFor(5, 5.4), ClusterBand.average);
     expect(clusterBandFor(5, 5.6), ClusterBand.below);
-    expect(clusterBandFor(6, 5.4), ClusterBand.average);
+    expect(clusterBandFor(6, 5.6), ClusterBand.average);
     expect(clusterBandFor(null, 5), ClusterBand.unrated);
     expect(clusterBandFor(5, null), ClusterBand.unrated);
   });

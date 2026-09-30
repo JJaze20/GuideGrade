@@ -181,12 +181,14 @@ void main() {
   AppState wire(
     StreamController<List<ConnectivityResult>> controller, {
     _SpySyncManager? spy,
+    Future<List<ConnectivityResult>> Function()? initialConnectivityCheck,
   }) {
     final appState = AppState(
       batchRepository:
           LocalBatchRepository(rootOverride: Directory('${tempDir.path}/repo')),
       syncManager: spy,
       connectivityStream: controller.stream,
+      initialConnectivityCheck: initialConnectivityCheck,
       reconnectSyncDebounce: debounce,
     );
     addTearDown(appState.dispose);
@@ -297,5 +299,107 @@ void main() {
     controller.add(const [ConnectivityResult.wifi]);
     await Future<void>.delayed(pastDebounce);
     expect(spy.syncNowCalls, 0);
+  });
+
+  group('initial connectivity state (isOnline)', () {
+    test('G. app starts offline: initial check resolves to none -> isOnline '
+        'settles false', () async {
+      final controller = makeController();
+      final spy = makeSpy();
+      final appState = wire(
+        controller,
+        spy: spy,
+        initialConnectivityCheck: () async => const [ConnectivityResult.none],
+      );
+
+      expect(appState.isOnline, isTrue,
+          reason: 'still the pre-resolution default');
+      await pumpEventQueue();
+      expect(appState.isOnline, isFalse);
+    });
+
+    test('H. app starts online: initial check resolves to a non-none result '
+        '-> isOnline stays true', () async {
+      final controller = makeController();
+      final spy = makeSpy();
+      final appState = wire(
+        controller,
+        spy: spy,
+        initialConnectivityCheck: () async => const [ConnectivityResult.wifi],
+      );
+
+      await pumpEventQueue();
+      expect(appState.isOnline, isTrue);
+    });
+
+    test('I. no initial checker provided: isOnline keeps the existing '
+        'assume-online default (back-compat for every other AppState() '
+        'caller/test)', () async {
+      final controller = makeController();
+      final spy = makeSpy();
+      final appState = wire(controller, spy: spy);
+
+      await pumpEventQueue();
+      expect(appState.isOnline, isTrue);
+    });
+
+    test('J. starts offline, then the stream reports wifi -> isOnline '
+        'becomes true', () async {
+      final controller = makeController();
+      final spy = makeSpy();
+      final appState = wire(
+        controller,
+        spy: spy,
+        initialConnectivityCheck: () async => const [ConnectivityResult.none],
+      );
+      await pumpEventQueue();
+      expect(appState.isOnline, isFalse);
+
+      controller.add(const [ConnectivityResult.wifi]);
+      await pumpEventQueue();
+      expect(appState.isOnline, isTrue);
+    });
+
+    test('K. starts online, then the stream reports none -> isOnline '
+        'becomes false', () async {
+      final controller = makeController();
+      final spy = makeSpy();
+      final appState = wire(
+        controller,
+        spy: spy,
+        initialConnectivityCheck: () async => const [ConnectivityResult.wifi],
+      );
+      await pumpEventQueue();
+      expect(appState.isOnline, isTrue);
+
+      controller.add(const [ConnectivityResult.none]);
+      await pumpEventQueue();
+      expect(appState.isOnline, isFalse);
+    });
+
+    test('L. a stream event that arrives before a slow initial check '
+        'resolves wins -- the stale initial result is discarded, not '
+        'applied on top of the more current stream state', () async {
+      final controller = makeController();
+      final spy = makeSpy();
+      final initialCheck = Completer<List<ConnectivityResult>>();
+      final appState = wire(
+        controller,
+        spy: spy,
+        initialConnectivityCheck: () => initialCheck.future,
+      );
+
+      // Real-time event arrives first: goes offline.
+      controller.add(const [ConnectivityResult.none]);
+      await pumpEventQueue();
+      expect(appState.isOnline, isFalse);
+
+      // The slow initial check now resolves online -- must NOT override the
+      // more current, stream-reported offline state.
+      initialCheck.complete(const [ConnectivityResult.wifi]);
+      await pumpEventQueue();
+      expect(appState.isOnline, isFalse,
+          reason: 'stream is authoritative once it has fired');
+    });
   });
 }

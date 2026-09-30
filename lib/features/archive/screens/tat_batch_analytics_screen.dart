@@ -4,6 +4,7 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import '../../../core/analytics/tat_batch_analytics.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
+import '../../../core/constants/exam_catalog.dart';
 import '../../../core/omr/tat_result.dart';
 import '../../../core/state/app_state.dart';
 import '../../../models/local_batch.dart';
@@ -213,7 +214,7 @@ class _TatBatchAnalyticsScreenState extends State<TatBatchAnalyticsScreen> {
             ),
             const SizedBox(height: 4),
             _kv('Batch Code', batch.batchCode),
-            _kv('Exam Type', 'Teaching Aptitude Test (TAT)'),
+            _kv('Exam Type', examTypeDisplayLabel('TAT')),
           ],
         ),
       );
