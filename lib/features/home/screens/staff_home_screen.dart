@@ -68,6 +68,11 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
     final user = AppStateScope.of(context).currentUser;
     final displayName = user?.displayName.trim();
     final name = (displayName != null && displayName.isNotEmpty) ? displayName : 'NDMU Staff Officer';
+    final role = switch (user?.role) {
+      'system_admin' => 'System Administrator',
+      'guidance_council' => 'Guidance Council',
+      _ => 'Staff',
+    };
 
     return Scaffold(
       backgroundColor: const Color(0xFFF4F7F5),
@@ -95,11 +100,44 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
                 physics: const AlwaysScrollableScrollPhysics(),
                 padding: const EdgeInsets.all(24),
                 children: [
-                  Text('Your workspace', style: AppTextStyles.heading(size: 28)),
-                  const SizedBox(height: 8),
-                  Text(name, style: AppTextStyles.heading(size: 18)),
-                  Text('Marbel, PH',
-                      style: AppTextStyles.body(size: 13, color: AppColors.textGray)),
+                  Container(
+                    padding: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: const Color(0xFFDCE5DF)),
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          flex: 3,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Welcome',
+                                  style: AppTextStyles.body(
+                                    size: 14,
+                                    weight: FontWeight.w700,
+                                    color: AppColors.primaryGreen,
+                                  )),
+                              const SizedBox(height: 4),
+                              Text(name, style: AppTextStyles.heading(size: 18)),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Flexible(
+                          flex: 2,
+                          child: Text(role,
+                              textAlign: TextAlign.right,
+                              style: AppTextStyles.body(
+                                size: 13,
+                                color: AppColors.textGray,
+                              )),
+                        ),
+                      ],
+                    ),
+                  ),
                   const SizedBox(height: 8),
                   Text(
                     'Prepare exams, manage batches, and review your results.',

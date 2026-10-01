@@ -3,7 +3,6 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
-import '../../../core/constants/exam_catalog.dart';
 import '../../../core/routes/app_routes.dart';
 import '../../../core/state/app_state.dart';
 import '../../../core/sync/cloud_restore_service.dart';
@@ -29,9 +28,7 @@ class _CloudArchiveScreenState extends State<CloudArchiveScreen> {
   bool _restoring = false;
   List<LocalBatch> _batches = [];
 
-  /// The exam type whose archived batches are showing, or null while the
-  /// three-button picker is. Purely a view filter over [_batches] -- nothing
-  /// is reloaded, copied or written when it changes.
+  // Null shows all batches; filtering never changes stored data.
   String? _selectedExam;
 
   @override
@@ -44,10 +41,16 @@ class _CloudArchiveScreenState extends State<CloudArchiveScreen> {
 
   Future<void> _load() async {
     setState(() => _loading = true);
-    final batches = await AppStateScope.of(context).batchRepository.getBatches();
+    final batches = await AppStateScope.of(
+      context,
+    ).batchRepository.getBatches();
     if (!mounted) return;
     setState(() {
-      _batches = batches;
+      _batches = List.of(batches)
+        ..sort((a, b) {
+          final dateOrder = b.updatedAt.compareTo(a.updatedAt);
+          return dateOrder != 0 ? dateOrder : a.id.compareTo(b.id);
+        });
       _loading = false;
     });
   }
@@ -97,7 +100,9 @@ class _CloudArchiveScreenState extends State<CloudArchiveScreen> {
     await showDialog<void>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: Text(summary.isSuccess ? 'Restore complete' : 'Restore unsuccessful'),
+        title: Text(
+          summary.isSuccess ? 'Restore complete' : 'Restore unsuccessful',
+        ),
         content: Text(_summaryMessage(summary)),
         actions: [
           TextButton(
@@ -126,194 +131,136 @@ class _CloudArchiveScreenState extends State<CloudArchiveScreen> {
   @override
   Widget build(BuildContext context) {
     final cloudRestoreService = AppStateScope.of(context).cloudRestoreService;
-    return PopScope(
-      // Back from a type's list returns to the picker instead of leaving.
-      canPop: _selectedExam == null,
-      onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) setState(() => _selectedExam = null);
-      },
-      child: Scaffold(
-        backgroundColor: AppColors.lightBg,
-        appBar: AppHeaderBar(
-          title: 'ARCHIVE',
-          trailing: cloudRestoreService == null
-              ? null
-              : IconButton(
-                  tooltip: 'Restore from Cloud',
-                  padding: EdgeInsets.zero,
-                  onPressed: _restoring ? null : _restoreFromCloud,
-                  icon: _restoring
-                      ? const Center(
-                          widthFactor: 1,
-                          heightFactor: 1,
-                          child: SizedBox.square(
-                            dimension: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+    return Scaffold(
+      backgroundColor: AppColors.lightBg,
+      appBar: AppHeaderBar(
+        title: 'ARCHIVE',
+        trailing: cloudRestoreService == null
+            ? null
+            : IconButton(
+                tooltip: 'Restore from Cloud',
+                padding: EdgeInsets.zero,
+                onPressed: _restoring ? null : _restoreFromCloud,
+                icon: _restoring
+                    ? const Center(
+                        widthFactor: 1,
+                        heightFactor: 1,
+                        child: SizedBox.square(
+                          dimension: 16,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
                           ),
-                        )
-                      : const FaIcon(FontAwesomeIcons.cloudArrowDown, size: 16, color: Colors.white),
-                ),
-        ),
-        body: SafeArea(
-          top: false,
-          child: RefreshIndicator(
-            onRefresh: _load,
-            child: _loading
-                ? const Center(child: CircularProgressIndicator())
-                : _batches.isEmpty
-                    ? _buildEmptyState()
-                    : _selectedExam == null
-                        ? _buildTypePicker()
-                        : _buildTypeList(_selectedExam!),
-          ),
-        ),
-        bottomNavigationBar: const AppBottomNav(activeTab: 'cloud'),
+                        ),
+                      )
+                    : const FaIcon(
+                        FontAwesomeIcons.cloudArrowDown,
+                        size: 16,
+                        color: Colors.white,
+                      ),
+              ),
       ),
+      body: SafeArea(
+        top: false,
+        child: RefreshIndicator(
+          onRefresh: _load,
+          child: _loading
+              ? const Center(child: CircularProgressIndicator())
+              : _batches.isEmpty
+              ? _buildEmptyState()
+              : _buildBatchList(),
+        ),
+      ),
+      bottomNavigationBar: const AppBottomNav(activeTab: 'cloud'),
     );
   }
 
-  /// The exam types the Archive offers, in button order.
-  static const List<String> _examTypes = ['QTM', 'TAT', 'AT'];
+  static const List<String> _examTypes = ['AT', 'QTM', 'TAT'];
 
-  static const String _otherKey = 'OTHER';
-
-  /// Batches of one exam type, by each batch's own stored
-  /// [LocalBatch.examCode]; keeps [_batches]' existing order.
-  List<LocalBatch> _batchesFor(String examCode) =>
-      _batches.where((b) => b.examCode == examCode).toList(growable: false);
-
-  /// Batches whose exam code none of the three buttons covers. They get one
-  /// extra "Other" button (only when such a batch exists) so a batch is never
-  /// unreachable.
-  List<LocalBatch> get _otherBatches =>
-      _batches.where((b) => !_examTypes.contains(b.examCode)).toList(growable: false);
-
-  List<LocalBatch> _batchesForSelection(String selection) =>
-      selection == _otherKey ? _otherBatches : _batchesFor(selection);
-
-  /// Landing view: one button per exam type, like the Web Results exam
-  /// selector. No batch is listed until a type is chosen.
-  Widget _buildTypePicker() {
-    final gradedTotal = _batches.where((b) => b.resultsAvailable).length;
-    return ListView(
+  Widget _buildBatchList() {
+    final batches = _selectedExam == null
+        ? _batches
+        : _batches.where((batch) => batch.examCode == _selectedExam).toList();
+    final gradedTotal = _batches
+        .where((batch) => batch.resultsAvailable)
+        .length;
+    return ListView.builder(
+      physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.all(16),
-      children: [
-        Row(
+      itemCount: batches.length + 1,
+      itemBuilder: (context, index) {
+        if (index > 0) return _buildBatchCard(batches[index - 1]);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Expanded(child: _StatBox(label: 'SAVED BATCHES', value: '${_batches.length}', color: AppColors.darkNavy)),
-            const SizedBox(width: 10),
-            Expanded(child: _StatBox(label: 'WITH RESULTS', value: '$gradedTotal', color: AppColors.primaryGreen)),
-          ],
-        ),
-        const SizedBox(height: 14),
-        Row(
-          children: [
-            const FaIcon(FontAwesomeIcons.boxArchive, size: 11, color: AppColors.primaryGreen),
-            const SizedBox(width: 6),
-            Text('Choose an exam type', style: AppTextStyles.heading(size: 11.5)),
-          ],
-        ),
-        const SizedBox(height: 10),
-        for (final code in _examTypes) _buildTypeButton(code),
-        if (_otherBatches.isNotEmpty) _buildTypeButton(_otherKey),
-      ],
-    );
-  }
-
-  String _typeTitle(String code) {
-    if (code == _otherKey) return 'Other exam types';
-    // Titles come from the existing exam catalog, never re-typed here.
-    final entry = examCatalog.where((e) => e.examCode == code).firstOrNull;
-    return entry?.title ?? code;
-  }
-
-  Widget _buildTypeButton(String code) {
-    final count = _batchesForSelection(code).length;
-    final label = code == _otherKey ? 'Other' : code;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: InkWell(
-        key: Key('archiveType.$code'),
-        onTap: () => setState(() => _selectedExam = code),
-        borderRadius: BorderRadius.circular(14),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: AppColors.cardBorder),
-          ),
-          child: Row(
-            children: [
-              Container(
-                width: 56,
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: AppColors.emerald100,
-                  borderRadius: BorderRadius.circular(10),
+            Row(
+              children: [
+                Expanded(
+                  child: _StatBox(
+                    label: 'SAVED BATCHES',
+                    value: '${_batches.length}',
+                    color: AppColors.darkNavy,
+                  ),
                 ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _StatBox(
+                    label: 'WITH RESULTS',
+                    value: '$gradedTotal',
+                    color: AppColors.primaryGreen,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            Text('Browse batches', style: AppTextStyles.heading(size: 18)),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _buildFilter(null),
+                for (final code in _examTypes) _buildFilter(code),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Text(
+              '${batches.length} ${batches.length == 1 ? 'batch' : 'batches'} · Tap a batch to view scans and results',
+              style: AppTextStyles.body(size: 13, color: AppColors.textGray),
+            ),
+            const SizedBox(height: 16),
+            if (batches.isEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 40),
                 child: Text(
-                  label,
-                  style: AppTextStyles.heading(size: 14).copyWith(color: AppColors.primaryGreen),
+                  'No archived $_selectedExam batches yet.',
+                  style: AppTextStyles.body(
+                    size: 14,
+                    color: AppColors.textGray,
+                  ),
                 ),
               ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(_typeTitle(code), style: AppTextStyles.body(size: 12.5, weight: FontWeight.w700)),
-                    const SizedBox(height: 2),
-                    Text(
-                      '$count ${count == 1 ? 'batch' : 'batches'}',
-                      style: AppTextStyles.body(size: 10, color: AppColors.textGray),
-                    ),
-                  ],
-                ),
-              ),
-              const Icon(Icons.chevron_right, color: AppColors.textGray),
-            ],
-          ),
-        ),
-      ),
+          ],
+        );
+      },
     );
   }
 
-  /// The archived batches of the chosen exam type only.
-  Widget _buildTypeList(String selection) {
-    final batches = _batchesForSelection(selection);
-    final title = selection == _otherKey ? 'Archived Batches (Other)' : 'Archived $selection Batches';
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        Row(
-          key: const Key('archiveTypeHeader'),
-          children: [
-            TextButton.icon(
-              key: const Key('archiveBackToTypes'),
-              onPressed: () => setState(() => _selectedExam = null),
-              icon: const Icon(Icons.arrow_back, size: 16),
-              label: const Text('Back'),
-            ),
-            const SizedBox(width: 6),
-            Expanded(child: Text(title, style: AppTextStyles.heading(size: 13))),
-          ],
-        ),
-        const SizedBox(height: 8),
-        if (batches.isEmpty)
-          Padding(
-            padding: const EdgeInsets.only(top: 60),
-            child: Center(
-              child: Text(
-                selection == _otherKey ? 'No batches here.' : 'No archived $selection batches yet.',
-                style: AppTextStyles.body(size: 11, color: AppColors.textGray),
-              ),
-            ),
-          )
-        else
-          ...batches.map(_buildBatchCard),
-      ],
+  Widget _buildFilter(String? code) {
+    return ChoiceChip(
+      key: Key('archiveType.${code ?? 'ALL'}'),
+      label: Text(code ?? 'All'),
+      selected: _selectedExam == code,
+      onSelected: (_) => setState(() => _selectedExam = code),
+      selectedColor: AppColors.emerald100,
+      labelStyle: AppTextStyles.body(
+        size: 14,
+        weight: FontWeight.w700,
+        color: _selectedExam == code
+            ? AppColors.primaryGreen
+            : AppColors.textGray,
+      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
     );
   }
 
@@ -326,7 +273,7 @@ class _CloudArchiveScreenState extends State<CloudArchiveScreen> {
             .then((_) => _load()),
         borderRadius: BorderRadius.circular(14),
         child: Container(
-          padding: const EdgeInsets.all(14),
+          padding: const EdgeInsets.all(18),
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(14),
@@ -343,13 +290,24 @@ class _CloudArchiveScreenState extends State<CloudArchiveScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          batch.description.isNotEmpty ? batch.description : 'Batch ${batch.batchCode}',
-                          style: AppTextStyles.body(size: 14, weight: FontWeight.w800),
+                          batch.description.isNotEmpty
+                              ? batch.description
+                              : 'Batch ${batch.batchCode}',
+                          style: AppTextStyles.body(
+                            size: 17,
+                            weight: FontWeight.w800,
+                          ),
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                         ),
                         const SizedBox(height: 2),
-                        Text(batch.batchCode, style: AppTextStyles.body(size: 9.5, color: AppColors.textGray)),
+                        Text(
+                          batch.batchCode,
+                          style: AppTextStyles.body(
+                            size: 12,
+                            color: AppColors.textGray,
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -361,19 +319,29 @@ class _CloudArchiveScreenState extends State<CloudArchiveScreen> {
                 NeedsReviewChip(count: batch.needsReviewCount),
               ],
               const SizedBox(height: 10),
-              _line(FontAwesomeIcons.fileLines, 'Exam Type: ${batch.examTitle} (${batch.examCode})'),
+              _line(
+                FontAwesomeIcons.fileLines,
+                'Exam Type: ${batch.examTitle} (${batch.examCode})',
+              ),
               const SizedBox(height: 4),
               _line(FontAwesomeIcons.images, 'Scans: ${batch.scanCount}'),
               const SizedBox(height: 4),
               _line(
-                batch.resultsAvailable ? FontAwesomeIcons.circleCheck : FontAwesomeIcons.circleMinus,
+                batch.resultsAvailable
+                    ? FontAwesomeIcons.circleCheck
+                    : FontAwesomeIcons.circleMinus,
                 batch.resultsAvailable
                     ? 'Results available (${batch.gradedCount}/${batch.scanCount} graded)'
                     : 'No results yet',
-                color: batch.resultsAvailable ? AppColors.primaryGreen : AppColors.textGray,
+                color: batch.resultsAvailable
+                    ? AppColors.primaryGreen
+                    : AppColors.textGray,
               ),
               const SizedBox(height: 4),
-              _line(FontAwesomeIcons.solidCalendar, 'Saved ${_fmtDate(batch.updatedAt)}'),
+              _line(
+                FontAwesomeIcons.solidCalendar,
+                'Saved ${_fmtDate(batch.updatedAt)}',
+              ),
             ],
           ),
         ),
@@ -389,7 +357,10 @@ class _CloudArchiveScreenState extends State<CloudArchiveScreen> {
         Expanded(
           child: Text(
             text,
-            style: AppTextStyles.body(size: 9.5, color: color ?? AppColors.textGray),
+            style: AppTextStyles.body(
+              size: 12,
+              color: color ?? AppColors.textGray,
+            ),
           ),
         ),
       ],
@@ -418,19 +389,35 @@ class _CloudArchiveScreenState extends State<CloudArchiveScreen> {
     }
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
-      child: Text(status, style: AppTextStyles.body(size: 9.5, weight: FontWeight.w600, color: fg)),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Text(
+        status,
+        style: AppTextStyles.body(size: 12, weight: FontWeight.w600, color: fg),
+      ),
     );
   }
 
   Widget _buildEmptyState() {
     return ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
       children: [
         const SizedBox(height: 120),
-        const Center(child: FaIcon(FontAwesomeIcons.boxOpen, size: 44, color: AppColors.textGray)),
+        const Center(
+          child: FaIcon(
+            FontAwesomeIcons.boxOpen,
+            size: 44,
+            color: AppColors.textGray,
+          ),
+        ),
         const SizedBox(height: 14),
         Center(
-          child: Text('No saved batches yet', style: AppTextStyles.body(size: 12, weight: FontWeight.w700)),
+          child: Text(
+            'No saved batches yet',
+            style: AppTextStyles.body(size: 12, weight: FontWeight.w700),
+          ),
         ),
         const SizedBox(height: 6),
         Center(
@@ -444,8 +431,18 @@ class _CloudArchiveScreenState extends State<CloudArchiveScreen> {
   }
 
   static const _months = [
-    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
   ];
 
   String _fmtDate(DateTime d) => '${_months[d.month - 1]} ${d.day}, ${d.year}';
@@ -456,7 +453,11 @@ class _StatBox extends StatelessWidget {
   final String value;
   final Color color;
 
-  const _StatBox({required this.label, required this.value, required this.color});
+  const _StatBox({
+    required this.label,
+    required this.value,
+    required this.color,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -469,9 +470,24 @@ class _StatBox extends StatelessWidget {
       ),
       child: Column(
         children: [
-          Text(label, style: const TextStyle(fontSize: 8.5, fontWeight: FontWeight.w800, color: AppColors.textGray)),
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
+              color: AppColors.textGray,
+            ),
+          ),
           const SizedBox(height: 2),
-          Text(value, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: color, fontFamily: 'monospace')),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w800,
+              color: color,
+              fontFamily: 'monospace',
+            ),
+          ),
         ],
       ),
     );
