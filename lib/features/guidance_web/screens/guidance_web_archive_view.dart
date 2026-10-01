@@ -81,7 +81,7 @@ class _GuidanceWebArchiveViewState extends State<GuidanceWebArchiveView> {
     } catch (_) {
       if (!mounted) return;
       setState(() {
-        _error = 'Could not load archived batches. Please try again.';
+        _error = 'Could not load completed batches. Please try again.';
         _loading = false;
       });
     }
@@ -164,16 +164,16 @@ class _GuidanceWebArchiveViewState extends State<GuidanceWebArchiveView> {
   }
 
   Widget _buildBody() {
-    if (_loading) return _message(FontAwesomeIcons.spinner, 'Loading archive...');
+    if (_loading) return _message(FontAwesomeIcons.spinner, 'Loading completed batches...');
     if (_error != null) {
       return _message(FontAwesomeIcons.triangleExclamation, _error!, isError: true);
     }
     if (_entries.isEmpty) {
-      return _message(FontAwesomeIcons.boxArchive, 'No archived batches yet.');
+      return _message(FontAwesomeIcons.boxArchive, 'No completed batches yet.');
     }
     final rows = _filtered;
     if (rows.isEmpty) {
-      return _message(FontAwesomeIcons.magnifyingGlass, 'No archived batches match your search or filter.');
+      return _message(FontAwesomeIcons.magnifyingGlass, 'No completed batches match your search or filter.');
     }
     return Container(
       decoration: BoxDecoration(

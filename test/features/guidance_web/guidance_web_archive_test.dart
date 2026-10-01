@@ -636,7 +636,7 @@ void main() {
     testWidgets('shows an empty state when nothing is archived', (tester) async {
       seed();
       await pumpArchive(tester);
-      expect(find.text('No archived batches yet.'), findsOneWidget);
+      expect(find.text('No completed batches yet.'), findsOneWidget);
     });
 
     testWidgets('an archive list has no Restore or Unarchive button', (tester) async {

@@ -49,7 +49,7 @@ enum _GuidanceWebDestination {
   dashboard('Dashboard', FontAwesomeIcons.gaugeHigh),
   results('Results', FontAwesomeIcons.fileLines),
   examineeRecords('Examinee Records', FontAwesomeIcons.userGraduate),
-  archive('Archive', FontAwesomeIcons.boxArchive),
+  archive('Completed Batch', FontAwesomeIcons.boxArchive),
   analytics('Analytics', FontAwesomeIcons.chartColumn),
   export('Export', FontAwesomeIcons.fileExport);
 
