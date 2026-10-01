@@ -25,8 +25,13 @@ class _FakeFirestoreService implements FirestoreService {
   final updates = <UserModel>[];
   List<GuidancePosition> _positions;
   final addedLabels = <String>[];
+  final removedValues = <String>[];
   final deactivateCalls = <String>[];
   final activateCalls = <String>[];
+
+  /// Position values Position Management should report as "assigned to a
+  /// user" -- empty by default.
+  final Set<String> assignedValues = {};
 
   @override
   Future<UserModel?> getUserById(String userId) async => stored;
@@ -54,6 +59,15 @@ class _FakeFirestoreService implements FirestoreService {
     addedLabels.add(label);
     _positions = [..._positions, added];
     return added;
+  }
+
+  @override
+  Future<bool> isGuidancePositionAssigned(String value) async => assignedValues.contains(value);
+
+  @override
+  Future<void> removeGuidancePosition(String value) async {
+    removedValues.add(value);
+    _positions = [..._positions]..removeWhere((p) => p.value == value);
   }
 
   @override
@@ -270,10 +284,15 @@ void main() {
     expect(find.text('auditing'), findsOneWidget);
   });
 
-  testWidgets('a System Admin can add a new position through the "+" action here too', (tester) async {
+  testWidgets('the "+" action opens Position Management here too, and adding a position still works',
+      (tester) async {
     final firestore = await openScreen(tester, _staff());
 
     await tester.tap(find.byKey(const Key('editUser.addPosition')));
+    await tester.pumpAndSettle();
+    expect(find.text('Position Management'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('positionManagement.add')));
     await tester.pumpAndSettle();
     await tester.enterText(find.byKey(const Key('addGuidancePosition.label')), 'Auditing');
     await tester.tap(find.byKey(const Key('addGuidancePosition.add')));
@@ -281,6 +300,10 @@ void main() {
 
     expect(firestore.addedLabels, ['Auditing']);
 
+    await tester.tap(find.byKey(const Key('positionManagement.close')));
+    await tester.pumpAndSettle();
+
+    // Edit User's own dropdown receives the updated position list too.
     await tester.tap(find.byKey(const Key('editUser.position')));
     await tester.pumpAndSettle();
     expect(find.text('Auditing'), findsWidgets);
@@ -289,6 +312,23 @@ void main() {
     await save(tester);
 
     expect(firestore.updates.single.guidancePosition, 'auditing');
+  });
+
+  testWidgets('deleting the position currently assigned to the user being edited is blocked', (tester) async {
+    // _staff() defaults to guidancePosition: 'guidance_staff' -- a REAL,
+    // concrete assignment check against the exact user this screen is
+    // editing, not a synthetic scenario.
+    final staff = _staff();
+    final firestore = await openScreen(tester, staff);
+    firestore.assignedValues.add('guidance_staff');
+
+    await tester.tap(find.byKey(const Key('editUser.addPosition')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('positionManagement.delete.guidance_staff')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Cannot Delete This Position'), findsOneWidget);
+    expect(firestore.removedValues, isEmpty);
   });
 
   // --- Display Name is optional, matching Create User (regression) ----

@@ -7,7 +7,8 @@ import '../../../core/services/user_provisioning_service.dart';
 import '../../../core/state/app_state.dart';
 import '../../../models/user.dart';
 import '../../../shared/widgets/primary_button.dart';
-import '../widgets/add_guidance_position_dialog.dart';
+import '../../../models/guidance_position.dart';
+import '../widgets/position_management_dialog.dart';
 
 /// Create User screen for the System Administrator.
 ///
@@ -101,24 +102,20 @@ class _CreateUserScreenState extends State<CreateUserScreen> {
     await appState.loadGuidancePositions(_firestoreService);
   }
 
-  Future<void> _addPosition() async {
-    final label = await showAddGuidancePositionDialog(context);
-    if (label == null) return; // cancelled
-    if (!mounted) return;
+  /// Opens Position Management (list + add + delete) instead of going
+  /// straight to the add-only dialog. Whatever changed while it was open
+  /// (a position added and/or deleted) is picked up by the one
+  /// [AppState.loadGuidancePositions] refresh below -- the same refresh
+  /// this screen already did after the old add-only dialog closed.
+  Future<void> _managePositions() async {
     final appState = AppStateScope.of(context);
-    try {
-      await _firestoreService.addGuidancePosition(label, appState.guidancePositions);
-      if (!mounted) return;
-      await appState.loadGuidancePositions(_firestoreService);
-    } on ArgumentError catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message.toString())));
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not add the position. Please try again.')),
-      );
-    }
+    await showPositionManagementDialog(
+      context,
+      firestoreService: _firestoreService,
+      initialPositions: appState.guidancePositions,
+    );
+    if (!mounted) return;
+    await appState.loadGuidancePositions(_firestoreService);
   }
 
   @override
@@ -357,7 +354,16 @@ class _CreateUserScreenState extends State<CreateUserScreen> {
   /// [AppState.guidancePositions]) rather than a hardcoded map, so a
   /// position added here -- or on Edit User -- is immediately reflected.
   Widget _buildGuidancePositionField() {
-    final positions = AppStateScope.of(context).guidancePositions;
+    // ensureIncludes: if the position currently picked in this (unsaved)
+    // form was deleted via Position Management while this screen was open,
+    // it must still appear as a selectable item -- otherwise
+    // DropdownButtonFormField asserts because its own value no longer
+    // matches any item. Mirrors EditUserScreen's existing safeguard for the
+    // same dropdown.
+    final positions = GuidancePositions.ensureIncludes(
+      AppStateScope.of(context).guidancePositions,
+      _guidancePosition,
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -367,15 +373,15 @@ class _CreateUserScreenState extends State<CreateUserScreen> {
             Text('Guidance Position', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600)),
             InkWell(
               key: const Key('createUser.addPosition'),
-              onTap: _addPosition,
+              onTap: _managePositions,
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(Icons.add_circle_outline, size: 14, color: AppColors.primaryGreen),
+                    const Icon(Icons.tune, size: 14, color: AppColors.primaryGreen),
                     const SizedBox(width: 4),
-                    Text('Add Position', style: AppTextStyles.body(size: 10.5, color: AppColors.primaryGreen, weight: FontWeight.w600)),
+                    Text('Manage Positions', style: AppTextStyles.body(size: 10.5, color: AppColors.primaryGreen, weight: FontWeight.w600)),
                   ],
                 ),
               ),
