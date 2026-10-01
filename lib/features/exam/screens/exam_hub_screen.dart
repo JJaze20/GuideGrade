@@ -26,7 +26,7 @@ class ExamHubScreen extends StatelessWidget {
 
     return Scaffold(
       backgroundColor: AppColors.lightBg,
-      appBar: const AppHeaderBar(title: 'GUIDE GRADE'),
+      appBar: const AppHeaderBar(title: 'Exams'),
       body: SafeArea(
         top: false,
         child: Center(
