@@ -87,10 +87,12 @@ void main() {
     expect(find.text('NDMU Staff Officer'), findsOneWidget);
   });
 
-  testWidgets('3. "Marbel, PH" still appears unchanged, independent of the signed-in user',
+  testWidgets('3. welcome card shows the signed-in role instead of the location',
       (tester) async {
     await pumpScreen(tester);
-    expect(find.text('Marbel, PH'), findsOneWidget);
+    expect(find.text('Welcome'), findsOneWidget);
+    expect(find.text('Your workspace'), findsNothing);
+    expect(find.text('Marbel, PH'), findsNothing);
 
     appState.setCurrentUser(UserModel(
       userId: 'gc-1',
@@ -102,7 +104,9 @@ void main() {
     ));
     await tester.pumpAndSettle();
 
-    expect(find.text('Marbel, PH'), findsOneWidget);
+    expect(find.text('Guidance Council'), findsOneWidget);
+    expect(find.text('Juan Dela Cruz'), findsOneWidget);
+    expect(find.text('Marbel, PH'), findsNothing);
   });
 
   testWidgets('4. batch loading and the empty state still work, unaffected by the name fix',
