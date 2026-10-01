@@ -116,8 +116,6 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
                     style: AppTextStyles.heading(
                       size: 30,
                       color: const Color(0xFF174D2A),
-                    ).copyWith(
-                      backgroundColor: const Color(0xE6E8F5E9),
                     ),
                   ),
                 ),
@@ -177,12 +175,6 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
             'Guide Grade',
             textAlign: TextAlign.center,
             style: AppTextStyles.heading(size: 24, color: AppColors.primaryGreen),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Guidance automated test diagnostic checking system',
-            textAlign: TextAlign.center,
-            style: AppTextStyles.body(size: 13, color: AppColors.textGray),
           ),
           const SizedBox(height: 28),
           Text('Sign In', style: AppTextStyles.heading(size: 22)),
