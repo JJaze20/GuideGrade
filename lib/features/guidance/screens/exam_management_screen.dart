@@ -23,15 +23,15 @@ class ExamManagementScreen extends StatelessWidget {
         backgroundColor: Colors.white,
         foregroundColor: AppColors.textDark,
         elevation: 0.5,
-        title: Text('Exam Management', style: AppTextStyles.heading(size: 13)),
+        title: Text('Exam Management', style: AppTextStyles.heading(size: 19)),
       ),
       body: SafeArea(
         child: ListView(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(20),
           children: [
             Text(
               'Select an exam to preview and print its official answer sheet.',
-              style: AppTextStyles.body(size: 10.5, color: AppColors.textGray),
+              style: AppTextStyles.body(size: 15, color: AppColors.textGray),
             ),
             const SizedBox(height: 16),
             ...examCatalog.map(
@@ -91,8 +91,8 @@ class _ExamCatalogCard extends StatelessWidget {
                   Text(entry.title, style: AppTextStyles.heading(size: 13)),
                   const SizedBox(height: 2),
                   Text(
-                    entry.examCode,
-                    style: AppTextStyles.body(size: 10, color: AppColors.textGray),
+                    '${entry.examCode} · Preview and print',
+                    style: AppTextStyles.body(size: 13, color: AppColors.textGray),
                   ),
                 ],
               ),

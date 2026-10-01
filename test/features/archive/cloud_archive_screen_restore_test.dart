@@ -192,6 +192,11 @@ void main() {
     expect(spy.restoreAllCalls, 1);
     expect(find.textContaining('3 cloud batches found'), findsOneWidget);
     expect(find.textContaining('2 new, 1 updated, 5 scans restored'), findsOneWidget);
+    expect(find.widgetWithText(AlertDialog, 'Restore complete'), findsOneWidget);
+    expect(find.byType(SnackBar), findsNothing);
+    await tester.tap(find.widgetWithText(TextButton, 'OK'));
+    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsNothing);
   });
 
   testWidgets('cancelling the confirmation dialog never calls restoreAll', (tester) async {
