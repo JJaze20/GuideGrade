@@ -17,6 +17,8 @@ import '../../../core/omr/omr_scorer.dart';
 import '../../../core/omr/omr_templates.dart';
 import '../../../core/omr/rescan_comparison.dart';
 import '../../../core/routes/app_routes.dart';
+import '../../../core/omr/scan_quality_gate.dart';
+import '../widgets/scan_quality_dialog.dart';
 import '../../../core/state/app_state.dart';
 import '../../../core/state/rescan_candidate.dart';
 import '../../../core/utils/omr_perf_log.dart';
@@ -1370,6 +1372,21 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
       if (!mounted) return;
       if (!proceed) return;
     }
+
+    // Quality gate: the conditions that have to hold for a read to be
+    // trusted. Last before the results screen on purpose -- the sheets are
+    // decoded by now, so this can report what actually went wrong rather
+    // than guessing from the preview, and the captures are still in hand so
+    // "Scan Again" costs one retake instead of a trip back through the
+    // archive. Advisory: see ScanQualityGate for why a hard block would be
+    // worse than the problem.
+    final failedQuality = ScanQualityGate.inspectSession(appState.scannedResults);
+    if (failedQuality.isNotEmpty) {
+      final acceptAnyway = await showScanQualityDialog(context, failedQuality);
+      if (!mounted) return;
+      if (!acceptAnyway) return;
+    }
+
     Navigator.of(context).pushReplacementNamed(AppRoutes.examResults);
   }
 
