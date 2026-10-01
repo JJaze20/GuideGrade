@@ -330,10 +330,17 @@ class _BatchScans {
 /// `mapCloudScan(row, answerKey:)` pipeline) and never overwrites a recorded
 /// score. Nothing here writes, archives, or modifies anything: it only calls
 /// `readCloudBatches`, `readBatchArchives`, `readScanCounts`,
-/// `readCloudScans` and `readAnswerKey`.
+/// `readCloudScans`, `readCloudExaminees` and `readAnswerKey`.
 ///
 /// Web Archive status comes from `batch_archives` markers only — never
 /// `batches.status`.
+///
+/// Official-result filter: every AT/QTM/TAT aggregate is computed from
+/// scans whose `examinee_id` resolves to a real `examinees` row only (see
+/// [_officialRowsOnly]) -- the same official-identity rule
+/// [GuidanceWebResultsService.loadResultsForBatch] applies to Results, so
+/// this page's totals/graded-ungraded counts/score distributions/averages
+/// never count an unlinked or dangling-`examinee_id` scan.
 class GuidanceWebAnalyticsService {
   GuidanceWebAnalyticsService({SyncClient? client})
       : _client = client ?? _buildDefaultClient();
@@ -412,7 +419,7 @@ class GuidanceWebAnalyticsService {
 
     final complete = <LocalBatch>[];
     final incomplete = <IncompleteBatch>[];
-    final rows = <CloudScanRow>[];
+    final activeRows = <CloudScanRow>[];
     var archivedExcludedCount = 0;
     for (final b in selected) {
       final data = _cache[b.id]!;
@@ -429,7 +436,7 @@ class GuidanceWebAnalyticsService {
         // own numbers; a batch with no retake activity is unaffected.
         final active = data.rows.where((r) => !r.isArchivedAttempt).toList();
         archivedExcludedCount += data.rows.length - active.length;
-        rows.addAll(active);
+        activeRows.addAll(active);
       } else {
         incomplete.add(IncompleteBatch(
           batch: b,
@@ -453,7 +460,7 @@ class GuidanceWebAnalyticsService {
     // own state rather than computing an all-zero AT/QTM/TAT result, which
     // would look like a genuine (if unusually poor) outcome instead of
     // "no active attempts". [lib/core/analytics/*] is never called here.
-    if (rows.isEmpty && archivedExcludedCount > 0) {
+    if (activeRows.isEmpty && archivedExcludedCount > 0) {
       return AnalyticsResult(
         examCode: examCode,
         selectedBatches: selected,
@@ -462,6 +469,18 @@ class GuidanceWebAnalyticsService {
         allActiveAttemptsArchived: true,
       );
     }
+
+    // Official-result filter: a scan counts toward Analytics only when its
+    // `examinee_id` resolves to a real `examinees` row -- the exact same
+    // rule [GuidanceWebResultsService.loadResultsForBatch] applies to
+    // Results. `examinee_id IS NULL` (never linked) and a dangling
+    // `examinee_id` (row missing/RLS-hidden) are both excluded the same
+    // way; OCR/staff-tagged scan identity is never used as a fallback.
+    // Skipped entirely when there is nothing active to resolve, so an
+    // empty/fully-archived batch never makes an extra request.
+    final rows = activeRows.isEmpty
+        ? const <CloudScanRow>[]
+        : await _officialRowsOnly(activeRows);
 
     switch (examCode) {
       case 'AT':
@@ -534,6 +553,32 @@ class GuidanceWebAnalyticsService {
     await Future.wait([
       for (var w = 0; w < math.min(maxConcurrency, missing.length); w++) worker(),
     ]);
+  }
+
+  /// Narrows [rows] to an official result: `examinee_id` set AND resolving
+  /// to an existing `examinees` row -- identical to [GuidanceWebResultsService
+  /// .loadResultsForBatch]'s own filter, kept in sync by applying the same
+  /// two-step shape (collect linked scan ids, then check each against a
+  /// fresh `readCloudExaminees` read) rather than sharing a helper across
+  /// the two services, which would be a larger refactor than this fix calls
+  /// for. A dangling `examinee_id` is excluded exactly like a null one.
+  Future<List<CloudScanRow>> _officialRowsOnly(List<CloudScanRow> rows) async {
+    final examineeIdByScanId = <String, String>{
+      for (final row in rows)
+        if (row.examineeId != null && row.examineeId!.isNotEmpty) row.id: row.examineeId!,
+    };
+    if (examineeIdByScanId.isEmpty) return const [];
+
+    final examinees = await _client.readCloudExaminees();
+    if (!examinees.isSuccess) {
+      throw GuidanceWebAnalyticsException(_readMessage(examinees.error));
+    }
+    final validExamineeIds = {for (final e in examinees.examinees) e.id};
+
+    return [
+      for (final row in rows)
+        if (validExamineeIds.contains(examineeIdByScanId[row.id])) row,
+    ];
   }
 
   /// TAT: overall statistics from stored `raw_score` (always), plus the

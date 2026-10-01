@@ -32,6 +32,13 @@ class _FakeClient implements SyncClient {
   final List<String> forbidden = [];
   final Map<String, int> scanReads = {};
   final Map<String, int> keyReads = {};
+
+  /// `examinee_id`s that must NOT resolve when [readCloudExaminees] is
+  /// called -- simulates a dangling link (row deleted/RLS-hidden) even
+  /// though a scan still carries that id. Every other `examinee_id` found
+  /// across [scansByBatch] resolves automatically, so existing tests that
+  /// never mention linkage keep working unchanged.
+  final Set<String> danglingExamineeIds = {};
   int _inFlight = 0;
   int maxInFlight = 0;
   Duration scanDelay = const Duration(milliseconds: 5);
@@ -119,7 +126,28 @@ class _FakeClient implements SyncClient {
   @override
   Future<SyncOutcome> deleteStoragePrefix(String batchId) => _no('deleteStoragePrefix');
   @override
-  Future<CloudExamineesRead> readCloudExaminees() => _no('readCloudExaminees');
+  Future<CloudExamineesRead> readCloudExaminees() async {
+    calls.add('readCloudExaminees');
+    final ids = <String>{
+      for (final scans in scansByBatch.values)
+        for (final s in scans)
+          if (s.examineeId != null && !danglingExamineeIds.contains(s.examineeId)) s.examineeId!,
+    };
+    return CloudExamineesRead.found([
+      for (final id in ids)
+        CloudExamineeRow(
+          id: id,
+          temporaryExamineeId: 'TMP-$id',
+          firstName: 'Official-$id',
+          lastName: 'Record',
+          status: 'active',
+          createdAt: DateTime.utc(2026, 1, 1),
+          createdByUid: 'uid',
+          updatedAt: DateTime.utc(2026, 1, 1),
+          updatedByUid: 'uid',
+        ),
+    ]);
+  }
   @override
   Future<CloudExamineeWrite> createExamineeFromScan({
     required String batchId,
@@ -175,6 +203,10 @@ CloudBatchRow _batch(String id, String examCode, {String status = 'Completed', i
       updatedAt: DateTime.utc(2026, 1, day),
     );
 
+/// Sentinel default for [_scan]'s `examineeId`: "not specified by this
+/// caller", distinct from an explicitly-passed `null` (unlinked).
+const Object _autoLink = Object();
+
 CloudScanRow _scan(
   String id,
   String batchId,
@@ -183,6 +215,13 @@ CloudScanRow _scan(
   Map<String, dynamic>? decoded,
   int attemptNo = 1,
   String attemptStatus = 'active',
+  // Official-result filter fixture: omitted (the default) auto-links this
+  // scan to its own resolvable examinee (`examinee-<id>`), so every
+  // pre-existing test that never mentions linkage is unaffected. Pass
+  // `null` for an unlinked scan, or a specific id (registered in
+  // [_FakeClient.danglingExamineeIds] for a dangling one, or shared with
+  // another scan to link the same official examinee across exam types).
+  Object? examineeId = _autoLink,
 }) =>
     CloudScanRow(
       id: id,
@@ -203,6 +242,7 @@ CloudScanRow _scan(
       examineeNumber: 'EX-$id',
       attemptNo: attemptNo,
       attemptStatus: attemptStatus,
+      examineeId: identical(examineeId, _autoLink) ? 'examinee-$id' : examineeId as String?,
     );
 
 /// A TAT decoded sheet: the first [c] items of each template section are
@@ -680,7 +720,14 @@ void main() {
         await run(exam);
       }
       expect(client.forbidden, isEmpty);
-      const allowed = {'readCloudBatches', 'readBatchArchives', 'readScanCounts', 'readCloudScans', 'readAnswerKey'};
+      const allowed = {
+        'readCloudBatches',
+        'readBatchArchives',
+        'readScanCounts',
+        'readCloudScans',
+        'readCloudExaminees',
+        'readAnswerKey',
+      };
       for (final call in client.calls) {
         expect(allowed, contains(call.split(':').first), reason: call);
       }
@@ -1095,4 +1142,119 @@ group('Applicant Retake Management -- archived attempts excluded by default', ()
   });
 });
 
+  group('Official-result filter (examinee_id must resolve to a real examinee)', () {
+    test('a linked scan is included', () async {
+      client.batches.add(_batch('b1', 'AT'));
+      client.scansByBatch['b1'] = [_scan('s1', 'b1', 'AT', 60, examineeId: 'e-1')];
+
+      final r = await run('AT');
+
+      expect(r.at!.totalExaminees, 1);
+    });
+
+    test('an unlinked scan (examinee_id IS NULL) is excluded', () async {
+      client.batches.add(_batch('b1', 'AT'));
+      client.scansByBatch['b1'] = [
+        _scan('linked', 'b1', 'AT', 60, examineeId: 'e-1'),
+        _scan('unlinked', 'b1', 'AT', 65, examineeId: null),
+      ];
+
+      final r = await run('AT');
+
+      // Only the linked scan reaches the AT calculator -- an unlinked scan
+      // is never used as a fallback identity and never counted.
+      expect(r.at!.totalExaminees, 1);
+      expect(r.at!.averageRawScore, 60);
+    });
+
+    test('a dangling examinee_id (row missing/RLS-hidden) is excluded the same way as unlinked', () async {
+      client.batches.add(_batch('b1', 'AT'));
+      client.scansByBatch['b1'] = [
+        _scan('linked', 'b1', 'AT', 60, examineeId: 'e-1'),
+        _scan('dangling', 'b1', 'AT', 65, examineeId: 'e-deleted'),
+      ];
+      client.danglingExamineeIds.add('e-deleted');
+
+      final r = await run('AT');
+
+      expect(r.at!.totalExaminees, 1);
+      expect(r.at!.averageRawScore, 60);
+    });
+
+    test('resolving official links calls readCloudExaminees, proving the identity source is the '
+        'examinees table and not the scan\'s own OCR/staff tag', () async {
+      client.batches.add(_batch('b1', 'AT'));
+      client.scansByBatch['b1'] = [_scan('s1', 'b1', 'AT', 60, examineeId: 'e-1')];
+
+      await run('AT');
+
+      expect(client.calls, contains('readCloudExaminees'));
+    });
+
+    test('archived-attempt filtering still applies before the official-link filter runs', () async {
+      client.batches.add(_batch('b1', 'AT'));
+      client.scansByBatch['b1'] = [
+        // Archived and unlinked at once: excluded for the archived-attempt
+        // reason alone, so no readCloudExaminees call is made just for it.
+        _scan('s-old', 'b1', 'AT', 50, attemptNo: 1, attemptStatus: 'archived', examineeId: null),
+        _scan('s-new', 'b1', 'AT', 65, attemptNo: 2, attemptStatus: 'active', examineeId: 'e-1'),
+      ];
+
+      final r = await run('AT');
+
+      expect(r.at!.totalExaminees, 1);
+      expect(r.at!.averageRawScore, 65);
+    });
+
+    test('QTM and TAT aggregates apply the same official-link filter as AT', () async {
+      client.batches.add(_batch('q1', 'QTM'));
+      client.scansByBatch['q1'] = [
+        _scan('linked', 'q1', 'QTM', 40, examineeId: 'e-1'),
+        _scan('unlinked', 'q1', 'QTM', 55, examineeId: null),
+      ];
+      client.batches.add(_batch('t1', 'TAT'));
+      client.scansByBatch['t1'] = [
+        _scan('linked', 't1', 'TAT', 90, examineeId: 'e-2'),
+        _scan('unlinked', 't1', 'TAT', 150, examineeId: null),
+      ];
+
+      final qtm = await run('QTM');
+      final tat = await run('TAT');
+
+      expect(qtm.qtm!.totalExaminees, 1);
+      expect(qtm.qtm!.averageRawScore, 40);
+      expect(tat.tatOverall!.totalExaminees, 1);
+      expect(tat.tatOverall!.averageTotal, 90);
+    });
+
+    test('the same official ExamineeRecord linked across AT, QTM and TAT scans resolves in every exam type',
+        () async {
+      client.batches.add(_batch('a1', 'AT'));
+      client.scansByBatch['a1'] = [_scan('a-scan', 'a1', 'AT', 60, examineeId: 'shared-examinee')];
+      client.batches.add(_batch('q1', 'QTM'));
+      client.scansByBatch['q1'] = [_scan('q-scan', 'q1', 'QTM', 45, examineeId: 'shared-examinee')];
+      client.batches.add(_batch('t1', 'TAT'));
+      client.scansByBatch['t1'] = [_scan('t-scan', 't1', 'TAT', 100, examineeId: 'shared-examinee')];
+
+      final at = await run('AT');
+      final qtm = await run('QTM');
+      final tat = await run('TAT');
+
+      expect(at.at!.totalExaminees, 1);
+      expect(qtm.qtm!.totalExaminees, 1);
+      expect(tat.tatOverall!.totalExaminees, 1);
+    });
+
+    test('a batch whose only scans are unlinked completes normally with an all-zero (not archived-only) result',
+        () async {
+      client.batches.add(_batch('b1', 'AT', day: 1));
+      client.scansByBatch['b1'] = [_scan('s1', 'b1', 'AT', 60, examineeId: null)];
+
+      final r = await run('AT');
+
+      expect(r.incompleteBatches, isEmpty);
+      expect(r.allActiveAttemptsArchived, isFalse);
+      expect(r.at!.totalExaminees, 0);
+    });
+  });
 }

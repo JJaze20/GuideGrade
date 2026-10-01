@@ -11,6 +11,7 @@ import '../../../core/omr/qtm_category.dart';
 import '../../../core/omr/qtm_result.dart';
 import '../../../core/omr/tat_category.dart';
 import '../../../models/answer_key.dart';
+import '../../../models/examinee_record.dart';
 import '../../../models/local_batch.dart';
 import '../services/guidance_web_analytics_service.dart';
 import '../services/guidance_web_results_service.dart';
@@ -75,6 +76,16 @@ class GuidanceWebExportService {
   /// PDF bytes. [allScans] is every scan of [batch] -- the batch averages
   /// and the category distribution are computed over all of them, never
   /// only the selected ones.
+  ///
+  /// [linkedExamineeByScanId] supplies the OFFICIAL identity (Examinee ID/
+  /// name) for a scan in [selected] -- the same map
+  /// [GuidanceWebResultsService.loadResultsForBatch] returns. A scan with no
+  /// entry here (never linked to an official [ExamineeRecord], or this
+  /// parameter left at its default) falls back to the scan's own
+  /// OCR/staff-tagged [LocalScan.examinee] -- kept only for a caller that
+  /// hasn't resolved official links for its own scan selection yet;
+  /// [buildDefaultExportDocument] always supplies an entry for every scan it
+  /// passes in, so that path never takes this fallback.
   @visibleForTesting
   Future<ExportDocument> buildExportDocument({
     required LocalBatch batch,
@@ -82,6 +93,7 @@ class GuidanceWebExportService {
     required List<LocalScan> selected,
     required List<LocalScan> allScans,
     bool includeCertificates = false,
+    Map<String, ExamineeRecord> linkedExamineeByScanId = const {},
   }) async {
     AnswerKey? key;
     try {
@@ -101,7 +113,14 @@ class GuidanceWebExportService {
         : const <String, double>{};
     final examinees = [
       for (final s in selected)
-        _examineeSection(batch, s, averages, key, includeCertificates),
+        _examineeSection(
+          batch,
+          s,
+          averages,
+          key,
+          includeCertificates,
+          linkedExamineeByScanId[s.id],
+        ),
     ];
     return ExportDocument(batch: section, examinees: examinees);
   }
@@ -114,6 +133,7 @@ class GuidanceWebExportService {
     required List<LocalScan> selected,
     required List<LocalScan> allScans,
     bool includeCertificates = false,
+    Map<String, ExamineeRecord> linkedExamineeByScanId = const {},
   }) async {
     final document = await buildExportDocument(
       batch: batch,
@@ -121,6 +141,7 @@ class GuidanceWebExportService {
       selected: selected,
       allScans: allScans,
       includeCertificates: includeCertificates,
+      linkedExamineeByScanId: linkedExamineeByScanId,
     );
 
     final left = (await rootBundle.load('assets/images/ndmu_logo.png'))
@@ -133,28 +154,35 @@ class GuidanceWebExportService {
     return buildExportPdf(document, leftLogo: left, rightLogo: right);
   }
 
-  /// The whole-batch [ExportDocument] used by [buildDefaultPdf]: every scan
-  /// [GuidanceWebResultsService.loadScansForBatch] returns for [batch]
-  /// (its own default exclusion of an archived retake attempt applies here
-  /// unchanged -- this never passes `includeArchivedAttempts: true`), used
-  /// as both the batch summary's scope and the per-examinee pages.
+  /// The whole-batch [ExportDocument] used by [buildDefaultPdf]: the same
+  /// official-result set [GuidanceWebResultsService.loadResultsForBatch]
+  /// returns for [batch] -- only a scan whose `examinee_id` resolves to a
+  /// real `examinees` row (its own default exclusion of an archived retake
+  /// attempt applies here unchanged -- this never passes
+  /// `includeArchivedAttempts: true`). Used as both the batch summary's
+  /// scope and the per-examinee pages, with the resolved official
+  /// [ExamineeRecord] for each one -- never the scan's own OCR/staff-tagged
+  /// [LocalScan.examinee] -- so an unlinked scan or a dangling `examinee_id`
+  /// never appears anywhere in this export.
   @visibleForTesting
   Future<ExportDocument> buildDefaultExportDocument(
     LocalBatch batch, {
     bool includeCertificates = false,
   }) async {
-    final scans = await _results.loadScansForBatch(batch);
+    final results = await _results.loadResultsForBatch(batch);
     return buildExportDocument(
       batch: batch,
       includeSummary: true,
-      selected: scans,
-      allScans: scans,
+      selected: results.scans,
+      allScans: results.scans,
       includeCertificates: includeCertificates,
+      linkedExamineeByScanId: results.linkedExamineeByScanId,
     );
   }
 
   /// The whole-batch export used by the list's `export`: the batch analytics
-  /// plus a page for every examinee (tagged or not) in the batch.
+  /// plus a page for every official result in the batch (see
+  /// [buildDefaultExportDocument]).
   Future<Uint8List> buildDefaultPdf(
     LocalBatch batch, {
     bool includeCertificates = false,
@@ -381,6 +409,7 @@ class GuidanceWebExportService {
     Map<String, double> averages,
     AnswerKey? key,
     bool includeCertificates,
+    ExamineeRecord? linked,
   ) {
     final e = scan.examinee;
     final result = scan.result;
@@ -402,15 +431,23 @@ class GuidanceWebExportService {
       scanCapturedAt: scan.capturedAt,
       batchCreatedAt: batch.createdAt,
     );
+    // Age has no established official-record input source yet (see
+    // ExamineeRecord's own class doc comment) -- kept from the OCR/staff tag
+    // exactly as before; only the official Examinee ID/name are affected by
+    // [linked].
     final age = e?.ageOn(examDate);
 
+    // Official identity ([linked]) is authoritative when this scan resolved
+    // to one -- see [buildExportDocument]'s doc comment for when it won't
+    // have.  OCR/staff-tagged [e] is used ONLY as that fallback, never as a
+    // substitute for a resolved official record.
     return ExportExamineeSection(
       examLabel: examTypeDisplayLabel(batch.examCode),
       batchLabel: _batchLabel(batch),
-      examineeId: dash(e?.examineeNumber),
-      firstName: dash(e?.firstName),
-      middleName: dash(e?.middleName),
-      lastName: dash(e?.lastName),
+      examineeId: dash(linked?.temporaryExamineeId ?? e?.examineeNumber),
+      firstName: dash(linked?.firstName ?? e?.firstName),
+      middleName: dash(linked?.middleName ?? e?.middleName),
+      lastName: dash(linked?.lastName ?? e?.lastName),
       age: age == null ? '-' : '$age',
       scanDate: _date(scan.capturedAt),
       score: result == null ? '-' : '${result.rawScore} / $denominator',
@@ -428,7 +465,7 @@ class GuidanceWebExportService {
               examCode: batch.examCode,
               rawScore: result?.rawScore,
               status: result?.status,
-              name: e?.displayName,
+              name: linked?.displayName ?? e?.displayName,
             )
           : null,
     );
