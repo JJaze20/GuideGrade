@@ -91,12 +91,12 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.primaryGreen,
+      backgroundColor: const Color(0xFFE8F5E9),
       body: Stack(
         fit: StackFit.expand,
         children: [
           Opacity(
-            opacity: 0.18,
+            opacity: 0.45,
             child: Image.asset(
               'assets/images/NDMU BANNER.png',
               fit: BoxFit.cover,
@@ -113,7 +113,12 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
                     'NDMU Guidance and Testing Center',
                     key: const Key('webLoginInstitution'),
                     textAlign: TextAlign.left,
-                    style: AppTextStyles.heading(size: 20, color: Colors.white),
+                    style: AppTextStyles.heading(
+                      size: 30,
+                      color: const Color(0xFF174D2A),
+                    ).copyWith(
+                      backgroundColor: const Color(0xE6E8F5E9),
+                    ),
                   ),
                 ),
                 Expanded(
@@ -169,7 +174,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
           ),
           const SizedBox(height: 16),
           Text(
-            'Web Console',
+            'Guide Grade',
             textAlign: TextAlign.center,
             style: AppTextStyles.heading(size: 24, color: AppColors.primaryGreen),
           ),
