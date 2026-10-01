@@ -78,14 +78,17 @@ class GuidanceWebExportService {
   /// only the selected ones.
   ///
   /// [linkedExamineeByScanId] supplies the OFFICIAL identity (Examinee ID/
-  /// name) for a scan in [selected] -- the same map
-  /// [GuidanceWebResultsService.loadResultsForBatch] returns. A scan with no
-  /// entry here (never linked to an official [ExamineeRecord], or this
-  /// parameter left at its default) falls back to the scan's own
-  /// OCR/staff-tagged [LocalScan.examinee] -- kept only for a caller that
-  /// hasn't resolved official links for its own scan selection yet;
-  /// [buildDefaultExportDocument] always supplies an entry for every scan it
-  /// passes in, so that path never takes this fallback.
+  /// name) for a scan -- the same map [GuidanceWebResultsService.
+  /// loadResultsForBatch] returns. This is the authoritative official-result
+  /// eligibility gate, enforced HERE regardless of what [selected] the
+  /// caller passed in: a scan in [selected] with no entry in
+  /// [linkedExamineeByScanId] (`examinee_id` was null, or didn't resolve to
+  /// a real `examinees` row -- a dangling link) produces NO examinee page at
+  /// all. There is no OCR/staff-tag fallback for an unresolved scan -- see
+  /// [_examineeSection]'s own doc comment -- so a stale or hand-built
+  /// selection that still includes an unlinked/dangling scan can never make
+  /// it into the output just by being passed in; the caller does not need
+  /// to pre-filter [selected] itself for this to hold.
   @visibleForTesting
   Future<ExportDocument> buildExportDocument({
     required LocalBatch batch,
@@ -102,24 +105,33 @@ class GuidanceWebExportService {
       key = null; // unrated clusters, "-" instead of numbers
     }
 
+    // Official-result eligibility: only a scan whose examinee_id resolved
+    // to a real examinees row produces an examinee page -- enforced here,
+    // not left to the caller, so this can't be bypassed by passing an
+    // unlinked/dangling scan in `selected`.
+    final eligible = [
+      for (final s in selected)
+        if (linkedExamineeByScanId.containsKey(s.id)) s,
+    ];
+
     final section = includeSummary
         ? await _batchSection(batch, allScans)
         : null;
     // Every examinee uses the same whole-batch baseline for this export.
-    final averages = selected.isNotEmpty && key != null && clusterDefsFor(batch.examCode) != null
+    final averages = eligible.isNotEmpty && key != null && clusterDefsFor(batch.examCode) != null
         ? computeClusterAverages(batch.examCode, [
             for (final scan in allScans) scoreOmrResult(scan.decoded, key).items,
           ])
         : const <String, double>{};
     final examinees = [
-      for (final s in selected)
+      for (final s in eligible)
         _examineeSection(
           batch,
           s,
           averages,
           key,
           includeCertificates,
-          linkedExamineeByScanId[s.id],
+          linkedExamineeByScanId[s.id]!,
         ),
     ];
     return ExportDocument(batch: section, examinees: examinees);
@@ -154,9 +166,8 @@ class GuidanceWebExportService {
     return buildExportPdf(document, leftLogo: left, rightLogo: right);
   }
 
-  /// The whole-batch [ExportDocument] used by [buildDefaultPdf]: the same
-  /// official-result set [GuidanceWebResultsService.loadResultsForBatch]
-  /// returns for [batch] -- only a scan whose `examinee_id` resolves to a
+  /// The whole-batch [ExportDocument] used by [buildDefaultPdf]: the
+  /// official-result set only -- a scan whose `examinee_id` resolves to a
   /// real `examinees` row (its own default exclusion of an archived retake
   /// attempt applies here unchanged -- this never passes
   /// `includeArchivedAttempts: true`). Used as both the batch summary's
@@ -164,17 +175,32 @@ class GuidanceWebExportService {
   /// [ExamineeRecord] for each one -- never the scan's own OCR/staff-tagged
   /// [LocalScan.examinee] -- so an unlinked scan or a dangling `examinee_id`
   /// never appears anywhere in this export.
+  ///
+  /// [GuidanceWebResultsService.loadResultsForBatch] itself now returns
+  /// EVERY scan in the batch (Results shows unlinked scans too), with
+  /// [WebBatchResults.linkedExamineeByScanId] as the one signal for which
+  /// are officially linked. [buildExportDocument] independently re-enforces
+  /// this same eligibility for the examinee pages it builds (so that
+  /// enforcement cannot be bypassed by any caller), but [allScans] here
+  /// still MUST be pre-filtered: [_batchSection]'s category-distribution
+  /// bars read straight from [allScans] with no filtering of their own, so
+  /// passing the full (unlinked-inclusive) scan list here would leak
+  /// unlinked scans back into that count even though the examinee pages
+  /// themselves stay correctly official-only.
   @visibleForTesting
   Future<ExportDocument> buildDefaultExportDocument(
     LocalBatch batch, {
     bool includeCertificates = false,
   }) async {
     final results = await _results.loadResultsForBatch(batch);
+    final officialScans = results.scans
+        .where((s) => results.linkedExamineeByScanId.containsKey(s.id))
+        .toList();
     return buildExportDocument(
       batch: batch,
       includeSummary: true,
-      selected: results.scans,
-      allScans: results.scans,
+      selected: officialScans,
+      allScans: officialScans,
       includeCertificates: includeCertificates,
       linkedExamineeByScanId: results.linkedExamineeByScanId,
     );
@@ -403,13 +429,20 @@ class GuidanceWebExportService {
 
   String _date(DateTime d) => '${_months[d.month - 1]} ${d.day}, ${d.year}';
 
+  /// [linked] is the resolved official [ExamineeRecord] for [scan] --
+  /// REQUIRED, never nullable. [buildExportDocument] only ever calls this
+  /// for a scan that already has a resolved entry in its own
+  /// `linkedExamineeByScanId`; a scan with no entry (null or dangling
+  /// `examinee_id`) is filtered out before reaching this method at all, so
+  /// there is no OCR/staff-tag fallback path here to accidentally take --
+  /// official Examinee ID/name/certificate name come from [linked] alone.
   ExportExamineeSection _examineeSection(
     LocalBatch batch,
     LocalScan scan,
     Map<String, double> averages,
     AnswerKey? key,
     bool includeCertificates,
-    ExamineeRecord? linked,
+    ExamineeRecord linked,
   ) {
     final e = scan.examinee;
     final result = scan.result;
@@ -432,22 +465,19 @@ class GuidanceWebExportService {
       batchCreatedAt: batch.createdAt,
     );
     // Age has no established official-record input source yet (see
-    // ExamineeRecord's own class doc comment) -- kept from the OCR/staff tag
-    // exactly as before; only the official Examinee ID/name are affected by
-    // [linked].
+    // ExamineeRecord's own class doc comment) -- kept from the OCR/staff tag.
+    // This is demographic data, not identity, and is unaffected by the
+    // official-identity rule: the examinee ID/name/certificate name below
+    // never do this.
     final age = e?.ageOn(examDate);
 
-    // Official identity ([linked]) is authoritative when this scan resolved
-    // to one -- see [buildExportDocument]'s doc comment for when it won't
-    // have.  OCR/staff-tagged [e] is used ONLY as that fallback, never as a
-    // substitute for a resolved official record.
     return ExportExamineeSection(
       examLabel: examTypeDisplayLabel(batch.examCode),
       batchLabel: _batchLabel(batch),
-      examineeId: dash(linked?.temporaryExamineeId ?? e?.examineeNumber),
-      firstName: dash(linked?.firstName ?? e?.firstName),
-      middleName: dash(linked?.middleName ?? e?.middleName),
-      lastName: dash(linked?.lastName ?? e?.lastName),
+      examineeId: dash(linked.temporaryExamineeId),
+      firstName: dash(linked.firstName),
+      middleName: dash(linked.middleName),
+      lastName: dash(linked.lastName),
       age: age == null ? '-' : '$age',
       scanDate: _date(scan.capturedAt),
       score: result == null ? '-' : '${result.rawScore} / $denominator',
@@ -465,7 +495,7 @@ class GuidanceWebExportService {
               examCode: batch.examCode,
               rawScore: result?.rawScore,
               status: result?.status,
-              name: linked?.displayName ?? e?.displayName,
+              name: linked.displayName,
             )
           : null,
     );

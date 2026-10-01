@@ -704,6 +704,71 @@ void main() {
       await service.analyze(catalog: catalog, examCode: 'AT', status: AnalyticsBatchStatus.all);
       expect(client.scanReads, {'cur': 2, 'arc': 2});
     });
+
+    test(
+        'identity/eligibility staleness is an intentional, documented limitation of this cache: '
+        'linking a scan after its batch is cached does not retroactively change Analytics eligibility '
+        'until the existing Refresh (clearCache) is used -- the same way every other kind of change '
+        '(a rescan, a score edit) is already only picked up on refresh', () async {
+      client.batches.add(_batch('b1', 'AT'));
+      client.scansByBatch['b1'] = [_scan('s1', 'b1', 'AT', 60, examineeId: null)];
+      final catalog = await service.loadCatalog();
+      final b1 = catalog.batches.firstWhere((b) => b.id == 'b1');
+
+      // Scoped to b1 alone with `batch:`, so the group's own 'cur'/'arc'
+      // fixture batches (both auto-linked by default) never contribute to
+      // this test's counts.
+      final before = await service.analyze(catalog: catalog, examCode: 'AT', status: AnalyticsBatchStatus.all, batch: b1);
+      expect(before.at!.totalExaminees, 0, reason: 'unlinked -- excluded from the official-result aggregate');
+
+      // The scan becomes officially linked in the underlying data source --
+      // as if another open tab just used Link to Existing or Confirm &
+      // Create on it -- but this batch's scans are already cached here.
+      client.scansByBatch['b1'] = [_scan('s1', 'b1', 'AT', 60, examineeId: 'e-1')];
+
+      final stillCached = await service.analyze(catalog: catalog, examCode: 'AT', status: AnalyticsBatchStatus.all, batch: b1);
+      expect(stillCached.at!.totalExaminees, 0,
+          reason: 'stale by design: the cached batch was not re-read, so the new link is not reflected yet');
+      expect(client.scanReads['b1'], 1, reason: 'no second readCloudScans happened for this batch');
+
+      service.clearCache();
+      final refreshed = await service.analyze(catalog: catalog, examCode: 'AT', status: AnalyticsBatchStatus.all, batch: b1);
+      expect(refreshed.at!.totalExaminees, 1, reason: 'after Refresh, the newly-linked scan is counted');
+      expect(client.scanReads['b1'], 2);
+    });
+
+    test(
+        'a fresh service instance (what GuidanceWebHomeScreen actually builds every time the sidebar '
+        'returns to Analytics -- there is no IndexedStack/keep-alive, so the previous instance and its '
+        'cache were already disposed) reflects a link/unlink/create change made since the last visit '
+        'immediately, with no clearCache needed -- this is why automatic cross-service cache '
+        'invalidation was not added: there is usually nothing stale left to invalidate by the time '
+        'Analytics is reopened', () async {
+      client.batches.add(_batch('b1', 'AT'));
+      client.scansByBatch['b1'] = [_scan('s1', 'b1', 'AT', 60, examineeId: null)];
+
+      // "Session 1": Analytics opened, batch analyzed while unlinked.
+      final catalog1 = await service.loadCatalog();
+      final b1 = catalog1.batches.firstWhere((b) => b.id == 'b1');
+      final before =
+          await service.analyze(catalog: catalog1, examCode: 'AT', status: AnalyticsBatchStatus.all, batch: b1);
+      expect(before.at!.totalExaminees, 0);
+
+      // The Guidance Council member navigates to Examinee Records and links
+      // the scan (Link to Existing / Confirm & Create), then navigates back
+      // to Analytics -- a brand-new GuidanceWebAnalyticsService, exactly
+      // like GuidanceWebHomeScreen._buildBody() actually constructs.
+      client.scansByBatch['b1'] = [_scan('s1', 'b1', 'AT', 60, examineeId: 'e-1')];
+      final freshService = GuidanceWebAnalyticsService(client: client);
+      final catalog2 = await freshService.loadCatalog();
+      final b1Again = catalog2.batches.firstWhere((b) => b.id == 'b1');
+
+      final afterReopen = await freshService.analyze(
+          catalog: catalog2, examCode: 'AT', status: AnalyticsBatchStatus.all, batch: b1Again);
+
+      expect(afterReopen.at!.totalExaminees, 1,
+          reason: 'a fresh instance has nothing cached, so it reads current data without a manual Refresh');
+    });
   });
 
   group('Read-only', () {

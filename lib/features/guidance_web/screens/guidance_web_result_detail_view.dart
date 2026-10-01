@@ -673,6 +673,7 @@ class _GuidanceWebResultDetailViewState
       linkedExaminee: widget.linkedExaminee,
     );
     return _card('EXAMINEE INFORMATION', [
+      if (!identity.fromCanonicalExaminee) _unverifiedIdentityNotice(),
       _infoRow('Examinee ID', _dash(identity.examineeId)),
       _infoRow('First Name', _dash(identity.firstName)),
       _infoRow('Middle Name', _dash(identity.middleName)),
@@ -685,6 +686,33 @@ class _GuidanceWebResultDetailViewState
       _infoRow('Batch', widget.batch.batchCode),
       _infoRow('Scan Date', _fmtDateTime(widget.scan.capturedAt)),
     ]);
+  }
+
+  /// Shown whenever [WebExamineeIdentity.fromCanonicalExaminee] is false.
+  /// That covers TWO different scans ([resolveWebExamineeIdentity]'s own
+  /// doc comment): one that is genuinely unlinked/has a dangling
+  /// `examinee_id`, and one that IS linked but whose canonical record has
+  /// no usable name. The wording below is deliberately neutral about which
+  /// of the two this is -- it must stay true for a scan that really is
+  /// linked, so it never says "not linked" outright, only that whatever
+  /// name/ID appears below is not a verified one. Status indication only,
+  /// matching [GuidanceWebResultsView]'s own row-level badge -- this card
+  /// offers no linking action of its own.
+  Widget _unverifiedIdentityNotice() {
+    return Container(
+      key: const Key('unverifiedIdentityNotice'),
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF3F4F6),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppColors.cardBorder),
+      ),
+      child: Text(
+        'The name/ID shown below is not from a verified Examinee Record.',
+        style: AppTextStyles.body(size: 10, weight: FontWeight.w600, color: AppColors.textGray),
+      ),
+    );
   }
 
   String _examTitle() => widget.batch.examTitle.isNotEmpty

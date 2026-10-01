@@ -585,8 +585,8 @@ void main() {
   group('loadResultsForBatch -- resolves each scan\'s examinee through scans.examinee_id', () {
     final batch = mapCloudBatch(_batchRow());
 
-    test('only scans linked to a resolvable canonical examinee are returned '
-        '(link-to-existing and confirm-and-create alike); the scan itself is '
+    test('every scan is returned (linked, confirm-and-created, and genuinely unlinked alike); '
+        'linkedExamineeByScanId has an entry ONLY for a resolvable link; the scan itself is '
         'not modified', () async {
       client.scansByBatchId['b1'] = CloudScansRead.found([
         // The verified data shape: scan-level names NULL, generated scan number.
@@ -602,9 +602,10 @@ void main() {
 
       final results = await service.loadResultsForBatch(batch);
 
-      // 1. UNLINKED SCAN EXCLUDED -- s_unlinked (examinee_id null) never
-      // appears, even though it has its own OCR/staff tag.
-      expect(results.scans.map((s) => s.id), unorderedEquals(['s_linked', 's_created']));
+      // 1. EVERY scan is present -- s_unlinked (examinee_id null) appears
+      // too, now that Results shows unlinked scans as well.
+      expect(results.scans.map((s) => s.id), unorderedEquals(['s_linked', 's_created', 's_unlinked']));
+      // Only the two resolvable links get an entry here.
       expect(results.linkedExamineeByScanId.keys, unorderedEquals(['s_linked', 's_created']));
       final linked = results.linkedExamineeByScanId['s_linked']!;
       expect(linked.temporaryExamineeId, 'EX-000004');
@@ -614,29 +615,34 @@ void main() {
       expect(results.linkedExamineeByScanId['s_created']!.displayName, 'Santos, Maria');
       expect(results.linkedExamineeByScanId.containsKey('s_unlinked'), isFalse);
       // Reference only: the scan's own tag is exactly what the row held --
-      // linking/this filter never writes to or clears it.
+      // linking/this resolution never writes to or clears it.
       final linkedScan = results.scans.firstWhere((s) => s.id == 's_linked');
       expect(linkedScan.examinee?.examineeNumber, 'EX-1790006562335-3');
       expect(linkedScan.examinee?.firstName, '');
+      // The unlinked scan's own OCR tag is still there too, untouched.
+      final unlinkedScan = results.scans.firstWhere((s) => s.id == 's_unlinked');
+      expect(unlinkedScan.examinee?.firstName, 'Ana');
+      expect(unlinkedScan.examinee?.lastName, 'Lim');
     });
 
-    test('a batch with no linked scans never reads the examinees table and '
-        'returns zero results', () async {
+    test('a batch with no linked scans never reads the examinees table, but still '
+        'returns every (unlinked) scan', () async {
       client.scansByBatchId['b1'] = CloudScansRead.found([
         _scanRow(id: 's1', batchId: 'b1', firstName: 'Ana', lastName: 'Lim', examineeNumber: 'OLD-7'),
       ]);
 
       final results = await service.loadResultsForBatch(batch);
 
-      // 1. UNLINKED SCAN EXCLUDED, even when it's the only scan in the batch.
-      expect(results.scans, isEmpty);
+      // The unlinked scan is still returned; it simply has no official
+      // identity resolved for it (the examinee_id IS NULL case).
+      expect(results.scans.map((s) => s.id), ['s1']);
       expect(results.linkedExamineeByScanId, isEmpty);
       expect(client.calls, isNot(contains('readCloudExaminees')));
     });
 
     test('4. DANGLING/MISSING EXAMINEE RECORD -- a scan pointing at an '
-        'examinee that cannot be found is excluded, not shown with its own '
-        'tag', () async {
+        'examinee that cannot be found is still returned, but never shown with '
+        'the dangling link as a valid official identity', () async {
       client.scansByBatchId['b1'] = CloudScansRead.found([
         _scanRow(id: 's1', batchId: 'b1', examineeNumber: 'EX-1', examineeId: 'e_gone'),
       ]);
@@ -646,8 +652,30 @@ void main() {
 
       final results = await service.loadResultsForBatch(batch);
 
-      expect(results.scans, isEmpty);
+      // examinee_id was set (non-empty), so the examinees table IS read --
+      // the dangling link is distinguished from a null one internally --
+      // but the scan ends up with no entry in linkedExamineeByScanId either
+      // way, which is all a Results caller needs to know.
+      expect(client.calls, contains('readCloudExaminees'));
+      expect(results.scans.map((s) => s.id), ['s1']);
       expect(results.linkedExamineeByScanId, isEmpty);
+    });
+
+    test('a genuinely unlinked scan (examinee_id IS NULL) and a dangling one both end up with '
+        'no linkedExamineeByScanId entry, indistinguishably, in the same batch', () async {
+      client.scansByBatchId['b1'] = CloudScansRead.found([
+        _scanRow(id: 's_null', batchId: 'b1'), // examinee_id never set
+        _scanRow(id: 's_dangling', batchId: 'b1', examineeId: 'e_gone'),
+        _scanRow(id: 's_linked', batchId: 'b1', examineeId: 'e1'),
+      ]);
+      client.examineesToReturn = CloudExamineesRead.found([
+        _examineeRow(id: 'e1', temporaryId: 'EX-000004', first: 'Merch', last: 'Andulana'),
+      ]);
+
+      final results = await service.loadResultsForBatch(batch);
+
+      expect(results.scans.map((s) => s.id), unorderedEquals(['s_null', 's_dangling', 's_linked']));
+      expect(results.linkedExamineeByScanId.keys, ['s_linked']);
     });
 
     test('2. LINKED SCAN INCLUDED -- a scan whose examinee_id resolves to an '
@@ -740,8 +768,8 @@ void main() {
     });
 
     test('7. UNLINKED SCANS query (readUnlinkedScans) is never called by '
-        'GuidanceWebResultsService -- this filtering never touches the '
-        'separate Unlinked Scans data path', () async {
+        'GuidanceWebResultsService -- showing unlinked scans in Results never '
+        'touches the separate Unlinked Scans data path', () async {
       client.scansByBatchId['b1'] = CloudScansRead.found([
         _scanRow(id: 's1', batchId: 'b1', examineeId: 'e1'),
         _scanRow(id: 's2', batchId: 'b1'), // unlinked
@@ -750,8 +778,9 @@ void main() {
         _examineeRow(id: 'e1', temporaryId: 'EX-000004', first: 'Merch', last: 'Andulana'),
       ]);
 
-      await service.loadResultsForBatch(batch);
+      final results = await service.loadResultsForBatch(batch);
 
+      expect(results.scans.map((s) => s.id), unorderedEquals(['s1', 's2']));
       expect(client.calls, isNot(contains('readUnlinkedScans')));
     });
 
@@ -871,9 +900,10 @@ group('5. CONFIRM & CREATE PATH -- Confirm & Create Examinee makes the '
         GuidanceWebExamineeRecordsService(client: sharedClient);
     final batch = mapCloudBatch(_batchRow(id: 'b1', examCode: 'AT'));
 
-    // G. Results visibility BEFORE creation: excluded.
+    // G. Results visibility BEFORE creation: the scan is present (Results
+    // now shows unlinked scans too), but with no official identity resolved.
     final before = await resultsService.loadResultsForBatch(batch);
-    expect(before.scans, isEmpty);
+    expect(before.scans.map((s) => s.id), ['s_unlinked']);
     expect(before.linkedExamineeByScanId, isEmpty);
 
     // D. Exercise the actual Confirm & Create action through the real,

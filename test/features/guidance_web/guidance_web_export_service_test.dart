@@ -385,6 +385,27 @@ void main() {
       expect(document.examinees.single.examineeId, 'TMP-e-1');
     });
 
+    test(
+        'regression: default Export still excludes an unlinked scan even though '
+        'GuidanceWebResultsService.loadResultsForBatch now returns it too -- Export narrows to the '
+        'official-linked subset itself, so Results now showing unlinked scans never leaks into Export',
+        () async {
+      client.batches.add(_batch('b1', 'AT'));
+      client.scansByBatch['b1'] = [
+        _scan('linked', 'b1', 'AT', examineeId: 'e-1'),
+        _scan('unlinked', 'b1', 'AT', examineeId: null),
+      ];
+
+      // Confirm the premise: Results itself now returns BOTH scans.
+      final allResults = await results.loadResultsForBatch(_batchLocal('b1', 'AT'));
+      expect(allResults.scans, hasLength(2));
+
+      // Export still only produces one examinee page.
+      final document = await service.buildDefaultExportDocument(_batchLocal('b1', 'AT'));
+      expect(document.examinees, hasLength(1));
+      expect(document.batch!.stats, contains(('Total', '1')));
+    });
+
     test('a dangling examinee_id (row missing/RLS-hidden) is not exported', () async {
       client.batches.add(_batch('b1', 'AT'));
       client.scansByBatch['b1'] = [
@@ -453,6 +474,60 @@ void main() {
 
       expect(atDoc.examinees.single.examineeId, 'TMP-shared');
       expect(qtmDoc.examinees.single.examineeId, 'TMP-shared');
+    });
+
+    test(
+        'buildExportDocument drops an unlinked scan from `selected` even when the caller passes it in -- '
+        'enforced in the service itself, not merely by a caller pre-filtering, so a stale or hand-built '
+        'selection can never bypass the official-result rule', () async {
+      client.batches.add(_batch('b1', 'AT'));
+      client.scansByBatch['b1'] = [
+        _scan('linked', 'b1', 'AT', examineeId: 'e-1'),
+        _scan('unlinked', 'b1', 'AT', firstName: 'Ana', lastName: 'Lim', examineeId: null),
+      ];
+      final batch = _batchLocal('b1', 'AT');
+      final allResults = await results.loadResultsForBatch(batch);
+      expect(allResults.scans, hasLength(2)); // Results shows both.
+
+      // Deliberately pass the FULL, unfiltered scan list as `selected` --
+      // simulating a stale selection or a caller that didn't pre-filter.
+      final document = await service.buildExportDocument(
+        batch: batch,
+        includeSummary: false,
+        selected: allResults.scans,
+        allScans: allResults.scans,
+        linkedExamineeByScanId: allResults.linkedExamineeByScanId,
+      );
+
+      expect(document.examinees, hasLength(1));
+      expect(document.examinees.single.examineeId, 'TMP-e-1');
+      // The OCR name never appears anywhere in the output.
+      expect(document.examinees.any((e) => e.firstName == 'Ana'), isFalse);
+    });
+
+    test(
+        'buildExportDocument drops a dangling-examinee_id scan from `selected` the same way, even when the '
+        'caller passes it in', () async {
+      client.batches.add(_batch('b1', 'AT'));
+      client.scansByBatch['b1'] = [
+        _scan('linked', 'b1', 'AT', examineeId: 'e-1'),
+        _scan('dangling', 'b1', 'AT', examineeNumber: 'OLD-7', examineeId: 'e-deleted'),
+      ];
+      client.danglingExamineeIds.add('e-deleted');
+      final batch = _batchLocal('b1', 'AT');
+      final allResults = await results.loadResultsForBatch(batch);
+      expect(allResults.scans, hasLength(2));
+
+      final document = await service.buildExportDocument(
+        batch: batch,
+        includeSummary: false,
+        selected: allResults.scans,
+        allScans: allResults.scans,
+        linkedExamineeByScanId: allResults.linkedExamineeByScanId,
+      );
+
+      expect(document.examinees, hasLength(1));
+      expect(document.examinees.single.examineeId, 'TMP-e-1');
     });
   });
 

@@ -671,6 +671,8 @@ void main() {
       expect(find.text('Andulana'), findsOneWidget);
       expect(find.text('Scan ID'), findsOneWidget);
       expect(find.text('EX-1790006562335-3'), findsOneWidget);
+      // A genuinely linked, verified identity never shows the unverified notice.
+      expect(find.byKey(const Key('unverifiedIdentityNotice')), findsNothing);
       // Pure display: the fake client throws on any link/unlink/create/push, so an
       // exception here would mean this view tried to write something.
       expect(tester.takeException(), isNull);
@@ -689,9 +691,15 @@ void main() {
       expect(find.text('Cruz'), findsOneWidget);
       expect(find.text('EX-000004'), findsNothing);
       expect(find.text('Scan ID'), findsNothing);
+      // The scan IS linked, so the notice must never claim it is "not
+      // linked" -- but the name shown is still the unverified scan tag, so
+      // the notice still appears.
+      expect(find.byKey(const Key('unverifiedIdentityNotice')), findsOneWidget);
+      expect(find.textContaining('not linked'), findsNothing);
     });
 
-    testWidgets('an unlinked/legacy scan keeps showing its own tag, with no Scan ID row', (tester) async {
+    testWidgets('an unlinked/legacy scan keeps showing its own tag, with no Scan ID row, and the unverified notice',
+        (tester) async {
       await pumpIdentity(
         tester,
         scanTag: const ExamineeInfo(firstName: 'Ana', middleName: 'Reyes', lastName: 'Lim', examineeNumber: 'OLD-7'),
@@ -702,9 +710,11 @@ void main() {
       expect(find.text('Reyes'), findsOneWidget);
       expect(find.text('Lim'), findsOneWidget);
       expect(find.text('Scan ID'), findsNothing);
+      expect(find.byKey(const Key('unverifiedIdentityNotice')), findsOneWidget);
     });
 
-    testWidgets('no usable canonical or scan identity keeps the existing dashes', (tester) async {
+    testWidgets('no usable canonical or scan identity keeps the existing dashes, with the unverified notice',
+        (tester) async {
       await pumpIdentity(
         tester,
         scanTag: null,
@@ -715,6 +725,7 @@ void main() {
       // Examinee ID / First / Middle / Last Name -> four dashes, no Scan ID row.
       expect(find.text('—'), findsNWidgets(4));
       expect(find.text('Scan ID'), findsNothing);
+      expect(find.byKey(const Key('unverifiedIdentityNotice')), findsOneWidget);
     });
 
     // --- manual corrections (LocalScan.effectiveDecoded) ------------------

@@ -136,11 +136,12 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
   List<LocalScan> _scans = [];
   String? _scansError;
 
-  /// The canonical examinee for each scan in [_scans] (keyed by scan id),
-  /// read through `scans.examinee_id` -> `examinees.id`. Every scan in
-  /// [_scans] has an entry here -- [GuidanceWebResultsService.
-  /// loadResultsForBatch] never returns an unlinked scan or one whose
-  /// `examinee_id` doesn't resolve (see its own doc comment).
+  /// The canonical examinee for each scan in [_scans] that has one (keyed
+  /// by scan id), read through `scans.examinee_id` -> `examinees.id`. NOT
+  /// every scan in [_scans] has an entry here -- [_scans] now holds every
+  /// scan in the batch, linked or not, while this map only ever has one for
+  /// a scan whose `examinee_id` resolves to a real `examinees` row (see
+  /// [GuidanceWebResultsService.loadResultsForBatch]'s own doc comment).
   Map<String, ExamineeRecord> _linkedExaminees = {};
 
   String _statusFilter = 'All';
@@ -355,6 +356,11 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
   /// status value is introduced beyond the two the app already defines.
   String _effectiveStatus(LocalScan scan) => scan.result?.status ?? 'Ungraded';
 
+  /// Search matches the official linked identity first; a scan with no
+  /// resolved [ExamineeRecord] falls back to its own OCR/staff tag so it
+  /// can still be found by the name/number staff typed in while reviewing
+  /// the sheet -- that fallback is search-matching only, never a change to
+  /// what identity the row displays as official (see [_displayName]).
   List<LocalScan> get _filteredScans {
     final term = _searchController.text.trim().toLowerCase();
     return _scans.where((scan) {
@@ -1006,11 +1012,26 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
     );
   }
 
+  /// Display name for a row. Branches on [linked] itself, NOT on whether
+  /// [resultExamineeName] returned something -- a linked scan whose official
+  /// record has no usable name must show a plain placeholder, never fall
+  /// back to the scan's own OCR/staff tag, since that would print OCR text
+  /// on a row this view otherwise marks as having an official identity
+  /// (bold/dark, no "not linked" badge -- see [_buildResultRow]'s
+  /// [hasIdentity]), misrepresenting it as official. The OCR tag is only
+  /// ever shown as plain scan information when the scan has NO link at all.
+  String _displayName(LocalScan scan, ExamineeRecord? linked) {
+    if (linked != null) return resultExamineeName(linked) ?? 'No name on file';
+    final tag = scan.examinee;
+    if (tag != null) return tag.displayName;
+    return 'No name on file';
+  }
+
   Widget _buildResultRow(int index, LocalScan scan, LocalBatch batch) {
     final linked = _linkedExaminees[scan.id];
     final hasIdentity = linked != null;
     final result = scan.result;
-    final name = resultExamineeName(linked) ?? 'Untagged';
+    final name = _displayName(scan, linked);
     final score = result == null
         ? '—'
         : '${result.rawScore} / ${_denominatorFor(batch, result)}';
@@ -1030,14 +1051,21 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
           ),
           Expanded(
             flex: 4,
-            child: Text(
-              name,
-              style: AppTextStyles.body(
-                size: 11,
-                weight: FontWeight.w600,
-                color: hasIdentity ? AppColors.textDark : AppColors.textGray,
-              ),
-              overflow: TextOverflow.ellipsis,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  name,
+                  style: AppTextStyles.body(
+                    size: 11,
+                    weight: FontWeight.w600,
+                    color: hasIdentity ? AppColors.textDark : AppColors.textGray,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+                if (!hasIdentity) _notLinkedBadge(),
+              ],
             ),
           ),
           Expanded(
@@ -1068,6 +1096,30 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  /// "This scan is not linked to an official Examinee Record" -- shown under
+  /// the name of every row with no resolved [ExamineeRecord], whether that's
+  /// because `examinee_id` is null or because it no longer resolves (both
+  /// look the same to the Guidance Council: the row needs processing in
+  /// Examinee Records / Unlinked Scans either way). Status indication only --
+  /// this view never offers a linking action of its own, to avoid a second,
+  /// independent linking implementation alongside the existing one.
+  Widget _notLinkedBadge() {
+    return Container(
+      key: const Key('notLinkedBadge'),
+      margin: const EdgeInsets.only(top: 3),
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF3F4F6),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppColors.cardBorder),
+      ),
+      child: Text(
+        'Not linked to an Examinee Record',
+        style: AppTextStyles.body(size: 8.5, weight: FontWeight.w700, color: AppColors.textGray),
       ),
     );
   }
@@ -1121,16 +1173,18 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
   String _fmtDate(DateTime d) => '${_months[d.month - 1]} ${d.day}, ${d.year}';
 }
 
-/// The name the Results table shows for a row: the LINKED canonical
+/// The OFFICIAL name the Results table shows for a row: the linked canonical
 /// examinee's name (`scans.examinee_id` -> `examinees`) when it has a usable
-/// name (first or last non-blank), otherwise null. Every row this is called
-/// for has already passed [GuidanceWebResultsService.loadResultsForBatch]'s
-/// official-identity filter, so [linked] is expected to always be non-null
-/// here -- this null-safety is defensive only, never a second, silent
-/// "official" identity source. Deliberately does NOT fall back to the scan's
-/// own OCR/staff-tagged [LocalScan.examinee] -- that is not an official
-/// identity and must never be shown as though it were one in Results (it
-/// remains available and correctly used elsewhere, e.g. Unlinked Scans).
+/// name (first or last non-blank), otherwise null. [linked] is null for a
+/// scan that was never linked, or one whose `examinee_id` is dangling --
+/// [GuidanceWebResultsService.loadResultsForBatch] now returns every scan in
+/// the batch, not only linked ones, so a null [linked] here is a normal,
+/// expected case, not a defensive fallback. Deliberately does NOT fall back
+/// to the scan's own OCR/staff-tagged [LocalScan.examinee] -- that is not an
+/// official identity and must never be shown as though it were one; a
+/// caller that wants to display the OCR tag as plain scan information
+/// (never as the official name) reads [LocalScan.examinee] itself, as
+/// [_buildResultRow] does.
 String? resultExamineeName(ExamineeRecord? linked) {
   if (linked != null &&
       (linked.firstName.trim().isNotEmpty ||

@@ -354,6 +354,47 @@ class GuidanceWebAnalyticsService {
   static const int maxConcurrency = 4;
 
   /// Per-batch scans for this Analytics session (in memory only).
+  ///
+  /// Known, intentional limitation: this caches the raw `CloudScanRow`s,
+  /// `examinee_id` included, so linking/unlinking a scan via Examinee
+  /// Records (Link to Existing, Confirm & Create, Remove Link) while its
+  /// batch is already cached here does NOT retroactively change that
+  /// batch's eligibility in [analyze] -- the stale link state is used until
+  /// [clearCache] (the existing "Refresh" action) forces a fresh read. This
+  /// is the same staleness this cache already has for any other kind of
+  /// change (a rescan, a manual score correction) and is treated as
+  /// acceptable for the same reason: Analytics is an explicit, session-long
+  /// view a Guidance Council member opens and refreshes deliberately, not a
+  /// live feed.
+  ///
+  /// Deliberately NOT automatically invalidated from Examinee Records'
+  /// link/unlink/create actions. Considered and rejected:
+  ///  * This class and [GuidanceWebExamineeRecordsService] (where those
+  ///    actions actually live) have no dependency on each other today and
+  ///    are intentionally decoupled -- Analytics doesn't need to know
+  ///    Examinee Records exists, or vice versa. A direct call from one into
+  ///    the other, or a shared event bus/notifier the way a small part of
+  ///    [AppState] does for [GuidancePositions], would be new coupling
+  ///    between two services that currently have no reason to know about
+  ///    each other, purely to shave off a cache-refresh click.
+  ///  * It is largely unnecessary in this app's actual navigation shell
+  ///    (`GuidanceWebHomeScreen._buildBody()`): the sidebar swaps the whole
+  ///    body widget per destination with no `IndexedStack`/keep-alive
+  ///    anywhere in `lib/features/guidance_web/` (confirmed by inspection),
+  ///    so this service instance -- and this very cache -- is disposed the
+  ///    moment the Guidance Council member navigates to Examinee Records to
+  ///    link/unlink/create anything, and a brand-new instance with an empty
+  ///    cache is built the next time they open Analytics. The only linking
+  ///    actions in this app live in `guidance_web_examinee_records_view.dart`
+  ///    / `guidance_web_examinee_detail_view.dart`, neither reachable while
+  ///    Analytics itself stays mounted, so the realistic staleness window is
+  ///    already far narrower than "cache never clears" -- it is bounded to
+  ///    one open Analytics session that never navigates away.
+  ///  * The one remaining case the existing Refresh action still covers --
+  ///    a second person linking a scan in a different browser session while
+  ///    this one's Analytics stays open on the same batch -- is an ordinary,
+  ///    already-accepted limitation of any cached read view without a live
+  ///    sync channel, not something unique to this cache.
   final Map<String, _BatchScans> _cache = {};
 
   static SyncClient _buildDefaultClient() {

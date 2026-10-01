@@ -745,10 +745,11 @@ void main() {
     }
 
     testWidgets(
-      '1. UNLINKED SCAN EXCLUDED -- a scan linked to an existing examinee, '
+      '1. UNLINKED SCAN NOW SHOWN -- a scan linked to an existing examinee, '
       'and one created with Confirm and Create, show the official examinee\'s '
-      'name; the unlinked scan (with its own OCR/staff tag and a score) does '
-      'not appear at all',
+      'name; an unlinked scan (with its own OCR/staff tag and a score) now '
+      'appears too, with that tag shown as plain scan information and a '
+      '"not linked" badge -- never styled as though it were official',
       (tester) async {
         seedLinkedBatch();
         await pumpResultsView(tester);
@@ -758,32 +759,28 @@ void main() {
         expect(find.text('Santos, Maria'), findsOneWidget);
         expect(
           find.text('Cruz, Juan'),
-          findsNothing,
-          reason: 'the unlinked scan\'s OCR/staff tag is not an official '
-              'identity and must never be shown as a Results row',
+          findsOneWidget,
+          reason: 'the unlinked scan now appears, with its OCR/staff tag '
+              'shown as plain scan information, never an official identity',
         );
-        expect(find.text('Untagged'), findsNothing);
+        // Exactly one row (the unlinked one) carries the "not linked" badge.
+        expect(find.byKey(const Key('notLinkedBadge')), findsOneWidget);
       },
     );
 
     testWidgets(
-      'an entirely unlinked, untagged scan does not appear in Results and '
-      'the page shows the normal empty state -- the name comes from the '
-      'relationship, never invented',
+      'an unlinked scan with no OCR/staff tag at all shows a plain '
+      'placeholder, never an invented name -- and no examinees request is '
+      'made since nothing in the batch is linked',
       (tester) async {
         client.scansByBatchId['b1'] = CloudScansRead.found([
-          _scanRow(
-            id: 's1',
-            firstName: '',
-            lastName: '',
-            number: 'EX-1790006562335-3',
-          ),
+          _scanRow(id: 's1', firstName: '', lastName: '', number: ''),
         ]);
         await pumpResultsView(tester);
         await selectTheOnlyBatch(tester);
 
-        expect(find.text('Untagged'), findsNothing);
-        expect(find.text('No results found for this batch.'), findsOneWidget);
+        expect(find.text('No name on file'), findsOneWidget);
+        expect(find.byKey(const Key('notLinkedBadge')), findsOneWidget);
         expect(
           client.examineeReads,
           0,
@@ -834,7 +831,9 @@ void main() {
     testWidgets(
       '3. OFFICIAL IDENTITY USED -- a scan linked to a resolvable examinee '
       'whose record has no usable name still appears (it IS officially '
-      'linked) but shows "Untagged", never the scan\'s own OCR/staff tag',
+      'linked, so it gets no "not linked" badge) but shows a plain '
+      'placeholder, never falling back to the scan\'s own OCR/staff tag -- '
+      'that fallback only ever applies to a scan with NO link at all',
       (tester) async {
         client.scansByBatchId['b1'] = CloudScansRead.found([
           _scanRow(
@@ -852,7 +851,13 @@ void main() {
         await selectTheOnlyBatch(tester);
 
         expect(find.text('Cruz, Juan'), findsNothing);
-        expect(find.text('Untagged'), findsOneWidget);
+        expect(find.text('No name on file'), findsOneWidget);
+        expect(
+          find.byKey(const Key('notLinkedBadge')),
+          findsNothing,
+          reason: 'the scan IS linked -- a blank official name is not the '
+              'same as being unlinked, and must not show the "not linked" badge',
+        );
       },
     );
 
@@ -966,7 +971,7 @@ void main() {
   });
 
   group('8. Archived Results -- the shared GuidanceWebResultsView/'
-      'GuidanceWebResultsService official-identity filter applies '
+      'GuidanceWebResultsService linked/unlinked identity resolution applies '
       'identically for an archived batch', () {
     Future<void> pumpArchivedBatch(WidgetTester tester) async {
       tester.view.physicalSize = const Size(1400, 1600);
@@ -1001,9 +1006,9 @@ void main() {
     }
 
     testWidgets('a linked scan is shown with its official identity, and an '
-        'unlinked scan is excluded, exactly as in the normal (non-archived) '
-        'Results view -- no special-case archive behavior exists or is '
-        'needed', (tester) async {
+        'unlinked scan is shown too with its OCR tag and a "not linked" '
+        'badge, exactly as in the normal (non-archived) Results view -- no '
+        'special-case archive behavior exists or is needed', (tester) async {
       client.scansByBatchId['b1'] = CloudScansRead.found([
         _scanRow(
           id: 's_linked',
@@ -1026,8 +1031,9 @@ void main() {
       await pumpArchivedBatch(tester);
 
       expect(find.text('Andulana, Merch'), findsOneWidget);
-      expect(find.text('Lim, Ana'), findsNothing);
-      expect(find.widgetWithText(TextButton, 'View'), findsNWidgets(1));
+      expect(find.text('Lim, Ana'), findsOneWidget);
+      expect(find.byKey(const Key('notLinkedBadge')), findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'View'), findsNWidgets(2));
     });
   });
 }

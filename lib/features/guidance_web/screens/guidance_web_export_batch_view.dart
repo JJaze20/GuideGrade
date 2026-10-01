@@ -8,6 +8,7 @@ import 'package:printing/printing.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
+import '../../../models/examinee_record.dart';
 import '../../../models/local_batch.dart';
 import '../export/guidance_web_export_service.dart';
 import '../services/guidance_web_analytics_service.dart';
@@ -188,6 +189,15 @@ class _GuidanceWebExportBatchViewState
   String? _error;
   List<LocalScan> _scans = [];
 
+  /// The official [ExamineeRecord] for each scan in [_scans] that has one,
+  /// from the same `scans.examinee_id -> examinees` resolution
+  /// [GuidanceWebResultsService.loadResultsForBatch] already does for the
+  /// Results page -- reused here (not a second implementation) so the PDF
+  /// this view builds uses official identity exactly the same way the
+  /// default (whole-batch) export already does, never the scan's own
+  /// OCR/staff tag for a scan that IS linked.
+  Map<String, ExamineeRecord> _linkedExaminees = {};
+
   bool _includeSummary = true;
   late bool _includeCertificates = widget.initialIncludeCertificates;
   final Set<String> _selected = {};
@@ -207,10 +217,16 @@ class _GuidanceWebExportBatchViewState
       _error = null;
     });
     try {
-      final scans = await _service.loadScansForBatch(widget.batch);
+      // Same scan set loadScansForBatch would return (both apply the same
+      // default archived-attempt exclusion), plus the official-link
+      // resolution -- so this view's own scan list/selection semantics are
+      // unchanged, it just now also knows which scans are officially linked.
+      final results = await _service.loadResultsForBatch(widget.batch);
+      final scans = results.scans;
       if (!mounted) return;
       setState(() {
         _scans = scans;
+        _linkedExaminees = results.linkedExamineeByScanId;
         // Tagged scans start checked; untagged ones start unchecked — except
         // when opened from the list's "View output", which previews the
         // whole-batch export (every examinee).
@@ -240,13 +256,27 @@ class _GuidanceWebExportBatchViewState
     }
   }
 
-  /// Builds the PDF for [p] (batch summary and/or the given scans).
+  /// Scans in this batch that are officially linked -- the baseline
+  /// [_buildPdf] uses for the batch summary's cluster averages/category
+  /// bars. NOT the same as the user's checklist selection: those stats are
+  /// meant to reflect the batch's whole official population, not just what
+  /// happens to be checked, but (per the official-result Export rule) they
+  /// must never include an unlinked/dangling scan either.
+  List<LocalScan> get _officialScans =>
+      [for (final s in _scans) if (_linkedExaminees.containsKey(s.id)) s];
+
+  /// Builds the PDF for [p] (batch summary and/or the given scans). Official
+  /// identity is used for every linked scan -- see [_linkedExaminees] --
+  /// and [GuidanceWebExportService.buildExportDocument] itself drops any
+  /// unlinked/dangling scan from [p.scans] before it could ever reach a
+  /// printed page, so a stale or hand-picked selection can't bypass that.
   Future<Uint8List> _buildPdf(_Preview p) => _export.buildPdf(
     batch: widget.batch,
     includeSummary: p.includeSummary,
     selected: p.scans,
-    allScans: _scans,
+    allScans: _officialScans,
     includeCertificates: _includeCertificates,
+    linkedExamineeByScanId: _linkedExaminees,
   );
 
   void _openPreview(_Preview p) {
@@ -258,8 +288,16 @@ class _GuidanceWebExportBatchViewState
 
   String get _fileName => '${widget.batch.batchCode}_export.pdf';
 
+  /// Checked scans that will actually appear in the export -- excludes a
+  /// checked-but-unlinked/dangling scan, which [GuidanceWebExportService.
+  /// buildExportDocument] drops from the output regardless of its checkbox.
+  /// Counts/labels shown to the admin use this, never the raw checked
+  /// count, so what they're told matches what actually prints.
+  int get _exportableSelectedCount =>
+      _selected.where(_linkedExaminees.containsKey).length;
+
   String get _selectionSummary {
-    final count = _selected.length;
+    final count = _exportableSelectedCount;
     final summary = _includeSummary ? 'the batch summary and ' : '';
     return 'Export ${widget.batch.batchCode} as one PDF containing '
         '$summary$count examinee analytics page${count == 1 ? '' : 's'}'
@@ -327,7 +365,21 @@ class _GuidanceWebExportBatchViewState
     });
   }
 
-  String _nameOf(LocalScan s) => s.examinee?.displayName ?? 'Untagged';
+  /// Official name when [s] is linked (even if the UI selection wasn't
+  /// driven by that -- see [_load]'s own selection-default comment), falling
+  /// back to the scan's own OCR/staff tag only when there is no official
+  /// identity to show, exactly mirroring Results' own [GuidanceWebResultsView]
+  /// display rule so this checklist never shows OCR text where an official
+  /// name is available.
+  String _nameOf(LocalScan s) {
+    final official = _linkedExaminees[s.id];
+    if (official != null) {
+      return (official.firstName.trim().isNotEmpty || official.lastName.trim().isNotEmpty)
+          ? official.displayName
+          : 'No name on file';
+    }
+    return s.examinee?.displayName ?? 'Untagged';
+  }
 
   int get _denominatorBase => widget.batch.examCode == 'TAT' ? 160 : 0;
 
@@ -543,7 +595,7 @@ class _GuidanceWebExportBatchViewState
                 Expanded(flex: 2, child: Text('SCORE', style: headerStyle)),
                 Expanded(flex: 1, child: Text('%', style: headerStyle)),
                 Expanded(flex: 2, child: Text('STATUS', style: headerStyle)),
-                const SizedBox(width: 96),
+                const SizedBox(width: 104),
               ],
             ),
           ),
@@ -562,7 +614,12 @@ class _GuidanceWebExportBatchViewState
   }
 
   Widget _scanRow(int index, LocalScan s) {
-    final tagged = s.examinee != null;
+    // Dark/bold styling now means "officially linked" (matches Results'
+    // own hasIdentity), not merely "has an OCR/staff tag" -- a tagged but
+    // unlinked scan still shows its OCR name (see _nameOf) but in the same
+    // muted style as a fully untagged one, so it's never visually confused
+    // with a verified identity.
+    final tagged = _linkedExaminees.containsKey(s.id);
     final on = _selected.contains(s.id);
     final textStyle = AppTextStyles.body(
       size: 11,
@@ -587,7 +644,11 @@ class _GuidanceWebExportBatchViewState
           Expanded(flex: 1, child: Text(_percentOf(s), style: textStyle)),
           Expanded(flex: 2, child: Text(_statusOf(s), style: textStyle)),
           SizedBox(
-            width: 96,
+            // Pre-existing overflow fix: 96 was too narrow for the "view"
+            // button plus the status dot at the default text scale (found
+            // while adding this view's first test coverage) -- unrelated to
+            // identity resolution, just enough room to lay out cleanly.
+            width: 104,
             child: Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
@@ -612,7 +673,7 @@ class _GuidanceWebExportBatchViewState
   }
 
   Widget _buildActions() {
-    final count = _selected.length;
+    final count = _exportableSelectedCount;
     final summary = _includeSummary ? 'batch summary + ' : '';
     return Row(
       children: [
