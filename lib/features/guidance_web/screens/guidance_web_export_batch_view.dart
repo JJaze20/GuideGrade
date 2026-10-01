@@ -616,8 +616,16 @@ class _GuidanceWebExportBatchViewState
           style: AppTextStyles.body(size: 11, color: AppColors.textGray),
         ),
         const Spacer(),
-        TextButton(
+        OutlinedButton(
           key: const Key('viewOutputButton'),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: AppColors.darkNavy,
+            side: BorderSide(
+              color: _hasSelection ? AppColors.darkNavy : AppColors.cardBorder,
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ),
           onPressed: _hasSelection
               ? () => _openPreview(
                   _Preview(
@@ -627,7 +635,7 @@ class _GuidanceWebExportBatchViewState
                 )
               : null,
           child: Text(
-            'view output',
+            'View Selected',
             style: AppTextStyles.body(
               size: 15,
               weight: FontWeight.w800,
@@ -644,7 +652,7 @@ class _GuidanceWebExportBatchViewState
             padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
           ),
           child: Text(
-            _exporting ? 'exporting...' : 'export',
+            _exporting ? 'Exporting...' : 'Export Selected',
             style: AppTextStyles.body(
               size: 15,
               weight: FontWeight.w800,
