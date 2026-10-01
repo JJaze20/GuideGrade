@@ -125,8 +125,8 @@ Future<ExportDecision?> showExportConfirmDialog(
 
 /// Export → view: one batch's export checklist.
 ///
-/// The batch summary row and every scan row has a checklist dot (green =
-/// included in the export, grey = left out). `view output` previews what the
+/// The batch summary row and every scan row has a checkbox (checked =
+/// included in the export, unchecked = left out). `view output` previews what the
 /// checked items will look like printed; `export` will produce the PDF from
 /// the same selection. A row's own `view` previews just that one item.
 ///
@@ -399,7 +399,7 @@ class _GuidanceWebExportBatchViewState
               ],
               if (!_loading && _scans.isNotEmpty)
                 Padding(
-                  // Lines the dot up with the row dots below.
+                  // Aligns the checkbox with the row checkboxes below.
                   padding: const EdgeInsets.only(right: 16),
                   child: Row(
                     children: [
@@ -411,7 +411,7 @@ class _GuidanceWebExportBatchViewState
                           color: AppColors.textGray,
                         ),
                       ),
-                      _dot(
+                      _selectionCheckbox(
                         key: const Key('checkAllDot'),
                         on: _allChecked,
                         tooltip: _allChecked ? 'Uncheck all' : 'Check all',
@@ -433,7 +433,7 @@ class _GuidanceWebExportBatchViewState
     );
   }
 
-  Widget _dot({
+  Widget _selectionCheckbox({
     required bool on,
     required VoidCallback onTap,
     required String tooltip,
@@ -441,21 +441,13 @@ class _GuidanceWebExportBatchViewState
   }) {
     return Tooltip(
       message: tooltip,
-      child: InkWell(
+      child: Checkbox(
         key: key,
-        customBorder: const CircleBorder(),
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.all(6),
-          child: Container(
-            width: 16,
-            height: 16,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: on ? AppColors.primaryGreen : const Color(0xFFBDBDBD),
-            ),
-          ),
-        ),
+        value: on,
+        onChanged: (_) => onTap(),
+        activeColor: AppColors.primaryGreen,
+        checkColor: Colors.white,
+        semanticLabel: tooltip,
       ),
     );
   }
@@ -497,7 +489,7 @@ class _GuidanceWebExportBatchViewState
             ),
             key: const Key('summaryView'),
           ),
-          _dot(
+          _selectionCheckbox(
             key: const Key('summaryDot'),
             on: _includeSummary,
             tooltip: _includeSummary
@@ -595,7 +587,7 @@ class _GuidanceWebExportBatchViewState
                   () => _openPreview(_Preview(includeSummary: false, scans: [s])),
                   key: Key('scanView_${s.id}'),
                 ),
-                _dot(
+                _selectionCheckbox(
                   key: Key('scanDot_${s.id}'),
                   on: on,
                   tooltip: on ? 'Included in export' : 'Not included in export',
