@@ -510,6 +510,7 @@ void main() {
       required LocalScan scan,
       required LocalBatch batch,
       ExamineeRecord? linkedExaminee,
+      bool analytics = false,
     }) async {
       await tester.pumpWidget(
         MaterialApp(
@@ -520,12 +521,61 @@ void main() {
               service: service,
               onBack: () {},
               linkedExaminee: linkedExaminee,
+              showClusterAnalysis: analytics,
             ),
           ),
         ),
       );
       await tester.pumpAndSettle();
     }
+
+    testWidgets('analytics keeps essentials visible and expands details on demand',
+        (tester) async {
+      await pump(
+        tester,
+        scan: _scan(
+          examinee: const ExamineeInfo(
+            firstName: 'Juan', lastName: 'Cruz', examineeNumber: 'EX-1',
+          ),
+          result: _storedResult(raw: 58),
+        ),
+        batch: _batch(),
+        analytics: true,
+      );
+      expect(find.byKey(const Key('analyticsResultCards')), findsOneWidget);
+      expect(find.text('Juan Cruz'), findsOneWidget);
+      expect(find.text('58 / 72'), findsOneWidget);
+      expect(find.text('EX-1'), findsNothing);
+      expect(find.text('No scanned image available for this sheet.'), findsNothing);
+      await tester.tap(find.text('Examinee details'));
+      await tester.pumpAndSettle();
+      expect(find.text('EX-1'), findsOneWidget);
+      await tester.tap(find.text('Examinee details'));
+      await tester.pumpAndSettle();
+      expect(find.text('EX-1'), findsNothing);
+      await tester.ensureVisible(find.text('Scanned answer sheet'));
+      await tester.tap(find.text('Scanned answer sheet'));
+      await tester.pumpAndSettle();
+      expect(find.text('No scanned image available for this sheet.'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('analytics stacks summary cards on a narrow viewport', (tester) async {
+      tester.view.physicalSize = const Size(480, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await pump(
+        tester,
+        scan: _scan(),
+        batch: _batch(),
+        analytics: true,
+      );
+      expect(find.text('Ungraded'), findsOneWidget);
+      expect(tester.getTopLeft(find.text('RESULT SUMMARY')).dy,
+          greaterThan(tester.getTopLeft(find.text('EXAMINEE')).dy));
+      expect(tester.takeException(), isNull);
+    });
 
     testWidgets('3. the stored headline score/percentage/status are shown verbatim, '
         'never recalculated from the freshly-fetched (and here, disagreeing) answer key',
