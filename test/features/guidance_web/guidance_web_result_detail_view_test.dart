@@ -553,10 +553,9 @@ void main() {
       await tester.tap(find.text('Examinee details'));
       await tester.pumpAndSettle();
       expect(find.text('EX-1'), findsNothing);
-      await tester.ensureVisible(find.text('Scanned answer sheet'));
-      await tester.tap(find.text('Scanned answer sheet'));
-      await tester.pumpAndSettle();
-      expect(find.text('No scanned image available for this sheet.'), findsOneWidget);
+      expect(find.text('Scanned answer sheet'), findsNothing);
+      expect(find.text('SCANNED ANSWER SHEET'), findsNothing);
+      expect(client.imageCalls, isEmpty);
       expect(tester.takeException(), isNull);
     });
 

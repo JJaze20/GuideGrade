@@ -397,7 +397,7 @@ class _GuidanceWebResultDetailViewState
   void initState() {
     super.initState();
     _loadAnswerKey();
-    _loadScanImage();
+    if (!widget.showClusterAnalysis) _loadScanImage();
   }
 
   Future<void> _loadAnswerKey() async {
@@ -700,12 +700,6 @@ class _GuidanceWebResultDetailViewState
                   _card('TEST BREAKDOWN', _tatBreakdownRows(result)),
               ],
             ),
-          ),
-          _analyticsExpansion(
-            id: 'sheet',
-            title: 'Scanned answer sheet',
-            subtitle: 'Expand to preview; select the image to enlarge',
-            child: _buildScannedSheetCard(),
           ),
         ],
       ),
