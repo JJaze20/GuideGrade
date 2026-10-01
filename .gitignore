@@ -64,3 +64,6 @@ tools/firebase-claims/*.json
 # Each developer copies prod.example.json -> prod.json and fills in their key.
 dart_defines/*.json
 !dart_defines/prod.example.json
+
+# Real examinee sheet photos and local bench output — never commit.
+test-image-input/
