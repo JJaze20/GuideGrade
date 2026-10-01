@@ -475,7 +475,23 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
         : stuck.isNotEmpty
             ? '${stuck.length} item(s) for this batch could not sync — see status below.'
             : 'Sync started — some items are still uploading.';
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(jobs.isEmpty
+            ? 'Sync complete'
+            : stuck.isNotEmpty
+                ? 'Sync needs attention'
+                : 'Sync in progress'),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _tagExaminee(LocalBatch batch, LocalScan scan, int index) async {
