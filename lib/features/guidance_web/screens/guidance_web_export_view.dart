@@ -435,59 +435,77 @@ class _GuidanceWebExportViewState extends State<GuidanceWebExportView> {
         _viewing = b;
       }),
       child: Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      child: Row(
-        children: [
-          Flexible(
-            child: Text(
-              '${b.batchCode} — $title (${_fmtDate(b.createdAt)})',
-              overflow: TextOverflow.ellipsis,
-              style: AppTextStyles.body(size: 13),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    '${b.batchCode} — $title (${_fmtDate(b.createdAt)})',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTextStyles.body(size: 13),
+                  ),
+                  if (containsSearch) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      'Contains search',
+                      key: const Key('containsSearchNote'),
+                      style: AppTextStyles.body(
+                        size: 11.5,
+                        weight: FontWeight.w600,
+                        color: AppColors.textGray,
+                      ).copyWith(fontStyle: FontStyle.italic),
+                    ),
+                  ],
+                ],
+              ),
             ),
-          ),
-          if (containsSearch) ...[
             const SizedBox(width: 16),
-            Text(
-              'Contains search',
-              key: const Key('containsSearchNote'),
-              style: AppTextStyles.body(
-                size: 11.5,
-                weight: FontWeight.w600,
-                color: AppColors.textGray,
-              ).copyWith(fontStyle: FontStyle.italic),
+            // Identical action columns on every row, including while exporting.
+            SizedBox(
+              width: 112,
+              child: TextButton(
+                key: Key('exportButton_${b.id}'),
+                onPressed: _exportingBatchId == null
+                    ? () => _confirmQuickExport(b)
+                    : null,
+                child: Text(
+                  _exportingBatchId == b.id ? 'exporting...' : 'export',
+                  textAlign: TextAlign.center,
+                  style: AppTextStyles.body(
+                    size: 13,
+                    weight: FontWeight.w800,
+                    color: AppColors.primaryGreen,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            SizedBox(
+              width: 72,
+              child: TextButton(
+                key: Key('viewButton_${b.id}'),
+                onPressed: () => setState(() {
+                  _startInPreview = false;
+                  _viewing = b;
+                }),
+                child: Text(
+                  'view',
+                  textAlign: TextAlign.center,
+                  style: AppTextStyles.body(
+                    size: 13,
+                    weight: FontWeight.w800,
+                    color: AppColors.darkNavy,
+                  ),
+                ),
+              ),
             ),
           ],
-          const Spacer(),
-          TextButton(
-            key: Key('exportButton_${b.id}'),
-            onPressed: _exportingBatchId == null ? () => _confirmQuickExport(b) : null,
-            child: Text(
-              _exportingBatchId == b.id ? 'exporting...' : 'export',
-              style: AppTextStyles.body(
-                size: 13,
-                weight: FontWeight.w800,
-                color: AppColors.primaryGreen,
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          TextButton(
-            key: Key('viewButton_${b.id}'),
-            onPressed: () => setState(() {
-              _startInPreview = false;
-              _viewing = b;
-            }),
-            child: Text(
-              'view',
-              style: AppTextStyles.body(
-                size: 13,
-                weight: FontWeight.w800,
-                color: AppColors.darkNavy,
-              ),
-            ),
-          ),
-        ],
-      ),
+        ),
       ),
     );
   }
