@@ -1232,7 +1232,7 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
             // added to the batch, so page geometry that was never
             // established can never reach correction, sampling, or scoring.
             if (!mounted) return;
-            await _showMisalignedDialog(check.message);
+            await _showCaptureRejected(check.message, manual: manual);
             return;
           }
         }
@@ -1246,10 +1246,15 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
         // either the mesh itself rejected the corrected page, or the
         // corrected decode came out too dirty to trust. That is the same
         // user-facing problem as a misalignment (the sheet needs to be
-        // flattened and retaken), so show the retake guidance rather than
-        // letting this reach the generic "Capture failed: ..." snackbar.
+        // flattened and retaken), so route it through the retake guidance
+        // rather than the generic "Capture failed: ..." catch below --
+        // manual captures get the blocking dialog, auto-captures the
+        // non-blocking note (see [_showCaptureRejected]).
         if (!mounted) return;
-        await _showMisalignedDialog(alignmentRejectMessage ?? e.message);
+        await _showCaptureRejected(
+          alignmentRejectMessage ?? e.message,
+          manual: manual,
+        );
         return;
       }
       if (!mounted) return;
@@ -1353,6 +1358,35 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
       _isCapturing = false;
       if (mounted) setState(() {});
     }
+  }
+
+  /// Post-capture rejection feedback, split by how the capture started.
+  ///
+  /// A manual shutter tap is a deliberate action, so its rejection gets the
+  /// blocking [_showMisalignedDialog] with the full retake guidance — the
+  /// user asked for a photo and needs to know why it was discarded.
+  ///
+  /// An auto-capture the user never asked for must not do that. On a
+  /// textured non-sheet scene the live detector can false-positive all four
+  /// corners, auto-capture fires about a second after the screen opens, and
+  /// the modal would then cover the viewfinder for a shot nobody took —
+  /// which is exactly the "message appears immediately and blocks the view"
+  /// report. Report it transiently instead; the next manual tap still gets
+  /// the full dialog.
+  Future<void> _showCaptureRejected(String? message, {required bool manual}) {
+    if (manual) return _showMisalignedDialog(message);
+    if (!mounted) return Future.value();
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(
+            message ??
+                'No sheet detected — align the sheet and tap the shutter when ready.',
+          ),
+        ),
+      );
+    return Future.value();
   }
 
   /// Informational only — always ends with the photo discarded. There is no
