@@ -401,6 +401,14 @@ class _GuidanceWebExamineeAnalyticsViewState
         score,
         style: AppTextStyles.body(size: 11, color: AppColors.textGray),
       ),
+      trailing: Text(
+        'View',
+        style: AppTextStyles.body(
+          size: 11,
+          weight: FontWeight.w700,
+          color: AppColors.primaryGreen,
+        ),
+      ),
       onTap: () => setState(() => _viewing = item),
     );
   }

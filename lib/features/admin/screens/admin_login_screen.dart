@@ -91,94 +91,95 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFE8F5E9),
+      backgroundColor: AppColors.primaryGreen,
       body: Stack(
         fit: StackFit.expand,
         children: [
+          // NDMU banner, faded so the green base shows through.
           Opacity(
-            opacity: 0.45,
+            opacity: 0.28,
             child: Image.asset(
               'assets/images/NDMU BANNER.png',
               fit: BoxFit.cover,
               alignment: Alignment.center,
             ),
           ),
-          SafeArea(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
-                  child: Text(
-                    'NDMU Guidance and Testing Center',
-                    key: const Key('webLoginInstitution'),
-                    textAlign: TextAlign.left,
-                    style: AppTextStyles.heading(
-                      size: 30,
-                      color: const Color(0xFF174D2A),
-                    ),
+          Center(
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 450),
+          padding: const EdgeInsets.all(48),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // Logo and branding
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Image.asset(
+                    'assets/images/guidegrade logo1 trimmed.png',
+                    height: 72,
                   ),
-                ),
-                Expanded(
-                  child: LayoutBuilder(
-                    builder: (context, constraints) => SingleChildScrollView(
-                      child: ConstrainedBox(
-                        constraints: BoxConstraints(minHeight: constraints.maxHeight),
-                        child: Center(
-                          child: Padding(
-                            padding: const EdgeInsets.fromLTRB(20, 24, 20, 40),
-                            child: ConstrainedBox(
-                              constraints: const BoxConstraints(maxWidth: 480),
-                              child: _buildSignInCard(),
-                            ),
-                          ),
+                  const SizedBox(width: 14),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Guide',
+                        style: AppTextStyles.logo(
+                          size: 36,
+                          color: AppColors.warmRedOrange,
                         ),
                       ),
-                    ),
+                      Text(
+                        'Grade',
+                        style: AppTextStyles.logo(
+                          size: 36,
+                          color: AppColors.primaryGreen,
+                        ),
+                      ),
+                    ],
                   ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+                ],
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Web Console',
+                style: AppTextStyles.heading(size: 18, color: Colors.white),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Guidance automated test diagnostic checking system',
+                style: AppTextStyles.body(size: 12, color: Colors.white70),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 48),
 
-  Widget _buildSignInCard() {
-    return Container(
-      padding: const EdgeInsets.all(28),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(24),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x24000000),
-            blurRadius: 32,
-            offset: Offset(0, 12),
-          ),
-        ],
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Center(
-            child: Image.asset(
-              'assets/images/guidegrade logo1 trimmed.png',
-              height: 72,
-              fit: BoxFit.contain,
-            ),
-          ),
-          const SizedBox(height: 16),
-          Text(
-            'Guide Grade',
-            textAlign: TextAlign.center,
-            style: AppTextStyles.heading(size: 24, color: AppColors.primaryGreen),
-          ),
-          const SizedBox(height: 28),
-          Text('Sign In', style: AppTextStyles.heading(size: 22)),
-          const SizedBox(height: 20),
+              // Login card
+              Container(
+                padding: const EdgeInsets.all(32),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.1),
+                      blurRadius: 20,
+                      offset: const Offset(0, 10),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      'Sign In',
+                      style: AppTextStyles.heading(size: 16),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 24),
+
                     TextField(
                       controller: _emailController,
                       enabled: !_isLoading,
@@ -187,17 +188,17 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
                         hintText: 'you@ndmu.edu.ph',
                         prefixIcon: const Icon(Icons.email_outlined),
                         border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
+                          borderRadius: BorderRadius.circular(8),
                         ),
                         contentPadding: const EdgeInsets.symmetric(
                           horizontal: 16,
-                          vertical: 16,
+                          vertical: 12,
                         ),
                       ),
                       keyboardType: TextInputType.emailAddress,
                     ),
                     const SizedBox(height: 16),
-
+                    
                     TextField(
                       controller: _passwordController,
                       enabled: !_isLoading,
@@ -217,24 +218,24 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
                           },
                         ),
                         border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
+                          borderRadius: BorderRadius.circular(8),
                         ),
                         contentPadding: const EdgeInsets.symmetric(
                           horizontal: 16,
-                          vertical: 16,
+                          vertical: 12,
                         ),
                       ),
                     ),
                     const SizedBox(height: 24),
-
+                    
                     ElevatedButton(
                       onPressed: _isLoading ? null : _handleEmailLogin,
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.primaryGreen,
+                        backgroundColor: AppColors.darkNavy,
                         foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 18),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
                         shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
+                          borderRadius: BorderRadius.circular(8),
                         ),
                       ),
                       child: _isLoading
@@ -255,7 +256,21 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
                               ),
                             ),
                     ),
-
+                  ],
+                ),
+              ),
+              const SizedBox(height: 24),
+              
+              // Footer info
+              Text(
+                'NDMU Guidance Council System',
+                style: AppTextStyles.body(size: 11, color: Colors.white70),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
+      ),
         ],
       ),
     );

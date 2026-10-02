@@ -397,7 +397,7 @@ class _GuidanceWebResultDetailViewState
   void initState() {
     super.initState();
     _loadAnswerKey();
-    if (!widget.showClusterAnalysis) _loadScanImage();
+    _loadScanImage();
   }
 
   Future<void> _loadAnswerKey() async {
@@ -587,7 +587,6 @@ class _GuidanceWebResultDetailViewState
     if (_error != null) {
       return _errorState();
     }
-    if (widget.showClusterAnalysis) return _buildAnalyticsCards();
     return SingleChildScrollView(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -607,141 +606,6 @@ class _GuidanceWebResultDetailViewState
           ] else
             _buildAnswerDetailsCard(),
         ],
-      ),
-    );
-  }
-
-  /// Analytics keeps the stored headline visible and puts longer details
-  /// behind independently expandable cards. The Results view is unchanged.
-  Widget _buildAnalyticsCards() {
-    final identity = resolveWebExamineeIdentity(
-      scan: widget.scan,
-      linkedExaminee: widget.linkedExaminee,
-    );
-    final name = [identity.firstName, identity.middleName, identity.lastName]
-        .whereType<String>()
-        .map((part) => part.trim())
-        .where((part) => part.isNotEmpty)
-        .join(' ');
-    final result = widget.scan.result;
-    final letter = _examineeLetter();
-    final hasClusters = clusterDefsFor(widget.batch.examCode) != null;
-    return SingleChildScrollView(
-      key: const Key('analyticsResultCards'),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final identityCard = _card('EXAMINEE', [
-                _analyticsFact('Name', _dash(name)),
-                _analyticsFact('Exam', _examTitle()),
-                _analyticsFact('Batch', widget.batch.batchCode),
-              ]);
-              final summaryCard = _card('RESULT SUMMARY', [
-                Wrap(
-                  spacing: 28,
-                  runSpacing: 12,
-                  children: [
-                    _analyticsFact('Score', result == null
-                        ? '—'
-                        : '${result.rawScore} / ${_denominatorFor(result)}'),
-                    _analyticsFact('Percentage', result == null
-                        ? '—'
-                        : '${result.percentage.toStringAsFixed(2)}%'),
-                    _analyticsFact('Status', result?.status ?? 'Ungraded'),
-                    _analyticsFact('Category', letter ?? '—'),
-                  ],
-                ),
-              ]);
-              if (constraints.maxWidth < 760) {
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    identityCard,
-                    const SizedBox(height: 12),
-                    summaryCard,
-                  ],
-                );
-              }
-              return Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(child: identityCard),
-                  const SizedBox(width: 16),
-                  Expanded(child: summaryCard),
-                ],
-              );
-            },
-          ),
-          const SizedBox(height: 16),
-          _analyticsExpansion(
-            id: 'identity',
-            title: 'Examinee details',
-            subtitle: 'Identification and scan date',
-            child: _buildExamineeCard(),
-          ),
-          if (hasClusters)
-            _analyticsExpansion(
-              id: 'clusters',
-              title: 'Cluster analysis',
-              subtitle: 'Correct answers and comparison with the batch',
-              child: _buildClusterAnalysisCard(),
-            ),
-          _analyticsExpansion(
-            id: 'category',
-            title: 'Category and interpretation',
-            subtitle: 'Classification details and supporting analysis',
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _buildCategoryCard(),
-                if (result != null && widget.batch.examCode == 'TAT')
-                  _card('TEST BREAKDOWN', _tatBreakdownRows(result)),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _analyticsFact(String label, String value) => Padding(
-    padding: const EdgeInsets.only(bottom: 8),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(label, style: AppTextStyles.body(size: 12, color: AppColors.textGray)),
-        const SizedBox(height: 4),
-        Text(value, style: AppTextStyles.body(size: 16, weight: FontWeight.w700)),
-      ],
-    ),
-  );
-
-  Widget _analyticsExpansion({
-    required String id,
-    required String title,
-    required String subtitle,
-    required Widget child,
-  }) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Material(
-        color: Colors.white,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-          side: const BorderSide(color: AppColors.cardBorder),
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: ExpansionTile(
-          key: PageStorageKey('analytics-${widget.scan.id}-$id'),
-          title: Text(title, style: AppTextStyles.body(size: 14, weight: FontWeight.w700)),
-          subtitle: Text(subtitle, style: AppTextStyles.body(size: 12, color: AppColors.textGray)),
-          tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-          childrenPadding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
-          children: [child],
-        ),
       ),
     );
   }
