@@ -7,6 +7,7 @@ import '../../../core/routes/app_routes.dart';
 import '../../../core/state/app_state.dart';
 import '../../../models/local_batch.dart';
 import '../../../shared/widgets/app_bottom_nav.dart';
+import '../../../shared/widgets/app_header_bar.dart';
 import '../../../shared/widgets/needs_review_badge.dart';
 
 /// Staff Home / Dashboard. Shows the welcome card, the Exam/Batch
@@ -76,19 +77,21 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
 
     return Scaffold(
       backgroundColor: const Color(0xFFF4F7F5),
-      appBar: AppBar(
-        title: const Text('GuideGrade'),
-        backgroundColor: Colors.white,
-        foregroundColor: AppColors.primaryGreen,
-        elevation: 0,
-        actions: [
-          IconButton(
-            tooltip: 'Your profile',
-            onPressed: () => Navigator.of(context).pushNamed(AppRoutes.profile),
-            icon: const Icon(Icons.account_circle_outlined),
+      // The original Home header: green bar, amber script "G" (the logo font)
+      // beside the GUIDE GRADE wordmark, and the round profile button.
+      appBar: AppHeaderBar(
+        title: 'GUIDE GRADE',
+        showLogo: true,
+        trailing: InkWell(
+          onTap: () => Navigator.of(context).pushNamed(AppRoutes.profile),
+          child: Container(
+            width: 30,
+            height: 30,
+            alignment: Alignment.center,
+            decoration: const BoxDecoration(color: Color(0xFF1B5E20), shape: BoxShape.circle),
+            child: const FaIcon(FontAwesomeIcons.userTie, size: 12, color: Colors.white),
           ),
-          const SizedBox(width: 8),
-        ],
+        ),
       ),
       body: SafeArea(
         child: Center(
