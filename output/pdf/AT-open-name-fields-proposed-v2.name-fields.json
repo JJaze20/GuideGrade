@@ -1,0 +1,36 @@
+{
+  "proposedTemplateVersion": "AT-open-name-fields-proposed-v2",
+  "sourceTemplateVersion": "AT-redesign-v1",
+  "pageWidthPt": 595.28,
+  "pageHeightPt": 841.89,
+  "coordinateOrigin": "top-left",
+  "units": "points",
+  "fields": [
+    {
+      "name": "lastName",
+      "x": 43.9971448,
+      "y": 103.9986717,
+      "width": 452.0020568,
+      "height": 20.0033064,
+      "boxCount": 0
+    },
+    {
+      "name": "firstName",
+      "x": 43.9971448,
+      "y": 139.99788809999998,
+      "width": 384.1996648,
+      "height": 20.0033064,
+      "boxCount": 0
+    },
+    {
+      "name": "middleInitial",
+      "x": 428.2027624,
+      "y": 139.99788809999998,
+      "width": 67.802392,
+      "height": 20.0033064,
+      "boxCount": 0
+    }
+  ],
+  "changes": "Only 43 internal letter-cell divider lines removed. All other PDF geometry preserved.",
+  "scannerIntegration": "Set all three name box counts to zero for this new version. Preserve old template metadata for archived scans. Scanner code has not been changed."
+}

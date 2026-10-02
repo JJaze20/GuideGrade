@@ -1,0 +1,66 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# The .vscode folder contains launch configuration and tasks you configure in
+# VS Code which you may wish to be included in version control, so this line
+# is commented out by default.
+#.vscode/
+
+# Flutter/Dart/Pub related
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
+/coverage/
+
+# Symbolication related
+app.*.symbols
+
+# Obfuscation related
+app.*.map.json
+
+# Android Studio will place build artifacts here
+/android/app/debug
+/android/app/profile
+/android/app/release
+
+# Environment files — NEVER commit these (may hold keys / connection strings).
+.env
+*.env
+
+# Firebase / Google Cloud service-account credentials — NEVER commit these.
+# Used only by the local Admin SDK claim script in tools/firebase-claims/.
+*serviceAccount*.json
+*service-account*.json
+*firebase-adminsdk*.json
+gcp-*.json
+google-credentials*.json
+tools/firebase-claims/node_modules/
+tools/firebase-claims/*.json
+!tools/firebase-claims/package.json
+!tools/firebase-claims/package-lock.json
+
+# Supabase build-config dart-defines — real URL/key stay local, never committed.
+# Each developer copies prod.example.json -> prod.json and fills in their key.
+dart_defines/*.json
+!dart_defines/prod.example.json

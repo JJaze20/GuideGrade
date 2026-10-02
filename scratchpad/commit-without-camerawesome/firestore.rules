@@ -1,0 +1,224 @@
+rules_version = '2';
+
+// GuideGrade Firestore security rules.
+//
+// Authentication (Firebase Auth) proves who a request is from. These rules
+// are where authorization -- what that identity is allowed to read/write --
+// is actually enforced server-side, since the Flutter client alone cannot
+// be trusted to gate this: a modified or compromised client could otherwise
+// call any FirestoreService method directly, regardless of what the app's
+// own screens check.
+//
+// Role-separation model (confirmed):
+//   system_admin      -- system management only (users, the append-only
+//                         logs audit trail, future admin monitoring).
+//                         MUST NOT read or write confidential examination
+//                         data.
+//   guidance_council   -- the confidential examination workflow (exams,
+//                         answer keys, batches, and any future
+//                         confidential examination collection). MUST NOT
+//                         manage other users and MUST NOT read/write logs.
+//
+// Roles are read from the requester's OWN `users/{uid}` document (never
+// from client-supplied request data). There is no path in these rules for
+// a user to create their own `users` document or to grant themselves a
+// role -- see the `users` match block below. Because of that, the very
+// first system_admin account must be created manually (Firebase Console or
+// the Admin SDK, which bypasses these client-facing rules) before anyone
+// can sign in through the app at all.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isSelf(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function callerDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function callerExists() {
+      return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    // Signed in, has a users/{uid} doc, and that doc's isActive == true.
+    // Does NOT imply any particular role -- see isSystemAdmin()/
+    // isGuidanceCouncil() below, which are the only functions confidential
+    // collections should ever be gated on.
+    function isActiveUser() {
+      return callerExists() && callerDoc().data.isActive == true;
+    }
+
+    function isSystemAdmin() {
+      return isActiveUser() && callerDoc().data.role == 'system_admin';
+    }
+
+    function isGuidanceCouncil() {
+      return isActiveUser() && callerDoc().data.role == 'guidance_council';
+    }
+
+    // ------------------------------------------------------------------
+    // users/{userId} -- Firebase Auth UID is always the document ID.
+    // System Administrator responsibility (User Management). Guidance
+    // Council must not manage other users.
+    // ------------------------------------------------------------------
+    match /users/{userId} {
+      // Every signed-in user may read their OWN doc, even before it's known
+      // to exist or be active/approved -- the app uses exactly this read to
+      // determine those things (see AuthService._authorize), so it can't be
+      // required to already hold. A system_admin may read any user's doc.
+      allow get: if isSelf(userId) || isSystemAdmin();
+
+      // Listing/querying the whole collection (e.g. a future user-
+      // management screen -- FirestoreService.getAllUsers/getUsersByRole/
+      // getActiveUsers already exist but no screen calls them yet) is
+      // admin-only.
+      allow list: if isSystemAdmin();
+
+      // New accounts are provisioned by an existing admin only. Signing in
+      // with Firebase never creates a users doc anymore -- there is
+      // deliberately no "create your own doc" allowance here.
+      allow create: if isSystemAdmin();
+
+      // A system_admin may update anything on any user (role, isActive,
+      // etc). Anyone may update ONLY their own lastLoginAt on their own
+      // doc -- the single field AuthService touches on every successful
+      // sign-in (FirestoreService.updateLastLogin). This is intentionally
+      // narrow so a user can never grant themselves a role or reactivate
+      // their own deactivated account by writing to themselves.
+      allow update: if isSystemAdmin()
+        || (isSelf(userId)
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastLoginAt']));
+
+      // No code path in the app deletes a user document.
+      allow delete: if false;
+    }
+
+    // ------------------------------------------------------------------
+    // exams/{examId} -- confidential examination data.
+    // Guidance Council only. system_admin gets no rule here at all (falls
+    // through to the default-deny catch-all below), regardless of isActive.
+    // ------------------------------------------------------------------
+    match /exams/{examId} {
+      allow read: if isGuidanceCouncil();
+      allow create, update: if isGuidanceCouncil();
+      allow delete: if false; // no delete path exists in the app today
+    }
+
+    // ------------------------------------------------------------------
+    // batches/{batchId} -- confidential examination data.
+    // Guidance Council only.
+    // ------------------------------------------------------------------
+    match /batches/{batchId} {
+      allow read: if isGuidanceCouncil();
+      allow create, update: if isGuidanceCouncil();
+      allow delete: if false; // no delete path exists in the app today
+    }
+
+    // ------------------------------------------------------------------
+    // answer_keys/{answerKeyId} -- confidential examination data.
+    // Guidance Council only.
+    // ------------------------------------------------------------------
+    match /answer_keys/{answerKeyId} {
+      allow read: if isGuidanceCouncil();
+      allow create, update: if isGuidanceCouncil();
+      allow delete: if false; // no delete path exists in the app today
+    }
+
+    // ------------------------------------------------------------------
+    // results/{resultId} -- confidential examination data (one graded
+    // outcome per exam+batch scanned sheet). Guidance Council only, same
+    // posture as exams/batches/answer_keys above. system_admin
+    // gets no rule here at all, so it falls through to the default-deny
+    // catch-all below, exactly like the other confidential collections.
+    // NOT deployed as part of this change -- see the A1/A2 implementation
+    // task this was written for.
+    // ------------------------------------------------------------------
+    match /results/{resultId} {
+      allow read: if isGuidanceCouncil();
+      allow create, update: if isGuidanceCouncil();
+      allow delete: if false; // no delete path exists in the app today
+    }
+
+    // ------------------------------------------------------------------
+    // Fixed vocabularies for logs/{logId} -- must exactly match
+    // lib/models/log_entry.dart's LogCategory/LogSeverity/LogAction. The
+    // client (LoggingService.createLog) asserts the same sets, but a
+    // client-side assertion is not a security boundary -- this is the
+    // actual enforcement, so a compromised or modified client still can't
+    // write a log with an arbitrary/impersonated action, category, or
+    // severity.
+    // ------------------------------------------------------------------
+    function isValidLogCategory(category) {
+      return category in ['AUTHENTICATION', 'USER_MANAGEMENT', 'AUTHORIZATION'];
+    }
+
+    function isValidLogSeverity(severity) {
+      return severity in ['INFO', 'WARNING'];
+    }
+
+    function isValidLogAction(action) {
+      return action in [
+        'LOGIN_SUCCESS', 'LOGOUT',
+        'USER_CREATED', 'USER_ACTIVATED', 'USER_DEACTIVATED',
+        'PASSWORD_RESET_SENT', 'DUPLICATE_EMAIL_ATTEMPT',
+        'ADMIN_GUIDANCE_ROUTE_DENIED'
+      ];
+    }
+
+    // ------------------------------------------------------------------
+    // logs/{logId} -- append-only System Administrator audit trail.
+    // System Admin only, both to read and to create (validated below).
+    // Nobody -- not even system_admin -- may update or delete a log entry
+    // once written, by any path: this is what makes the collection
+    // genuinely append-only, not just "the UI doesn't offer a delete
+    // button."
+    //
+    // The create rule does not just check role: it independently
+    // re-validates every field LoggingService.createLog sends, so a
+    // modified/compromised client cannot write a log entry that
+    // impersonates a different actor, claims an unrecognized
+    // action/category/severity, fakes its own timestamp, or omits the
+    // required fields -- even though only system_admin can reach this
+    // rule at all.
+    // ------------------------------------------------------------------
+    match /logs/{logId} {
+      allow read: if isSystemAdmin();
+
+      allow create: if isSystemAdmin()
+        // Can only ever log yourself as the actor -- never another UID.
+        && request.resource.data.actorUid == request.auth.uid
+        && request.resource.data.actorRole == 'system_admin'
+        && request.resource.data.actorEmail is string
+        && request.resource.data.actorEmail.size() > 0
+        && isValidLogCategory(request.resource.data.category)
+        && isValidLogSeverity(request.resource.data.severity)
+        && isValidLogAction(request.resource.data.action)
+        // Must be the server-timestamp sentinel, not a client-computed value.
+        && request.resource.data.timestamp == request.time
+        && request.resource.data.description is string
+        && request.resource.data.description.size() > 0
+        && request.resource.data.success is bool
+        && (!('targetUserId' in request.resource.data) || request.resource.data.targetUserId is string)
+        && (!('targetUserEmail' in request.resource.data) || request.resource.data.targetUserEmail is string);
+
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    // Default deny for anything not explicitly matched above -- this is
+    // also what makes exams/batches/answer_keys unreadable and
+    // unwritable by system_admin: there is no admin-inclusive rule for any
+    // of those collections, so a system_admin request falls all the way
+    // through to here and is denied. Any future confidential examination
+    // collection should get its own isGuidanceCouncil()-gated match block
+    // above, not rely on this catch-all.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

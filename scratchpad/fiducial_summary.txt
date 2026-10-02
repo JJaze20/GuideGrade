@@ -1,0 +1,16 @@
+09-12 13:49:32.846  1808  5500 I flutter : [OMR FIDUCIAL DEBUG] ===== pass on 1080x1920 image | pageQuad=null (fallback: literal photo corners) =====
+09-12 13:49:32.951  1808  5500 I flutter : [OMR FIDUCIAL DEBUG] q=top-left winner=(91.3,242.5) expected=(42.4,49.2) distance=200.0 positionScore=0.113 squareness=0.981 contrast=80.5 tier=low
+09-12 13:49:33.215  1808  5500 I flutter : [OMR FIDUCIAL DEBUG] q=top-left winner=(91.3,242.6) expected=(42.4,49.2) distance=200.0 positionScore=0.557 squareness=0.993 contrast=80.5 tier=confident
+09-12 13:49:33.231  1808  5500 I flutter : [OMR FIDUCIAL DEBUG] q=top-right winner=(923.7,174.2) expected=(1016.5,49.2) distance=155.7 positionScore=0.183 squareness=0.938 contrast=59.1 tier=low
+09-12 13:49:33.438  1808  5500 I flutter : [OMR FIDUCIAL DEBUG] q=top-right winner=(923.7,174.2) expected=(1016.5,49.2) distance=155.7 positionScore=0.634 squareness=0.937 contrast=59.1 tier=confident
+09-12 13:49:33.557  1808  5500 I flutter : [OMR FIDUCIAL DEBUG] q=bottom-left winner=(34.2,1647.3) expected=(42.4,1801.0) distance=153.7 positionScore=0.187 squareness=0.883 contrast=60.8 tier=low
+09-12 13:49:33.883  1808  5500 I flutter : [OMR FIDUCIAL DEBUG] q=bottom-left winner=(34.3,1647.2) expected=(42.4,1801.0) distance=153.7 positionScore=0.638 squareness=0.873 contrast=60.8 tier=confident
+09-12 13:49:33.941  1808  5500 I flutter : [OMR FIDUCIAL DEBUG] q=bottom-right winner=(1022.8,1695.8) expected=(1016.5,1801.0) distance=105.2 positionScore=0.317 squareness=0.938 contrast=60.6 tier=low
+09-12 13:49:34.535  1808  5500 I flutter : [OMR FIDUCIAL DEBUG] q=bottom-right winner=(1022.9,1695.9) expected=(1016.5,1801.0) distance=104.8 positionScore=0.736 squareness=0.967 contrast=66.6 tier=confident
+09-12 13:49:34.536  1808  5500 I flutter : [OMR FIDUCIAL DEBUG] WINNER q=top-left tier=confident (91.3,242.6) sq=0.993
+09-12 13:49:34.536  1808  5500 I flutter : [OMR FIDUCIAL DEBUG] WINNER q=top-right tier=confident (923.7,174.2) sq=0.937
+09-12 13:49:34.536  1808  5500 I flutter : [OMR FIDUCIAL DEBUG] WINNER q=bottom-left tier=confident (34.3,1647.2) sq=0.873
+09-12 13:49:34.536  1808  5500 I flutter : [OMR FIDUCIAL DEBUG] WINNER q=bottom-right tier=confident (1022.9,1695.9) sq=0.967
+09-12 13:49:34.537  1808  5500 I flutter : [OMR FIDUCIAL DEBUG] q=bottom-right DOWNGRADE reason=geom_inconsistent frac=(1.116,1.023) off=0.194
+09-12 13:49:34.731  1808  5500 I flutter : [OMR FIDUCIAL DEBUG] q=bottom-right-rescue winner=(860.4,1550.4) expected=(866.7,1578.8) distance=28.4 positionScore=0.734 squareness=0.886 contrast=32.0 tier=confident
+09-12 13:49:34.731  1808  5500 I flutter : [OMR FIDUCIAL DEBUG] q=bottom-right RESCUE_FAILED candidate found but geometrically inconsistent (frac=(0.933,0.919))
