@@ -29,10 +29,7 @@ class AppBottomNav extends StatelessWidget {
             AppRoutes.examHub,
             AppRoutes.cloudArchive,
           ];
-          Navigator.of(context).pushNamedAndRemoveUntil(
-            routes[index],
-            (route) => false,
-          );
+          AppRoutes.switchTab(context, routes[index]);
         },
         destinations: const [
           NavigationDestination(
