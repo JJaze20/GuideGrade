@@ -59,6 +59,11 @@ dependencies:
   # opencv_dart in omr_decoder.dart.
   google_mlkit_text_recognition: ^0.15.0
   connectivity_plus: ^7.3.1
+  # Plain HTTP client for the DeepSeek vision API (the app's only external
+  # REST call -- everything else goes through the Firebase/Supabase SDKs).
+  # See lib/core/services/deepseek_vision_service.dart. The API key arrives
+  # via --dart-define, never from source.
+  http: ^1.6.0
   # Encrypts locally saved batch data at rest (batch.json + scan images) --
   # see lib/core/services/batch_crypto_service.dart. flutter_secure_storage
   # holds the AES key in the Android Keystore / iOS Keychain rather than in

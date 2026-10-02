@@ -48,6 +48,47 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
     if (!mounted) return;
     final appState = AppStateScope.of(context);
     await appState.persistCapturedSessionToBatch();
+    if (!mounted) return;
+    // Force Scan: the operator accepted the sheet, so it is already durable in
+    // the batch above. Adjudication only refines it and never blocks or undoes
+    // that save -- a model that is unreachable leaves the decode exactly as it
+    // was, which is the sheet the operator agreed to keep.
+    if (!appState.forceScanRequested) return;
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(const SnackBar(
+      content: Text('Force Scan — sending the unclear answers for review…'),
+      duration: Duration(minutes: 1),
+    ));
+    await appState.runForceScanAdjudication();
+    if (!mounted) return;
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(SnackBar(content: Text(_forceScanSummary(appState))));
+  }
+
+  /// What to tell the operator about the Force Scan run.
+  ///
+  /// A run that changed nothing is reported as agreement, not as failure: a
+  /// model that confirms what the decoder read is the useful outcome here, and
+  /// calling that a wasted call would train people to distrust the right answer.
+  String _forceScanSummary(AppState appState) {
+    final error = appState.forceScanError;
+    final corrected = appState.forceScanItemsCorrected;
+    if (error != null) {
+      // Report what did land alongside the failure: an all-or-nothing message
+      // would deny corrections that are already saved, graded and visible.
+      return corrected == 0
+          ? 'Force Scan: $error'
+          : 'Force Scan: $error ($corrected answer'
+              '${corrected == 1 ? '' : 's'} still re-read).';
+    }
+    if (appState.forceScanSheetsSent == 0) {
+      return 'Force Scan — nothing needed a second opinion.';
+    }
+    if (corrected == 0) {
+      return 'Force Scan — the vision model agreed with every answer read.';
+    }
+    return 'Force Scan — $corrected answer${corrected == 1 ? '' : 's'} '
+        're-read from the scan.';
   }
 
   @override

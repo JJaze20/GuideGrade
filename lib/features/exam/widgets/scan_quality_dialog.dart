@@ -2,11 +2,26 @@ import 'package:flutter/material.dart';
 
 import '../../../core/omr/scan_quality_gate.dart';
 
-/// Asks whether to keep a scan that did not clear every quality check.
+/// What the operator decided about a scan that did not clear every check.
+enum ScanQualityChoice {
+  /// Keep it as the decoder read it. The flagged items stay flagged.
+  scanAnyway,
+
+  /// Throw this session away and capture the sheets again. Also what
+  /// dismissing the dialog means -- the safer of the three, since an
+  /// accidental tap outside should never silently accept a flagged sheet.
+  scanAgain,
+
+  /// Keep it, then send the items the decoder could not resolve to the vision
+  /// model for adjudication (see `OmrVisionAdjudicator`). Only ever offered
+  /// when a model is actually configured for this build.
+  forceScan,
+}
+
+/// Asks what to do with a scan that did not clear every quality check.
 ///
-/// Returns true to accept it anyway, false to go back and rescan. Dismissing
-/// it counts as rescanning -- the safer of the two, since an accidental tap
-/// outside should never silently accept a sheet that was flagged.
+/// [forceScanAvailable] is false when no vision model is configured, which
+/// hides "Force Scan" rather than offering a button that can only fail.
 ///
 /// Advisory, not a block. See [ScanQualityGate] for why: the checks establish
 /// that nothing detectable went wrong, which is a necessary condition for a
@@ -14,11 +29,12 @@ import '../../../core/omr/scan_quality_gate.dart';
 /// check and are read perfectly -- an examinee who genuinely left half the
 /// paper blank trips the blank-rate check -- so the person holding the sheet
 /// has to be the one to decide.
-Future<bool> showScanQualityDialog(
+Future<ScanQualityChoice> showScanQualityDialog(
   BuildContext context,
-  List<SheetQualityReport> failed,
-) async {
-  final accepted = await showGeneralDialog<bool>(
+  List<SheetQualityReport> failed, {
+  bool forceScanAvailable = false,
+}) async {
+  final chosen = await showGeneralDialog<ScanQualityChoice>(
     context: context,
     barrierDismissible: true,
     barrierLabel: 'Scan quality',
@@ -39,18 +55,25 @@ Future<bool> showScanQualityDialog(
         opacity: animation,
         child: ScaleTransition(
           scale: Tween<double>(begin: 0.85, end: 1.0).animate(curved),
-          child: _ScanQualityDialog(failed: failed),
+          child: _ScanQualityDialog(
+            failed: failed,
+            forceScanAvailable: forceScanAvailable,
+          ),
         ),
       );
     },
   );
-  return accepted ?? false;
+  return chosen ?? ScanQualityChoice.scanAgain;
 }
 
 class _ScanQualityDialog extends StatelessWidget {
   final List<SheetQualityReport> failed;
+  final bool forceScanAvailable;
 
-  const _ScanQualityDialog({required this.failed});
+  const _ScanQualityDialog({
+    required this.failed,
+    required this.forceScanAvailable,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -132,13 +155,33 @@ class _ScanQualityDialog extends StatelessWidget {
               ),
             ),
             const Divider(height: 1, color: Color(0xFF1E293B)),
+            if (forceScanAvailable)
+              const Padding(
+                padding: EdgeInsets.fromLTRB(18, 10, 18, 0),
+                child: Text(
+                  'Force Scan keeps this sheet and lets the vision model settle '
+                  'the answers that could not be read. It takes a moment and '
+                  'may change nothing.',
+                  style: TextStyle(
+                    color: Color(0xFF94A3B8),
+                    fontSize: 11,
+                    height: 1.35,
+                  ),
+                ),
+              ),
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.end,
+              // Wrap, not Row: three actions on a 420px dialog overflow at
+              // large text scales, and a wrapped button is readable where a
+              // clipped one is not.
+              child: Wrap(
+                alignment: WrapAlignment.end,
+                spacing: 6,
+                runSpacing: 6,
                 children: [
                   TextButton(
-                    onPressed: () => Navigator.of(context).pop(true),
+                    onPressed: () =>
+                        Navigator.of(context).pop(ScanQualityChoice.scanAnyway),
                     style: TextButton.styleFrom(
                       foregroundColor: const Color(0xFF94A3B8),
                       padding: const EdgeInsets.symmetric(
@@ -150,9 +193,27 @@ class _ScanQualityDialog extends StatelessWidget {
                           fontSize: 12.5, fontWeight: FontWeight.w700),
                     ),
                   ),
-                  const SizedBox(width: 6),
+                  if (forceScanAvailable)
+                    OutlinedButton(
+                      onPressed: () => Navigator.of(context)
+                          .pop(ScanQualityChoice.forceScan),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFFFBBF24),
+                        side: const BorderSide(color: Color(0xFFFBBF24)),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 11),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8)),
+                      ),
+                      child: const Text(
+                        'Force Scan',
+                        style: TextStyle(
+                            fontSize: 12.5, fontWeight: FontWeight.w700),
+                      ),
+                    ),
                   ElevatedButton(
-                    onPressed: () => Navigator.of(context).pop(false),
+                    onPressed: () =>
+                        Navigator.of(context).pop(ScanQualityChoice.scanAgain),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFF16A34A),
                       foregroundColor: Colors.white,

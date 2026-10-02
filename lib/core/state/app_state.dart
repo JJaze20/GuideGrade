@@ -22,9 +22,11 @@ import '../omr/exam_score.dart';
 import '../omr/name_ocr_service.dart';
 import '../omr/omr_decoder.dart';
 import '../omr/omr_scorer.dart';
+import '../omr/omr_vision_adjudicator.dart';
 import '../omr/scan_rescoring.dart';
 import '../omr/omr_templates.dart';
 import '../services/batch_repository.dart';
+import '../services/deepseek_vision_service.dart';
 import '../services/firestore_service.dart';
 import '../services/local_batch_repository.dart';
 import 'rescan_candidate.dart';
@@ -1560,6 +1562,15 @@ class AppState extends ChangeNotifier {
   /// dialog, so a double tap or a retried save applies the correction once —
   /// and a request that would not change what the item reads as is a no-op
   /// (no new revision, nothing queued to sync).
+  ///
+  /// [actorUid]/[actorName] override who the history credits the correction to.
+  /// They exist for corrections the app itself applied — currently "Force Scan"
+  /// adjudication, which credits the vision model rather than the operator who
+  /// switched it on. In a graded record the entry has to say who actually chose
+  /// the answer, and a correction the model proposed is not the operator's
+  /// decision to have made. Omitted, the signed-in user is credited as usual;
+  /// there is deliberately no default that could attribute an app-made change
+  /// to a person.
   Future<ScanCorrectionOutcome> correctScanAnswer({
     required String batchId,
     required String scanId,
@@ -1568,6 +1579,8 @@ class AppState extends ChangeNotifier {
     required CorrectedAnswer value,
     String? reason,
     required String requestId,
+    String? actorUid,
+    String? actorName,
   }) =>
       _changeCorrection(
         batchId: batchId,
@@ -1575,6 +1588,9 @@ class AppState extends ChangeNotifier {
         sectionName: sectionName,
         itemNumber: itemNumber,
         requestId: requestId,
+        actor: (actorUid == null && actorName == null)
+            ? null
+            : (uid: actorUid ?? '', name: actorName ?? ''),
         apply: (history, scan, detected, editor) => CorrectionRules.withCorrection(
           history,
           id: requestId,
@@ -1665,6 +1681,9 @@ class AppState extends ChangeNotifier {
     required String sectionName,
     required int itemNumber,
     required String requestId,
+    // Who to credit in the history; null credits the signed-in user (see
+    // [correctScanAnswer]).
+    ({String uid, String name})? actor,
     required List<AnswerCorrection> Function(
       List<AnswerCorrection> history,
       LocalScan scan,
@@ -1686,7 +1705,7 @@ class AppState extends ChangeNotifier {
       throw StateError('Item $itemNumber in "$sectionName" is not on this sheet.');
     }
     final user = currentUser;
-    final editor = (uid: user?.userId ?? '', name: user?.displayName ?? '');
+    final editor = actor ?? (uid: user?.userId ?? '', name: user?.displayName ?? '');
     final history = apply(scan.corrections, scan, detected, editor);
     if (identical(history, scan.corrections) || history.length == scan.corrections.length) {
       return ScanCorrectionOutcome(batch: batch, scan: scan, changed: false);
@@ -1722,6 +1741,129 @@ class AppState extends ChangeNotifier {
       changed: true,
       scoreRecalculated: true,
     );
+  }
+
+  // --- Force Scan (vision adjudication) ---------------------------------------
+
+  /// Set by the scanning screen when the operator picks "Force Scan" on the
+  /// quality dialog, and consumed by [runForceScanAdjudication] after the
+  /// session has been persisted. It lives here rather than being passed
+  /// through the navigation because the two halves happen on either side of a
+  /// screen change (scanning -> results), and the results screen is where
+  /// persistence runs.
+  bool forceScanRequested = false;
+
+  /// How many sheets the last [runForceScanAdjudication] run sent to the model.
+  int forceScanSheetsSent = 0;
+
+  /// How many items the model actually changed. Zero is a perfectly good
+  /// result -- it means the model agreed with the decoder, which is the
+  /// useful answer, not a failure.
+  int forceScanItemsCorrected = 0;
+
+  /// Set when the run could not finish. Null when it did, including when it
+  /// had nothing to do.
+  String? forceScanError;
+
+  /// Lazily built so a build with no API key never even constructs a client.
+  OmrVisionAdjudicator? _visionAdjudicator;
+
+  OmrVisionAdjudicator get visionAdjudicator =>
+      _visionAdjudicator ??= OmrVisionAdjudicator();
+
+  /// Whether the vision model is configured for this build. False hides
+  /// "Force Scan" entirely rather than offering a button that can only fail.
+  bool get visionAdjudicationAvailable => visionAdjudicator.isAvailable;
+
+  /// Sends the just-persisted session's unresolved items to the vision model
+  /// and records what it decides as ordinary corrections.
+  ///
+  /// Runs only when [forceScanRequested] was set, consumes that flag, and
+  /// requires the session to have reached the batch already — a correction is
+  /// stored per scan, so there has to be a scan to store it against. Every
+  /// verdict goes through [correctScanAnswer], the same path a counselor's
+  /// manual correction takes, so it is re-graded by the unchanged exam rules,
+  /// persisted, queued for sync, and left reversible in the scan's history.
+  ///
+  /// Never throws: a model that is down, rate-limited, out of credit or
+  /// unreachable leaves the accepted scan exactly as the decoder read it and
+  /// reports why through [forceScanError]. Force Scan is a bonus on top of an
+  /// already-accepted sheet, never a reason for the sheet to fail.
+  Future<void> runForceScanAdjudication() async {
+    if (!forceScanRequested) return;
+    forceScanRequested = false;
+    forceScanSheetsSent = 0;
+    forceScanItemsCorrected = 0;
+    forceScanError = null;
+
+    final batch = scanBatch;
+    if (batch == null || !sessionPersistedToBatch) {
+      forceScanError = 'The scan was not saved, so nothing was sent for review.';
+      notifyListeners();
+      return;
+    }
+    final adjudicator = visionAdjudicator;
+    if (!adjudicator.isAvailable) {
+      forceScanError = 'No vision model is configured for this build.';
+      notifyListeners();
+      return;
+    }
+
+    // This session's own sheets: sessionScanOffset is the index its first scan
+    // landed at, savedScanCount how many made it under the batch's cap.
+    final start = sessionScanOffset;
+    final end = start + savedScanCount;
+    try {
+      for (var i = start; i < end && i < batch.scans.length; i++) {
+        final scan = batch.scans[i];
+        final bytes = await batchRepository.resolveScanImage(batch.id, scan);
+        if (bytes == null) continue;
+        final verdicts = await adjudicator.adjudicate(
+          result: scan.decoded,
+          imageBytes: bytes,
+        );
+        if (verdicts.isEmpty) continue;
+        forceScanSheetsSent++;
+        // Walk the sheet's own items and look each one up, rather than
+        // iterating the verdicts: the item carries the section name and number
+        // the correction is keyed by, and an item the model returned that is
+        // not on this sheet simply finds nothing here.
+        for (final item in scan.decoded.items) {
+          final value = verdicts[
+              AnswerCorrection.keyFor(item.sectionName, item.itemNumber)];
+          if (value == null) continue;
+          try {
+            final outcome = await correctScanAnswer(
+              batchId: batch.id,
+              scanId: scan.id,
+              sectionName: item.sectionName,
+              itemNumber: item.itemNumber,
+              value: value,
+              reason: 'Force Scan — resolved by the vision model',
+              requestId:
+                  'vision-${scan.id}-${item.sectionName}-${item.itemNumber}',
+              actorUid: 'ai:force-scan',
+              actorName: 'Force Scan (vision model)',
+            );
+            if (outcome.changed) forceScanItemsCorrected++;
+          } on StateError catch (e) {
+            // In practice this is the "no answer key" refusal: a correction
+            // that cannot be graded is deliberately not recorded, and that is
+            // the right call here too. Report it and keep going -- the other
+            // sheets are unaffected, and abandoning them would turn one
+            // ungradable exam into a failed run.
+            forceScanError ??= e.message;
+          }
+        }
+        notifyListeners();
+      }
+    } on DeepSeekVisionException catch (e) {
+      // Already a user-safe message -- see the exception's own doc comment.
+      forceScanError = e.message;
+    } catch (e) {
+      forceScanError = 'Force Scan could not finish: $e';
+    }
+    notifyListeners();
   }
 
   /// App-external "omr_debug" folder for [processCapturedPages]'s debug

@@ -1381,10 +1381,27 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
     // archive. Advisory: see ScanQualityGate for why a hard block would be
     // worse than the problem.
     final failedQuality = ScanQualityGate.inspectSession(appState.scannedResults);
+    // Cleared unconditionally, before the dialog: a flag left set by an earlier
+    // session (whose adjudication never ran, e.g. the operator backed out of
+    // the results screen) must never make a later accepted scan call the model
+    // on its own.
+    appState.forceScanRequested = false;
     if (failedQuality.isNotEmpty) {
-      final acceptAnyway = await showScanQualityDialog(context, failedQuality);
+      final choice = await showScanQualityDialog(
+        context,
+        failedQuality,
+        // Force Scan is only offered when a vision model is actually
+        // configured for this build; without a key the button would be a
+        // promise the app cannot keep.
+        forceScanAvailable: appState.visionAdjudicationAvailable,
+      );
       if (!mounted) return;
-      if (!acceptAnyway) return;
+      if (choice == ScanQualityChoice.scanAgain) return;
+      // Force Scan keeps the sheet AND asks for adjudication once the session
+      // has been saved -- which happens on the results screen, the screen this
+      // is about to navigate to, since a correction is stored per scan and
+      // there is no scan yet. See [AppState.runForceScanAdjudication].
+      appState.forceScanRequested = choice == ScanQualityChoice.forceScan;
     }
 
     Navigator.of(context).pushReplacementNamed(AppRoutes.examResults);
