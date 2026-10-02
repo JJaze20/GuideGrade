@@ -58,6 +58,9 @@ class OmrDecoder {
 
   OmrScanResult decode(String imagePath, OmrExamTemplate template, {String? rectifiedOutputPath}) => _unsupported();
 
+  void saveDebugVisualization(String imagePath, OmrExamTemplate template, String outputDir, int pageIndex) =>
+      _unsupported();
+
   String? rectifyForOverlay(String imagePath, OmrExamTemplate template, String outputPath) => _unsupported();
 
   ({String lastName, String firstName, String middleName})? cropNameFields(

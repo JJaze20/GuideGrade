@@ -14,6 +14,7 @@ import '../../../shared/widgets/name_crop_strip.dart';
 import '../../../shared/widgets/primary_button.dart';
 import '../widgets/scan_editing_factory.dart';
 import '../widgets/scan_result_summary.dart';
+import 'omr_debug_viewer_screen.dart';
 import 'scanned_image_viewer_screen.dart';
 
 /// Exam Results — shows what the OMR decoder read off each scanned sheet in
@@ -336,6 +337,35 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
                 label: const Text('View Scan', style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700)),
                 style: TextButton.styleFrom(
                   foregroundColor: AppColors.primaryGreen,
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+              ),
+            ),
+          ],
+          if (appState.lastDebugImagesDir != null) ...[
+            const SizedBox(height: 2),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => OmrDebugViewerScreen(
+                      debugDir: appState.lastDebugImagesDir!,
+                      // The decoder numbers pages from 1; this list is 0-based.
+                      pageIndex: sheetIndex + 1,
+                      title: 'How the image was scanned — Sheet ${sheetIndex + 1}',
+                      meshVerdict: scored.meshVerdict,
+                    ),
+                  ),
+                ),
+                icon: const FaIcon(FontAwesomeIcons.layerGroup,
+                    size: 12, color: Color(0xFF94A3B8)),
+                label: const Text('How the image was scanned',
+                    style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700)),
+                style: TextButton.styleFrom(
+                  foregroundColor: const Color(0xFF94A3B8),
                   padding: const EdgeInsets.symmetric(horizontal: 4),
                   minimumSize: Size.zero,
                   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
