@@ -59,7 +59,7 @@ class NeedsReviewBanner extends StatelessWidget {
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              '$n sheet${n == 1 ? '' : 's'} need${n == 1 ? 's' : ''} review — the scanner either could not '
+              '$n sheet${n == 1 ? '' : 's'} need${n == 1 ? 's' : ''} review. The scanner either could not '
               'read some answers clearly (double or unclear marks), or accepted the sheet only after '
               'straightening a bent photo: ${sheetLabels.join(', ')}. '
               'Open each sheet and confirm the answers.',

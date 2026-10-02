@@ -1288,7 +1288,7 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
                 if (score != null && score.isGraded && score.totalGraded < score.totalItems)
                   const Text('Partial answer key'),
                 if (scored.items.any((item) => item.isAmbiguous))
-                  const Text('Preliminary score — some answers need review.'),
+                  const Text('Preliminary score. Some answers need review.'),
                 // The score above can be clean even when the sheet needed
                 // straightening, so say so here rather than letting it read
                 // as an ordinary capture: this one is flagged for review
