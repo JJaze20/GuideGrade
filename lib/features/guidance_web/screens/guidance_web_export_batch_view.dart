@@ -587,7 +587,7 @@ class _GuidanceWebExportBatchViewState
                 Expanded(flex: 2, child: Text('SCORE', style: headerStyle)),
                 Expanded(flex: 1, child: Text('%', style: headerStyle)),
                 Expanded(flex: 2, child: Text('STATUS', style: headerStyle)),
-                const SizedBox(width: 104),
+                const SizedBox(width: 128),
               ],
             ),
           ),
@@ -636,11 +636,15 @@ class _GuidanceWebExportBatchViewState
           Expanded(flex: 1, child: Text(_percentOf(s), style: textStyle)),
           Expanded(flex: 2, child: Text(_statusOf(s), style: textStyle)),
           SizedBox(
-            // Pre-existing overflow fix: 96 was too narrow for the "view"
-            // button plus the status dot at the default text scale (found
-            // while adding this view's first test coverage) -- unrelated to
-            // identity resolution, just enough room to lay out cleanly.
-            width: 104,
+            // Pre-existing overflow fix, widened again: 96 was too narrow
+            // for the "view" button plus the old status dot (found while
+            // adding this view's first test coverage); 104 was sized for
+            // that dot and is in turn too narrow for the standard Material
+            // Checkbox the selection indicator became later -- its default
+            // tap target is noticeably wider than the old custom dot. 128
+            // is just enough room for "view" + a Checkbox to lay out
+            // cleanly with a small margin, unrelated to identity resolution.
+            width: 128,
             child: Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
