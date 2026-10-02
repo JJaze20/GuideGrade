@@ -244,6 +244,12 @@ class CorrectionRules {
       items: items,
       templateVersion: decoded.templateVersion,
       meshInteriorMeasuredFrac: decoded.meshInteriorMeasuredFrac,
+      // Carried through so a correction never erases the record that this
+      // capture was accepted only because the mesh rescued it -- otherwise
+      // the sheet would silently stop being flagged the moment a reviewer
+      // touched any one item. (meshVerdict is still dropped here; that is a
+      // separate, pre-existing gap, left as-is.)
+      meshRescued: decoded.meshRescued,
     );
   }
 

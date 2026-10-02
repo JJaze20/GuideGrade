@@ -10,6 +10,7 @@ import 'omr_alignment_check.dart';
 import 'omr_mesh_correction.dart';
 import 'omr_bubble_classifier.dart';
 import 'omr_templates.dart';
+import 'scan_quality_gate.dart';
 import 'tat_marker_validation.dart';
 
 /// Template-centered search box, fallback quadrant, and scoring anchor.
@@ -1654,7 +1655,7 @@ class OmrDecoder {
   /// Reads [imagePath] against [template] and returns the decoded marks.
   /// Throws a [StateError] with a user-facing message if the sheet couldn't
   /// be read or aligned.
-  OmrScanResult decode(String imagePath, OmrExamTemplate template, {String? rectifiedOutputPath}) {
+  OmrScanResult decode(String imagePath, OmrExamTemplate template, {String? rectifiedOutputPath, bool allowMeshRescue = false}) {
     final decodeTotalSw = _kPerfDebug ? (Stopwatch()..start()) : null;
     var decodeCornerSearchMs = 0;
     var decodeWarpMs = 0;
@@ -1716,6 +1717,12 @@ class OmrDecoder {
             // Declared out here so the `finally` below can dispose it; it is
             // assigned as the first statement inside the `try`.
             cv.Mat? normalizedGray;
+            // Set only when this decode was admitted by the mesh rescue
+            // below (the planar gate failed, the caller opted in, and the
+            // interior marks actually corrected the sheet). Threaded onto
+            // the returned [OmrScanResult.meshRescued] so the sheet can be
+            // flagged for review downstream.
+            var meshRescued = false;
             try {
               // Post-warp geometric gate: independently re-detect each
               // fiducial directly on `warped` (already grayscale — `oriented`
@@ -1743,15 +1750,27 @@ class OmrDecoder {
                 decodeWarpVerifyMs = verifySw.elapsedMilliseconds;
               }
               if (!warpVerdict.ok) {
-                throw StateError(warpVerdict.message!);
+                if (!allowMeshRescue) {
+                  throw StateError(warpVerdict.message!);
+                }
+                // The planar check failed, but a warp DOES exist here (the
+                // corner search and the homography both succeeded) — this is
+                // the moderate-curvature case the bench measured as
+                // recoverable by the local mesh, not an unlocatable page.
+                // Rather than discarding the photo, fall through to the
+                // interior-mark mesh built just below and let it decide; if
+                // the mesh cannot actually correct the sheet, the guards
+                // after it re-throw. See [OmrScanResult.meshRescued].
+                meshRescued = true;
               }
 
               // Local mesh correction: only meaningful for a template that
               // prints the extra interior fiducials (see
               // [OmrExamTemplate.interiorFiducials]) — a no-op (empty map,
               // [OmrMeshCorrection.build] returns
-              // [OmrMeshVerdict.notApplicable]) for every legacy sheet and
-              // TAT, so this changes nothing for them. The 4 corners are
+              // [OmrMeshVerdict.notApplicable]) for a template with none of
+              // them, i.e. a pre-redesign legacy sheet. Every current
+              // template prints some, TAT included. The 4 corners are
               // passed as their own canonical position (not
               // `refine.corners`, which are pre-warp/original-photo
               // coordinates) — they're exactly where the homography just
@@ -1797,6 +1816,15 @@ class OmrDecoder {
               // independent check exists to catch.
               if (mesh.shouldRejectCapture) {
                 throw StateError(mesh.rejectionReason!);
+              }
+              // A rescue is only a rescue if the mesh actually corrected
+              // something. If the planar gate failed but the mesh is a no-op
+              // (no interior marks on this template, too few detected, or a
+              // residual small enough to count as planar), nothing improved
+              // the sheet that failed verification — so the original refusal
+              // stands rather than accepting an uncorrected bad warp.
+              if (meshRescued && !mesh.isActive) {
+                throw StateError(warpVerdict.message!);
               }
 
               // Illumination normalization runs first, on the raw warp:
@@ -1931,6 +1959,20 @@ class OmrDecoder {
                         if (bubbleSw != null) {
                           decodeBubbleReadMs = bubbleSw.elapsedMilliseconds;
                         }
+                        // A mesh rescue admits a capture the pipeline would
+                        // otherwise have discarded, so it must clear the same
+                        // per-sheet conditions the advisory quality gate
+                        // already applies (see [ScanQualityGate]) — otherwise
+                        // a bent sheet the local correction could only partly
+                        // fix would be accepted silently. The bench keeps
+                        // exactly this line (TAT/AT sag 0.30 refuse), so it is
+                        // what separates a real rescue from a bad fit.
+                        if (meshRescued && _rescueDecodeTooDirty(result.items)) {
+                          throw StateError(
+                            'The photo was too bent to straighten cleanly. '
+                            'Flatten the sheet and retake.',
+                          );
+                        }
                         if (decodeTotalSw != null) {
                           _perfLog(
                             'decode cornerSearch=${decodeCornerSearchMs}ms warp=${decodeWarpMs}ms '
@@ -1994,6 +2036,7 @@ class OmrDecoder {
                               ? null
                               : mesh.toMeasuredFractions(canonicalWidth, canonicalHeight),
                           meshVerdict: mesh.verdict.name,
+                          meshRescued: meshRescued,
                         );
                       } finally {
                         inkMap.dispose();
@@ -3409,6 +3452,20 @@ class OmrDecoder {
     } finally {
       perimeter.dispose();
     }
+  }
+
+  /// Whether a mesh-rescued decode is too dirty to accept.
+  ///
+  /// Mirrors [ScanQualityGate]'s per-sheet conditions on the decoded items,
+  /// so a rescue can only ever admit a sheet the existing advisory quality
+  /// gate would also have called clean: no ambiguous item, and no
+  /// implausible blank rate. Kept in terms of the gate's own
+  /// [ScanQualityGate.blankRateLimit] so the two cannot drift apart.
+  static bool _rescueDecodeTooDirty(List<OmrItemResult> items) {
+    if (items.any((i) => i.isAmbiguous)) return true;
+    if (items.isEmpty) return true;
+    final blank = items.where((i) => i.isBlank).length;
+    return blank / items.length > ScanQualityGate.blankRateLimit;
   }
 
   /// Independently re-detects each of the 4 fiducial markers directly on

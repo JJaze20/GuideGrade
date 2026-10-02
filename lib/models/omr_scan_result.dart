@@ -96,12 +96,27 @@ class OmrScanResult {
   /// from a clean one by the time a result reached the UI.
   final String? meshVerdict;
 
+  /// True when this capture passed only because the local mesh correction
+  /// rescued it: the post-warp planar verification failed
+  /// (`AlignmentCheck.warpRejected`) and the decoder, instead of discarding
+  /// the photo, fell through to the interior-mark mesh -- which then found
+  /// the marks and produced a clean decode. False for every capture that
+  /// passed the planar gate on its own, and for results decoded before this
+  /// field existed.
+  ///
+  /// Persisted because such a sheet is strictly newer than anything the
+  /// pipeline accepted before, and accepting it silently would make it
+  /// indistinguishable from a sheet that needed no rescue at all -- see
+  /// `LocalScan.needsReview`, which surfaces it for review.
+  final bool meshRescued;
+
   const OmrScanResult({
     required this.examCode,
     required this.items,
     this.templateVersion,
     this.meshInteriorMeasuredFrac,
     this.meshVerdict,
+    this.meshRescued = false,
   });
 
   /// A retake hint when the geometry of this capture cannot be trusted, or
@@ -117,6 +132,7 @@ class OmrScanResult {
             (role, pt) => MapEntry(role, [pt.$1, pt.$2]),
           ),
         if (meshVerdict != null) 'meshVerdict': meshVerdict,
+        if (meshRescued) 'meshRescued': true,
       };
 
   factory OmrScanResult.fromJson(Map<String, dynamic> json) => OmrScanResult(
@@ -133,5 +149,6 @@ class OmrScanResult {
           },
         ),
         meshVerdict: json['meshVerdict'] as String?,
+        meshRescued: json['meshRescued'] as bool? ?? false,
       );
 }

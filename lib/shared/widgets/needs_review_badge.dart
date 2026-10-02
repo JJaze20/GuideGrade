@@ -30,9 +30,12 @@ class NeedsReviewChip extends StatelessWidget {
   }
 }
 
-/// Batch-level explanation: how many sheets hold scanner-flagged answers that
-/// nobody has reviewed yet, and which ones. [sheetLabels] are the display
-/// names of the affected sheets, in batch order.
+/// Batch-level explanation: how many sheets need a look and which ones.
+/// [sheetLabels] are the display names of the affected sheets, in batch
+/// order. A sheet lands here either because it holds scanner-flagged answers
+/// nobody has reviewed, or because it was accepted only after the mesh
+/// straightened a bent photo (see `LocalScan.needsReview`) — so the wording
+/// names both, not just double marks.
 class NeedsReviewBanner extends StatelessWidget {
   final List<String> sheetLabels;
   const NeedsReviewBanner({super.key, required this.sheetLabels});
@@ -56,9 +59,10 @@ class NeedsReviewBanner extends StatelessWidget {
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              '$n sheet${n == 1 ? '' : 's'} need${n == 1 ? 's' : ''} review — the scanner could not '
-              'read some answers clearly (double or unclear marks): ${sheetLabels.join(', ')}. '
-              'Open each sheet and confirm those answers.',
+              '$n sheet${n == 1 ? '' : 's'} need${n == 1 ? 's' : ''} review — the scanner either could not '
+              'read some answers clearly (double or unclear marks), or accepted the sheet only after '
+              'straightening a bent photo: ${sheetLabels.join(', ')}. '
+              'Open each sheet and confirm the answers.',
               style: AppTextStyles.body(size: 9.5, weight: FontWeight.w600, color: _amberFg),
             ),
           ),

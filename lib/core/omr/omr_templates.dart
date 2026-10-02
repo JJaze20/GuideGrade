@@ -32,12 +32,14 @@ class OmrCorner {
 }
 
 /// One of the extra interior registration marks a redesigned sheet prints
-/// beyond its 4 corner anchors — a left/right pair straddling the
-/// horizontal divider between answer blocks, plus 3 smaller marks on the
-/// page's vertical centerline (above the answers, at the divider, below
-/// the answers). Unlike [OmrCorner] (always exactly 4, used to fit the
-/// sheet's main perspective homography), a template may have zero of
-/// these (legacy sheets, TAT) — see [OmrExamTemplate.interiorFiducials].
+/// beyond its 4 corner anchors — for AT/QTM a left/right pair straddling the
+/// horizontal divider between answer blocks plus 3 smaller marks on the
+/// page's vertical centerline, and for TAT a divider pair plus the
+/// band-distributed marks listed in [OmrFiducialRole]. Unlike [OmrCorner]
+/// (always exactly 4, used to fit the sheet's main perspective homography),
+/// a template may have zero of these — a pre-redesign legacy sheet does;
+/// every current template prints some — see
+/// [OmrExamTemplate.interiorFiducials].
 enum OmrFiducialRole {
   dividerLeft,
   dividerRight,

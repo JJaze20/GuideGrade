@@ -501,8 +501,12 @@ class LocalScan {
     ];
   }
 
-  /// Whether at least one flagged item is still unresolved.
-  bool get needsReview => unresolvedFlaggedItems.isNotEmpty;
+  /// Whether at least one flagged item is still unresolved, or the sheet as
+  /// a whole was accepted only by the mesh rescue (see
+  /// [OmrScanResult.meshRescued]) -- a capture the pipeline would previously
+  /// have discarded, so it always warrants a look even when every item read
+  /// cleanly.
+  bool get needsReview => unresolvedFlaggedItems.isNotEmpty || decoded.meshRescued;
 
   /// Whether [other] is this exact stored record — same capture, answers,
   /// score, student details, corrections and image references. Used to

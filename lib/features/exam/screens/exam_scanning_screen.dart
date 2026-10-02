@@ -1181,6 +1181,11 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
         }
       }
       final template = omrTemplates[appState.activeExamCode];
+      // The retake reason from the post-capture alignment pass, kept in scope
+      // past the template block so the decode below can surface it if the
+      // rescue path still refuses the photo (see the catch around
+      // previewCapturedPage).
+      String? alignmentRejectMessage;
       if (template != null) {
         final alignmentSw = kOmrPerfDebug ? (Stopwatch()..start()) : null;
         final check = await compute(
@@ -1189,41 +1194,64 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
         );
         if (alignmentSw != null) alignmentMs = alignmentSw.elapsedMilliseconds;
         if (!check.aligned) {
+          alignmentRejectMessage = check.message;
           if (kOmrPerfDebug) {
             omrPerfLog(
-              'capture rejected exam=${template.examCode} '
+              'capture ${check.warpRejected ? 'warp-rescue' : 'rejected'} '
+              'exam=${template.examCode} '
               'warpRejected=${check.warpRejected} '
               'errors=${check.reprojectionErrorPx} reason=${check.message}',
             );
           }
-          // Best-effort diagnostic dump so a rejection actually leaves
-          // something to inspect afterward -- a rejected photo is never
-          // added to the batch, so without this it vanishes with nothing
-          // but the dialog's own message. Fire-and-forget: must never
-          // delay the dialog or affect the scanning flow on failure.
-          unawaited(() async {
-            final debugDir = await appState.prepareDebugImagesDir();
-            if (debugDir == null) return;
-            try {
-              await compute(
-                _saveRejectedCaptureDebugViz,
-                _RejectedCaptureDebugVizRequest(file.path, template, debugDir),
-              );
-            } catch (_) {}
-          }());
-          // The live check above is advisory-strength (a lower-effort
-          // preview frame); this one runs the real decoder's corner search
-          // against the actual captured photo and is authoritative. No
-          // bypass — a photo that fails this is always discarded, never
-          // added to the batch, so an unconfirmed page geometry can never
-          // reach perspective correction, bubble sampling, or scoring.
-          if (!mounted) return;
-          await _showMisalignedDialog(check.message);
-          return;
+          // A warp-rejected capture is the one failure the interior-mark mesh
+          // exists to handle: all four corners were found and a homography
+          // was fit, and only its planar re-verification failed -- which is
+          // exactly what a sheet curling up on a hand looks like. Let it
+          // through to the mesh (previewCapturedPage enables the rescue)
+          // instead of discarding it here. The decoder still refuses it if
+          // the corrected decode isn't clean, and that refusal is caught
+          // below and shown as ordinary retake guidance.
+          if (!check.warpRejected) {
+            // Best-effort diagnostic dump so a rejection actually leaves
+            // something to inspect afterward -- a rejected photo is never
+            // added to the batch, so without this it vanishes with nothing
+            // but the dialog's own message. Fire-and-forget: must never
+            // delay the dialog or affect the scanning flow on failure.
+            unawaited(() async {
+              final debugDir = await appState.prepareDebugImagesDir();
+              if (debugDir == null) return;
+              try {
+                await compute(
+                  _saveRejectedCaptureDebugViz,
+                  _RejectedCaptureDebugVizRequest(file.path, template, debugDir),
+                );
+              } catch (_) {}
+            }());
+            // No bypass for an unconfirmed quad: a photo where the four
+            // corners were never even established is always discarded, never
+            // added to the batch, so page geometry that was never
+            // established can never reach correction, sampling, or scoring.
+            if (!mounted) return;
+            await _showMisalignedDialog(check.message);
+            return;
+          }
         }
       }
       if (!mounted) return;
-      final decoded = await appState.previewCapturedPage(file);
+      final OmrScanResult decoded;
+      try {
+        decoded = await appState.previewCapturedPage(file);
+      } on StateError catch (e) {
+        // The rescue above was attempted and the decoder refused anyway --
+        // either the mesh itself rejected the corrected page, or the
+        // corrected decode came out too dirty to trust. That is the same
+        // user-facing problem as a misalignment (the sheet needs to be
+        // flattened and retaken), so show the retake guidance rather than
+        // letting this reach the generic "Capture failed: ..." snackbar.
+        if (!mounted) return;
+        await _showMisalignedDialog(alignmentRejectMessage ?? e.message);
+        return;
+      }
       if (!mounted) return;
       if (appState.rescanScanId != null) {
         // A rescan never saves straight from the camera: the photo has passed
@@ -1261,6 +1289,12 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
                   const Text('Partial answer key'),
                 if (scored.items.any((item) => item.isAmbiguous))
                   const Text('Preliminary score — some answers need review.'),
+                // The score above can be clean even when the sheet needed
+                // straightening, so say so here rather than letting it read
+                // as an ordinary capture: this one is flagged for review
+                // downstream (see LocalScan.needsReview).
+                if (scored.meshRescued)
+                  const Text('Straightened from a bent photo — check this sheet later.'),
               ],
             ),
             actions: [
@@ -1321,10 +1355,14 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
     }
   }
 
-  /// Informational only — always ends with the photo discarded. There is
-  /// no "use anyway" option: a page whose 4 corners weren't confirmed on
-  /// the actual captured photo is always rejected, per the hard
-  /// all-4-corners requirement.
+  /// Informational only — always ends with the photo discarded. There is no
+  /// "use anyway" option: a page whose four corners weren't confirmed on the
+  /// actual captured photo is always rejected, per the hard all-4-corners
+  /// requirement.
+  ///
+  /// Also reached when a warp-rejected sheet was handed to the mesh and the
+  /// rescue still refused it (the corrected decode wasn't clean) — same
+  /// outcome for the user: flatten the sheet and retake.
   Future<void> _showMisalignedDialog(String? message) {
     return showDialog<void>(
       context: context,

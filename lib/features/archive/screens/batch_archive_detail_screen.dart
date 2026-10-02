@@ -644,7 +644,15 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
                 ),
                 if (scan.needsReview) ...[
                   const SizedBox(height: 4),
-                  NeedsReviewChip(count: scan.unresolvedFlaggedItems.length),
+                  // A sheet can need review with nothing flagged per-item:
+                  // one accepted only by the mesh rescue has no ambiguous
+                  // marks to count. Omit the count there rather than print
+                  // "Needs review · 0".
+                  NeedsReviewChip(
+                    count: scan.unresolvedFlaggedItems.isEmpty
+                        ? null
+                        : scan.unresolvedFlaggedItems.length,
+                  ),
                 ],
                 const SizedBox(height: 4),
                 Text(

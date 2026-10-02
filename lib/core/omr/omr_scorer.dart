@@ -40,12 +40,18 @@ class ScoredResult {
   /// [OmrScanResult.geometryWarning].
   final String? meshVerdict;
 
+  /// Carried through from [OmrScanResult.meshRescued]: this capture was
+  /// accepted only because the interior-mark mesh recovered a sheet whose
+  /// planar warp check failed. See that field's doc comment.
+  final bool meshRescued;
+
   const ScoredResult({
     required this.examCode,
     required this.items,
     this.templateVersion,
     this.meshInteriorMeasuredFrac,
     this.meshVerdict,
+    this.meshRescued = false,
   });
 
   /// The retake hint for this scan's geometry, or null when it is sound.
@@ -80,5 +86,6 @@ ScoredResult scoreOmrResult(OmrScanResult result, AnswerKey? answerKey) {
     templateVersion: result.templateVersion,
     meshInteriorMeasuredFrac: result.meshInteriorMeasuredFrac,
     meshVerdict: result.meshVerdict,
+    meshRescued: result.meshRescued,
   );
 }

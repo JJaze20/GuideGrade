@@ -43,8 +43,18 @@ class _OmrDecodeRequest {
   final OmrExamTemplate template;
   final String? rectifiedOutputPath;
   final bool diagnosticsEnabled;
+
+  /// Whether a capture whose post-warp planar check failed may still reach
+  /// the interior-mark mesh instead of being discarded. Set only for photos
+  /// the user just took (previewCapturedPage, and the compile fallback that
+  /// re-decodes a captured page). A decode of anything else — a stored image
+  /// read back for display, debug or diagnostics — leaves this false and
+  /// keeps the strict behaviour. See OmrDecoder.decode's `allowMeshRescue`.
+  final bool allowMeshRescue;
   const _OmrDecodeRequest(this.imagePath, this.template,
-      {this.rectifiedOutputPath, this.diagnosticsEnabled = false});
+      {this.rectifiedOutputPath,
+      this.diagnosticsEnabled = false,
+      this.allowMeshRescue = false});
 }
 
 OmrScanResult _decodeOmrPage(_OmrDecodeRequest request) {
@@ -53,7 +63,8 @@ OmrScanResult _decodeOmrPage(_OmrDecodeRequest request) {
   // OmrDecoder.setDiagnosticsEnabled's doc comment.
   OmrDecoder.setDiagnosticsEnabled(request.diagnosticsEnabled);
   return const OmrDecoder().decode(request.imagePath, request.template,
-      rectifiedOutputPath: request.rectifiedOutputPath);
+      rectifiedOutputPath: request.rectifiedOutputPath,
+      allowMeshRescue: request.allowMeshRescue);
 }
 
 class _DebugVizRequest {
@@ -940,9 +951,14 @@ class AppState extends ChangeNotifier {
     final directory = await _prepareRectifiedImagesDir();
     final reviewPath = directory == null ? null
         : '$directory/preview_${DateTime.now().microsecondsSinceEpoch}.jpg';
+    // This is the live capture path: the photo has just been taken and the
+    // caller has already decided (see ExamScanningScreen) that a failed
+    // post-warp planar check is worth handing to the mesh rather than
+    // discarding. Preview -> compile reuses this very result, so the rescued
+    // sheet is only ever decoded once.
     final result = await compute(_decodeOmrPage, _OmrDecodeRequest(
       file.path, template, rectifiedOutputPath: reviewPath,
-      diagnosticsEnabled: diagnosticsEnabled,
+      diagnosticsEnabled: diagnosticsEnabled, allowMeshRescue: true,
     ));
     final savedReview = reviewPath != null && await File(reviewPath).exists()
         ? reviewPath : null;
@@ -1319,7 +1335,7 @@ class AppState extends ChangeNotifier {
       var decoded = false;
       try {
         final OmrScanResult result = preview?.result ?? await compute<_OmrDecodeRequest, OmrScanResult>(_decodeOmrPage, _OmrDecodeRequest(page.path, template,
-            rectifiedOutputPath: reviewOutput, diagnosticsEnabled: diagnosticsEnabled));
+            rectifiedOutputPath: reviewOutput, diagnosticsEnabled: diagnosticsEnabled, allowMeshRescue: true));
         scannedResults.add(result);
         decoded = true;
       } catch (e) {

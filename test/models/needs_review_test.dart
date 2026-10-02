@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:guidegrade/core/omr/omr_scorer.dart';
 import 'package:guidegrade/models/answer_correction.dart';
@@ -12,12 +14,12 @@ OmrItemResult _item(int n, String? choice, {bool ambiguous = false}) => OmrItemR
       isAmbiguous: ambiguous,
     );
 
-LocalScan _scan(String id, List<OmrItemResult> items, {List<AnswerCorrection> corrections = const []}) =>
+LocalScan _scan(String id, List<OmrItemResult> items, {List<AnswerCorrection> corrections = const [], bool meshRescued = false}) =>
     LocalScan(
       id: id,
       imageFileName: 'images/$id.enc',
       capturedAt: DateTime.utc(2026, 9, 1),
-      decoded: OmrScanResult(examCode: 'AT', items: items),
+      decoded: OmrScanResult(examCode: 'AT', items: items, meshRescued: meshRescued),
       corrections: corrections,
     );
 
@@ -79,6 +81,40 @@ void main() {
       expect(scan.needsReview, isFalse);
       expect(_batch([scan]).needsReview, isFalse);
       expect(_batch([scan]).needsReviewCount, 0);
+    });
+
+    test('a mesh-rescued sheet flags the sheet and its batch with nothing '
+        'flagged per-item', () {
+      // The rescue admits a capture the pipeline would previously have
+      // discarded, so it warrants a look even though every answer read
+      // cleanly — there is no ambiguous item to count.
+      final rescued = _scan('s1', [_item(1, 'A'), _item(2, 'B')], meshRescued: true);
+      expect(rescued.unresolvedFlaggedItems, isEmpty);
+      expect(rescued.needsReview, isTrue);
+      expect(_batch([rescued]).needsReview, isTrue);
+      expect(_batch([rescued]).needsReviewCount, 1);
+
+      // And correcting an item cannot clear it: the rescue is a property of
+      // the capture, not of any one answer.
+      final corrected = _scan(
+        's1',
+        rescued.decoded.items,
+        meshRescued: true,
+        corrections: [_set('s1', 2, const CorrectedAnswer.choice('C'))],
+      );
+      expect(corrected.needsReview, isTrue);
+
+      // An ordinary clean sheet still does not.
+      expect(_scan('s2', [_item(1, 'A')]).needsReview, isFalse);
+    });
+
+    test('the rescue flag survives a scan persistence round-trip', () {
+      final rescued = _scan('s1', [_item(1, 'A')], meshRescued: true);
+      final restored = LocalScan.fromJson(
+        jsonDecode(jsonEncode(rescued.toJson())) as Map<String, dynamic>,
+      );
+      expect(restored.decoded.meshRescued, isTrue);
+      expect(restored.needsReview, isTrue);
     });
 
     test('reviewing the flagged answer resolves it, and the batch warning clears', () {
