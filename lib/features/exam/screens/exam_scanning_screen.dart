@@ -1294,7 +1294,7 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
                 // as an ordinary capture: this one is flagged for review
                 // downstream (see LocalScan.needsReview).
                 if (scored.meshRescued)
-                  const Text('Straightened from a bent photo — check this sheet later.'),
+                  const Text('Straightened from a bent photo. Check this sheet later.'),
               ],
             ),
             actions: [
