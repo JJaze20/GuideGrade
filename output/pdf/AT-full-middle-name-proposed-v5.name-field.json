@@ -1,0 +1,34 @@
+{
+  "proposedTemplateVersion": "AT-full-middle-name-proposed-v5",
+  "pageWidthPt": 595.28,
+  "pageHeightPt": 841.89,
+  "coordinateOrigin": "top-left",
+  "units": "points",
+  "fields": [
+    {
+      "name": "lastName",
+      "x": 44.0,
+      "y": 104.0,
+      "width": 153.68,
+      "height": 20,
+      "boxCount": 0
+    },
+    {
+      "name": "firstName",
+      "x": 197.68,
+      "y": 104.0,
+      "width": 153.68,
+      "height": 20,
+      "boxCount": 0
+    },
+    {
+      "name": "middleName",
+      "x": 351.36,
+      "y": 104.0,
+      "width": 144.64000000000001,
+      "height": 20,
+      "boxCount": 0
+    }
+  ],
+  "scannerIntegration": "Three separate crops in one row; use these new rectangles with box counts zero. Existing app templates not changed."
+}

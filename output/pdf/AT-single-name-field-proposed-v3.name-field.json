@@ -1,0 +1,14 @@
+{
+  "proposedTemplateVersion": "AT-single-name-field-proposed-v3",
+  "pageWidthPt": 595.28,
+  "pageHeightPt": 841.89,
+  "coordinateOrigin": "top-left",
+  "units": "points",
+  "nameField": {
+    "x": 44.0,
+    "y": 104.0,
+    "width": 452.0,
+    "height": 56.0
+  },
+  "scannerIntegration": "New combined crop rectangle; implement explicitly for this version. Do not crop as separate Last/First/MI fields. Existing app templates not changed."
+}

@@ -1,0 +1,11 @@
+# Everything sensitive stays local. Never commit anything from this folder
+# except the script, its package manifest, and the README.
+node_modules/
+*.json
+!package.json
+!package-lock.json
+
+# Belt-and-braces for common service-account key names
+*serviceAccount*.json
+*service-account*.json
+*firebase-adminsdk*.json

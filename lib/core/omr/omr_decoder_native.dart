@@ -11,6 +11,7 @@ import 'omr_mesh_correction.dart';
 import 'omr_bubble_classifier.dart';
 import 'omr_templates.dart';
 import 'tat_marker_validation.dart';
+import 'tat_corner_evidence.dart';
 
 /// Template-centered search box, fallback quadrant, and scoring anchor.
 typedef _QuadrantSearch = ({
@@ -1037,14 +1038,18 @@ class OmrDecoder {
   }) {
     final pageQuad = _detectPageQuad(gray);
     final searches = _quadrantsFor(gray.width, gray.height, pageQuad, template);
+    final a4Corners = template.templateVersion == 'TAT-A4-placement-v2';
+    final a4Radius = a4Corners ? tatCornerAnchorRadius(gray.width, gray.height, pageQuad != null) : null;
     final results = [
       for (final s in searches)
         _bestOf(
           _findMarkerInRegion(
             gray, s.stage1, s.anchorX, s.anchorY,
             anchorScaleOverride: s.stage1AnchorScale,
+            edgeAwareContrast: a4Corners, maxAnchorDistancePx: a4Radius,
           ),
-          () => _findMarkerInRegion(gray, s.quadrant, s.anchorX, s.anchorY),
+          () => _findMarkerInRegion(gray, s.quadrant, s.anchorX, s.anchorY,
+              edgeAwareContrast: a4Corners, maxAnchorDistancePx: a4Radius),
         ),
     ];
     // Bounded higher-resolution retry: once the sheet is roughly in frame
@@ -1078,7 +1083,8 @@ class OmrDecoder {
         final pad = math.max(12.0, math.max(b.width, b.height) * 2.0);
         final box = _clampedRect(cx - pad * sx, cy - pad * sy,
             cx + pad * sx, cy + pad * sy, detailGray.width, detailGray.height);
-        final detailed = _findMarkerInRegion(detailGray, box, cx, cy);
+        final detailed = _findMarkerInRegion(detailGray, box, cx, cy,
+            edgeAwareContrast: a4Corners);
         final p = detailed.centroid;
         // Confirm the same blob, rather than switching to neighboring text.
         if (detailed.confidence != CornerConfidence.confident || p == null ||
@@ -1497,6 +1503,7 @@ class OmrDecoder {
               gray, rescueBox, px, py,
               debugTag: tag,
               anchorScaleOverride: rescueAnchorScale,
+              edgeAwareContrast: template.templateVersion == 'TAT-A4-placement-v2',
             );
             final rc = rr.centroid;
             if (rc == null ||
@@ -2988,6 +2995,8 @@ class OmrDecoder {
     const labels = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
     final pageQuad = _detectPageQuad(gray);
     final searches = _quadrantsFor(gray.width, gray.height, pageQuad, template);
+    final a4Corners = template.templateVersion == 'TAT-A4-placement-v2';
+    final a4Radius = a4Corners ? tatCornerAnchorRadius(gray.width, gray.height, pageQuad != null) : null;
 
     if (_kFiducialDebug) {
       _fidLog(
@@ -3012,10 +3021,12 @@ class OmrDecoder {
         gray, s.stage1, s.anchorX, s.anchorY,
         debugTag: tag,
         anchorScaleOverride: s.stage1AnchorScale,
+        edgeAwareContrast: a4Corners, maxAnchorDistancePx: a4Radius,
       );
       return _bestOf(
         stage1Result,
-        () => _findMarkerInRegion(gray, s.quadrant, s.anchorX, s.anchorY, debugTag: tag),
+        () => _findMarkerInRegion(gray, s.quadrant, s.anchorX, s.anchorY, debugTag: tag,
+            edgeAwareContrast: a4Corners, maxAnchorDistancePx: a4Radius),
       );
     });
 
@@ -3189,7 +3200,8 @@ class OmrDecoder {
         final box = _clampedRect(
           rx - pad, ry - pad, rx + pad, ry + pad, gray.width, gray.height,
         );
-        final refined = _findMarkerInRegion(gray, box, rx, ry);
+        final refined = _findMarkerInRegion(gray, box, rx, ry,
+            edgeAwareContrast: template.templateVersion == 'TAT-A4-placement-v2');
         final rc = refined.centroid;
         final sameBlob = rc != null &&
             refined.confidence != CornerConfidence.none &&
@@ -4143,6 +4155,8 @@ class OmrDecoder {
     String? debugTag,
     double? anchorScaleOverride,
     double? expectedSidePx,
+    bool edgeAwareContrast = false,
+    double? maxAnchorDistancePx,
   }) {
     final roi = gray.region(region);
     try {
@@ -4297,6 +4311,14 @@ class OmrDecoder {
                         blobRoi.dispose();
                         localRoi.dispose();
                       }
+                      if (edgeAwareContrast) {
+                        contrast = tatCornerContrast(
+                          imageWidth: gray.width, imageHeight: gray.height,
+                          x: (region.x + rect.x).toDouble(), y: (region.y + rect.y).toDouble(),
+                          width: rect.width.toDouble(), height: rect.height.toDouble(),
+                          grayAt: (x, y) => gray.atNum(y, x).toDouble(),
+                        );
+                      }
 
                       void log(String Function() message) {
                         if (_kFiducialDebug && debugTag != null) {
@@ -4433,6 +4455,10 @@ class OmrDecoder {
                       );
 
                       final positionScore = math.exp(-distance / anchorScale);
+                      if (maxAnchorDistancePx != null && distance > maxAnchorDistancePx) {
+                        reject(rect, squareness, 0, 'page_anchor', area: area, contrast: contrast);
+                        continue;
+                      }
                       final contrastScore = _clamp01(
                           (contrast - _markerMinContrast) /
                               (90 - _markerMinContrast));

@@ -28,7 +28,7 @@ void check(bool ok, String what) {
 }
 
 void main() {
-  final t = omrTemplates['TAT']!;
+  final t = omrTemplateFor('TAT', 'TAT-portrait-v5')!;
   final json = jsonDecode(File('tool/data/TAT-portrait-v5.geometry.json').readAsStringSync())
       as Map<String, dynamic>;
   final pw = (json['pageWidth'] as num).toDouble(), ph = (json['pageHeight'] as num).toDouble();
@@ -256,7 +256,7 @@ void main() {
       'three marks beat a stray match');
 
   // --- nothing earlier changed ----------------------------------------------
-  check(omrTemplateFor('TAT', null)!.templateVersion == 'TAT-portrait-v5', 'current TAT is v5');
+  check(omrTemplateFor('TAT', null)!.templateVersion == 'TAT-A4-placement-v2', 'current TAT is A4');
   check(omrTemplateFor('TAT', 'TAT-portrait-v1')!.templateVersion == 'TAT-portrait-v1', 'v1 scans still resolve');
   check(identical(omrTemplateFor('TAT', 'TAT-redesign-v1'), legacyTatTemplate), 'legacy TAT scans still resolve');
   check(omrTemplateFor('TAT', 'no-such-layout') == null, 'an unknown layout resolves to nothing, not to the wrong sheet');

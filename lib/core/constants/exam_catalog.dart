@@ -41,7 +41,7 @@ const List<ExamCatalogEntry> examCatalog = [
   ExamCatalogEntry(
     examCode: 'TAT',
     title: 'Teaching Aptitude Test',
-    pdfAsset: 'answer_sheets/TAT-portrait-v5.pdf',
+    pdfAsset: 'answer_sheets/TAT-A4-placement-v2.pdf',
     questionnairePdfAsset: 'questionnaires/TAT.pdf',
   ),
 ];
