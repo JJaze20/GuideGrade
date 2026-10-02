@@ -1,6 +1,5 @@
 import 'omr_tat_legacy_template.dart';
 import 'omr_template_tat_v5.dart';
-import 'omr_template_tat_a4.dart';
 import 'omr_templates.dart';
 
 /// The template a scan was made with, looked up by the version stored on the
@@ -18,8 +17,6 @@ OmrExamTemplate? omrTemplateFor(String examCode, String? version) {
   if (current != null && current.templateVersion == version) return current;
   if (examCode == 'TAT') {
     switch (version) {
-      case 'TAT-A4-placement-v2':
-        return omrTATA4V2;
       case 'TAT-portrait-v5':
         return omrTATPortraitV5;
       case 'TAT-portrait-v1':

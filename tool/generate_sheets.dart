@@ -2757,10 +2757,6 @@ enum OmrFiducialRole {
   tatAboveII41,
   tatAboveIII6,
   tatAboveIII11,
-  tatA4AboveI1,
-  tatA4AboveI16,
-  tatA4AboveIII1,
-  tatA4AboveIII11,
 }
 
 class OmrFiducial {
@@ -3001,7 +2997,7 @@ Future<void> main(List<String> args) async {
   dartFile.writeln('// pageHeightPt), matching the printed PDFs in /answer_sheets.');
   dartFile.writeln('// Regenerate with: cd tool && dart run generate_sheets.dart');
   dartFile.writeln();
-  dartFile.writeln("import 'omr_template_tat_a4.dart';");
+  dartFile.writeln("import 'omr_template_tat_v5.dart';");
   dartFile.writeln();
   dartFile.writeln(_schema);
 
@@ -3124,7 +3120,7 @@ Future<void> main(List<String> args) async {
     }
 
     dartFile.writeln(_emitTemplate(layout));
-    mapEntries.add(exam.code == 'TAT' ? '"TAT": omrTATA4V2' : '"${exam.code}": _omr${exam.code}');
+    mapEntries.add(exam.code == 'TAT' ? '"TAT": omrTATPortraitV5' : '"${exam.code}": _omr${exam.code}');
   }
 
   dartFile.writeln('final Map<String, OmrExamTemplate> omrTemplates = {');

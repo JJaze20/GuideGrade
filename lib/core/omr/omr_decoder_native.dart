@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -11,7 +10,6 @@ import 'omr_mesh_correction.dart';
 import 'omr_bubble_classifier.dart';
 import 'omr_templates.dart';
 import 'tat_marker_validation.dart';
-import 'tat_corner_evidence.dart';
 
 /// Template-centered search box, fallback quadrant, and scoring anchor.
 typedef _QuadrantSearch = ({
@@ -566,7 +564,7 @@ class OmrDecoder {
   /// [OmrDecoder.setDiagnosticsEnabled], which
   /// [ExamScanningScreen]'s existing debug-build-only bug-icon toggle
   /// calls once per capture, threaded through the isolate boundary via
-  /// [_OmrDecodeRequest.diagnosticsEnabled]/[_DebugVizRequest] (see
+  /// the decode request's diagnosticsEnabled flag (see
   /// `app_state.dart`) since each `compute()` call gets its own isolate
   /// memory — a plain static set on the main isolate would never be seen
   /// there. Each isolate call sets this explicitly at its own start, so no
@@ -1038,18 +1036,14 @@ class OmrDecoder {
   }) {
     final pageQuad = _detectPageQuad(gray);
     final searches = _quadrantsFor(gray.width, gray.height, pageQuad, template);
-    final a4Corners = template.templateVersion == 'TAT-A4-placement-v2';
-    final a4Radius = a4Corners ? tatCornerAnchorRadius(gray.width, gray.height, pageQuad != null) : null;
     final results = [
       for (final s in searches)
         _bestOf(
           _findMarkerInRegion(
             gray, s.stage1, s.anchorX, s.anchorY,
             anchorScaleOverride: s.stage1AnchorScale,
-            edgeAwareContrast: a4Corners, maxAnchorDistancePx: a4Radius,
           ),
-          () => _findMarkerInRegion(gray, s.quadrant, s.anchorX, s.anchorY,
-              edgeAwareContrast: a4Corners, maxAnchorDistancePx: a4Radius),
+          () => _findMarkerInRegion(gray, s.quadrant, s.anchorX, s.anchorY),
         ),
     ];
     // Bounded higher-resolution retry: once the sheet is roughly in frame
@@ -1083,8 +1077,7 @@ class OmrDecoder {
         final pad = math.max(12.0, math.max(b.width, b.height) * 2.0);
         final box = _clampedRect(cx - pad * sx, cy - pad * sy,
             cx + pad * sx, cy + pad * sy, detailGray.width, detailGray.height);
-        final detailed = _findMarkerInRegion(detailGray, box, cx, cy,
-            edgeAwareContrast: a4Corners);
+        final detailed = _findMarkerInRegion(detailGray, box, cx, cy);
         final p = detailed.centroid;
         // Confirm the same blob, rather than switching to neighboring text.
         if (detailed.confidence != CornerConfidence.confident || p == null ||
@@ -1503,7 +1496,6 @@ class OmrDecoder {
               gray, rescueBox, px, py,
               debugTag: tag,
               anchorScaleOverride: rescueAnchorScale,
-              edgeAwareContrast: template.templateVersion == 'TAT-A4-placement-v2',
             );
             final rc = rr.centroid;
             if (rc == null ||
@@ -2508,465 +2500,6 @@ class OmrDecoder {
     return gray.region(cv.Rect(0, 0, trimWidth, height));
   }
 
-  /// Debug-only: writes two annotated JPEGs to [outputDir] — the detected
-  /// corner markers drawn on the original photo, and the full expected
-  /// bubble grid drawn on the warped/aligned image — so a misread sheet can
-  /// be diagnosed by looking at where the decoder actually thinks things
-  /// are, instead of guessing from decoded results alone. [outputDir] must
-  /// already exist and be writable.
-  void saveDebugVisualization(
-    String imagePath,
-    OmrExamTemplate template,
-    String outputDir,
-    int pageIndex,
-  ) {
-    final debugVizSw = _kPerfDebug ? (Stopwatch()..start()) : null;
-    final src = _imreadForTemplate(imagePath, template);
-    try {
-      if (src.isEmpty) return;
-      final gray = cv.cvtColor(src, cv.COLOR_BGR2GRAY);
-      try {
-        cv.Mat oriented;
-        _RefineResult refine;
-        int? rotationCode;
-        try {
-          (oriented, refine, rotationCode) = _orientAndFindCorners(
-            gray,
-            template,
-          );
-        } on StateError catch (e) {
-          // Corner detection itself failed — still write the raw photo so
-          // framing/lighting/orientation can be inspected, plus the exact
-          // error, instead of silently producing no debug output for
-          // precisely the failing case that needs to be seen.
-          cv.imwrite('$outputDir/sheet${pageIndex}_FAILED.jpg', src);
-          File(
-            '$outputDir/sheet${pageIndex}_error.txt',
-          ).writeAsStringSync(e.message);
-          if (debugVizSw != null) {
-            _perfLog(
-              'debugViz pageIndex=$pageIndex FAILED total=${debugVizSw.elapsedMilliseconds}ms',
-            );
-          }
-          return;
-        }
-        final corners = refine.corners;
-        try {
-          // For a landscape template that needed a rotation to align (see
-          // _orientAndFindCorners), src has to be rotated the same exact way
-          // so every debug image below — corners, color grid, grayscale
-          // stages — is drawn against the same orientation the real corners
-          // (and decode()'s real pipeline) actually use. Untouched (and
-          // undisposed separately) when no rotation was needed.
-          final orientedSrc = rotationCode == null
-              ? src
-              : cv.rotate(src, rotationCode);
-          try {
-            final cornersDebug = orientedSrc.clone();
-            try {
-              // The page-boundary estimate (yellow) is drawn separately from
-              // the final selected marks (red) so a bad final pick can be
-              // told apart from a bad *anchor* feeding into it: if the yellow
-              // quad already isn't on the sheet, _detectPageQuad is the stage
-              // to fix; if it's fine but the red circles still aren't on the
-              // marks, the problem is in _findMarkerInRegion's own filtering.
-              final pageQuad = _detectPageQuad(oriented);
-              if (pageQuad != null) {
-                // pageQuad is [topLeft, topRight, bottomLeft, bottomRight] —
-                // not already a perimeter walk — so draw it in actual
-                // clockwise order (TL, TR, BR, BL) or the "quad" comes out as
-                // a bowtie instead of an outline.
-                final perimeter = [
-                  pageQuad[0],
-                  pageQuad[1],
-                  pageQuad[3],
-                  pageQuad[2],
-                ];
-                for (var i = 0; i < perimeter.length; i++) {
-                  final (x, y) = perimeter[i];
-                  cv.circle(
-                    cornersDebug,
-                    cv.Point(x.round(), y.round()),
-                    10,
-                    cv.Scalar(0, 255, 255),
-                    thickness: 3,
-                  );
-                  final (nx, ny) = perimeter[(i + 1) % perimeter.length];
-                  cv.line(
-                    cornersDebug,
-                    cv.Point(x.round(), y.round()),
-                    cv.Point(nx.round(), ny.round()),
-                    cv.Scalar(0, 255, 255),
-                    thickness: 2,
-                  );
-                }
-              }
-              const cornerLabels = ['TL', 'TR', 'BL', 'BR'];
-              for (var i = 0; i < 4; i++) {
-                // Stage-1 search box (thin blue) — the template-expected
-                // prior, never a hard crop; useful to see it actually
-                // landed on the real marker (or didn't, explaining a
-                // Stage-2 fallback).
-                cv.rectangle(
-                  cornersDebug,
-                  refine.stage1Regions[i],
-                  cv.Scalar(255, 140, 0),
-                  thickness: 2,
-                );
-                // Expected marker position (magenta crosshair) — the exact
-                // point every candidate in this corner's search was scored
-                // against (see [_QuadrantSearch.anchorX]/`anchorY`),
-                // distinct from the Stage-1 box itself (which can get
-                // clamped at the image edge).
-                final (ax, ay) = refine.anchors[i];
-                final axi = ax.round(), ayi = ay.round();
-                cv.line(cornersDebug, cv.Point(axi - 12, ayi), cv.Point(axi + 12, ayi),
-                    cv.Scalar(255, 0, 255), thickness: 2);
-                cv.line(cornersDebug, cv.Point(axi, ayi - 12), cv.Point(axi, ayi + 12),
-                    cv.Scalar(255, 0, 255), thickness: 2);
-                // Every candidate this corner rejected — orange, sized by
-                // how highly it scored, so a near-miss (a bubble that
-                // almost won) stands out from obvious clutter. Label
-                // carries every metric requested for diagnosing a failed
-                // corner: reason, squareness, area, contrast.
-                for (final r in refine.rejectedPerCorner[i]) {
-                  final cx = r.bboxGlobal.x + r.bboxGlobal.width ~/ 2;
-                  final cy = r.bboxGlobal.y + r.bboxGlobal.height ~/ 2;
-                  cv.circle(
-                    cornersDebug,
-                    cv.Point(cx, cy),
-                    6 + (r.squareness * 10).round(),
-                    cv.Scalar(0, 140, 255),
-                    thickness: 2,
-                  );
-                  cv.putText(
-                    cornersDebug,
-                    '${r.reason} sq=${r.squareness.toStringAsFixed(2)} '
-                    'a=${r.area.toStringAsFixed(0)} '
-                    '${r.bboxGlobal.width}x${r.bboxGlobal.height} '
-                    'c=${r.contrast.toStringAsFixed(1)}',
-                    cv.Point(cx + 10, cy),
-                    cv.FONT_HERSHEY_SIMPLEX,
-                    0.4,
-                    cv.Scalar(0, 140, 255),
-                    thickness: 1,
-                  );
-                }
-              }
-              for (var i = 0; i < 4; i++) {
-                final c = corners[i];
-                final confidence = refine.confidence[i];
-                // Confident = green (the check that used to reject the real
-                // square at this pixel scale is gone); low/rescued = amber,
-                // so a Stage-4 geometry-assisted rescue is visibly distinct
-                // from a crisp detection, not indistinguishable red.
-                final color = confidence == CornerConfidence.confident
-                    ? cv.Scalar(0, 255, 0)
-                    : cv.Scalar(0, 200, 255);
-                cv.circle(
-                  cornersDebug,
-                  cv.Point(c.x.round(), c.y.round()),
-                  16,
-                  color,
-                  thickness: 5,
-                );
-                cv.putText(
-                  cornersDebug,
-                  '${cornerLabels[i]} ${confidence.name}',
-                  cv.Point(c.x.round() + 20, c.y.round() - 10),
-                  cv.FONT_HERSHEY_SIMPLEX,
-                  0.6,
-                  color,
-                  thickness: 2,
-                );
-              }
-              // The homography quad itself — connecting the 4 accepted
-              // corners in true perimeter order (TL,TR,BR,BL is a
-              // perimeter walk; index order [tl,tr,bl,br] is not), distinct
-              // in color (magenta) from the individual accept/reject
-              // markers above so the actual quad shape fed into
-              // getPerspectiveTransform2f is visible at a glance.
-              const perimeterOrder = [0, 1, 3, 2];
-              for (var i = 0; i < perimeterOrder.length; i++) {
-                final a = corners[perimeterOrder[i]];
-                final b = corners[perimeterOrder[(i + 1) % perimeterOrder.length]];
-                cv.line(
-                  cornersDebug,
-                  cv.Point(a.x.round(), a.y.round()),
-                  cv.Point(b.x.round(), b.y.round()),
-                  cv.Scalar(255, 0, 255),
-                  thickness: 2,
-                );
-              }
-              if (refine.note != null) {
-                cv.putText(
-                  cornersDebug,
-                  refine.note!,
-                  cv.Point(20, cornersDebug.height - 20),
-                  cv.FONT_HERSHEY_SIMPLEX,
-                  0.5,
-                  cv.Scalar(0, 200, 255),
-                  thickness: 1,
-                );
-              }
-              cv.imwrite(
-                '$outputDir/sheet${pageIndex}_corners.jpg',
-                cornersDebug,
-              );
-            } finally {
-              cornersDebug.dispose();
-            }
-
-            final canonicalWidth = (template.pageWidthPt * _canonicalPxPerPt)
-                .round();
-            final canonicalHeight = (template.pageHeightPt * _canonicalPxPerPt)
-                .round();
-            final dstCorners = cv.VecPoint2f.fromList([
-              for (final corner in template.cornerMarkers)
-                cv.Point2f(
-                  corner.xFrac * canonicalWidth,
-                  corner.yFrac * canonicalHeight,
-                ),
-            ]);
-            final srcCorners = cv.VecPoint2f.fromList(corners);
-            final transform = cv.getPerspectiveTransform2f(
-              srcCorners,
-              dstCorners,
-            );
-            try {
-              // The actual grayscale pipeline decode() reads bubbles from —
-              // same warp, same CLAHE, same threshold, on the grayscale image
-              // rather than color — saved at each stage so a misread can be
-              // diagnosed against what the decoder actually saw, not a
-              // reconstruction of it. sheetN_warped_gray.jpg is the flattened
-              // page before any contrast correction; sheetN_clahe.jpg is after
-              // (compare the two to see how much correction was needed);
-              // sheetN_inkmap.jpg is the final black/white result
-              // _readBubbles actually samples — white is "ink" everywhere it
-              // matters for scoring.
-              final warpedGray = cv.warpPerspective(oriented, transform, (
-                canonicalWidth,
-                canonicalHeight,
-              ));
-              // Computed from warpedGray (before any of the color drawing
-              // below) so the grid.jpg overlay can show exactly what
-              // decode()/locateCorners() would see: where each fiducial was
-              // expected after correction, where it was actually
-              // re-detected, and the resulting per-corner pixel error. See
-              // [_verifyWarpedCorners]'s doc comment for why re-detection
-              // (not re-projecting the same 4 source points) is the only
-              // meaningful post-warp check.
-              final warpVerification = _verifyWarpedCorners(
-                warpedGray,
-                template,
-                canonicalWidth,
-                canonicalHeight,
-              );
-              final warpClassified = _classifyWarpVerification(
-                warpVerification,
-                refine.confidence,
-              );
-
-              final warped = cv.warpPerspective(orientedSrc, transform, (
-                canonicalWidth,
-                canonicalHeight,
-              ));
-              try {
-                for (final section in template.sections) {
-                  for (final entry in section.items.entries) {
-                    for (final bubble in entry.value) {
-                      final x = (bubble.xFrac * canonicalWidth).round();
-                      final y = (bubble.yFrac * canonicalHeight).round();
-                      cv.circle(
-                        warped,
-                        cv.Point(x, y),
-                        3,
-                        cv.Scalar(0, 0, 255),
-                        thickness: -1,
-                      );
-                    }
-                  }
-                }
-                const warpCornerLabels = ['TL', 'TR', 'BL', 'BR'];
-                for (var i = 0; i < 4; i++) {
-                  final e = warpVerification.expected[i];
-                  final r = warpVerification.redetected[i];
-                  final err = warpVerification.errorPx[i];
-                  // Expected canonical position — magenta crosshair, always
-                  // drawn even when nothing was re-detected there.
-                  final ex = e.x.round(), ey = e.y.round();
-                  cv.line(warped, cv.Point(ex - 10, ey), cv.Point(ex + 10, ey),
-                      cv.Scalar(255, 0, 255), thickness: 2);
-                  cv.line(warped, cv.Point(ex, ey - 10), cv.Point(ex, ey + 10),
-                      cv.Scalar(255, 0, 255), thickness: 2);
-                  // Error-tier color: green within tolerance, amber past
-                  // _warpWarnPx, red past _warpRejectPx (or not found).
-                  final errColor = err > _warpRejectPx
-                      ? cv.Scalar(0, 0, 255)
-                      : err > _warpWarnPx
-                          ? cv.Scalar(0, 200, 255)
-                          : cv.Scalar(0, 255, 0);
-                  if (r != null) {
-                    final rx = r.x.round(), ry = r.y.round();
-                    cv.circle(warped, cv.Point(rx, ry), 8, errColor,
-                        thickness: 2);
-                    cv.line(warped, cv.Point(ex, ey), cv.Point(rx, ry),
-                        errColor, thickness: 1);
-                  }
-                  final label = err.isInfinite
-                      ? '${warpCornerLabels[i]} not found'
-                      // Plain ASCII — cv.FONT_HERSHEY_SIMPLEX has no glyph
-                      // for "Δ" and silently renders it as "??" (confirmed
-                      // against a real device capture).
-                      : '${warpCornerLabels[i]} err=${err.toStringAsFixed(1)}px';
-                  cv.putText(
-                    warped,
-                    label,
-                    cv.Point(ex + 14, ey + 14),
-                    cv.FONT_HERSHEY_SIMPLEX,
-                    0.5,
-                    errColor,
-                    thickness: 1,
-                  );
-                }
-                final verdictLabel = warpClassified.ok
-                    ? (warpClassified.degraded
-                        ? 'post-warp: within tolerance but degraded (max ${warpClassified.maxErrorPx.toStringAsFixed(1)}px)'
-                        : 'post-warp: OK (max ${warpClassified.maxErrorPx.toStringAsFixed(1)}px)')
-                    : 'post-warp: REJECTED - ${warpClassified.message}';
-                cv.putText(
-                  warped,
-                  verdictLabel,
-                  cv.Point(20, warped.height - 20),
-                  cv.FONT_HERSHEY_SIMPLEX,
-                  0.5,
-                  warpClassified.ok
-                      ? (warpClassified.degraded
-                          ? cv.Scalar(0, 200, 255)
-                          : cv.Scalar(0, 255, 0))
-                      : cv.Scalar(0, 0, 255),
-                  thickness: 1,
-                );
-                cv.imwrite('$outputDir/sheet${pageIndex}_grid.jpg', warped);
-              } finally {
-                warped.dispose();
-              }
-
-              // Declared out here so the `finally` can dispose it.
-              cv.Mat? normalizedDebugGray;
-              try {
-                cv.imwrite(
-                  '$outputDir/sheet${pageIndex}_warped_gray.jpg',
-                  warpedGray,
-                );
-                // Same illumination normalization decode() now applies,
-                // saved as its own stage between warped_gray and clahe so a
-                // shadow's removal is directly visible. When
-                // _normalizeIllumination declines, it hands back `warpedGray`
-                // and this image is simply identical to the previous one.
-                normalizedDebugGray = _normalizeIllumination(warpedGray);
-                cv.imwrite(
-                  '$outputDir/sheet${pageIndex}_normalized.jpg',
-                  normalizedDebugGray,
-                );
-                // Kept identical to the real decode path above (clipLimit,
-                // blur kernel, brightness-adaptive scaling, and now the
-                // illumination normalization too) so this debug output
-                // actually reflects what _readBubbles saw, not a different
-                // pipeline.
-                final warpedGrayMeanScalar = warpedGray.mean();
-                double warpedGrayBrightness;
-                try {
-                  warpedGrayBrightness = warpedGrayMeanScalar.val1;
-                } finally {
-                  warpedGrayMeanScalar.dispose();
-                }
-                // Same darkness-scaled bilateral pre-filter decode() now
-                // runs — a no-op Mat reference (not a real filter call) at/
-                // above _referenceBrightness — over the normalized image,
-                // exactly as decode() does.
-                final grayDarkness = _darknessFactor(warpedGrayBrightness);
-                final grayClaheInput = grayDarkness > 0
-                    ? cv.bilateralFilter(normalizedDebugGray, 5,
-                        50 * grayDarkness, 50 * grayDarkness)
-                    : normalizedDebugGray;
-                try {
-                  final clahe = cv.createCLAHE(
-                    clipLimit: _adaptiveClipLimit(_claheClipLimitFor(template.examCode), warpedGrayBrightness),
-                    tileGridSize: (8, 8),
-                  );
-                  try {
-                    final normalized = clahe.apply(grayClaheInput);
-                    try {
-                      cv.imwrite(
-                        '$outputDir/sheet${pageIndex}_clahe.jpg',
-                        normalized,
-                      );
-                      final blurred = cv.gaussianBlur(normalized, (5, 5), 0);
-                      try {
-                        final inkMap = cv.adaptiveThreshold(
-                          blurred,
-                          255,
-                          cv.ADAPTIVE_THRESH_GAUSSIAN_C,
-                          cv.THRESH_BINARY_INV,
-                          _adaptiveThresholdBlockSizeFor(template),
-                          _adaptiveThresholdCFor(_adaptiveThresholdC, warpedGrayBrightness),
-                        );
-                        try {
-                          cv.imwrite(
-                            '$outputDir/sheet${pageIndex}_inkmap.jpg',
-                            inkMap,
-                          );
-                          if (debugVizSw != null) {
-                            _perfLog(
-                              'debugViz pageIndex=$pageIndex total=${debugVizSw.elapsedMilliseconds}ms',
-                            );
-                          }
-                        } finally {
-                          inkMap.dispose();
-                        }
-                      } finally {
-                        blurred.dispose();
-                      }
-                    } finally {
-                      normalized.dispose();
-                    }
-                  } finally {
-                    clahe.dispose();
-                  }
-                } finally {
-                  if (!identical(grayClaheInput, normalizedDebugGray)) {
-                    grayClaheInput.dispose();
-                  }
-                }
-              } finally {
-                // Only a *new* Mat from _normalizeIllumination is ours here;
-                // its bail path returns `warpedGray`, disposed just below.
-                if (normalizedDebugGray != null &&
-                    !identical(normalizedDebugGray, warpedGray)) {
-                  normalizedDebugGray.dispose();
-                }
-                warpedGray.dispose();
-              }
-            } finally {
-              transform.dispose();
-              srcCorners.dispose();
-              dstCorners.dispose();
-            }
-          } finally {
-            if (rotationCode != null) orientedSrc.dispose();
-          }
-        } finally {
-          if (rotationCode != null) oriented.dispose();
-        }
-      } finally {
-        gray.dispose();
-      }
-    } finally {
-      src.dispose();
-    }
-  }
-
   /// Finds each of the sheet's 4 fiducial corner marks.
   ///
   /// Stage 1: search a tight box around where *this exam's* own marker is
@@ -2995,8 +2528,6 @@ class OmrDecoder {
     const labels = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
     final pageQuad = _detectPageQuad(gray);
     final searches = _quadrantsFor(gray.width, gray.height, pageQuad, template);
-    final a4Corners = template.templateVersion == 'TAT-A4-placement-v2';
-    final a4Radius = a4Corners ? tatCornerAnchorRadius(gray.width, gray.height, pageQuad != null) : null;
 
     if (_kFiducialDebug) {
       _fidLog(
@@ -3021,12 +2552,10 @@ class OmrDecoder {
         gray, s.stage1, s.anchorX, s.anchorY,
         debugTag: tag,
         anchorScaleOverride: s.stage1AnchorScale,
-        edgeAwareContrast: a4Corners, maxAnchorDistancePx: a4Radius,
       );
       return _bestOf(
         stage1Result,
-        () => _findMarkerInRegion(gray, s.quadrant, s.anchorX, s.anchorY, debugTag: tag,
-            edgeAwareContrast: a4Corners, maxAnchorDistancePx: a4Radius),
+        () => _findMarkerInRegion(gray, s.quadrant, s.anchorX, s.anchorY, debugTag: tag),
       );
     });
 
@@ -3200,8 +2729,7 @@ class OmrDecoder {
         final box = _clampedRect(
           rx - pad, ry - pad, rx + pad, ry + pad, gray.width, gray.height,
         );
-        final refined = _findMarkerInRegion(gray, box, rx, ry,
-            edgeAwareContrast: template.templateVersion == 'TAT-A4-placement-v2');
+        final refined = _findMarkerInRegion(gray, box, rx, ry);
         final rc = refined.centroid;
         final sameBlob = rc != null &&
             refined.confidence != CornerConfidence.none &&
@@ -3272,8 +2800,8 @@ class OmrDecoder {
   /// was needed, otherwise a new rotated Mat the caller must separately
   /// dispose), its corners, and which rotation code was used to get there
   /// (null when [gray] needed none) — callers that also need to reproduce
-  /// the same rotation on a second image (e.g. saveDebugVisualization's
-  /// color [src]) need the exact code, not just "was it rotated": a 90°
+  /// the same rotation on a second image (e.g. the color review image) need
+  /// the exact code, not just "was it rotated": a 90°
   /// rotation in either direction changes a Mat's width/height the same
   /// way, so that alone can't tell them apart.
   (cv.Mat, _RefineResult, int?) _orientAndFindCorners(
@@ -4155,8 +3683,6 @@ class OmrDecoder {
     String? debugTag,
     double? anchorScaleOverride,
     double? expectedSidePx,
-    bool edgeAwareContrast = false,
-    double? maxAnchorDistancePx,
   }) {
     final roi = gray.region(region);
     try {
@@ -4311,14 +3837,6 @@ class OmrDecoder {
                         blobRoi.dispose();
                         localRoi.dispose();
                       }
-                      if (edgeAwareContrast) {
-                        contrast = tatCornerContrast(
-                          imageWidth: gray.width, imageHeight: gray.height,
-                          x: (region.x + rect.x).toDouble(), y: (region.y + rect.y).toDouble(),
-                          width: rect.width.toDouble(), height: rect.height.toDouble(),
-                          grayAt: (x, y) => gray.atNum(y, x).toDouble(),
-                        );
-                      }
 
                       void log(String Function() message) {
                         if (_kFiducialDebug && debugTag != null) {
@@ -4455,10 +3973,6 @@ class OmrDecoder {
                       );
 
                       final positionScore = math.exp(-distance / anchorScale);
-                      if (maxAnchorDistancePx != null && distance > maxAnchorDistancePx) {
-                        reject(rect, squareness, 0, 'page_anchor', area: area, contrast: contrast);
-                        continue;
-                      }
                       final contrastScore = _clamp01(
                           (contrast - _markerMinContrast) /
                               (90 - _markerMinContrast));

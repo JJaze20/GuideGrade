@@ -33,41 +33,6 @@ AlignmentCheck _checkAlignment(_AlignmentCheckRequest request) {
   return const OmrDecoder().locateCorners(request.imagePath, request.template);
 }
 
-class _RejectedCaptureDebugVizRequest {
-  final String imagePath;
-  final OmrExamTemplate template;
-  final String debugDir;
-  const _RejectedCaptureDebugVizRequest(this.imagePath, this.template, this.debugDir);
-}
-
-/// Dumps the same kind of annotated debug images
-/// [AppState.processCapturedPages] writes for a SUCCESSFUL capture (see
-/// `OmrDecoder.saveDebugVisualization`'s doc comment, including its own
-/// `sheet{n}_FAILED.jpg` fallback when corner detection itself throws), but
-/// for a capture the post-capture gate just REJECTED — which otherwise
-/// leaves no trace anywhere, since a rejected photo never reaches
-/// [AppState.processCapturedPages] at all. Written to a `rejected/`
-/// subfolder of the same "omr_debug" directory so these can never collide
-/// with (or be overwritten by) a later successful capture's own debug
-/// files at the same page slot. Best-effort only: any failure here is
-/// swallowed by the caller, since this exists purely for diagnosis and
-/// must never affect the actual scanning flow.
-void _saveRejectedCaptureDebugViz(_RejectedCaptureDebugVizRequest request) {
-  final dir = Directory('${request.debugDir}/rejected');
-  if (!dir.existsSync()) dir.createSync(recursive: true);
-  // A fresh, distinguishable slot per rejection (not tied to a page index,
-  // since a rejected photo was never assigned one) -- old ones are left in
-  // place rather than overwritten, so a string of retries during one
-  // session can all still be inspected afterward.
-  final pageIndex = DateTime.now().millisecondsSinceEpoch;
-  const OmrDecoder().saveDebugVisualization(
-    request.imagePath,
-    request.template,
-    dir.path,
-    pageIndex,
-  );
-}
-
 class _NormalizeOrientationRequest {
   final String imagePath;
   final int quarterTurnsClockwise;
@@ -261,19 +226,6 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
   /// [_buildTopBar]) — this is a developer tool, not a user-facing
   /// feature, and defaults to false even there.
   bool _diagnosticsEnabled = false;
-
-  /// Whether to keep this session's per-stage decode images so they can be
-  /// reviewed afterwards from Scan Results ("How it was read").
-  ///
-  /// Unlike [_diagnosticsEnabled] this is available in a release build: the
-  /// people who need to see how a sheet was read are running one. It costs
-  /// one extra decode per page and nothing else -- deliberately NOT the
-  /// verbose per-contour logging, which is what made dim-light scanning
-  /// crawl and stays behind [_diagnosticsEnabled].
-  ///
-  /// Mirrors [AppState.debugImagesEnabled], enabled during scanner development
-  /// so the "How it was read" viewer has diagnostic images available.
-  bool _debugImagesEnabled = true;
 
   /// Populated only while [_diagnosticsEnabled] is true (see
   /// [_LiveCornersRequest.includeDiagnostics]); null otherwise, same as
@@ -507,7 +459,6 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
     // itself throws, since the widget isn't fully attached to the tree
     // yet at that point.
     _appState = AppStateScope.of(context);
-    _debugImagesEnabled = _appState.debugImagesEnabled;
     // All exams use the portrait camera UI. TAT's printed page is rotated
     // into canonical coordinates by measured fiducials after capture.
     _isLandscapeExam = false;
@@ -1194,21 +1145,6 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
               'errors=${check.reprojectionErrorPx} reason=${check.message}',
             );
           }
-          // Best-effort diagnostic dump so a rejection actually leaves
-          // something to inspect afterward -- a rejected photo is never
-          // added to the batch, so without this it vanishes with nothing
-          // but the dialog's own message. Fire-and-forget: must never
-          // delay the dialog or affect the scanning flow on failure.
-          unawaited(() async {
-            final debugDir = await appState.prepareDebugImagesDir();
-            if (debugDir == null) return;
-            try {
-              await compute(
-                _saveRejectedCaptureDebugViz,
-                _RejectedCaptureDebugVizRequest(file.path, template, debugDir),
-              );
-            } catch (_) {}
-          }());
           // The live check above is advisory-strength (a lower-effort
           // preview frame); this one runs the real decoder's corner search
           // against the actual captured photo and is authoritative. No
@@ -1770,34 +1706,6 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // Available in release, unlike the bug icon below: staff need
-              // to be able to capture how a sheet was read without a special
-              // build. Enabled by default during scanner development.
-              Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: InkWell(
-                  onTap: () => setState(() {
-                    _debugImagesEnabled = !_debugImagesEnabled;
-                    _appState.debugImagesEnabled = _debugImagesEnabled;
-                  }),
-                  child: Container(
-                    width: 32,
-                    height: 32,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      color: _debugImagesEnabled
-                          ? AppColors.accentYellowGreen
-                          : Colors.black.withOpacity(0.4),
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(
-                      Icons.layers_outlined,
-                      color: _debugImagesEnabled ? Colors.black : Colors.white,
-                      size: 16,
-                    ),
-                  ),
-                ),
-              ),
               // TEMPORARY developer tool, debug-build-only and off by
               // default (see [_diagnosticsEnabled]) — never shown in a
               // release build, so this can't reach end users.

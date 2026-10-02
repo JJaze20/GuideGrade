@@ -5,7 +5,7 @@
 // Regenerate with: cd tool && dart run generate_sheets.dart
 
 import 'omr_template_registry.dart';
-import 'omr_template_tat_a4.dart';
+import 'omr_template_tat_v5.dart';
 
 class BubblePos {
   final String choice;
@@ -58,10 +58,6 @@ enum OmrFiducialRole {
   tatAboveII41,
   tatAboveIII6,
   tatAboveIII11,
-  tatA4AboveI1,
-  tatA4AboveI16,
-  tatA4AboveIII1,
-  tatA4AboveIII11,
 }
 
 class OmrFiducial {
@@ -1318,7 +1314,7 @@ final OmrExamTemplate _omrAT = OmrExamTemplate(
 );
 
 final Map<String, OmrExamTemplate> omrTemplates = {
-  "TAT": omrTATA4V2,
+  "TAT": omrTATPortraitV5,
   "QTM": _omrQTM,
   "AT": _omrAT,
 };

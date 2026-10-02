@@ -29,10 +29,6 @@ enum OmrMeshVertex {
   tatAboveII41,
   tatAboveIII6,
   tatAboveIII11,
-  tatA4AboveI1,
-  tatA4AboveI16,
-  tatA4AboveIII1,
-  tatA4AboveIII11,
 }
 
 /// One (canonical, measured) point pair for a mesh vertex, plus whether the
@@ -388,39 +384,14 @@ class OmrMeshCorrection {
   /// tiles the sheet exactly.
   static List<List<OmrMeshVertex>> get tatV5Topology => _tatV5Triangles;
 
-  // A4: Tests I/III share the upper area; Test II fills the lower area.
-  // These 18 triangles tile the corner rectangle using all 9 printed marks.
-  static const List<List<OmrMeshVertex>> tatA4Topology = [
-    [OmrMeshVertex.topLeft, OmrMeshVertex.topRight, OmrMeshVertex.tatA4AboveI16],
-    [OmrMeshVertex.topRight, OmrMeshVertex.tatA4AboveI16, OmrMeshVertex.tatA4AboveIII1],
-    [OmrMeshVertex.topRight, OmrMeshVertex.tatA4AboveIII1, OmrMeshVertex.tatA4AboveIII11],
-    [OmrMeshVertex.topRight, OmrMeshVertex.tatA4AboveIII11, OmrMeshVertex.dividerRight],
-    [OmrMeshVertex.topLeft, OmrMeshVertex.tatA4AboveI1, OmrMeshVertex.tatA4AboveI16],
-    [OmrMeshVertex.topLeft, OmrMeshVertex.dividerLeft, OmrMeshVertex.tatA4AboveI1],
-    [OmrMeshVertex.dividerLeft, OmrMeshVertex.tatA4AboveI1, OmrMeshVertex.tatA4AboveI16],
-    [OmrMeshVertex.dividerLeft, OmrMeshVertex.tatA4AboveI16, OmrMeshVertex.centerAtDivider],
-    [OmrMeshVertex.centerAtDivider, OmrMeshVertex.tatA4AboveI16, OmrMeshVertex.tatA4AboveIII1],
-    [OmrMeshVertex.centerAtDivider, OmrMeshVertex.tatA4AboveIII1, OmrMeshVertex.dividerRight],
-    [OmrMeshVertex.dividerRight, OmrMeshVertex.tatA4AboveIII1, OmrMeshVertex.tatA4AboveIII11],
-    [OmrMeshVertex.dividerLeft, OmrMeshVertex.centerAtDivider, OmrMeshVertex.tatAboveII21],
-    [OmrMeshVertex.centerAtDivider, OmrMeshVertex.tatAboveII41, OmrMeshVertex.tatAboveII21],
-    [OmrMeshVertex.centerAtDivider, OmrMeshVertex.dividerRight, OmrMeshVertex.tatAboveII41],
-    [OmrMeshVertex.dividerLeft, OmrMeshVertex.tatAboveII21, OmrMeshVertex.bottomLeft],
-    [OmrMeshVertex.dividerRight, OmrMeshVertex.bottomRight, OmrMeshVertex.tatAboveII41],
-    [OmrMeshVertex.bottomLeft, OmrMeshVertex.tatAboveII21, OmrMeshVertex.tatAboveII41],
-    [OmrMeshVertex.bottomLeft, OmrMeshVertex.tatAboveII41, OmrMeshVertex.bottomRight],
-  ];
-
-  bool get _isTatA4 => points.containsKey(OmrMeshVertex.tatA4AboveI1);
   bool get _isTatV5 => points.containsKey(OmrMeshVertex.tatAboveI1);
-  bool get _isTat => points.containsKey(OmrMeshVertex.tatAboveI) || _isTatV5 || _isTatA4;
+  bool get _isTat => points.containsKey(OmrMeshVertex.tatAboveI) || _isTatV5;
   List<List<OmrMeshVertex>> get _topology =>
-      _isTatA4 ? tatA4Topology : (_isTatV5 ? _tatV5Triangles : (_isTat ? _tatTriangles : _triangles));
+      _isTatV5 ? _tatV5Triangles : (_isTat ? _tatTriangles : _triangles);
 
   /// Bound local area change, edge stretch and orientation before sampling.
   static bool _tatGeometrySafe(Map<OmrMeshVertex, OmrMeshPointStatus> points) {
-    final topology = points.containsKey(OmrMeshVertex.tatA4AboveI1) ? tatA4Topology :
-        (points.containsKey(OmrMeshVertex.tatAboveI1) ? _tatV5Triangles : _tatTriangles);
+    final topology = points.containsKey(OmrMeshVertex.tatAboveI1) ? _tatV5Triangles : _tatTriangles;
     for (final tri in topology) {
       final a = points[tri[0]]!, b = points[tri[1]]!, c = points[tri[2]]!;
       final original = (b.canonicalX-a.canonicalX)*(c.canonicalY-a.canonicalY)
@@ -457,10 +428,6 @@ class OmrMeshCorrection {
         OmrMeshVertex.tatAboveII41 => OmrFiducialRole.tatAboveII41,
         OmrMeshVertex.tatAboveIII6 => OmrFiducialRole.tatAboveIII6,
         OmrMeshVertex.tatAboveIII11 => OmrFiducialRole.tatAboveIII11,
-        OmrMeshVertex.tatA4AboveI1 => OmrFiducialRole.tatA4AboveI1,
-        OmrMeshVertex.tatA4AboveI16 => OmrFiducialRole.tatA4AboveI16,
-        OmrMeshVertex.tatA4AboveIII1 => OmrFiducialRole.tatA4AboveIII1,
-        OmrMeshVertex.tatA4AboveIII11 => OmrFiducialRole.tatA4AboveIII11,
         _ => null,
       };
 
@@ -589,21 +556,15 @@ class OmrMeshCorrection {
           avgDeviationPt <= misregistrationCoherenceRatio * meanMagPt;
     }
 
-    final isTatA4 = points.containsKey(OmrMeshVertex.tatA4AboveI1);
     final isTatV5 = points.containsKey(OmrMeshVertex.tatAboveI1);
-    final isTat = points.containsKey(OmrMeshVertex.tatAboveI) || isTatV5 || isTatA4;
+    final isTat = points.containsKey(OmrMeshVertex.tatAboveI) || isTatV5;
     // v5: each answer band keeps at least half of its own small marks (Test I
     // 2 of 3, Test II 1 of 2, Test III 1 of 2), so one hidden mark per band
     // is tolerated but a band with none of its references is not.
     bool bandCovered(List<OmrMeshVertex> band, int needed) =>
-        band.where((v) => points[v]?.wasDetected == true).length >= needed;
+        band.where((v) => points[v]!.wasDetected).length >= needed;
     final tatSectionsCovered = !isTat ||
-        (isTatA4
-            ? bandCovered(const [OmrMeshVertex.tatA4AboveI1, OmrMeshVertex.tatA4AboveI16], 1) &&
-                bandCovered(const [OmrMeshVertex.tatA4AboveIII1, OmrMeshVertex.tatA4AboveIII11], 1) &&
-                bandCovered(const [OmrMeshVertex.tatAboveII21, OmrMeshVertex.tatAboveII41], 1) &&
-                bandCovered(const [OmrMeshVertex.centerAtDivider], 1)
-            : isTatV5
+        (isTatV5
             ? bandCovered(const [
                   OmrMeshVertex.tatAboveI1, OmrMeshVertex.tatAboveI11, OmrMeshVertex.tatAboveI21,
                 ], 2) &&
@@ -617,13 +578,10 @@ class OmrMeshCorrection {
     // One obscured side mark is permissible when all three sections are
     // bracketed by real detections. A missing mark is only a zero-displacement
     // regularizing anchor, never counted as detection/validation evidence.
-    final tatSupported = tatSectionsCovered && (isTatA4 ? detectedInteriorCount >= 5 : (isTatV5 || detectedInteriorCount >= 7));
+    final tatSupported = tatSectionsCovered && (isTatV5 || detectedInteriorCount >= 7);
     final OmrMeshVerdict verdict;
     if (isTat && worstResidualPt > 12) {
       verdict = isCoherentShift ? OmrMeshVerdict.likelyMisregistered : OmrMeshVerdict.tooSevere;
-    } else if (isTatA4 && !tatSupported) {
-      verdict = worstResidualPt > tatUnsupportedDistortionResidualPt
-          ? OmrMeshVerdict.unsupportedDistortion : OmrMeshVerdict.inconclusive;
     } else if (isTat && !tatSupported && worstResidualPt > tatUnsupportedDistortionResidualPt) {
       verdict = OmrMeshVerdict.unsupportedDistortion;
     } else if (detectedInteriorCount < (isTat ? 4 : minConfidentInteriorPoints)) {

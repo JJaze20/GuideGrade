@@ -1,7 +1,0 @@
-node_modules/
-*.log
-.env
-.env.*
-# never commit service-account keys used for the one-time backfill
-serviceAccount*.json
-*serviceAccountKey*.json
