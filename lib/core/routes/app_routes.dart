@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../../core/services/logging_service.dart';
 import '../../core/state/app_state.dart';
 import '../../core/utils/platform_utils.dart';
+import '../../shared/widgets/app_bottom_nav.dart';
 import '../../features/authentication/screens/mobile_login_screen.dart';
 import '../../features/authentication/screens/profile_setup_screen.dart';
 import '../../features/splash/screens/splash_screen.dart';
@@ -227,13 +228,13 @@ class AppRoutes {
       case adminLogin:
         return _fade(const AdminLoginScreen());
       case staffHome:
-        return _fade(const StaffHomeScreen());
+        return tabRoute(staffHome, const StaffHomeScreen());
       case profile:
         return _slide(const ProfileScreen());
       case profileSetup:
         return _fade(const ProfileSetupScreen());
       case examHub:
-        return _fade(const ExamHubScreen());
+        return tabRoute(examHub, const ExamHubScreen());
       case examSetup:
         return _slide(ExamSetupScreen(preselectBatchId: settings.arguments as String?));
       case examScanning:
@@ -243,7 +244,7 @@ class AppRoutes {
       case answerKeyEntry:
         return _slide(const AnswerKeyEntryScreen());
       case cloudArchive:
-        return _fade(const CloudArchiveScreen());
+        return tabRoute(cloudArchive, const CloudArchiveScreen());
       case batchArchiveDetail:
         return _slide(BatchArchiveDetailScreen(batchId: settings.arguments as String));
       case qtmBatchAnalytics:
@@ -320,10 +321,117 @@ class AppRoutes {
     return PlatformUtils.isWeb ? const GuidanceWebHomeScreen() : const StaffHomeScreen();
   }
 
+  /// Left-to-right order of the bottom-nav tabs.
+  static const Map<String, int> _tabOrder = {staffHome: 0, examHub: 1, cloudArchive: 2};
+
+  /// The [AppBottomNav] tab id for each tab route.
+  static const Map<String, String> _tabNavId = {staffHome: 'home', examHub: 'sheet', cloudArchive: 'cloud'};
+
+  /// The tab last navigated to, so the next tab switch knows which way to
+  /// swipe. Home is where a signed-in session starts.
+  static int _currentTab = 0;
+
+  /// Which way the swipe in progress is moving (+1 = new page enters from the
+  /// right, -1 = from the left, 0 = none). Read by the page being left so it
+  /// slides out the opposite way; cleared once the transition is over so a
+  /// later, unrelated route pushed on top of a tab doesn't move it.
+  static int _swipeDirection = 0;
+
+  static const Duration _tabSwipeDuration = Duration(milliseconds: 280);
+
+  /// Switches to another bottom-nav tab, leaving no history behind it (the
+  /// existing tab behaviour).
+  ///
+  /// When the current tab is the only route on the stack — the normal case,
+  /// since every tab switch clears it — this is a replacement, which is what
+  /// lets the page being left slide away with the new one. A plain
+  /// push-and-remove-everything drops the old page instantly, so it would just
+  /// sit there and get covered. If something is still underneath, fall back to
+  /// the old clear-everything push (the new page still swipes in).
+  static void switchTab(BuildContext context, String route) {
+    final navigator = Navigator.of(context);
+    if (!navigator.canPop()) {
+      navigator.pushReplacementNamed(route);
+    } else {
+      navigator.pushNamedAndRemoveUntil(route, (_) => false);
+    }
+  }
+
+  /// Route for one of the bottom-nav tabs: swipes sideways in the direction of
+  /// the tab's position (Exams is right of Home, Archive right of Exams), the
+  /// page being left sliding away the other way. Re-selecting the current tab
+  /// has nothing to swipe towards, so that is a plain fade.
+  @visibleForTesting
+  static Route<dynamic> tabRoute(String name, Widget child) {
+    final target = _tabOrder[name] ?? 0;
+    final direction = target.compareTo(_currentTab).sign;
+    _currentTab = target;
+    if (direction == 0) return _fade(child);
+    _swipeDirection = direction;
+
+    final route = PageRouteBuilder<dynamic>(
+      pageBuilder: (_, __, ___) => child,
+      transitionDuration: _tabSwipeDuration,
+      reverseTransitionDuration: _tabSwipeDuration,
+      transitionsBuilder: (_, animation, secondaryAnimation, c) {
+        final entering = Tween<Offset>(begin: Offset(direction.toDouble(), 0), end: Offset.zero)
+            .animate(CurvedAnimation(parent: animation, curve: Curves.easeOutCubic));
+        final page = _leaving(secondaryAnimation, SlideTransition(position: entering, child: c));
+        // The bottom nav belongs to each tab's Scaffold, so it would slide
+        // along with the page. Hold a fixed copy over it while the swipe
+        // runs, and let the page's own (identical) nav show once it ends.
+        return AnimatedBuilder(
+          animation: animation,
+          builder: (_, __) => Stack(
+            children: [
+              Positioned.fill(child: page),
+              if (!animation.isCompleted)
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  // A Scaffold strips the top (status bar) inset before it lays
+                  // out its bottom bar; outside one, the nav would add that
+                  // padding to its own top and grow upward. Strip it here too
+                  // so this copy is exactly the size of the page's own nav.
+                  child: Builder(
+                    builder: (ctx) => MediaQuery.removePadding(
+                      context: ctx,
+                      removeTop: true,
+                      child: AppBottomNav(activeTab: _tabNavId[name] ?? 'home'),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+    // The swipe is over when the new page has finished arriving; until then
+    // the page being left needs to know which way to slide.
+    route.completed.whenComplete(() {
+      if (_swipeDirection == direction) _swipeDirection = 0;
+    });
+    return route;
+  }
+
+  /// Slides [child] away opposite to the swipe in progress while another tab
+  /// is covering it. With no swipe in progress ([_swipeDirection] is 0) this
+  /// is a no-op, so a page pushed over a tab later doesn't move it. Shared by
+  /// every route a tab can have been opened with (including [_fade], the
+  /// landing route), since the page being left always uses its OWN route to
+  /// leave.
+  static Widget _leaving(Animation<double> secondaryAnimation, Widget child) {
+    final leaving = Tween<Offset>(begin: Offset.zero, end: Offset(-_swipeDirection.toDouble(), 0))
+        .animate(CurvedAnimation(parent: secondaryAnimation, curve: Curves.easeOutCubic));
+    return SlideTransition(position: leaving, child: child);
+  }
+
   static Route<dynamic> _fade(Widget child) {
     return PageRouteBuilder(
       pageBuilder: (_, __, ___) => child,
-      transitionsBuilder: (_, animation, __, c) => FadeTransition(opacity: animation, child: c),
+      transitionsBuilder: (_, animation, secondaryAnimation, c) =>
+          _leaving(secondaryAnimation, FadeTransition(opacity: animation, child: c)),
       transitionDuration: const Duration(milliseconds: 220),
     );
   }

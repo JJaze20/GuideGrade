@@ -24,24 +24,27 @@ def update(path: Path):
     above_header_transform = f'1 0 0 1 {303 - width / 2:.4f} 896 cm'.encode('ascii')
     right_title_transform = f'1 0 0 1 {558 - width:.4f} 760 cm'.encode('ascii')
     # Title on the left; pencil instruction right-aligned on the same baseline.
-    new_transform = b'1 0 0 1 48 760 cm'
+    new_transform = b'1 0 0 1 48 790 cm'
     instruction = 'Use a No. 2 pencil. Fill the circle completely.'
     instruction_x = 558 - stringWidth(instruction, 'Helvetica', 7)
     old_instruction = b'1 0 0 1 48 760 Tm'
-    new_instruction = f'1 0 0 1 {instruction_x:.4f} 760 Tm'.encode('ascii')
+    previous_instruction = f'1 0 0 1 {instruction_x:.4f} 760 Tm'.encode('ascii')
+    new_instruction = f'1 0 0 1 {instruction_x:.4f} 790 Tm'.encode('ascii')
     if border not in content and new_transform in content and new_instruction in content:
         print('TAT v5 header already updated')
         return
-    candidates = [rotated_transform, above_header_transform, right_title_transform]
+    candidates = [rotated_transform, above_header_transform, right_title_transform,
+                  b'1 0 0 1 48 760 cm']
     matches = [value for value in candidates if value in content]
     assert len(matches) == 1, 'Unexpected TAT title position'
     old_transform = matches[0]
     assert content.count(border) <= 1, 'Unexpected TAT letterhead border'
     assert content.count(old_transform) == 1, 'Unexpected TAT title transform'
-    assert content.count(old_instruction) == 1, 'Unexpected pencil instruction position'
+    instructions = [value for value in [old_instruction, previous_instruction] if value in content]
+    assert len(instructions) == 1, 'Unexpected pencil instruction position'
     # Do not perform a general PDF re-layout or rasterize the sheet.
     updated = content.replace(border, b'').replace(old_transform, new_transform)
-    updated = updated.replace(old_instruction, new_instruction)
+    updated = updated.replace(instructions[0], new_instruction)
     stream = DecodedStreamObject()
     stream.set_data(updated)
     writer = PdfWriter()
