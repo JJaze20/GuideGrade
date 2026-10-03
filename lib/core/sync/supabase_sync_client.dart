@@ -11,6 +11,7 @@ import 'admin_scan_restore_client.dart';
 import 'retake_client.dart';
 import 'scan_cloud_extensions.dart';
 import 'scan_delete_client.dart';
+import 'scan_restore_client.dart';
 import 'sync_client.dart';
 import 'sync_job.dart';
 import 'sync_outcome.dart';
@@ -106,7 +107,7 @@ class AnswerKeyDecision {
 /// token-refresh retry on an auth error; scheduling is the sync manager's
 /// job.
 class SupabaseSyncClient
-    implements SyncClient, RetakeClient, ScanDeleteClient, AdminScanRestoreClient {
+    implements SyncClient, RetakeClient, ScanDeleteClient, ScanRestoreClient, AdminScanRestoreClient {
   SupabaseSyncClient({
     required this.batches,
     required this.localStorage,
@@ -1081,7 +1082,8 @@ class SupabaseSyncClient
               'attempt_no, attempt_status, archived_at, archived_by_uid, '
               'archived_by_name, archive_reason',
             )
-            .eq('batch_id', batchId);
+            .eq('batch_id', batchId)
+            .isFilter('deleted_at', null);
         return CloudScansRead.found(
           rows.map((r) => parseCloudScanRow(r)).toList(),
         );
@@ -1240,7 +1242,8 @@ class SupabaseSyncClient
               'attempt_status, archived_at, archived_by_uid, archived_by_name, '
               'archive_reason',
             )
-            .isFilter('examinee_id', null);
+            .isFilter('examinee_id', null)
+            .isFilter('deleted_at', null);
         return CloudScansRead.found(
           rows.map((r) => parseCloudScanRow(r)).toList(),
         );
@@ -1699,8 +1702,11 @@ class SupabaseSyncClient
     });
   }
 
-  /// Exact scan count per batch (one small counted request per batch id —
-  /// never a row dump, so PostgREST's row cap can't truncate a count).
+  /// Exact count of ACTIVE scans per batch (one small counted request per
+  /// batch id — never a row dump, so PostgREST's row cap can't truncate a
+  /// count). A soft-deleted scan (`deleted_at IS NOT NULL`, Requirement #4)
+  /// is not counted, so this stays over exactly the same population as
+  /// [readCloudScans] -- Analytics' completeness check compares the two.
   @override
   Future<CloudScanCountsRead> readScanCounts(List<String> batchIds) async {
     var refreshed = false;
@@ -1712,6 +1718,7 @@ class SupabaseSyncClient
               .from('scans')
               .select('id')
               .eq('batch_id', id)
+              .isFilter('deleted_at', null)
               .limit(1)
               .count(CountOption.exact);
           counts[id] = response.count;
@@ -1937,6 +1944,96 @@ class SupabaseSyncClient
         'p_deleted_by_uid': deletedByUid,
         'p_deleted_by_name': deletedByName,
         'p_deletion_reason': deletionReason,
+      });
+      return const SyncOutcome.success();
+    });
+  }
+
+  /// Parses one raw `list_retained_soft_deleted_scans_for_guidance` row into
+  /// a [CloudRetainedDeletedScanRow].
+  static CloudRetainedDeletedScanRow parseCloudRetainedDeletedScanRow(
+    Map<String, dynamic> row,
+  ) =>
+      CloudRetainedDeletedScanRow(
+        batchId: row['batch_id'] as String,
+        scanId: row['scan_id'] as String,
+        examCode: row['exam_code'] as String,
+        deletedAt: _requiredDateTime(row['deleted_at'], 'deleted_at'),
+        retentionUntil: _requiredDateTime(row['retention_until'], 'retention_until'),
+        deletionReason: row['deletion_reason'] as String?,
+        deletedByName: row['deleted_by_name'] as String?,
+        activeRestoreRequestStatus: row['active_restore_request_status'] as String?,
+      );
+
+  static DateTime _requiredDateTime(Object? raw, String fieldName) {
+    final parsed = _dateOrNull(raw);
+    if (parsed == null) {
+      throw FormatException('Required timestamp "$fieldName" is missing or invalid.');
+    }
+    return parsed;
+  }
+
+  /// See [ScanRestoreClient.listRetainedSoftDeletedScans]. Calls the
+  /// `list_retained_soft_deleted_scans_for_guidance` RPC exactly as declared
+  /// in 0011_list_retained_soft_deleted_scans_for_guidance.sql -- no
+  /// parameters, Guidance-Council-only (enforced by the RPC itself). Never
+  /// calls any System-Admin-only RPC (`list_soft_deleted_unlinked_scans_for_admin`
+  /// is a separate function, never referenced here).
+  @override
+  Future<CloudRetainedDeletedScansRead> listRetainedSoftDeletedScans() async {
+    var refreshed = false;
+    while (true) {
+      try {
+        final result = await _client.rpc('list_retained_soft_deleted_scans_for_guidance');
+        final rows = (result as List).map((r) => Map<String, dynamic>.from(r as Map));
+        return CloudRetainedDeletedScansRead.found(
+          rows.map(parseCloudRetainedDeletedScanRow).toList(),
+        );
+      } on PostgrestException catch (e) {
+        final code = _sanitizeCode(e.code);
+        if ((code == '401' || code == 'PGRST301') && !refreshed) {
+          refreshed = true;
+          if (await _safeRefresh()) continue;
+        }
+        return CloudRetainedDeletedScansRead.failed(classifyPostgrestCode(code));
+      } on TimeoutException {
+        return const CloudRetainedDeletedScansRead.failed(SyncOutcome.transient('network'));
+      } on SocketException {
+        return const CloudRetainedDeletedScansRead.failed(SyncOutcome.transient('network'));
+      } catch (e) {
+        _logUnclassified(e);
+        return CloudRetainedDeletedScansRead.failed(classifyUnexpectedError(e));
+      }
+    }
+  }
+
+  /// See [ScanRestoreClient.createScanRestoreRequest]. Calls the EXISTING
+  /// `create_scan_restore_request` RPC from
+  /// 0009_create_unlinked_scan_soft_delete.sql with its five `p_`-prefixed
+  /// parameters -- every precondition (Guidance Council caller,
+  /// `p_requested_by_uid` matching the authenticated JWT `sub`, the scan
+  /// existing/currently-soft-deleted/unlinked/within-retention, no existing
+  /// active request, a non-blank reason) is enforced by the RPC itself,
+  /// never duplicated here. The RPC's own return row (request_id, status,
+  /// requested_at) is not needed by this method's signature and is not
+  /// parsed -- the caller re-reads [listRetainedSoftDeletedScans] afterward,
+  /// the same "re-read the truth from the database" convention
+  /// [RetakeClient]'s write methods already use.
+  @override
+  Future<SyncOutcome> createScanRestoreRequest({
+    required String batchId,
+    required String scanId,
+    required String reason,
+    required String requestedByUid,
+    String? requestedByName,
+  }) {
+    return _guardPostgrest(() async {
+      await _client.rpc('create_scan_restore_request', params: {
+        'p_batch_id': batchId,
+        'p_scan_id': scanId,
+        'p_reason': reason,
+        'p_requested_by_uid': requestedByUid,
+        'p_requested_by_name': requestedByName,
       });
       return const SyncOutcome.success();
     });
