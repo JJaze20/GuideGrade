@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:guidegrade/core/services/batch_crypto_service.dart';
 import 'package:guidegrade/core/services/local_batch_repository.dart';
+import 'package:guidegrade/core/sync/scan_delete_client.dart';
 import 'package:guidegrade/core/sync/sync_client.dart';
 import 'package:guidegrade/core/sync/sync_job.dart';
 import 'package:guidegrade/core/sync/sync_manager.dart';
@@ -50,7 +51,7 @@ class _FakeBatchCryptoService extends BatchCryptoService {
 /// Records every dispatch and returns a configurable [SyncOutcome]
 /// (per call label, else success). An optional [gate] lets a test hold a
 /// job mid-flight.
-class _FakeSyncClient implements SyncClient {
+class _FakeSyncClient implements SyncClient, ScanDeleteClient {
   final List<String> calls = [];
   final Map<String, SyncOutcome> outcomeByLabel = {};
   Completer<void>? gate;
@@ -148,6 +149,42 @@ class _FakeSyncClient implements SyncClient {
   @override
   Future<SyncOutcome> deleteScan(String batchId, String scanId) =>
       _run('deleteScan:$batchId:$scanId');
+
+  /// Never called by `SyncManager._dispatch`'s `deleteScan` case anymore
+  /// (Requirement #4: it now calls [softDeleteUnlinkedScan] instead) --
+  /// stubbed only so this fake satisfies [ScanDeleteClient] in full; any
+  /// call here would mean the old hard-delete fallback regressed.
+  @override
+  Future<SyncOutcome> deleteUnlinkedScan({
+    required String batchId,
+    required String scanId,
+  }) async {
+    calls.add('deleteUnlinkedScan:$batchId/$scanId');
+    throw StateError('must never call deleteUnlinkedScan');
+  }
+
+  /// The `meta` handed to the most recent `softDeleteUnlinkedScan` call, for
+  /// asserting the exact batchId/scanId/deletedByUid/deletedByName/reason
+  /// SyncManager's `deleteScan` dispatch passed through from `job.meta`.
+  Map<String, String?>? lastSoftDeleteUnlinkedScanCall;
+
+  @override
+  Future<SyncOutcome> softDeleteUnlinkedScan({
+    required String batchId,
+    required String scanId,
+    required String deletedByUid,
+    String? deletedByName,
+    required String deletionReason,
+  }) {
+    lastSoftDeleteUnlinkedScanCall = {
+      'batchId': batchId,
+      'scanId': scanId,
+      'deletedByUid': deletedByUid,
+      'deletedByName': deletedByName,
+      'deletionReason': deletionReason,
+    };
+    return _run('softDeleteUnlinkedScan:$batchId:$scanId');
+  }
 
   @override
   Future<SyncOutcome> deleteBatch(String batchId) =>
@@ -1923,4 +1960,133 @@ void main() {
       );
     },
   );
+
+  group('Requirement #4: deleteScan dispatches to softDeleteUnlinkedScan', () {
+    test(
+      '42. a DELETE_SCAN job dispatches to softDeleteUnlinkedScan with the exact '
+      'batchId/scanId/deletedByUid/deletedByName/reason, and NEVER to the old '
+      'hard-delete deleteScan',
+      () async {
+        final job = await queue.enqueue(
+          SyncJob.create(
+            type: SyncJobType.deleteScan,
+            entityId: 's1',
+            batchId: 'b1',
+            scanId: 's1',
+            meta: const {
+              'deletedByUid': 'firebase-uid-1',
+              'deletedByName': 'Council Member',
+              'reason': 'Duplicate capture',
+            },
+            now: clock(),
+          ),
+        );
+
+        await manager.start();
+
+        expect(client.calls, contains('softDeleteUnlinkedScan:b1:s1'));
+        expect(client.calls, isNot(contains('deleteScan:b1:s1')));
+        expect(client.calls, isNot(contains(startsWith('deleteUnlinkedScan:'))));
+
+        expect(client.lastSoftDeleteUnlinkedScanCall, {
+          'batchId': 'b1',
+          'scanId': 's1',
+          'deletedByUid': 'firebase-uid-1',
+          'deletedByName': 'Council Member',
+          'deletionReason': 'Duplicate capture',
+        });
+
+        expect(queue.jobById(job!.id), isNull); // removed: success
+      },
+    );
+
+    test(
+      '43. a 42501 (linked scan) result marks the job failedPermanent and does '
+      'not retry',
+      () async {
+        client.outcomeByLabel['softDeleteUnlinkedScan:b1:s1'] =
+            const SyncOutcome.permanent('42501');
+
+        final job = await queue.enqueue(
+          SyncJob.create(
+            type: SyncJobType.deleteScan,
+            entityId: 's1',
+            batchId: 'b1',
+            scanId: 's1',
+            meta: const {
+              'deletedByUid': 'firebase-uid-1',
+              'deletedByName': 'Council Member',
+              'reason': 'Duplicate capture',
+            },
+            now: clock(),
+          ),
+        );
+
+        await manager.start();
+
+        final updated = queue.jobById(job!.id)!;
+        expect(updated.status, SyncJobStatus.failedPermanent);
+        expect(updated.lastErrorCode, '42501');
+        expect(updated.attempts, 0);
+
+        // Re-processing the queue does not retry a failedPermanent job.
+        await manager.start();
+        expect(
+          client.calls.where((c) => c == 'softDeleteUnlinkedScan:b1:s1'),
+          hasLength(1),
+        );
+      },
+    );
+
+    test('44. a successful soft-delete completes the job (removed from the queue)',
+        () async {
+      final job = await queue.enqueue(
+        SyncJob.create(
+          type: SyncJobType.deleteScan,
+          entityId: 's1',
+          batchId: 'b1',
+          scanId: 's1',
+          meta: const {
+            'deletedByUid': 'firebase-uid-1',
+            'deletedByName': 'Council Member',
+            'reason': 'Duplicate capture',
+          },
+          now: clock(),
+        ),
+      );
+
+      await manager.start();
+
+      expect(queue.jobById(job!.id), isNull);
+      expect(queue.jobs, isEmpty);
+    });
+
+    test(
+      '45. the soft-delete dispatch never invokes any Storage removal call '
+      '(deleteScan, deleteStoragePrefix) for this job',
+      () async {
+        final job = await queue.enqueue(
+          SyncJob.create(
+            type: SyncJobType.deleteScan,
+            entityId: 's1',
+            batchId: 'b1',
+            scanId: 's1',
+            meta: const {
+              'deletedByUid': 'firebase-uid-1',
+              'deletedByName': 'Council Member',
+              'reason': 'Duplicate capture',
+            },
+            now: clock(),
+          ),
+        );
+
+        await manager.start();
+
+        expect(queue.jobById(job!.id), isNull); // ran, succeeded
+        expect(client.calls, isNot(contains(startsWith('deleteScan:'))));
+        expect(client.calls, isNot(contains(startsWith('deleteStoragePrefix:'))));
+        expect(client.calls, isNot(contains(startsWith('deleteUnlinkedScan:'))));
+      },
+    );
+  });
 }

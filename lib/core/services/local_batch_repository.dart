@@ -557,6 +557,13 @@ class LocalBatchRepository implements BatchRepository {
   Future<LocalBatch> deleteScan({
     required String batchId,
     required String scanId,
+    // Cloud-sync-only metadata (see BatchRepository.deleteScan's doc
+    // comment) -- a bare LocalBatchRepository has no cloud operation to
+    // attach them to, so they are accepted only to satisfy the shared
+    // interface and are otherwise unused here.
+    String? deletedByUid,
+    String? deletedByName,
+    String? reason,
   }) =>
       _serialized(batchId, () async {
         final root = await _root();

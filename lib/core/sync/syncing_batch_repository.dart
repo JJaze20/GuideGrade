@@ -311,16 +311,40 @@ class SyncingBatchRepository implements BatchRepository {
   // G3. deleteScan
   // ---------------------------------------------------------------------------
 
+  /// [deletedByUid]/[deletedByName] must be the caller's own authenticated
+  /// Firebase identity (see `BatchArchiveDetailScreen._deleteSheet`'s own
+  /// resolution of it) -- never a user-entered value. [reason] must be
+  /// non-blank: the queued cloud job now performs a Requirement #4 30-day
+  /// soft delete via `soft_delete_unlinked_scan`, which itself requires a
+  /// non-blank reason (see SyncManager._dispatch) -- rejected here, before
+  /// anything is locally deleted or enqueued, rather than letting a blank
+  /// reason surface later as a confusing cloud-side failure.
   @override
   Future<LocalBatch> deleteScan({
     required String batchId,
     required String scanId,
+    String? deletedByUid,
+    String? deletedByName,
+    String? reason,
   }) async {
+    final trimmedReason = reason?.trim();
+    if (trimmedReason == null || trimmedReason.isEmpty) {
+      throw ArgumentError.value(reason, 'reason', 'A reason is required to delete a scan.');
+    }
     // Local first: if it throws, nothing is enqueued and the caller sees the
     // failure — the sheet is still there. The queue drops this scan's pending
     // row/image pushes when the delete job lands (see SyncQueue.enqueue).
     final batch = await local.deleteScan(batchId: batchId, scanId: scanId);
-    _fireEnqueue([_deleteScan(batchId, scanId), _pushBatch(batchId)]);
+    _fireEnqueue([
+      _deleteScan(
+        batchId,
+        scanId,
+        deletedByUid: deletedByUid ?? '',
+        deletedByName: deletedByName,
+        reason: trimmedReason,
+      ),
+      _pushBatch(batchId),
+    ]);
     return batch;
   }
 
@@ -463,11 +487,28 @@ class SyncingBatchRepository implements BatchRepository {
         scanId: scanId,
       );
 
-  SyncJob _deleteScan(String batchId, String scanId) => SyncJob.create(
+  /// `meta` carries ONLY the three small strings
+  /// `SyncManager._dispatch`'s `deleteScan` case needs to call
+  /// `ScanDeleteClient.softDeleteUnlinkedScan` -- never a token, credential,
+  /// row snapshot, or examinee data (see [SyncJob]'s own doc comment on
+  /// `meta`).
+  SyncJob _deleteScan(
+    String batchId,
+    String scanId, {
+    required String deletedByUid,
+    String? deletedByName,
+    required String reason,
+  }) =>
+      SyncJob.create(
         type: SyncJobType.deleteScan,
         entityId: scanId,
         batchId: batchId,
         scanId: scanId,
+        meta: {
+          'deletedByUid': deletedByUid,
+          'deletedByName': ?deletedByName,
+          'reason': reason,
+        },
       );
 
   SyncJob _deleteBatch(String batchId) => SyncJob.create(

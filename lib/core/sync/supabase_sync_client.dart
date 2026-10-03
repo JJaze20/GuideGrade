@@ -1910,6 +1910,35 @@ class SupabaseSyncClient implements SyncClient, RetakeClient, ScanDeleteClient {
     return const SyncOutcome.success();
   }
 
+  /// See [ScanDeleteClient.softDeleteUnlinkedScan]. Calls the
+  /// `soft_delete_unlinked_scan` RPC exactly as declared in
+  /// 0009_create_unlinked_scan_soft_delete.sql with its five `p_`-prefixed
+  /// parameters -- every precondition (Guidance Council caller,
+  /// `p_deleted_by_uid` matching the authenticated JWT `sub`, the scan
+  /// existing/unlinked/not-archived/not-already-soft-deleted, a non-blank
+  /// reason) is enforced by the RPC itself, never duplicated here. The
+  /// RPC's own return row (batch_id, scan_id, deleted_at, retention_until)
+  /// is not needed by this method's signature and is not parsed. Never
+  /// touches Storage.
+  @override
+  Future<SyncOutcome> softDeleteUnlinkedScan({
+    required String batchId,
+    required String scanId,
+    required String deletedByUid,
+    String? deletedByName,
+    required String deletionReason,
+  }) {
+    return _guardPostgrest(() async {
+      await _client.rpc('soft_delete_unlinked_scan', params: {
+        'p_batch_id': batchId,
+        'p_scan_id': scanId,
+        'p_deleted_by_uid': deletedByUid,
+        'p_deleted_by_name': deletedByName,
+        'p_deletion_reason': deletionReason,
+      });
+      return const SyncOutcome.success();
+    });
+  }
   // ---------------------------------------------------------------------------
   // G. deleteBatch
   // ---------------------------------------------------------------------------
