@@ -51,17 +51,25 @@ class _FakeClient implements SyncClient {
   @override
   Future<CloudBatchesRead> readCloudBatches() async {
     calls.add('readCloudBatches');
-    if (batchReadFails) return const CloudBatchesRead.failed(SyncOutcome.permanent('42501'));
+    if (batchReadFails)
+      return const CloudBatchesRead.failed(SyncOutcome.permanent('42501'));
     return CloudBatchesRead.found(List.of(batches));
   }
 
   @override
   Future<CloudBatchArchivesRead> readBatchArchives() async {
     calls.add('readBatchArchives');
-    if (archiveReadFails) return const CloudBatchArchivesRead.failed(SyncOutcome.permanent('PGRST205'));
+    if (archiveReadFails)
+      return const CloudBatchArchivesRead.failed(
+        SyncOutcome.permanent('PGRST205'),
+      );
     return CloudBatchArchivesRead.found([
       for (final id in archivedIds)
-        CloudBatchArchiveRow(batchId: id, archivedAt: DateTime.utc(2026, 3, 1), archivedByUid: 'u'),
+        CloudBatchArchiveRow(
+          batchId: id,
+          archivedAt: DateTime.utc(2026, 3, 1),
+          archivedByUid: 'u',
+        ),
     ]);
   }
 
@@ -69,7 +77,8 @@ class _FakeClient implements SyncClient {
   Future<CloudScanCountsRead> readScanCounts(List<String> batchIds) async {
     calls.add('readScanCounts');
     return CloudScanCountsRead.found({
-      for (final id in batchIds) id: countsOverride[id] ?? (scansByBatch[id] ?? const []).length,
+      for (final id in batchIds)
+        id: countsOverride[id] ?? (scansByBatch[id] ?? const []).length,
     });
   }
 
@@ -95,22 +104,27 @@ class _FakeClient implements SyncClient {
   @override
   Future<SyncOutcome> pushBatch(String batchId) => _no('pushBatch');
   @override
-  Future<SyncOutcome> pushScan(String batchId, String scanId, {Map<String, String> meta = const {}}) =>
-      _no('pushScan');
+  Future<SyncOutcome> pushScan(
+    String batchId,
+    String scanId, {
+    Map<String, String> meta = const {},
+  }) => _no('pushScan');
   @override
   Future<SyncOutcome> uploadImage(SyncJob job) => _no('uploadImage');
   @override
-  Future<SyncOutcome> patchImageStatus(String batchId, String scanId) => _no('patchImageStatus');
+  Future<SyncOutcome> patchImageStatus(String batchId, String scanId) =>
+      _no('patchImageStatus');
   @override
-  Future<SyncOutcome> pushAnswerKey(String examCode, {Map<String, String> meta = const {}}) =>
-      _no('pushAnswerKey');
+  Future<SyncOutcome> pushAnswerKey(
+    String examCode, {
+    Map<String, String> meta = const {},
+  }) => _no('pushAnswerKey');
   @override
   Future<CloudImageRead> downloadScanImage({
     required String batchId,
     required String scanId,
     required bool rectified,
-  }) =>
-      _no('downloadScanImage');
+  }) => _no('downloadScanImage');
 
   @override
   Future<CloudImageRead> downloadNameCropImage({
@@ -122,16 +136,20 @@ class _FakeClient implements SyncClient {
   @override
   Future<SyncOutcome> deleteBatch(String batchId) => _no('deleteBatch');
   @override
-  Future<SyncOutcome> deleteScan(String batchId, String scanId) => _no('deleteScan');
+  Future<SyncOutcome> deleteScan(String batchId, String scanId) =>
+      _no('deleteScan');
   @override
-  Future<SyncOutcome> deleteStoragePrefix(String batchId) => _no('deleteStoragePrefix');
+  Future<SyncOutcome> deleteStoragePrefix(String batchId) =>
+      _no('deleteStoragePrefix');
   @override
   Future<CloudExamineesRead> readCloudExaminees() async {
     calls.add('readCloudExaminees');
     final ids = <String>{
       for (final scans in scansByBatch.values)
         for (final s in scans)
-          if (s.examineeId != null && !danglingExamineeIds.contains(s.examineeId)) s.examineeId!,
+          if (s.examineeId != null &&
+              !danglingExamineeIds.contains(s.examineeId))
+            s.examineeId!,
     };
     return CloudExamineesRead.found([
       for (final id in ids)
@@ -148,6 +166,7 @@ class _FakeClient implements SyncClient {
         ),
     ]);
   }
+
   @override
   Future<CloudExamineeWrite> createExamineeFromScan({
     required String batchId,
@@ -155,53 +174,57 @@ class _FakeClient implements SyncClient {
     required String firstName,
     String? middleName,
     required String lastName,
-  }) =>
-      _no('createExamineeFromScan');
+  }) => _no('createExamineeFromScan');
   @override
   Future<CloudExamineeWrite> updateCloudExaminee({
     required String id,
     required String firstName,
     String? middleName,
     required String lastName,
-  }) =>
-      _no('updateCloudExaminee');
+  }) => _no('updateCloudExaminee');
   @override
-  Future<CloudExamineeWrite> setExamineeArchived(String id, bool archived) => _no('setExamineeArchived');
+  Future<CloudExamineeWrite> setExamineeArchived(String id, bool archived) =>
+      _no('setExamineeArchived');
   @override
   Future<SyncOutcome> linkScanToExaminee({
     required String batchId,
     required String scanId,
     required String? examineeId,
-  }) =>
-      _no('linkScanToExaminee');
+  }) => _no('linkScanToExaminee');
   @override
   Future<SyncOutcome> unlinkScanFromExaminee({
     required String batchId,
     required String scanId,
     required String examineeId,
-  }) =>
-      _no('unlinkScanFromExaminee');
+  }) => _no('unlinkScanFromExaminee');
   @override
-  Future<CloudScansRead> readCloudScansForExaminee(String examineeId) => _no('readCloudScansForExaminee');
+  Future<CloudScansRead> readCloudScansForExaminee(String examineeId) =>
+      _no('readCloudScansForExaminee');
   @override
   Future<CloudScansRead> readUnlinkedScans() => _no('readUnlinkedScans');
   @override
-  Future<SyncOutcome> archiveBatch({required String batchId, String? reason}) => _no('archiveBatch');
+  Future<SyncOutcome> archiveBatch({required String batchId, String? reason}) =>
+      _no('archiveBatch');
 }
 
-CloudBatchRow _batch(String id, String examCode, {String status = 'Completed', int day = 1}) => CloudBatchRow(
-      id: id,
-      batchCode: 'CODE-$id',
-      examCode: examCode,
-      examTitle: 'Title $examCode',
-      description: '',
-      expectedCount: 100,
-      status: status,
-      createdByUid: 'uid',
-      createdByName: 'Officer',
-      createdAt: DateTime.utc(2026, 1, day),
-      updatedAt: DateTime.utc(2026, 1, day),
-    );
+CloudBatchRow _batch(
+  String id,
+  String examCode, {
+  String status = 'Completed',
+  int day = 1,
+}) => CloudBatchRow(
+  id: id,
+  batchCode: 'CODE-$id',
+  examCode: examCode,
+  examTitle: 'Title $examCode',
+  description: '',
+  expectedCount: 100,
+  status: status,
+  createdByUid: 'uid',
+  createdByName: 'Officer',
+  createdAt: DateTime.utc(2026, 1, day),
+  updatedAt: DateTime.utc(2026, 1, day),
+);
 
 /// Sentinel default for [_scan]'s `examineeId`: "not specified by this
 /// caller", distinct from an explicitly-passed `null` (unlinked).
@@ -213,6 +236,7 @@ CloudScanRow _scan(
   String examCode,
   int? raw, {
   Map<String, dynamic>? decoded,
+  int? gradedItems,
   int attemptNo = 1,
   String attemptStatus = 'active',
   // Official-result filter fixture: omitted (the default) auto-links this
@@ -222,28 +246,31 @@ CloudScanRow _scan(
   // [_FakeClient.danglingExamineeIds] for a dangling one, or shared with
   // another scan to link the same official examinee across exam types).
   Object? examineeId = _autoLink,
-}) =>
-    CloudScanRow(
-      id: id,
-      batchId: batchId,
-      examCode: examCode,
-      capturedAt: DateTime.utc(2026, 1, 1),
-      decoded: decoded ?? {'examCode': examCode, 'items': <dynamic>[]},
-      rawScore: raw,
-      // AT's existing analyzable rule needs the key to cover all 72 items.
-      totalGraded: raw == null ? null : (examCode == 'AT' ? 72 : 10),
-      totalItems: examCode == 'AT' ? 72 : (examCode == 'QTM' ? 60 : 130),
-      resultStatus: raw == null ? null : 'Graded',
-      scannedAt: raw == null ? null : DateTime.utc(2026, 1, 1),
-      processedByUid: 'uid',
-      processedByName: 'Officer',
-      firstName: 'First$id',
-      lastName: 'Last$id',
-      examineeNumber: 'EX-$id',
-      attemptNo: attemptNo,
-      attemptStatus: attemptStatus,
-      examineeId: identical(examineeId, _autoLink) ? 'examinee-$id' : examineeId as String?,
-    );
+}) => CloudScanRow(
+  id: id,
+  batchId: batchId,
+  examCode: examCode,
+  capturedAt: DateTime.utc(2026, 1, 1),
+  decoded: decoded ?? {'examCode': examCode, 'items': <dynamic>[]},
+  rawScore: raw,
+  // AT's existing analyzable rule needs the key to cover all 72 items.
+  totalGraded: raw == null
+      ? null
+      : (gradedItems ?? (examCode == 'AT' ? 72 : 10)),
+  totalItems: examCode == 'AT' ? 72 : (examCode == 'QTM' ? 60 : 130),
+  resultStatus: raw == null ? null : 'Graded',
+  scannedAt: raw == null ? null : DateTime.utc(2026, 1, 1),
+  processedByUid: 'uid',
+  processedByName: 'Officer',
+  firstName: 'First$id',
+  lastName: 'Last$id',
+  examineeNumber: 'EX-$id',
+  attemptNo: attemptNo,
+  attemptStatus: attemptStatus,
+  examineeId: identical(examineeId, _autoLink)
+      ? 'examinee-$id'
+      : examineeId as String?,
+);
 
 /// A TAT decoded sheet: the first [c] items of each template section are
 /// marked correct ('A'), the rest marked wrong ('B'). Against [_completeKey]
@@ -281,7 +308,8 @@ Map<String, String> _completeKeyAnswers() {
   return map;
 }
 
-CloudAnswerKeyRead _foundKey(Map<String, String> answers) => CloudAnswerKeyRead.found(
+CloudAnswerKeyRead _foundKey(Map<String, String> answers) =>
+    CloudAnswerKeyRead.found(
       version: 12,
       answers: answers,
       updatedByName: 'Ms. Cruz',
@@ -307,9 +335,323 @@ void main() {
       catalog: catalog,
       examCode: examCode,
       status: status,
-      batch: batchId == null ? null : catalog.batches.firstWhere((b) => b.id == batchId),
+      batch: batchId == null
+          ? null
+          : catalog.batches.firstWhere((b) => b.id == batchId),
     );
   }
+
+  group('Top scorers competition ranking', () {
+    for (final (label, scores, ranks) in [
+      ('no ties', [100, 98, 97, 95], [1, 2, 3, 4]),
+      ('tie at first', [100, 100, 98], [1, 1, 3]),
+      ('multiple ties', [100, 100, 98, 97, 97, 95], [1, 1, 3, 4, 4, 6]),
+      (
+        'ties at tenth',
+        [100, 100, 100, 98, 98, 95, 94, 94, 90, 89, 89, 85],
+        [1, 1, 1, 4, 4, 6, 7, 7, 9, 10, 10],
+      ),
+      ('zero score', [1, 0], [1, 2]),
+      ('all tied', List.filled(15, 100), List.filled(15, 1)),
+      ('empty', <int>[], <int>[]),
+    ]) {
+      test(label, () async {
+        client.batches.add(_batch('b', 'TAT'));
+        client.scansByBatch['b'] = [
+          for (var i = 0; i < scores.length; i++)
+            _scan('s$i', 'b', 'TAT', scores[i]),
+        ];
+        final result = await run('TAT');
+        final before = List.of(client.calls);
+        expect(result.topScorers.map((s) => s.rank), ranks);
+        expect(result.topScorers.every((s) => s.rank <= 10), isTrue);
+        expect(client.calls, before);
+      });
+    }
+    for (final (exam, maximum) in [('AT', 72), ('QTM', 60), ('TAT', 160)]) {
+      test(
+        '$exam reuses eligibility and ranks each canonical identity once',
+        () async {
+          client.batches.add(_batch('b', exam));
+          client.scansByBatch['b'] = [
+            _scan('one', 'b', exam, maximum, examineeId: 'same'),
+            _scan('duplicate', 'b', exam, maximum - 1, examineeId: 'same'),
+            _scan('tie', 'b', exam, maximum),
+            _scan('next', 'b', exam, maximum - 2),
+            _scan('archived', 'b', exam, maximum, attemptStatus: 'archived'),
+            _scan('unlinked', 'b', exam, maximum, examineeId: null),
+            _scan('missing', 'b', exam, maximum, examineeId: 'gone'),
+            _scan('ungraded', 'b', exam, null),
+            _scan('invalid', 'b', exam, 999),
+            if (exam == 'AT')
+              _scan('partial', 'b', exam, maximum, gradedItems: 10),
+          ];
+          client.danglingExamineeIds.add('gone');
+          final result = await run(exam);
+          expect(result.topScorers.map((s) => s.rank), [1, 1, 3]);
+          expect(result.topScorers.map((s) => s.result.score), [
+            maximum,
+            maximum,
+            maximum - 2,
+          ]);
+          expect(
+            result.topScorers.map((s) => s.result.examinee.id).toSet().length,
+            3,
+          );
+        },
+      );
+      for (final width in [390.0, 1440.0]) {
+        testWidgets(
+          '$exam Top Scorers sits below distributions at width $width',
+          (tester) async {
+            await tester.binding.setSurfaceSize(Size(width, 1000));
+            addTearDown(() => tester.binding.setSurfaceSize(null));
+            client.batches.add(_batch('b', exam));
+            client.scansByBatch['b'] = [
+              _scan('one', 'b', exam, maximum),
+              _scan('two', 'b', exam, maximum),
+              _scan('three', 'b', exam, maximum - 1),
+            ];
+            await tester.pumpWidget(
+              MaterialApp(
+                home: Scaffold(
+                  body: GuidanceWebBatchAnalyticsView(service: service),
+                ),
+              ),
+            );
+            await tester.pumpAndSettle();
+            if (exam != 'AT') {
+              await tester.tap(find.byKey(const Key('examTypeFilter')));
+              await tester.pumpAndSettle();
+              await tester.tap(
+                find
+                    .text(
+                      exam == 'QTM'
+                          ? 'Qualifying Test for Mathematics (QTM)'
+                          : 'Teaching Aptitude Test (TAT)',
+                    )
+                    .last,
+              );
+              await tester.pumpAndSettle();
+            }
+            final card = find.byKey(const Key('analytics.topScorers'));
+            final lastDistribution = find.text(
+              exam == 'AT'
+                  ? 'Category Distribution'
+                  : 'Eligibility Distribution',
+            );
+            expect(
+              tester.getTopLeft(card).dy,
+              greaterThan(tester.getTopLeft(lastDistribution).dy),
+            );
+            await tester.ensureVisible(card);
+            await tester.pumpAndSettle();
+            expect(
+              find.text(
+                'Top Scorers — ${exam == 'AT' ? 'Admission Test' : exam}',
+              ),
+              findsOneWidget,
+            );
+            expect(find.text('Top 1'), findsNWidgets(2));
+            expect(find.text('Top 3'), findsOneWidget);
+            expect(tester.takeException(), isNull);
+          },
+        );
+      }
+    }
+  });
+
+  group('Distribution examinee search', () {
+    for (final (exam, scores) in [
+      ('AT', [0, 54, 55, 60, 61, 64, 65, 72]),
+      ('QTM', [0, 9, 10, 19, 20, 29, 30, 39, 40, 49, 50, 60]),
+      (
+        'TAT',
+        [0, 19, 20, 39, 40, 59, 60, 79, 80, 99, 100, 119, 120, 139, 140, 160],
+      ),
+    ]) {
+      test(
+        '$exam group membership matches existing aggregate at every boundary',
+        () async {
+          client.batches.add(_batch('b', exam));
+          client.scansByBatch['b'] = [
+            for (var i = 0; i < scores.length; i++)
+              _scan('s$i', 'b', exam, scores[i]),
+            _scan('unlinked', 'b', exam, scores.first, examineeId: null),
+            _scan('dangling', 'b', exam, scores.first, examineeId: 'gone'),
+            _scan(
+              'archived',
+              'b',
+              exam,
+              scores.first,
+              attemptStatus: 'archived',
+            ),
+            _scan('ungraded', 'b', exam, null),
+            _scan('invalid', 'b', exam, 999),
+            if (exam == 'AT') _scan('partial', 'b', exam, 55, gradedItems: 10),
+          ];
+          client.danglingExamineeIds.add('gone');
+          final result = await run(exam);
+          final groups = result.distributionGroups('Score Distribution');
+          final expected = switch (exam) {
+            'AT' => result.at!.scoreDistribution.values.toList(),
+            'QTM' => result.qtm!.scoreDistribution.values.toList(),
+            _ => result.tatOverall!.totalScoreDistribution.values.toList(),
+          };
+          expect(groups.map((g) => g.results.length).toList(), expected);
+          expect(groups.every((g) => g.results.length == 2), isTrue);
+          expect(
+            groups.expand((g) => g.results).map((r) => r.score).toSet(),
+            scores.toSet(),
+          );
+          if (exam == 'AT') {
+            expect(
+              result
+                  .distributionGroups('Category Distribution')
+                  .map((g) => g.results.length),
+              result.at!.categoryDistribution.values,
+            );
+          }
+          final before = List.of(client.calls);
+          for (final group in groups) {
+            expect(group.byExaminee.length, 2);
+            expect(
+              group.results.first.examinee.displayName,
+              contains('Official-'),
+            );
+          }
+          expect(client.calls, before);
+        },
+      );
+    }
+
+    testWidgets('Admission category actions show the exact A/B/C/D examinees', (
+      tester,
+    ) async {
+      await tester.binding.setSurfaceSize(const Size(1440, 1200));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      client.batches.add(_batch('b', 'AT'));
+      client.scansByBatch['b'] = [
+        _scan('a', 'b', 'AT', 54),
+        _scan('b', 'b', 'AT', 60),
+        _scan('c', 'b', 'AT', 64),
+        _scan('d', 'b', 'AT', 72),
+      ];
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(body: GuidanceWebBatchAnalyticsView(service: service)),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final before = List.of(client.calls);
+      for (final category in ['A', 'B', 'C', 'D']) {
+        final action = find.byKey(
+          ValueKey('distribution.search.Category Distribution.$category'),
+        );
+        await tester.ensureVisible(action);
+        await tester.tap(action);
+        await tester.pumpAndSettle();
+        expect(find.text('Examinees — $category'), findsOneWidget);
+        expect(
+          find.byKey(
+            ValueKey(
+              'distribution.examinee.examinee-${category.toLowerCase()}',
+            ),
+          ),
+          findsOneWidget,
+        );
+        expect(find.text('1 matching result · 1 examinee'), findsOneWidget);
+        expect(client.calls, before);
+        await tester.tap(find.text('Close'));
+        await tester.pumpAndSettle();
+      }
+      expect(tester.takeException(), isNull);
+    });
+
+    for (final (exam, score, label) in [
+      ('AT', 55, 'B (55–60)'),
+      ('QTM', 60, '50–60'),
+      ('TAT', 79, '60–79'),
+    ]) {
+      for (final width in [390.0, 1440.0]) {
+        testWidgets(
+          '$exam search dialog uses loaded identities at width $width',
+          (tester) async {
+            await tester.binding.setSurfaceSize(Size(width, 1000));
+            addTearDown(() => tester.binding.setSurfaceSize(null));
+            client.batches.add(_batch('b', exam));
+            client.scansByBatch['b'] = [
+              _scan('one', 'b', exam, score, examineeId: 'same'),
+              _scan('two', 'b', exam, score, examineeId: 'same'),
+            ];
+            await tester.pumpWidget(
+              MaterialApp(
+                home: Scaffold(
+                  body: GuidanceWebBatchAnalyticsView(service: service),
+                ),
+              ),
+            );
+            await tester.pumpAndSettle();
+            if (exam != 'AT') {
+              await tester.tap(find.byKey(const Key('examTypeFilter')));
+              await tester.pumpAndSettle();
+              await tester.tap(
+                find
+                    .text(
+                      exam == 'QTM'
+                          ? 'Qualifying Test for Mathematics (QTM)'
+                          : 'Teaching Aptitude Test (TAT)',
+                    )
+                    .last,
+              );
+              await tester.pumpAndSettle();
+            }
+            final before = List.of(client.calls);
+            final search = find.byKey(
+              ValueKey('distribution.search.Score Distribution.$label'),
+            );
+            await tester.ensureVisible(search);
+            await tester.tap(search);
+            await tester.pumpAndSettle();
+            expect(find.text('Examinees — $label'), findsOneWidget);
+            expect(
+              find.text('2 matching results · 1 examinee'),
+              findsOneWidget,
+            );
+            expect(
+              find.byKey(const ValueKey('distribution.examinee.same')),
+              findsOneWidget,
+            );
+            expect(
+              find.text('Score: $score · Batch: CODE-b'),
+              findsNWidgets(2),
+            );
+            expect(client.calls, before);
+            expect(tester.takeException(), isNull);
+            await tester.tap(find.text('Close'));
+            await tester.pumpAndSettle();
+            final emptyLabel = exam == 'AT'
+                ? 'A (0–54)'
+                : exam == 'QTM'
+                ? '0–9'
+                : '0–19';
+            final emptySearch = find.byKey(
+              ValueKey('distribution.search.Score Distribution.$emptyLabel'),
+            );
+            await tester.ensureVisible(emptySearch);
+            await tester.tap(emptySearch);
+            await tester.pumpAndSettle();
+            expect(
+              find.text('No examinees found in this range.'),
+              findsOneWidget,
+            );
+            expect(client.calls, before);
+            expect(tester.takeException(), isNull);
+          },
+        );
+      }
+    }
+  });
 
   group('TAT overall uses the stored raw_score', () {
     void seedTat() {
@@ -325,31 +667,39 @@ void main() {
     }
 
     for (final withKey in [false, true]) {
-      test('total/percentage/eligibility/bands/average/highest/lowest/median (key ${withKey ? 'present' : 'missing'})',
-          () async {
-        seedTat();
-        if (withKey) client.keyRead = _foundKey(_completeKeyAnswers());
-        final o = (await run('TAT')).tatOverall!;
+      test(
+        'total/percentage/eligibility/bands/average/highest/lowest/median (key ${withKey ? 'present' : 'missing'})',
+        () async {
+          seedTat();
+          if (withKey) client.keyRead = _foundKey(_completeKeyAnswers());
+          final o = (await run('TAT')).tatOverall!;
 
-        expect(o.totalExaminees, 4);
-        expect(o.gradedExaminees, 3);
-        expect(o.ungradedExaminees, 1);
-        expect(o.averageTotal, closeTo((90 + 40 + 150) / 3, 1e-9));
-        expect(o.highestTotal, 150);
-        expect(o.lowestTotal, 40);
-        expect(o.medianTotal, 90);
-        expect(o.averagePercentage, closeTo(((90 + 40 + 150) / 3) / 160 * 100, 1e-9));
-        expect(o.highestPercentage, closeTo(150 / 160 * 100, 1e-9));
-        expect(o.lowestPercentage, closeTo(40 / 160 * 100, 1e-9));
-        expect(o.medianPercentage, closeTo(90 / 160 * 100, 1e-9));
-        // Eligibility: 40 does not meet (<48); 90 and 150 meet.
-        expect(o.eligibilityDistribution[TatEligibility.meetsRequirement], 2);
-        expect(o.eligibilityDistribution[TatEligibility.doesNotMeetRequirement], 1);
-        // Bands from the stored totals.
-        expect(o.totalScoreDistribution[TatTotalBand.band40to59], 1);
-        expect(o.totalScoreDistribution[TatTotalBand.band80to99], 1);
-        expect(o.totalScoreDistribution[TatTotalBand.band140to160], 1);
-      });
+          expect(o.totalExaminees, 4);
+          expect(o.gradedExaminees, 3);
+          expect(o.ungradedExaminees, 1);
+          expect(o.averageTotal, closeTo((90 + 40 + 150) / 3, 1e-9));
+          expect(o.highestTotal, 150);
+          expect(o.lowestTotal, 40);
+          expect(o.medianTotal, 90);
+          expect(
+            o.averagePercentage,
+            closeTo(((90 + 40 + 150) / 3) / 160 * 100, 1e-9),
+          );
+          expect(o.highestPercentage, closeTo(150 / 160 * 100, 1e-9));
+          expect(o.lowestPercentage, closeTo(40 / 160 * 100, 1e-9));
+          expect(o.medianPercentage, closeTo(90 / 160 * 100, 1e-9));
+          // Eligibility: 40 does not meet (<48); 90 and 150 meet.
+          expect(o.eligibilityDistribution[TatEligibility.meetsRequirement], 2);
+          expect(
+            o.eligibilityDistribution[TatEligibility.doesNotMeetRequirement],
+            1,
+          );
+          // Bands from the stored totals.
+          expect(o.totalScoreDistribution[TatTotalBand.band40to59], 1);
+          expect(o.totalScoreDistribution[TatTotalBand.band80to99], 1);
+          expect(o.totalScoreDistribution[TatTotalBand.band140to160], 1);
+        },
+      );
     }
 
     test('average percentage is the mean of raw_score / 160 * 100', () async {
@@ -359,166 +709,251 @@ void main() {
       expect(o.averagePercentage, closeTo(expected, 1e-9));
     });
 
-    test('a stored total outside 0..160 is excluded and counted, not fabricated', () async {
-      client.batches.add(_batch('t1', 'TAT'));
-      client.scansByBatch['t1'] = [_scan('a', 't1', 'TAT', 90), _scan('b', 't1', 'TAT', 999)];
-      final o = (await run('TAT')).tatOverall!;
-      expect(o.analyzableExaminees, 1);
-      expect(o.excludedGradedCount, 1);
-    });
+    test(
+      'a stored total outside 0..160 is excluded and counted, not fabricated',
+      () async {
+        client.batches.add(_batch('t1', 'TAT'));
+        client.scansByBatch['t1'] = [
+          _scan('a', 't1', 'TAT', 90),
+          _scan('b', 't1', 'TAT', 999),
+        ];
+        final o = (await run('TAT')).tatOverall!;
+        expect(o.analyzableExaminees, 1);
+        expect(o.excludedGradedCount, 1);
+      },
+    );
   });
 
   group('TAT detailed analysis (Answer Key)', () {
     void seedConsistent() {
       client.batches.add(_batch('t1', 'TAT'));
       client.scansByBatch['t1'] = [
-        _scan('a', 't1', 'TAT', _tatTotal(20, 60, 15), decoded: _tatDecoded(20, 60, 15)), // 40+40+10 = 90
-        _scan('b', 't1', 'TAT', _tatTotal(10, 50, 10), decoded: _tatDecoded(10, 50, 10)), // 20+20+0 = 40
+        _scan(
+          'a',
+          't1',
+          'TAT',
+          _tatTotal(20, 60, 15),
+          decoded: _tatDecoded(20, 60, 15),
+        ), // 40+40+10 = 90
+        _scan(
+          'b',
+          't1',
+          'TAT',
+          _tatTotal(10, 50, 10),
+          decoded: _tatDecoded(10, 50, 10),
+        ), // 20+20+0 = 40
       ];
     }
 
-    test('a complete key produces per-test analytics, strongest and weakest via the existing helper', () async {
-      seedConsistent();
-      client.keyRead = _foundKey(_completeKeyAnswers());
-      final d = (await run('TAT')).tatDetail!;
-      expect(d.status, TatDetailStatus.available);
-      final a = d.analytics!;
-      expect(a.analyzableExaminees, 2);
-      expect(a.test1.average, 30); // (40 + 20) / 2
-      expect(a.test2.average, 30); // (40 + 20) / 2
-      expect(a.test3.average, 5); // (10 + 0) / 2
-      expect(a.strongestTestByPercent, TatTestKey.test1); // 50% of max
-      expect(a.weakestTestByPercent, TatTestKey.test3); // 25% of max
-      expect(d.drifts, isEmpty);
-    });
+    test(
+      'a complete key produces per-test analytics, strongest and weakest via the existing helper',
+      () async {
+        seedConsistent();
+        client.keyRead = _foundKey(_completeKeyAnswers());
+        final d = (await run('TAT')).tatDetail!;
+        expect(d.status, TatDetailStatus.available);
+        final a = d.analytics!;
+        expect(a.analyzableExaminees, 2);
+        expect(a.test1.average, 30); // (40 + 20) / 2
+        expect(a.test2.average, 30); // (40 + 20) / 2
+        expect(a.test3.average, 5); // (10 + 0) / 2
+        expect(a.strongestTestByPercent, TatTestKey.test1); // 50% of max
+        expect(a.weakestTestByPercent, TatTestKey.test3); // 25% of max
+        expect(d.drifts, isEmpty);
+      },
+    );
 
-    test('provenance comes from the existing version / updated_at / updated_by_name', () async {
-      seedConsistent();
-      client.keyRead = _foundKey(_completeKeyAnswers());
-      final info = (await run('TAT')).tatDetail!.keyInfo!;
-      expect(info.version, 12);
-      expect(info.updatedByName, 'Ms. Cruz');
-      expect(info.updatedAt, DateTime.utc(2026, 9, 19, 8));
-    });
+    test(
+      'provenance comes from the existing version / updated_at / updated_by_name',
+      () async {
+        seedConsistent();
+        client.keyRead = _foundKey(_completeKeyAnswers());
+        final info = (await run('TAT')).tatDetail!.keyInfo!;
+        expect(info.version, 12);
+        expect(info.updatedByName, 'Ms. Cruz');
+        expect(info.updatedAt, DateTime.utc(2026, 9, 19, 8));
+      },
+    );
 
-    test('a missing key does not crash: overall works, detail is unavailable', () async {
-      seedConsistent();
-      client.keyRead = const CloudAnswerKeyRead.absent();
-      final r = await run('TAT');
-      expect(r.tatOverall!.gradedExaminees, 2);
-      expect(r.tatOverall!.highestTotal, 90);
-      expect(r.tatDetail!.status, TatDetailStatus.keyMissing);
-      expect(r.tatDetail!.analytics, isNull);
-      expect(r.tatDetail!.keyInfo, isNull);
-    });
+    test(
+      'a missing key does not crash: overall works, detail is unavailable',
+      () async {
+        seedConsistent();
+        client.keyRead = const CloudAnswerKeyRead.absent();
+        final r = await run('TAT');
+        expect(r.tatOverall!.gradedExaminees, 2);
+        expect(r.tatOverall!.highestTotal, 90);
+        expect(r.tatDetail!.status, TatDetailStatus.keyMissing);
+        expect(r.tatDetail!.analytics, isNull);
+        expect(r.tatDetail!.keyInfo, isNull);
+      },
+    );
 
-    test('an incomplete key gives NO partial per-test results, but overall still works', () async {
-      seedConsistent();
-      final answers = _completeKeyAnswers()..remove(_completeKeyAnswers().keys.first);
-      client.keyRead = _foundKey(answers);
-      final r = await run('TAT');
-      expect(r.tatOverall!.highestTotal, 90);
-      expect(r.tatDetail!.status, TatDetailStatus.keyIncomplete);
-      expect(r.tatDetail!.analytics, isNull);
-      expect(r.tatDetail!.drifts, isEmpty);
-      expect(r.tatDetail!.keyInfo!.version, 12); // provenance still shown
-    });
+    test(
+      'an incomplete key gives NO partial per-test results, but overall still works',
+      () async {
+        seedConsistent();
+        final answers = _completeKeyAnswers()
+          ..remove(_completeKeyAnswers().keys.first);
+        client.keyRead = _foundKey(answers);
+        final r = await run('TAT');
+        expect(r.tatOverall!.highestTotal, 90);
+        expect(r.tatDetail!.status, TatDetailStatus.keyIncomplete);
+        expect(r.tatDetail!.analytics, isNull);
+        expect(r.tatDetail!.drifts, isEmpty);
+        expect(r.tatDetail!.keyInfo!.version, 12); // provenance still shown
+      },
+    );
 
     test('an empty-string answer counts as incomplete', () {
       final answers = _completeKeyAnswers();
       answers[answers.keys.last] = '  ';
-      expect(isTatAnswerKeyComplete(AnswerKey(examCode: 'TAT', correctChoices: answers)), isFalse);
-      expect(isTatAnswerKeyComplete(AnswerKey(examCode: 'TAT', correctChoices: _completeKeyAnswers())), isTrue);
+      expect(
+        isTatAnswerKeyComplete(
+          AnswerKey(examCode: 'TAT', correctChoices: answers),
+        ),
+        isFalse,
+      );
+      expect(
+        isTatAnswerKeyComplete(
+          AnswerKey(examCode: 'TAT', correctChoices: _completeKeyAnswers()),
+        ),
+        isTrue,
+      );
     });
 
-    test('completeness is derived from omrTemplates[TAT] (every section|item)', () {
-      final expected = omrTemplates['TAT']!.sections.fold<int>(0, (n, s) => n + s.itemCount);
-      expect(_completeKeyAnswers().length, expected);
-    });
+    test(
+      'completeness is derived from omrTemplates[TAT] (every section|item)',
+      () {
+        final expected = omrTemplates['TAT']!.sections.fold<int>(
+          0,
+          (n, s) => n + s.itemCount,
+        );
+        expect(_completeKeyAnswers().length, expected);
+      },
+    );
 
-    test('a failed key read is non-fatal: overall works, detail is unavailable', () async {
-      seedConsistent();
-      client.keyRead = const CloudAnswerKeyRead.failed(SyncOutcome.transient('network'));
-      final r = await run('TAT');
-      expect(r.tatOverall!.gradedExaminees, 2);
-      expect(r.tatDetail!.status, TatDetailStatus.keyUnavailable);
-    });
+    test(
+      'a failed key read is non-fatal: overall works, detail is unavailable',
+      () async {
+        seedConsistent();
+        client.keyRead = const CloudAnswerKeyRead.failed(
+          SyncOutcome.transient('network'),
+        );
+        final r = await run('TAT');
+        expect(r.tatOverall!.gradedExaminees, 2);
+        expect(r.tatDetail!.status, TatDetailStatus.keyUnavailable);
+      },
+    );
 
-    test('a recomputed total that differs from raw_score warns, stays included, and never replaces raw_score',
-        () async {
-      client.batches.add(_batch('t1', 'TAT'));
-      client.scansByBatch['t1'] = [
-        _scan('drift', 't1', 'TAT', 92, decoded: _tatDecoded(20, 60, 15)), // recorded 92, current key 90
-        _scan('ok', 't1', 'TAT', _tatTotal(10, 50, 10), decoded: _tatDecoded(10, 50, 10)),
-      ];
-      client.keyRead = _foundKey(_completeKeyAnswers());
-      final r = await run('TAT');
+    test(
+      'a recomputed total that differs from raw_score warns, stays included, and never replaces raw_score',
+      () async {
+        client.batches.add(_batch('t1', 'TAT'));
+        client.scansByBatch['t1'] = [
+          _scan(
+            'drift',
+            't1',
+            'TAT',
+            92,
+            decoded: _tatDecoded(20, 60, 15),
+          ), // recorded 92, current key 90
+          _scan(
+            'ok',
+            't1',
+            'TAT',
+            _tatTotal(10, 50, 10),
+            decoded: _tatDecoded(10, 50, 10),
+          ),
+        ];
+        client.keyRead = _foundKey(_completeKeyAnswers());
+        final r = await run('TAT');
 
-      expect(r.tatDetail!.drifts, hasLength(1));
-      final drift = r.tatDetail!.drifts.single;
-      expect(drift.scanId, 'drift');
-      expect(drift.recordedTotal, 92);
-      expect(drift.currentKeyTotal, 90);
-      // Included in the per-test summaries.
-      expect(r.tatDetail!.analytics!.analyzableExaminees, 2);
-      // The recorded 92 stays official in the overall statistics.
-      expect(r.tatOverall!.highestTotal, 92);
-      // The source row was not altered.
-      expect(client.scansByBatch['t1']!.first.rawScore, 92);
-    });
+        expect(r.tatDetail!.drifts, hasLength(1));
+        final drift = r.tatDetail!.drifts.single;
+        expect(drift.scanId, 'drift');
+        expect(drift.recordedTotal, 92);
+        expect(drift.currentKeyTotal, 90);
+        // Included in the per-test summaries.
+        expect(r.tatDetail!.analytics!.analyzableExaminees, 2);
+        // The recorded 92 stays official in the overall statistics.
+        expect(r.tatOverall!.highestTotal, 92);
+        // The source row was not altered.
+        expect(client.scansByBatch['t1']!.first.rawScore, 92);
+      },
+    );
   });
 
-  group('AT and QTM use the existing helpers on stored scores, with no Answer Key', () {
-    test('AT: stored raw_score, existing categories and bands', () async {
-      client.batches.add(_batch('a1', 'AT'));
-      client.scansByBatch['a1'] = [
-        _scan('1', 'a1', 'AT', 50), // A
-        _scan('2', 'a1', 'AT', 56), // Unclassified
-        _scan('3', 'a1', 'AT', 59), // B
-        _scan('4', 'a1', 'AT', 62), // C
-        _scan('5', 'a1', 'AT', 70), // D
-      ];
-      final r = await run('AT');
-      final at = r.at!;
-      expect(at.averageRawScore, closeTo((50 + 56 + 59 + 62 + 70) / 5, 1e-9));
-      expect(at.categoryDistribution[AdmissionCategory.a], 1);
-      expect(at.categoryDistribution[AdmissionCategory.b], 1);
-      expect(at.categoryDistribution[AdmissionCategory.c], 1);
-      expect(at.categoryDistribution[AdmissionCategory.d], 1);
-      expect(at.unclassifiedCount, 1);
-      expect(at.scoreDistribution[AtScoreBand.unclassified], 1);
-      expect(client.keyReads, isEmpty); // no Answer Key read for AT
-    });
+  group(
+    'AT and QTM use the existing helpers on stored scores, with no Answer Key',
+    () {
+      test('AT: stored raw_score, existing categories and bands', () async {
+        client.batches.add(_batch('a1', 'AT'));
+        client.scansByBatch['a1'] = [
+          _scan('1', 'a1', 'AT', 50), // A
+          _scan('2', 'a1', 'AT', 56), // B
+          _scan('3', 'a1', 'AT', 59), // B
+          _scan('4', 'a1', 'AT', 62), // C
+          _scan('5', 'a1', 'AT', 70), // D
+        ];
+        final r = await run('AT');
+        final at = r.at!;
+        expect(at.averageRawScore, closeTo((50 + 56 + 59 + 62 + 70) / 5, 1e-9));
+        expect(at.categoryDistribution[AdmissionCategory.a], 1);
+        expect(at.categoryDistribution[AdmissionCategory.b], 2);
+        expect(at.categoryDistribution[AdmissionCategory.c], 1);
+        expect(at.categoryDistribution[AdmissionCategory.d], 1);
+        expect(at.unclassifiedCount, 0);
+        expect(at.scoreDistribution[AtScoreBand.b], 2);
+        expect(client.keyReads, isEmpty); // no Answer Key read for AT
+      });
 
-    test('QTM: stored raw_score, existing eligibility and bands', () async {
-      client.batches.add(_batch('q1', 'QTM'));
-      client.scansByBatch['q1'] = [
-        _scan('1', 'q1', 'QTM', 10), // < 15
-        _scan('2', 'q1', 'QTM', 16), // 15..17
-        _scan('3', 'q1', 'QTM', 20), // 18+
-      ];
-      final q = (await run('QTM')).qtm!;
-      expect(q.eligibilityDistribution[QtmEligibility.notEligible], 1);
-      expect(q.eligibilityDistribution[QtmEligibility.allCoursesExceptBscs], 1);
-      expect(q.eligibilityDistribution[QtmEligibility.allCoursesIncludingBscs], 1);
-      expect(q.averageRawScore, closeTo(46 / 3, 1e-9));
-      expect(client.keyReads, isEmpty); // no Answer Key read for QTM
-    });
-  });
+      test('QTM: stored raw_score, existing eligibility and bands', () async {
+        client.batches.add(_batch('q1', 'QTM'));
+        client.scansByBatch['q1'] = [
+          _scan('1', 'q1', 'QTM', 10), // < 15
+          _scan('2', 'q1', 'QTM', 16), // 15..17
+          _scan('3', 'q1', 'QTM', 20), // 18+
+        ];
+        final q = (await run('QTM')).qtm!;
+        expect(q.eligibilityDistribution[QtmEligibility.notEligible], 1);
+        expect(
+          q.eligibilityDistribution[QtmEligibility.allCoursesExceptBscs],
+          1,
+        );
+        expect(
+          q.eligibilityDistribution[QtmEligibility.allCoursesIncludingBscs],
+          1,
+        );
+        expect(q.averageRawScore, closeTo(46 / 3, 1e-9));
+        expect(client.keyReads, isEmpty); // no Answer Key read for QTM
+      });
+    },
+  );
 
   group('Answer Key retrieval', () {
-    test('TAT: exactly one readAnswerKey per load, however many scans and batches', () async {
-      for (var i = 0; i < 3; i++) {
-        client.batches.add(_batch('t$i', 'TAT', day: i + 1));
-        client.scansByBatch['t$i'] = [
-          for (var s = 0; s < 8; s++) _scan('s$i-$s', 't$i', 'TAT', 60, decoded: _tatDecoded(20, 60, 15)),
-        ];
-      }
-      client.keyRead = _foundKey(_completeKeyAnswers());
-      await run('TAT');
-      expect(client.keyReads['TAT'], 1);
-      expect(client.keyReads.length, 1);
-    });
+    test(
+      'TAT: exactly one readAnswerKey per load, however many scans and batches',
+      () async {
+        for (var i = 0; i < 3; i++) {
+          client.batches.add(_batch('t$i', 'TAT', day: i + 1));
+          client.scansByBatch['t$i'] = [
+            for (var s = 0; s < 8; s++)
+              _scan(
+                's$i-$s',
+                't$i',
+                'TAT',
+                60,
+                decoded: _tatDecoded(20, 60, 15),
+              ),
+          ];
+        }
+        client.keyRead = _foundKey(_completeKeyAnswers());
+        await run('TAT');
+        expect(client.keyReads['TAT'], 1);
+        expect(client.keyReads.length, 1);
+      },
+    );
 
     test('no Answer Key read when nothing complete is analyzed', () async {
       client.batches.add(_batch('t1', 'TAT'));
@@ -544,21 +979,33 @@ void main() {
 
     test('All includes current + Web-archived', () async {
       final catalog = await service.loadCatalog();
-      final ids = catalog.batchesFor(examCode: 'AT', status: AnalyticsBatchStatus.all).map((b) => b.id);
+      final ids = catalog
+          .batchesFor(examCode: 'AT', status: AnalyticsBatchStatus.all)
+          .map((b) => b.id);
       expect(ids.toSet(), {'archived', 'current', 'mobile-archived'});
     });
 
-    test('Current excludes Web-archived, and batches.status == Archived is ignored', () async {
-      final catalog = await service.loadCatalog();
-      final ids = catalog.batchesFor(examCode: 'AT', status: AnalyticsBatchStatus.current).map((b) => b.id);
-      expect(ids.toSet(), {'current', 'mobile-archived'});
-    });
+    test(
+      'Current excludes Web-archived, and batches.status == Archived is ignored',
+      () async {
+        final catalog = await service.loadCatalog();
+        final ids = catalog
+            .batchesFor(examCode: 'AT', status: AnalyticsBatchStatus.current)
+            .map((b) => b.id);
+        expect(ids.toSet(), {'current', 'mobile-archived'});
+      },
+    );
 
-    test('Archived includes only batches with a batch_archives marker', () async {
-      final catalog = await service.loadCatalog();
-      final ids = catalog.batchesFor(examCode: 'AT', status: AnalyticsBatchStatus.archived).map((b) => b.id);
-      expect(ids.toList(), ['archived']);
-    });
+    test(
+      'Archived includes only batches with a batch_archives marker',
+      () async {
+        final catalog = await service.loadCatalog();
+        final ids = catalog
+            .batchesFor(examCode: 'AT', status: AnalyticsBatchStatus.archived)
+            .map((b) => b.id);
+        expect(ids.toList(), ['archived']);
+      },
+    );
 
     test('archived batches are fully analyzable', () async {
       final r = await run('AT', status: AnalyticsBatchStatus.archived);
@@ -566,19 +1013,38 @@ void main() {
       expect(r.analyzedBatches.single.id, 'archived');
     });
 
-    test('a failed marker read leaves All usable and makes Current/Archived unavailable (not "none archived")',
-        () async {
-      client.archiveReadFails = true;
-      final catalog = await service.loadCatalog();
-      expect(catalog.archiveFilterAvailable, isFalse);
-      expect(catalog.batchesFor(examCode: 'AT', status: AnalyticsBatchStatus.all), hasLength(3));
-      expect(() => catalog.batchesFor(examCode: 'AT', status: AnalyticsBatchStatus.current),
-          throwsA(isA<GuidanceWebAnalyticsException>()));
-      expect(() => catalog.batchesFor(examCode: 'AT', status: AnalyticsBatchStatus.archived),
-          throwsA(isA<GuidanceWebAnalyticsException>()));
-      final r = await service.analyze(catalog: catalog, examCode: 'AT', status: AnalyticsBatchStatus.all);
-      expect(r.at!.totalExaminees, 3);
-    });
+    test(
+      'a failed marker read leaves All usable and makes Current/Archived unavailable (not "none archived")',
+      () async {
+        client.archiveReadFails = true;
+        final catalog = await service.loadCatalog();
+        expect(catalog.archiveFilterAvailable, isFalse);
+        expect(
+          catalog.batchesFor(examCode: 'AT', status: AnalyticsBatchStatus.all),
+          hasLength(3),
+        );
+        expect(
+          () => catalog.batchesFor(
+            examCode: 'AT',
+            status: AnalyticsBatchStatus.current,
+          ),
+          throwsA(isA<GuidanceWebAnalyticsException>()),
+        );
+        expect(
+          () => catalog.batchesFor(
+            examCode: 'AT',
+            status: AnalyticsBatchStatus.archived,
+          ),
+          throwsA(isA<GuidanceWebAnalyticsException>()),
+        );
+        final r = await service.analyze(
+          catalog: catalog,
+          examCode: 'AT',
+          status: AnalyticsBatchStatus.all,
+        );
+        expect(r.at!.totalExaminees, 3);
+      },
+    );
   });
 
   group('Batch filtering', () {
@@ -587,17 +1053,23 @@ void main() {
         ..add(_batch('b1', 'AT', day: 2))
         ..add(_batch('b2', 'AT', day: 1))
         ..add(_batch('q1', 'QTM'));
-      client.scansByBatch['b1'] = [_scan('1', 'b1', 'AT', 60), _scan('2', 'b1', 'AT', 50)];
+      client.scansByBatch['b1'] = [
+        _scan('1', 'b1', 'AT', 60),
+        _scan('2', 'b1', 'AT', 50),
+      ];
       client.scansByBatch['b2'] = [_scan('3', 'b2', 'AT', 70)];
       client.scansByBatch['q1'] = [_scan('4', 'q1', 'QTM', 30)];
     });
 
-    test('All Batches combines every complete batch of the exam type only', () async {
-      final r = await run('AT');
-      expect(r.at!.totalExaminees, 3);
-      expect(r.analyzedBatches.map((b) => b.id).toSet(), {'b1', 'b2'});
-      expect(client.scanReads.containsKey('q1'), isFalse);
-    });
+    test(
+      'All Batches combines every complete batch of the exam type only',
+      () async {
+        final r = await run('AT');
+        expect(r.at!.totalExaminees, 3);
+        expect(r.analyzedBatches.map((b) => b.id).toSet(), {'b1', 'b2'});
+        expect(client.scanReads.containsKey('q1'), isFalse);
+      },
+    );
 
     test('a specific batch analyzes only that batch', () async {
       final r = await run('AT', batchId: 'b2');
@@ -616,20 +1088,25 @@ void main() {
       expect(r.analyzedBatches, hasLength(30));
     });
 
-    test('more than 30 matching batches: nothing is loaded and a narrowing error is raised', () async {
-      for (var i = 0; i < 31; i++) {
-        client.batches.add(_batch('b$i', 'AT', day: (i % 28) + 1));
-        client.scansByBatch['b$i'] = [_scan('s$i', 'b$i', 'AT', 60)];
-      }
-      await expectLater(
-        run('AT'),
-        throwsA(isA<AnalyticsTooManyBatchesException>()
-            .having((e) => e.count, 'count', 31)
-            .having((e) => e.message, 'message', contains('narrow'))),
-      );
-      expect(client.scanReads, isEmpty); // not "the first 30"
-      expect(client.calls.where((c) => c == 'readScanCounts'), isEmpty);
-    });
+    test(
+      'more than 30 matching batches: nothing is loaded and a narrowing error is raised',
+      () async {
+        for (var i = 0; i < 31; i++) {
+          client.batches.add(_batch('b$i', 'AT', day: (i % 28) + 1));
+          client.scansByBatch['b$i'] = [_scan('s$i', 'b$i', 'AT', 60)];
+        }
+        await expectLater(
+          run('AT'),
+          throwsA(
+            isA<AnalyticsTooManyBatchesException>()
+                .having((e) => e.count, 'count', 31)
+                .having((e) => e.message, 'message', contains('narrow')),
+          ),
+        );
+        expect(client.scanReads, isEmpty); // not "the first 30"
+        expect(client.calls.where((c) => c == 'readScanCounts'), isEmpty);
+      },
+    );
 
     test('a specific batch is allowed even when many batches exist', () async {
       for (var i = 0; i < 40; i++) {
@@ -640,42 +1117,56 @@ void main() {
       expect(r.analyzedBatches.single.id, 'b7');
     });
 
-    test('never more than 4 scan requests in flight, and the limit is actually used', () async {
-      for (var i = 0; i < 12; i++) {
-        client.batches.add(_batch('b$i', 'AT', day: (i % 28) + 1));
-        client.scansByBatch['b$i'] = [_scan('s$i', 'b$i', 'AT', 60)];
-      }
-      await run('AT');
-      expect(client.maxInFlight, lessThanOrEqualTo(4));
-      expect(client.maxInFlight, 4);
-    });
+    test(
+      'never more than 4 scan requests in flight, and the limit is actually used',
+      () async {
+        for (var i = 0; i < 12; i++) {
+          client.batches.add(_batch('b$i', 'AT', day: (i % 28) + 1));
+          client.scansByBatch['b$i'] = [_scan('s$i', 'b$i', 'AT', 60)];
+        }
+        await run('AT');
+        expect(client.maxInFlight, lessThanOrEqualTo(4));
+        expect(client.maxInFlight, 4);
+      },
+    );
 
-    test('a scan-count mismatch marks the batch incomplete and excludes it from every aggregate', () async {
-      client.batches
-        ..add(_batch('good', 'AT', day: 2))
-        ..add(_batch('bad', 'AT', day: 1));
-      client.scansByBatch['good'] = [_scan('1', 'good', 'AT', 60), _scan('2', 'good', 'AT', 50)];
-      client.scansByBatch['bad'] = [for (var i = 0; i < 1000; i++) _scan('x$i', 'bad', 'AT', 70)];
-      client.countsOverride['bad'] = 1250;
+    test(
+      'a scan-count mismatch marks the batch incomplete and excludes it from every aggregate',
+      () async {
+        client.batches
+          ..add(_batch('good', 'AT', day: 2))
+          ..add(_batch('bad', 'AT', day: 1));
+        client.scansByBatch['good'] = [
+          _scan('1', 'good', 'AT', 60),
+          _scan('2', 'good', 'AT', 50),
+        ];
+        client.scansByBatch['bad'] = [
+          for (var i = 0; i < 1000; i++) _scan('x$i', 'bad', 'AT', 70),
+        ];
+        client.countsOverride['bad'] = 1250;
 
-      final r = await run('AT');
-      expect(r.at!.totalExaminees, 2); // only the complete batch
-      expect(r.analyzedBatches.map((b) => b.id), ['good']);
-      expect(r.incompleteBatches, hasLength(1));
-      expect(r.incompleteBatches.single.batch.id, 'bad');
-      expect(r.incompleteBatches.single.expectedScans, 1250);
-      expect(r.incompleteBatches.single.retrievedScans, 1000);
-    });
+        final r = await run('AT');
+        expect(r.at!.totalExaminees, 2); // only the complete batch
+        expect(r.analyzedBatches.map((b) => b.id), ['good']);
+        expect(r.incompleteBatches, hasLength(1));
+        expect(r.incompleteBatches.single.batch.id, 'bad');
+        expect(r.incompleteBatches.single.expectedScans, 1250);
+        expect(r.incompleteBatches.single.retrievedScans, 1000);
+      },
+    );
 
-    test('selecting an incomplete batch yields no aggregate results at all', () async {
-      client.batches.add(_batch('bad', 'AT'));
-      client.scansByBatch['bad'] = [_scan('1', 'bad', 'AT', 60)];
-      client.countsOverride['bad'] = 5;
-      final r = await run('AT', batchId: 'bad');
-      expect(r.hasData, isFalse);
-      expect(r.at, isNull);
-      expect(r.incompleteBatches, hasLength(1));
-    });
+    test(
+      'selecting an incomplete batch yields no aggregate results at all',
+      () async {
+        client.batches.add(_batch('bad', 'AT'));
+        client.scansByBatch['bad'] = [_scan('1', 'bad', 'AT', 60)];
+        client.countsOverride['bad'] = 5;
+        final r = await run('AT', batchId: 'bad');
+        expect(r.hasData, isFalse);
+        expect(r.at, isNull);
+        expect(r.incompleteBatches, hasLength(1));
+      },
+    );
   });
 
   group('Scan cache', () {
@@ -690,139 +1181,226 @@ void main() {
 
     test('changing filters reuses already-loaded batches', () async {
       final catalog = await service.loadCatalog();
-      await service.analyze(catalog: catalog, examCode: 'AT', status: AnalyticsBatchStatus.all);
+      await service.analyze(
+        catalog: catalog,
+        examCode: 'AT',
+        status: AnalyticsBatchStatus.all,
+      );
       expect(client.scanReads, {'cur': 1, 'arc': 1});
-      await service.analyze(catalog: catalog, examCode: 'AT', status: AnalyticsBatchStatus.current);
-      await service.analyze(catalog: catalog, examCode: 'AT', status: AnalyticsBatchStatus.archived);
+      await service.analyze(
+        catalog: catalog,
+        examCode: 'AT',
+        status: AnalyticsBatchStatus.current,
+      );
+      await service.analyze(
+        catalog: catalog,
+        examCode: 'AT',
+        status: AnalyticsBatchStatus.archived,
+      );
       expect(client.scanReads, {'cur': 1, 'arc': 1}); // no refetch
     });
 
     test('clearCache forces a fresh read', () async {
       final catalog = await service.loadCatalog();
-      await service.analyze(catalog: catalog, examCode: 'AT', status: AnalyticsBatchStatus.all);
+      await service.analyze(
+        catalog: catalog,
+        examCode: 'AT',
+        status: AnalyticsBatchStatus.all,
+      );
       service.clearCache();
-      await service.analyze(catalog: catalog, examCode: 'AT', status: AnalyticsBatchStatus.all);
+      await service.analyze(
+        catalog: catalog,
+        examCode: 'AT',
+        status: AnalyticsBatchStatus.all,
+      );
       expect(client.scanReads, {'cur': 2, 'arc': 2});
     });
 
     test(
-        'identity/eligibility staleness is an intentional, documented limitation of this cache: '
-        'linking a scan after its batch is cached does not retroactively change Analytics eligibility '
-        'until the existing Refresh (clearCache) is used -- the same way every other kind of change '
-        '(a rescan, a score edit) is already only picked up on refresh', () async {
-      client.batches.add(_batch('b1', 'AT'));
-      client.scansByBatch['b1'] = [_scan('s1', 'b1', 'AT', 60, examineeId: null)];
-      final catalog = await service.loadCatalog();
-      final b1 = catalog.batches.firstWhere((b) => b.id == 'b1');
+      'identity/eligibility staleness is an intentional, documented limitation of this cache: '
+      'linking a scan after its batch is cached does not retroactively change Analytics eligibility '
+      'until the existing Refresh (clearCache) is used -- the same way every other kind of change '
+      '(a rescan, a score edit) is already only picked up on refresh',
+      () async {
+        client.batches.add(_batch('b1', 'AT'));
+        client.scansByBatch['b1'] = [
+          _scan('s1', 'b1', 'AT', 60, examineeId: null),
+        ];
+        final catalog = await service.loadCatalog();
+        final b1 = catalog.batches.firstWhere((b) => b.id == 'b1');
 
-      // Scoped to b1 alone with `batch:`, so the group's own 'cur'/'arc'
-      // fixture batches (both auto-linked by default) never contribute to
-      // this test's counts.
-      final before = await service.analyze(catalog: catalog, examCode: 'AT', status: AnalyticsBatchStatus.all, batch: b1);
-      expect(before.at!.totalExaminees, 0, reason: 'unlinked -- excluded from the official-result aggregate');
+        // Scoped to b1 alone with `batch:`, so the group's own 'cur'/'arc'
+        // fixture batches (both auto-linked by default) never contribute to
+        // this test's counts.
+        final before = await service.analyze(
+          catalog: catalog,
+          examCode: 'AT',
+          status: AnalyticsBatchStatus.all,
+          batch: b1,
+        );
+        expect(
+          before.at!.totalExaminees,
+          0,
+          reason: 'unlinked -- excluded from the official-result aggregate',
+        );
 
-      // The scan becomes officially linked in the underlying data source --
-      // as if another open tab just used Link to Existing or Confirm &
-      // Create on it -- but this batch's scans are already cached here.
-      client.scansByBatch['b1'] = [_scan('s1', 'b1', 'AT', 60, examineeId: 'e-1')];
+        // The scan becomes officially linked in the underlying data source --
+        // as if another open tab just used Link to Existing or Confirm &
+        // Create on it -- but this batch's scans are already cached here.
+        client.scansByBatch['b1'] = [
+          _scan('s1', 'b1', 'AT', 60, examineeId: 'e-1'),
+        ];
 
-      final stillCached = await service.analyze(catalog: catalog, examCode: 'AT', status: AnalyticsBatchStatus.all, batch: b1);
-      expect(stillCached.at!.totalExaminees, 0,
-          reason: 'stale by design: the cached batch was not re-read, so the new link is not reflected yet');
-      expect(client.scanReads['b1'], 1, reason: 'no second readCloudScans happened for this batch');
+        final stillCached = await service.analyze(
+          catalog: catalog,
+          examCode: 'AT',
+          status: AnalyticsBatchStatus.all,
+          batch: b1,
+        );
+        expect(
+          stillCached.at!.totalExaminees,
+          0,
+          reason:
+              'stale by design: the cached batch was not re-read, so the new link is not reflected yet',
+        );
+        expect(
+          client.scanReads['b1'],
+          1,
+          reason: 'no second readCloudScans happened for this batch',
+        );
 
-      service.clearCache();
-      final refreshed = await service.analyze(catalog: catalog, examCode: 'AT', status: AnalyticsBatchStatus.all, batch: b1);
-      expect(refreshed.at!.totalExaminees, 1, reason: 'after Refresh, the newly-linked scan is counted');
-      expect(client.scanReads['b1'], 2);
-    });
+        service.clearCache();
+        final refreshed = await service.analyze(
+          catalog: catalog,
+          examCode: 'AT',
+          status: AnalyticsBatchStatus.all,
+          batch: b1,
+        );
+        expect(
+          refreshed.at!.totalExaminees,
+          1,
+          reason: 'after Refresh, the newly-linked scan is counted',
+        );
+        expect(client.scanReads['b1'], 2);
+      },
+    );
 
     test(
-        'a fresh service instance (what GuidanceWebHomeScreen actually builds every time the sidebar '
-        'returns to Analytics -- there is no IndexedStack/keep-alive, so the previous instance and its '
-        'cache were already disposed) reflects a link/unlink/create change made since the last visit '
-        'immediately, with no clearCache needed -- this is why automatic cross-service cache '
-        'invalidation was not added: there is usually nothing stale left to invalidate by the time '
-        'Analytics is reopened', () async {
-      client.batches.add(_batch('b1', 'AT'));
-      client.scansByBatch['b1'] = [_scan('s1', 'b1', 'AT', 60, examineeId: null)];
+      'a fresh service instance (what GuidanceWebHomeScreen actually builds every time the sidebar '
+      'returns to Analytics -- there is no IndexedStack/keep-alive, so the previous instance and its '
+      'cache were already disposed) reflects a link/unlink/create change made since the last visit '
+      'immediately, with no clearCache needed -- this is why automatic cross-service cache '
+      'invalidation was not added: there is usually nothing stale left to invalidate by the time '
+      'Analytics is reopened',
+      () async {
+        client.batches.add(_batch('b1', 'AT'));
+        client.scansByBatch['b1'] = [
+          _scan('s1', 'b1', 'AT', 60, examineeId: null),
+        ];
 
-      // "Session 1": Analytics opened, batch analyzed while unlinked.
-      final catalog1 = await service.loadCatalog();
-      final b1 = catalog1.batches.firstWhere((b) => b.id == 'b1');
-      final before =
-          await service.analyze(catalog: catalog1, examCode: 'AT', status: AnalyticsBatchStatus.all, batch: b1);
-      expect(before.at!.totalExaminees, 0);
+        // "Session 1": Analytics opened, batch analyzed while unlinked.
+        final catalog1 = await service.loadCatalog();
+        final b1 = catalog1.batches.firstWhere((b) => b.id == 'b1');
+        final before = await service.analyze(
+          catalog: catalog1,
+          examCode: 'AT',
+          status: AnalyticsBatchStatus.all,
+          batch: b1,
+        );
+        expect(before.at!.totalExaminees, 0);
 
-      // The Guidance Council member navigates to Examinee Records and links
-      // the scan (Link to Existing / Confirm & Create), then navigates back
-      // to Analytics -- a brand-new GuidanceWebAnalyticsService, exactly
-      // like GuidanceWebHomeScreen._buildBody() actually constructs.
-      client.scansByBatch['b1'] = [_scan('s1', 'b1', 'AT', 60, examineeId: 'e-1')];
-      final freshService = GuidanceWebAnalyticsService(client: client);
-      final catalog2 = await freshService.loadCatalog();
-      final b1Again = catalog2.batches.firstWhere((b) => b.id == 'b1');
+        // The Guidance Council member navigates to Examinee Records and links
+        // the scan (Link to Existing / Confirm & Create), then navigates back
+        // to Analytics -- a brand-new GuidanceWebAnalyticsService, exactly
+        // like GuidanceWebHomeScreen._buildBody() actually constructs.
+        client.scansByBatch['b1'] = [
+          _scan('s1', 'b1', 'AT', 60, examineeId: 'e-1'),
+        ];
+        final freshService = GuidanceWebAnalyticsService(client: client);
+        final catalog2 = await freshService.loadCatalog();
+        final b1Again = catalog2.batches.firstWhere((b) => b.id == 'b1');
 
-      final afterReopen = await freshService.analyze(
-          catalog: catalog2, examCode: 'AT', status: AnalyticsBatchStatus.all, batch: b1Again);
+        final afterReopen = await freshService.analyze(
+          catalog: catalog2,
+          examCode: 'AT',
+          status: AnalyticsBatchStatus.all,
+          batch: b1Again,
+        );
 
-      expect(afterReopen.at!.totalExaminees, 1,
-          reason: 'a fresh instance has nothing cached, so it reads current data without a manual Refresh');
-    });
+        expect(
+          afterReopen.at!.totalExaminees,
+          1,
+          reason:
+              'a fresh instance has nothing cached, so it reads current data without a manual Refresh',
+        );
+      },
+    );
   });
 
   group('Read-only', () {
-    test('a full TAT + AT + QTM session performs only the allowed reads', () async {
-      client.batches
-        ..add(_batch('t1', 'TAT'))
-        ..add(_batch('a1', 'AT'))
-        ..add(_batch('q1', 'QTM'));
-      client.scansByBatch['t1'] = [_scan('1', 't1', 'TAT', 90, decoded: _tatDecoded(20, 60, 15))];
-      client.scansByBatch['a1'] = [_scan('2', 'a1', 'AT', 60)];
-      client.scansByBatch['q1'] = [_scan('3', 'q1', 'QTM', 20)];
-      client.keyRead = _foundKey(_completeKeyAnswers());
-      for (final exam in ['TAT', 'AT', 'QTM']) {
-        await run(exam);
-      }
-      expect(client.forbidden, isEmpty);
-      const allowed = {
-        'readCloudBatches',
-        'readBatchArchives',
-        'readScanCounts',
-        'readCloudScans',
-        'readCloudExaminees',
-        'readAnswerKey',
-      };
-      for (final call in client.calls) {
-        expect(allowed, contains(call.split(':').first), reason: call);
-      }
-    });
-
-    test('the analytics service and view contain no write, archive, or restore calls', () {
-      for (final path in [
-        'lib/features/guidance_web/services/guidance_web_analytics_service.dart',
-        'lib/features/guidance_web/screens/guidance_web_analytics_view.dart',
-      ]) {
-        final code = File(path)
-            .readAsLinesSync()
-            .where((l) => !l.trimLeft().startsWith('//'))
-            .join('\n');
-        for (final forbidden in [
-          '.pushBatch(',
-          '.pushScan(',
-          '.archiveBatch(',
-          '.unlinkScanFromExaminee(',
-          '.linkScanToExaminee(',
-          '.deleteBatch(',
-          '.insert(',
-          '.update(',
-          '.upsert(',
-          '.delete(',
-        ]) {
-          expect(code, isNot(contains(forbidden)), reason: '$path contains $forbidden');
+    test(
+      'a full TAT + AT + QTM session performs only the allowed reads',
+      () async {
+        client.batches
+          ..add(_batch('t1', 'TAT'))
+          ..add(_batch('a1', 'AT'))
+          ..add(_batch('q1', 'QTM'));
+        client.scansByBatch['t1'] = [
+          _scan('1', 't1', 'TAT', 90, decoded: _tatDecoded(20, 60, 15)),
+        ];
+        client.scansByBatch['a1'] = [_scan('2', 'a1', 'AT', 60)];
+        client.scansByBatch['q1'] = [_scan('3', 'q1', 'QTM', 20)];
+        client.keyRead = _foundKey(_completeKeyAnswers());
+        for (final exam in ['TAT', 'AT', 'QTM']) {
+          await run(exam);
         }
-      }
-    });
+        expect(client.forbidden, isEmpty);
+        const allowed = {
+          'readCloudBatches',
+          'readBatchArchives',
+          'readScanCounts',
+          'readCloudScans',
+          'readCloudExaminees',
+          'readAnswerKey',
+        };
+        for (final call in client.calls) {
+          expect(allowed, contains(call.split(':').first), reason: call);
+        }
+      },
+    );
+
+    test(
+      'the analytics service and view contain no write, archive, or restore calls',
+      () {
+        for (final path in [
+          'lib/features/guidance_web/services/guidance_web_analytics_service.dart',
+          'lib/features/guidance_web/screens/guidance_web_analytics_view.dart',
+        ]) {
+          final code = File(path)
+              .readAsLinesSync()
+              .where((l) => !l.trimLeft().startsWith('//'))
+              .join('\n');
+          for (final forbidden in [
+            '.pushBatch(',
+            '.pushScan(',
+            '.archiveBatch(',
+            '.unlinkScanFromExaminee(',
+            '.linkScanToExaminee(',
+            '.deleteBatch(',
+            '.insert(',
+            '.update(',
+            '.upsert(',
+            '.delete(',
+          ]) {
+            expect(
+              code,
+              isNot(contains(forbidden)),
+              reason: '$path contains $forbidden',
+            );
+          }
+        }
+      },
+    );
   });
 
   group('Analytics view', () {
@@ -831,9 +1409,11 @@ void main() {
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
-      await tester.pumpWidget(MaterialApp(
-        home: Scaffold(body: GuidanceWebAnalyticsView(service: service)),
-      ));
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(body: GuidanceWebAnalyticsView(service: service)),
+        ),
+      );
     }
 
     Future<void> chooseExam(WidgetTester tester, String label) async {
@@ -853,14 +1433,52 @@ void main() {
     void seedTatView({bool drift = false}) {
       client.batches.add(_batch('t1', 'TAT'));
       client.scansByBatch['t1'] = [
-        _scan('a', 't1', 'TAT', drift ? 92 : 90, decoded: _tatDecoded(20, 60, 15)),
+        _scan(
+          'a',
+          't1',
+          'TAT',
+          drift ? 92 : 90,
+          decoded: _tatDecoded(20, 60, 15),
+        ),
         _scan('b', 't1', 'TAT', 40, decoded: _tatDecoded(10, 50, 10)),
       ];
     }
 
+    for (final width in [320.0, 390.0, 768.0, 1280.0]) {
+      testWidgets('Analytics filters and distributions fit at $width', (
+        tester,
+      ) async {
+        client.batches.add(_batch('a1', 'AT'));
+        client.scansByBatch['a1'] = [_scan('one', 'a1', 'AT', 56)];
+        await pump(tester);
+        tester.view.physicalSize = Size(width, 1000);
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        expect(
+          find.byKey(const Key('examTypeFilter')).hitTestable(),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const Key('batchStatusFilter')).hitTestable(),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const Key('batchFilter')).hitTestable(),
+          findsOneWidget,
+        );
+        await chooseExam(tester, 'Qualifying Test for Mathematics (QTM)');
+        expect(tester.takeException(), isNull);
+        await chooseExam(tester, 'Teaching Aptitude Test (TAT)');
+        expect(tester.takeException(), isNull);
+      });
+    }
+
     testWidgets('loading state, then AT results', (tester) async {
       client.batches.add(_batch('a1', 'AT'));
-      client.scansByBatch['a1'] = [_scan('1', 'a1', 'AT', 60), _scan('2', 'a1', 'AT', 50)];
+      client.scansByBatch['a1'] = [
+        _scan('1', 'a1', 'AT', 56),
+        _scan('2', 'a1', 'AT', 50),
+      ];
       await pump(tester);
       expect(find.text('Loading Analytics...'), findsOneWidget);
 
@@ -868,6 +1486,8 @@ void main() {
       expect(find.text('Overall Statistics'), findsOneWidget);
       expect(find.text('Score Distribution'), findsOneWidget);
       expect(find.text('Category Distribution'), findsOneWidget);
+      expect(find.text('B (55–60)'), findsOneWidget);
+      expect(find.textContaining('Unclassified'), findsNothing);
       expect(find.text('TOTAL'), findsOneWidget);
       expect(find.text('MEDIAN'), findsOneWidget);
       expect(client.keyReads, isEmpty);
@@ -876,78 +1496,120 @@ void main() {
     testWidgets('empty state when no batch matches', (tester) async {
       await pump(tester);
       await tester.pumpAndSettle();
-      expect(find.text('No batches match the selected filters.'), findsOneWidget);
+      expect(
+        find.text('No batches match the selected filters.'),
+        findsOneWidget,
+      );
     });
 
     testWidgets('error state when batches cannot be read', (tester) async {
       client.batchReadFails = true;
       await pump(tester);
       await tester.pumpAndSettle();
-      expect(find.text('Could not load Analytics data. Please try again.'), findsOneWidget);
+      expect(
+        find.text('Could not load Analytics data. Please try again.'),
+        findsOneWidget,
+      );
     });
 
-    testWidgets('TAT with a complete key: provenance once, per-test analysis, strongest/weakest', (tester) async {
-      seedTatView();
-      client.keyRead = _foundKey(_completeKeyAnswers());
-      await pump(tester);
-      await tester.pumpAndSettle();
-      await chooseExam(tester, 'Teaching Aptitude Test (TAT)');
+    testWidgets(
+      'TAT keeps overall statistics and hides detailed analysis with a complete key',
+      (tester) async {
+        seedTatView();
+        client.keyRead = _foundKey(_completeKeyAnswers());
+        await pump(tester);
+        await tester.pumpAndSettle();
+        await chooseExam(tester, 'Teaching Aptitude Test (TAT)');
 
-      expect(find.text('Overall Statistics (recorded scores)'), findsOneWidget);
-      expect(find.text('Detailed TAT Analysis'), findsOneWidget);
-      expect(find.text('Version: 12'), findsOneWidget);
-      expect(find.text('Updated: September 19, 2026'), findsOneWidget);
-      expect(find.text('Updated by: Ms. Cruz'), findsOneWidget);
-      expect(find.textContaining('Strongest test: Test 1'), findsOneWidget);
-      expect(find.textContaining('Weakest test: Test 3'), findsOneWidget);
-      expect(find.byKey(const Key('tatDriftWarning')), findsNothing);
-      expect(client.keyReads['TAT'], 1);
-    });
+        expect(
+          find.text('Overall Statistics (recorded scores)'),
+          findsOneWidget,
+        );
+        expect(find.text('Detailed TAT Analysis'), findsNothing);
+        expect(find.text('Version: 12'), findsNothing);
+        expect(find.text('Updated: September 19, 2026'), findsNothing);
+        expect(find.text('Updated by: Ms. Cruz'), findsNothing);
+        expect(find.textContaining('Strongest test: Test 1'), findsNothing);
+        expect(find.textContaining('Weakest test: Test 3'), findsNothing);
+        expect(find.byKey(const Key('tatDriftWarning')), findsNothing);
+        expect(find.text('Score Distribution'), findsOneWidget);
+        expect(find.text('Eligibility Distribution'), findsOneWidget);
+        expect(client.keyReads['TAT'], 1);
+      },
+    );
 
-    testWidgets('TAT drift shows the warning with recorded and current-key totals', (tester) async {
+    testWidgets('TAT detailed drift presentation is removed', (tester) async {
       seedTatView(drift: true);
       client.keyRead = _foundKey(_completeKeyAnswers());
       await pump(tester);
       await tester.pumpAndSettle();
       await chooseExam(tester, 'Teaching Aptitude Test (TAT)');
 
-      expect(find.byKey(const Key('tatDriftWarning')), findsOneWidget);
-      expect(find.textContaining('recorded score remains authoritative'), findsOneWidget);
-      expect(find.textContaining('Recorded total: 92'), findsOneWidget);
-      expect(find.textContaining('Current-key total: 90'), findsOneWidget);
+      expect(find.byKey(const Key('tatDriftWarning')), findsNothing);
+      expect(
+        find.textContaining('recorded score remains authoritative'),
+        findsNothing,
+      );
+      expect(find.textContaining('Recorded total: 92'), findsNothing);
+      expect(find.textContaining('Current-key total: 90'), findsNothing);
     });
 
-    testWidgets('TAT with a missing key: overall available, detail unavailable', (tester) async {
-      seedTatView();
-      await pump(tester);
-      await tester.pumpAndSettle();
-      await chooseExam(tester, 'Teaching Aptitude Test (TAT)');
+    testWidgets(
+      'TAT with a missing key: overall available, detailed section removed',
+      (tester) async {
+        seedTatView();
+        await pump(tester);
+        await tester.pumpAndSettle();
+        await chooseExam(tester, 'Teaching Aptitude Test (TAT)');
 
-      expect(find.text('Overall Statistics (recorded scores)'), findsOneWidget);
-      expect(find.text('⚠ Unavailable — Answer Key is not available.'), findsOneWidget);
-      expect(find.textContaining('Strongest test'), findsNothing);
-    });
+        expect(
+          find.text('Overall Statistics (recorded scores)'),
+          findsOneWidget,
+        );
+        expect(
+          find.text('⚠ Unavailable — Answer Key is not available.'),
+          findsNothing,
+        );
+        expect(find.textContaining('Strongest test'), findsNothing);
+      },
+    );
 
-    testWidgets('TAT with an incomplete key: overall available, detail unavailable, provenance shown', (tester) async {
-      seedTatView();
-      client.keyRead = _foundKey(_completeKeyAnswers()..remove(_completeKeyAnswers().keys.first));
-      await pump(tester);
-      await tester.pumpAndSettle();
-      await chooseExam(tester, 'Teaching Aptitude Test (TAT)');
+    testWidgets(
+      'TAT with an incomplete key: overall available, detailed section removed',
+      (tester) async {
+        seedTatView();
+        client.keyRead = _foundKey(
+          _completeKeyAnswers()..remove(_completeKeyAnswers().keys.first),
+        );
+        await pump(tester);
+        await tester.pumpAndSettle();
+        await chooseExam(tester, 'Teaching Aptitude Test (TAT)');
 
-      expect(find.text('Overall Statistics (recorded scores)'), findsOneWidget);
-      expect(find.text('⚠ Unavailable — Answer Key appears incomplete.'), findsOneWidget);
-      expect(find.textContaining('Strongest test'), findsNothing);
-      expect(find.text('Version: 12'), findsOneWidget);
-    });
+        expect(
+          find.text('Overall Statistics (recorded scores)'),
+          findsOneWidget,
+        );
+        expect(
+          find.text('⚠ Unavailable — Answer Key appears incomplete.'),
+          findsNothing,
+        );
+        expect(find.textContaining('Strongest test'), findsNothing);
+        expect(find.text('Version: 12'), findsNothing);
+      },
+    );
 
-    testWidgets('archive filtering: Archived shows only Web-archived batches', (tester) async {
+    testWidgets('archive filtering: Archived shows only Web-archived batches', (
+      tester,
+    ) async {
       client.batches
         ..add(_batch('arc', 'AT', day: 2))
         ..add(_batch('cur', 'AT', day: 1));
       client.archivedIds.add('arc');
       client.scansByBatch['arc'] = [_scan('1', 'arc', 'AT', 60)];
-      client.scansByBatch['cur'] = [_scan('2', 'cur', 'AT', 60), _scan('3', 'cur', 'AT', 50)];
+      client.scansByBatch['cur'] = [
+        _scan('2', 'cur', 'AT', 60),
+        _scan('3', 'cur', 'AT', 50),
+      ];
       await pump(tester);
       await tester.pumpAndSettle();
       expect(find.text('Analyzing 2 batches'), findsOneWidget);
@@ -958,77 +1620,112 @@ void main() {
       expect(find.text('Analyzing 1 batch'), findsOneWidget);
     });
 
-    testWidgets('archive marker failure: notice shown, All still analyzes, no page failure', (tester) async {
-      client.archiveReadFails = true;
-      client.batches.add(_batch('a1', 'AT'));
-      client.scansByBatch['a1'] = [_scan('1', 'a1', 'AT', 60)];
-      await pump(tester);
-      await tester.pumpAndSettle();
+    testWidgets(
+      'archive marker failure: notice shown, All still analyzes, no page failure',
+      (tester) async {
+        client.archiveReadFails = true;
+        client.batches.add(_batch('a1', 'AT'));
+        client.scansByBatch['a1'] = [_scan('1', 'a1', 'AT', 60)];
+        await pump(tester);
+        await tester.pumpAndSettle();
 
-      expect(find.byKey(const Key('archiveUnavailableNotice')), findsOneWidget);
-      expect(find.text('Overall Statistics'), findsOneWidget);
-    });
+        expect(
+          find.byKey(const Key('archiveUnavailableNotice')),
+          findsOneWidget,
+        );
+        expect(find.text('Overall Statistics'), findsOneWidget);
+      },
+    );
 
-    testWidgets('more than 30 matching batches shows the narrowing message and loads nothing', (tester) async {
-      for (var i = 0; i < 31; i++) {
-        client.batches.add(_batch('b$i', 'AT', day: (i % 28) + 1));
-        client.scansByBatch['b$i'] = [_scan('s$i', 'b$i', 'AT', 60)];
-      }
-      await pump(tester);
-      await tester.pumpAndSettle();
-      expect(find.byKey(const Key('narrowMessage')), findsOneWidget);
-      expect(find.textContaining('narrow the selection'), findsOneWidget);
-      expect(client.scanReads, isEmpty);
-    });
+    testWidgets(
+      'more than 30 matching batches shows the narrowing message and loads nothing',
+      (tester) async {
+        for (var i = 0; i < 31; i++) {
+          client.batches.add(_batch('b$i', 'AT', day: (i % 28) + 1));
+          client.scansByBatch['b$i'] = [_scan('s$i', 'b$i', 'AT', 60)];
+        }
+        await pump(tester);
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('narrowMessage')), findsOneWidget);
+        expect(find.textContaining('narrow the selection'), findsOneWidget);
+        expect(client.scanReads, isEmpty);
+      },
+    );
 
-    testWidgets('an incomplete batch is warned about with its counts and excluded', (tester) async {
-      client.batches
-        ..add(_batch('good', 'AT', day: 2))
-        ..add(_batch('bad', 'AT', day: 1));
-      client.scansByBatch['good'] = [_scan('1', 'good', 'AT', 60)];
-      client.scansByBatch['bad'] = [for (var i = 0; i < 3; i++) _scan('x$i', 'bad', 'AT', 70)];
-      client.countsOverride['bad'] = 1250;
-      await pump(tester);
-      await tester.pumpAndSettle();
+    testWidgets(
+      'an incomplete batch is warned about with its counts and excluded',
+      (tester) async {
+        client.batches
+          ..add(_batch('good', 'AT', day: 2))
+          ..add(_batch('bad', 'AT', day: 1));
+        client.scansByBatch['good'] = [_scan('1', 'good', 'AT', 60)];
+        client.scansByBatch['bad'] = [
+          for (var i = 0; i < 3; i++) _scan('x$i', 'bad', 'AT', 70),
+        ];
+        client.countsOverride['bad'] = 1250;
+        await pump(tester);
+        await tester.pumpAndSettle();
 
-      expect(find.byKey(const Key('incompleteBatchWarning')), findsOneWidget);
-      expect(find.textContaining('CODE-bad: expected 1,250 scans, retrieved 3'), findsOneWidget);
-      expect(find.text('Analyzing 1 batch'), findsOneWidget);
-    });
+        expect(find.byKey(const Key('incompleteBatchWarning')), findsOneWidget);
+        expect(
+          find.textContaining('CODE-bad: expected 1,250 scans, retrieved 3'),
+          findsOneWidget,
+        );
+        expect(find.text('Analyzing 1 batch'), findsOneWidget);
+      },
+    );
 
-    testWidgets('an incomplete specific batch shows the warning and no misleading statistics', (tester) async {
-      client.batches.add(_batch('bad', 'AT'));
-      client.scansByBatch['bad'] = [_scan('1', 'bad', 'AT', 60)];
-      client.countsOverride['bad'] = 5;
-      await pump(tester);
-      await tester.pumpAndSettle();
+    testWidgets(
+      'an incomplete specific batch shows the warning and no misleading statistics',
+      (tester) async {
+        client.batches.add(_batch('bad', 'AT'));
+        client.scansByBatch['bad'] = [_scan('1', 'bad', 'AT', 60)];
+        client.countsOverride['bad'] = 5;
+        await pump(tester);
+        await tester.pumpAndSettle();
 
-      expect(find.byKey(const Key('incompleteBatchWarning')), findsOneWidget);
-      expect(find.byKey(const Key('noCompleteData')), findsOneWidget);
-      expect(find.text('Overall Statistics'), findsNothing);
-    });
+        expect(find.byKey(const Key('incompleteBatchWarning')), findsOneWidget);
+        expect(find.byKey(const Key('noCompleteData')), findsOneWidget);
+        expect(find.text('Overall Statistics'), findsNothing);
+      },
+    );
 
-    testWidgets('a batch whose only attempt is archived shows the archived-only message, not zero statistics',
-        (tester) async {
-      client.batches.add(_batch('b1', 'AT'));
-      client.scansByBatch['b1'] = [_scan('s-old', 'b1', 'AT', 50, attemptNo: 1, attemptStatus: 'archived')];
-      await pump(tester);
-      await tester.pumpAndSettle();
+    testWidgets(
+      'a batch whose only attempt is archived shows the archived-only message, not zero statistics',
+      (tester) async {
+        client.batches.add(_batch('b1', 'AT'));
+        client.scansByBatch['b1'] = [
+          _scan(
+            's-old',
+            'b1',
+            'AT',
+            50,
+            attemptNo: 1,
+            attemptStatus: 'archived',
+          ),
+        ];
+        await pump(tester);
+        await tester.pumpAndSettle();
 
-      expect(find.byKey(const Key('allAttemptsArchived')), findsOneWidget);
-      expect(
-        find.text('All examination attempts in this batch are archived. No active attempts to analyze.'),
-        findsOneWidget,
-      );
-      expect(find.text('Overall Statistics'), findsNothing);
-      expect(find.text('Total'), findsNothing);
-      // Not the "no complete batch data" message either -- the batch WAS
-      // fully retrieved, it's simply all-archived.
-      expect(find.byKey(const Key('noCompleteData')), findsNothing);
-      expect(find.byKey(const Key('incompleteBatchWarning')), findsNothing);
-    });
+        expect(find.byKey(const Key('allAttemptsArchived')), findsOneWidget);
+        expect(
+          find.text(
+            'All examination attempts in this batch are archived. No active attempts to analyze.',
+          ),
+          findsOneWidget,
+        );
+        expect(find.text('Overall Statistics'), findsNothing);
+        expect(find.text('Total'), findsNothing);
+        // Not the "no complete batch data" message either -- the batch WAS
+        // fully retrieved, it's simply all-archived.
+        expect(find.byKey(const Key('noCompleteData')), findsNothing);
+        expect(find.byKey(const Key('incompleteBatchWarning')), findsNothing);
+      },
+    );
 
-    testWidgets('the refresh action clears the cache and re-reads', (tester) async {
+    testWidgets('the refresh action clears the cache and re-reads', (
+      tester,
+    ) async {
       client.batches.add(_batch('a1', 'AT'));
       client.scansByBatch['a1'] = [_scan('1', 'a1', 'AT', 60)];
       await pump(tester);
@@ -1056,161 +1753,256 @@ void main() {
     expect(GuidanceWebAnalyticsService.qtmPercentOf(null), isNull);
   });
 
-group('Applicant Retake Management -- archived attempts excluded by default', () {
-  test('AT: an archived Attempt 1 is excluded from the aggregate, the active Attempt 2 is included', () async {
-    client.batches.add(_batch('b1', 'AT'));
-    client.scansByBatch['b1'] = [
-      _scan('s-old', 'b1', 'AT', 50, attemptNo: 1, attemptStatus: 'archived'),
-      _scan('s-new', 'b1', 'AT', 65, attemptNo: 2, attemptStatus: 'active'),
-    ];
+  group('Applicant Retake Management -- archived attempts excluded by default', () {
+    test(
+      'AT: an archived Attempt 1 is excluded from the aggregate, the active Attempt 2 is included',
+      () async {
+        client.batches.add(_batch('b1', 'AT'));
+        client.scansByBatch['b1'] = [
+          _scan(
+            's-old',
+            'b1',
+            'AT',
+            50,
+            attemptNo: 1,
+            attemptStatus: 'archived',
+          ),
+          _scan('s-new', 'b1', 'AT', 65, attemptNo: 2, attemptStatus: 'active'),
+        ];
 
-    final r = await run('AT');
+        final r = await run('AT');
 
-    expect(r.at!.totalExaminees, 1);
-    expect(r.at!.averageRawScore, 65);
-  });
+        expect(r.at!.totalExaminees, 1);
+        expect(r.at!.averageRawScore, 65);
+      },
+    );
 
-  test('AT: the batch is still marked complete -- archiving an attempt never looks like a missing scan', () async {
-    client.batches.add(_batch('b1', 'AT'));
-    client.scansByBatch['b1'] = [
-      _scan('s-old', 'b1', 'AT', 50, attemptNo: 1, attemptStatus: 'archived'),
-      _scan('s-new', 'b1', 'AT', 65, attemptNo: 2, attemptStatus: 'active'),
-    ];
+    test(
+      'AT: the batch is still marked complete -- archiving an attempt never looks like a missing scan',
+      () async {
+        client.batches.add(_batch('b1', 'AT'));
+        client.scansByBatch['b1'] = [
+          _scan(
+            's-old',
+            'b1',
+            'AT',
+            50,
+            attemptNo: 1,
+            attemptStatus: 'archived',
+          ),
+          _scan('s-new', 'b1', 'AT', 65, attemptNo: 2, attemptStatus: 'active'),
+        ];
 
-    final r = await run('AT');
+        final r = await run('AT');
 
-    expect(r.incompleteBatches, isEmpty);
-    expect(r.analyzedBatches.map((b) => b.id), ['b1']);
-  });
+        expect(r.incompleteBatches, isEmpty);
+        expect(r.analyzedBatches.map((b) => b.id), ['b1']);
+      },
+    );
 
-  test('TAT: an archived Attempt 1 is excluded from the overall stats', () async {
-    client.batches.add(_batch('t1', 'TAT'));
-    client.scansByBatch['t1'] = [
-      _scan('s-old', 't1', 'TAT', 40, attemptNo: 1, attemptStatus: 'archived'),
-      _scan('s-new', 't1', 'TAT', 150, attemptNo: 2, attemptStatus: 'active'),
-    ];
+    test(
+      'TAT: an archived Attempt 1 is excluded from the overall stats',
+      () async {
+        client.batches.add(_batch('t1', 'TAT'));
+        client.scansByBatch['t1'] = [
+          _scan(
+            's-old',
+            't1',
+            'TAT',
+            40,
+            attemptNo: 1,
+            attemptStatus: 'archived',
+          ),
+          _scan(
+            's-new',
+            't1',
+            'TAT',
+            150,
+            attemptNo: 2,
+            attemptStatus: 'active',
+          ),
+        ];
 
-    final o = (await run('TAT')).tatOverall!;
+        final o = (await run('TAT')).tatOverall!;
 
-    expect(o.totalExaminees, 1);
-    expect(o.averageTotal, 150);
-  });
+        expect(o.totalExaminees, 1);
+        expect(o.averageTotal, 150);
+      },
+    );
 
-  test('an applicant with only Attempt 1 (no retake) is unchanged', () async {
-    client.batches.add(_batch('b1', 'AT'));
-    client.scansByBatch['b1'] = [_scan('s1', 'b1', 'AT', 60)]; // default: attempt 1, active
-
-    final r = await run('AT');
-
-    expect(r.at!.totalExaminees, 1);
-    expect(r.at!.averageRawScore, 60);
-  });
-
-  test('QTM is unchanged for an ordinary batch (no retake activity at all)', () async {
-    client.batches.add(_batch('q1', 'QTM'));
-    client.scansByBatch['q1'] = [
-      _scan('1', 'q1', 'QTM', 10),
-      _scan('2', 'q1', 'QTM', 20),
-    ];
-
-    final q = (await run('QTM')).qtm!;
-
-    expect(q.totalExaminees, 2);
-    expect(q.averageRawScore, 15);
-  });
-
-  test('the archived-attempt filter applies uniformly regardless of exam code', () async {
-    client.batches.add(_batch('q1', 'QTM'));
-    client.scansByBatch['q1'] = [
-      _scan('1', 'q1', 'QTM', 10, attemptNo: 1, attemptStatus: 'archived'),
-      _scan('2', 'q1', 'QTM', 20),
-    ];
-
-    final q = (await run('QTM')).qtm!;
-
-    expect(q.totalExaminees, 1);
-    expect(q.averageRawScore, 20);
-  });
-
-  group('archived-only batch (physically complete, nothing active)', () {
-    test('AT: recognized -- completeness stays true, but at/qtm/tatOverall stay null', () async {
-      client.batches.add(_batch('b1', 'AT', day: 1));
+    test('an applicant with only Attempt 1 (no retake) is unchanged', () async {
+      client.batches.add(_batch('b1', 'AT'));
       client.scansByBatch['b1'] = [
-        _scan('s-old', 'b1', 'AT', 50, attemptNo: 1, attemptStatus: 'archived'),
-      ];
+        _scan('s1', 'b1', 'AT', 60),
+      ]; // default: attempt 1, active
 
       final r = await run('AT');
 
-      // Completeness still uses the physical scan count -- this batch was
-      // fully retrieved (1 expected, 1 retrieved), so it is NOT reported as
-      // incomplete even though nothing in it is active.
-      expect(r.incompleteBatches, isEmpty);
-      expect(r.analyzedBatches.map((b) => b.id), ['b1']);
-      expect(r.allActiveAttemptsArchived, isTrue);
-      // Archived scans never reach the pure AT/QTM/TAT calculators: no
-      // all-zero result is fabricated for them to report on.
-      expect(r.at, isNull);
-      expect(r.qtm, isNull);
-      expect(r.tatOverall, isNull);
-      expect(r.tatDetail, isNull);
+      expect(r.at!.totalExaminees, 1);
+      expect(r.at!.averageRawScore, 60);
     });
 
-    test('TAT: recognized the same way', () async {
-      client.batches.add(_batch('t1', 'TAT', day: 1));
-      client.scansByBatch['t1'] = [
-        _scan('s-old', 't1', 'TAT', 40, attemptNo: 1, attemptStatus: 'archived'),
-      ];
+    test(
+      'QTM is unchanged for an ordinary batch (no retake activity at all)',
+      () async {
+        client.batches.add(_batch('q1', 'QTM'));
+        client.scansByBatch['q1'] = [
+          _scan('1', 'q1', 'QTM', 10),
+          _scan('2', 'q1', 'QTM', 20),
+        ];
 
-      final r = await run('TAT');
+        final q = (await run('QTM')).qtm!;
 
-      expect(r.incompleteBatches, isEmpty);
-      expect(r.allActiveAttemptsArchived, isTrue);
-      expect(r.tatOverall, isNull);
-      expect(r.tatDetail, isNull);
-    });
+        expect(q.totalExaminees, 2);
+        expect(q.averageRawScore, 15);
+      },
+    );
 
-    test('a batch with at least one active scan is never reported archived-only', () async {
-      client.batches.add(_batch('b1', 'AT', day: 1));
-      client.scansByBatch['b1'] = [
-        _scan('s-old', 'b1', 'AT', 50, attemptNo: 1, attemptStatus: 'archived'),
-        _scan('s-new', 'b1', 'AT', 65, attemptNo: 2, attemptStatus: 'active'),
-      ];
+    test(
+      'the archived-attempt filter applies uniformly regardless of exam code',
+      () async {
+        client.batches.add(_batch('q1', 'QTM'));
+        client.scansByBatch['q1'] = [
+          _scan('1', 'q1', 'QTM', 10, attemptNo: 1, attemptStatus: 'archived'),
+          _scan('2', 'q1', 'QTM', 20),
+        ];
 
-      final r = await run('AT');
+        final q = (await run('QTM')).qtm!;
 
-      expect(r.allActiveAttemptsArchived, isFalse);
-      expect(r.at, isNotNull);
-    });
+        expect(q.totalExaminees, 1);
+        expect(q.averageRawScore, 20);
+      },
+    );
 
-    test('an ordinary batch with no retake activity is never reported archived-only', () async {
-      client.batches.add(_batch('b1', 'AT', day: 1));
-      client.scansByBatch['b1'] = [_scan('s1', 'b1', 'AT', 60)];
+    group('archived-only batch (physically complete, nothing active)', () {
+      test(
+        'AT: recognized -- completeness stays true, but at/qtm/tatOverall stay null',
+        () async {
+          client.batches.add(_batch('b1', 'AT', day: 1));
+          client.scansByBatch['b1'] = [
+            _scan(
+              's-old',
+              'b1',
+              'AT',
+              50,
+              attemptNo: 1,
+              attemptStatus: 'archived',
+            ),
+          ];
 
-      final r = await run('AT');
+          final r = await run('AT');
 
-      expect(r.allActiveAttemptsArchived, isFalse);
-      expect(r.at, isNotNull);
-    });
+          // Completeness still uses the physical scan count -- this batch was
+          // fully retrieved (1 expected, 1 retrieved), so it is NOT reported as
+          // incomplete even though nothing in it is active.
+          expect(r.incompleteBatches, isEmpty);
+          expect(r.analyzedBatches.map((b) => b.id), ['b1']);
+          expect(r.allActiveAttemptsArchived, isTrue);
+          // Archived scans never reach the pure AT/QTM/TAT calculators: no
+          // all-zero result is fabricated for them to report on.
+          expect(r.at, isNull);
+          expect(r.qtm, isNull);
+          expect(r.tatOverall, isNull);
+          expect(r.tatDetail, isNull);
+        },
+      );
 
-    test('an incomplete batch (not fully synced) is never reported archived-only', () async {
-      client.batches.add(_batch('b1', 'AT', day: 1));
-      client.scansByBatch['b1'] = [
-        _scan('s-old', 'b1', 'AT', 50, attemptNo: 1, attemptStatus: 'archived'),
-      ];
-      client.countsOverride['b1'] = 5; // server reports 5 expected, only 1 retrieved
+      test('TAT: recognized the same way', () async {
+        client.batches.add(_batch('t1', 'TAT', day: 1));
+        client.scansByBatch['t1'] = [
+          _scan(
+            's-old',
+            't1',
+            'TAT',
+            40,
+            attemptNo: 1,
+            attemptStatus: 'archived',
+          ),
+        ];
 
-      final r = await run('AT');
+        final r = await run('TAT');
 
-      expect(r.incompleteBatches, hasLength(1));
-      expect(r.allActiveAttemptsArchived, isFalse);
+        expect(r.incompleteBatches, isEmpty);
+        expect(r.allActiveAttemptsArchived, isTrue);
+        expect(r.tatOverall, isNull);
+        expect(r.tatDetail, isNull);
+      });
+
+      test(
+        'a batch with at least one active scan is never reported archived-only',
+        () async {
+          client.batches.add(_batch('b1', 'AT', day: 1));
+          client.scansByBatch['b1'] = [
+            _scan(
+              's-old',
+              'b1',
+              'AT',
+              50,
+              attemptNo: 1,
+              attemptStatus: 'archived',
+            ),
+            _scan(
+              's-new',
+              'b1',
+              'AT',
+              65,
+              attemptNo: 2,
+              attemptStatus: 'active',
+            ),
+          ];
+
+          final r = await run('AT');
+
+          expect(r.allActiveAttemptsArchived, isFalse);
+          expect(r.at, isNotNull);
+        },
+      );
+
+      test(
+        'an ordinary batch with no retake activity is never reported archived-only',
+        () async {
+          client.batches.add(_batch('b1', 'AT', day: 1));
+          client.scansByBatch['b1'] = [_scan('s1', 'b1', 'AT', 60)];
+
+          final r = await run('AT');
+
+          expect(r.allActiveAttemptsArchived, isFalse);
+          expect(r.at, isNotNull);
+        },
+      );
+
+      test(
+        'an incomplete batch (not fully synced) is never reported archived-only',
+        () async {
+          client.batches.add(_batch('b1', 'AT', day: 1));
+          client.scansByBatch['b1'] = [
+            _scan(
+              's-old',
+              'b1',
+              'AT',
+              50,
+              attemptNo: 1,
+              attemptStatus: 'archived',
+            ),
+          ];
+          client.countsOverride['b1'] =
+              5; // server reports 5 expected, only 1 retrieved
+
+          final r = await run('AT');
+
+          expect(r.incompleteBatches, hasLength(1));
+          expect(r.allActiveAttemptsArchived, isFalse);
+        },
+      );
     });
   });
-});
 
   group('Official-result filter (examinee_id must resolve to a real examinee)', () {
     test('a linked scan is included', () async {
       client.batches.add(_batch('b1', 'AT'));
-      client.scansByBatch['b1'] = [_scan('s1', 'b1', 'AT', 60, examineeId: 'e-1')];
+      client.scansByBatch['b1'] = [
+        _scan('s1', 'b1', 'AT', 60, examineeId: 'e-1'),
+      ];
 
       final r = await run('AT');
 
@@ -1232,94 +2024,136 @@ group('Applicant Retake Management -- archived attempts excluded by default', ()
       expect(r.at!.averageRawScore, 60);
     });
 
-    test('a dangling examinee_id (row missing/RLS-hidden) is excluded the same way as unlinked', () async {
-      client.batches.add(_batch('b1', 'AT'));
-      client.scansByBatch['b1'] = [
-        _scan('linked', 'b1', 'AT', 60, examineeId: 'e-1'),
-        _scan('dangling', 'b1', 'AT', 65, examineeId: 'e-deleted'),
-      ];
-      client.danglingExamineeIds.add('e-deleted');
+    test(
+      'a dangling examinee_id (row missing/RLS-hidden) is excluded the same way as unlinked',
+      () async {
+        client.batches.add(_batch('b1', 'AT'));
+        client.scansByBatch['b1'] = [
+          _scan('linked', 'b1', 'AT', 60, examineeId: 'e-1'),
+          _scan('dangling', 'b1', 'AT', 65, examineeId: 'e-deleted'),
+        ];
+        client.danglingExamineeIds.add('e-deleted');
 
-      final r = await run('AT');
+        final r = await run('AT');
 
-      expect(r.at!.totalExaminees, 1);
-      expect(r.at!.averageRawScore, 60);
-    });
+        expect(r.at!.totalExaminees, 1);
+        expect(r.at!.averageRawScore, 60);
+      },
+    );
 
-    test('resolving official links calls readCloudExaminees, proving the identity source is the '
-        'examinees table and not the scan\'s own OCR/staff tag', () async {
-      client.batches.add(_batch('b1', 'AT'));
-      client.scansByBatch['b1'] = [_scan('s1', 'b1', 'AT', 60, examineeId: 'e-1')];
+    test(
+      'resolving official links calls readCloudExaminees, proving the identity source is the '
+      'examinees table and not the scan\'s own OCR/staff tag',
+      () async {
+        client.batches.add(_batch('b1', 'AT'));
+        client.scansByBatch['b1'] = [
+          _scan('s1', 'b1', 'AT', 60, examineeId: 'e-1'),
+        ];
 
-      await run('AT');
+        await run('AT');
 
-      expect(client.calls, contains('readCloudExaminees'));
-    });
+        expect(client.calls, contains('readCloudExaminees'));
+      },
+    );
 
-    test('archived-attempt filtering still applies before the official-link filter runs', () async {
-      client.batches.add(_batch('b1', 'AT'));
-      client.scansByBatch['b1'] = [
-        // Archived and unlinked at once: excluded for the archived-attempt
-        // reason alone, so no readCloudExaminees call is made just for it.
-        _scan('s-old', 'b1', 'AT', 50, attemptNo: 1, attemptStatus: 'archived', examineeId: null),
-        _scan('s-new', 'b1', 'AT', 65, attemptNo: 2, attemptStatus: 'active', examineeId: 'e-1'),
-      ];
+    test(
+      'archived-attempt filtering still applies before the official-link filter runs',
+      () async {
+        client.batches.add(_batch('b1', 'AT'));
+        client.scansByBatch['b1'] = [
+          // Archived and unlinked at once: excluded for the archived-attempt
+          // reason alone, so no readCloudExaminees call is made just for it.
+          _scan(
+            's-old',
+            'b1',
+            'AT',
+            50,
+            attemptNo: 1,
+            attemptStatus: 'archived',
+            examineeId: null,
+          ),
+          _scan(
+            's-new',
+            'b1',
+            'AT',
+            65,
+            attemptNo: 2,
+            attemptStatus: 'active',
+            examineeId: 'e-1',
+          ),
+        ];
 
-      final r = await run('AT');
+        final r = await run('AT');
 
-      expect(r.at!.totalExaminees, 1);
-      expect(r.at!.averageRawScore, 65);
-    });
+        expect(r.at!.totalExaminees, 1);
+        expect(r.at!.averageRawScore, 65);
+      },
+    );
 
-    test('QTM and TAT aggregates apply the same official-link filter as AT', () async {
-      client.batches.add(_batch('q1', 'QTM'));
-      client.scansByBatch['q1'] = [
-        _scan('linked', 'q1', 'QTM', 40, examineeId: 'e-1'),
-        _scan('unlinked', 'q1', 'QTM', 55, examineeId: null),
-      ];
-      client.batches.add(_batch('t1', 'TAT'));
-      client.scansByBatch['t1'] = [
-        _scan('linked', 't1', 'TAT', 90, examineeId: 'e-2'),
-        _scan('unlinked', 't1', 'TAT', 150, examineeId: null),
-      ];
+    test(
+      'QTM and TAT aggregates apply the same official-link filter as AT',
+      () async {
+        client.batches.add(_batch('q1', 'QTM'));
+        client.scansByBatch['q1'] = [
+          _scan('linked', 'q1', 'QTM', 40, examineeId: 'e-1'),
+          _scan('unlinked', 'q1', 'QTM', 55, examineeId: null),
+        ];
+        client.batches.add(_batch('t1', 'TAT'));
+        client.scansByBatch['t1'] = [
+          _scan('linked', 't1', 'TAT', 90, examineeId: 'e-2'),
+          _scan('unlinked', 't1', 'TAT', 150, examineeId: null),
+        ];
 
-      final qtm = await run('QTM');
-      final tat = await run('TAT');
+        final qtm = await run('QTM');
+        final tat = await run('TAT');
 
-      expect(qtm.qtm!.totalExaminees, 1);
-      expect(qtm.qtm!.averageRawScore, 40);
-      expect(tat.tatOverall!.totalExaminees, 1);
-      expect(tat.tatOverall!.averageTotal, 90);
-    });
+        expect(qtm.qtm!.totalExaminees, 1);
+        expect(qtm.qtm!.averageRawScore, 40);
+        expect(tat.tatOverall!.totalExaminees, 1);
+        expect(tat.tatOverall!.averageTotal, 90);
+      },
+    );
 
-    test('the same official ExamineeRecord linked across AT, QTM and TAT scans resolves in every exam type',
-        () async {
-      client.batches.add(_batch('a1', 'AT'));
-      client.scansByBatch['a1'] = [_scan('a-scan', 'a1', 'AT', 60, examineeId: 'shared-examinee')];
-      client.batches.add(_batch('q1', 'QTM'));
-      client.scansByBatch['q1'] = [_scan('q-scan', 'q1', 'QTM', 45, examineeId: 'shared-examinee')];
-      client.batches.add(_batch('t1', 'TAT'));
-      client.scansByBatch['t1'] = [_scan('t-scan', 't1', 'TAT', 100, examineeId: 'shared-examinee')];
+    test(
+      'the same official ExamineeRecord linked across AT, QTM and TAT scans resolves in every exam type',
+      () async {
+        client.batches.add(_batch('a1', 'AT'));
+        client.scansByBatch['a1'] = [
+          _scan('a-scan', 'a1', 'AT', 60, examineeId: 'shared-examinee'),
+        ];
+        client.batches.add(_batch('q1', 'QTM'));
+        client.scansByBatch['q1'] = [
+          _scan('q-scan', 'q1', 'QTM', 45, examineeId: 'shared-examinee'),
+        ];
+        client.batches.add(_batch('t1', 'TAT'));
+        client.scansByBatch['t1'] = [
+          _scan('t-scan', 't1', 'TAT', 100, examineeId: 'shared-examinee'),
+        ];
 
-      final at = await run('AT');
-      final qtm = await run('QTM');
-      final tat = await run('TAT');
+        final at = await run('AT');
+        final qtm = await run('QTM');
+        final tat = await run('TAT');
 
-      expect(at.at!.totalExaminees, 1);
-      expect(qtm.qtm!.totalExaminees, 1);
-      expect(tat.tatOverall!.totalExaminees, 1);
-    });
+        expect(at.at!.totalExaminees, 1);
+        expect(qtm.qtm!.totalExaminees, 1);
+        expect(tat.tatOverall!.totalExaminees, 1);
+      },
+    );
 
-    test('a batch whose only scans are unlinked completes normally with an all-zero (not archived-only) result',
-        () async {
-      client.batches.add(_batch('b1', 'AT', day: 1));
-      client.scansByBatch['b1'] = [_scan('s1', 'b1', 'AT', 60, examineeId: null)];
+    test(
+      'a batch whose only scans are unlinked completes normally with an all-zero (not archived-only) result',
+      () async {
+        client.batches.add(_batch('b1', 'AT', day: 1));
+        client.scansByBatch['b1'] = [
+          _scan('s1', 'b1', 'AT', 60, examineeId: null),
+        ];
 
-      final r = await run('AT');
+        final r = await run('AT');
 
-      expect(r.incompleteBatches, isEmpty);
-      expect(r.allActiveAttemptsArchived, isFalse);
-      expect(r.at!.totalExaminees, 0);
-    });
+        expect(r.incompleteBatches, isEmpty);
+        expect(r.allActiveAttemptsArchived, isFalse);
+        expect(r.at!.totalExaminees, 0);
+      },
+    );
   });
 }

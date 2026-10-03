@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
-import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
+import '../../../core/constants/app_tokens.dart';
 import '../../../core/sync/admin_scan_restore_client.dart';
+import '../../../shared/widgets/segmented_tabs.dart';
+import '../../../shared/widgets/state_views.dart';
+import '../../../shared/widgets/status_badge.dart';
+import '../../../shared/widgets/surface_card.dart';
 import '../services/admin_scan_restore_service.dart';
 
 enum _RestoreTab { deletedScans, restoreRequests }
@@ -168,14 +172,17 @@ class _RestoreManagementScreenState extends State<RestoreManagementScreen> {
       appBar: AppBar(
         backgroundColor: Colors.white,
         foregroundColor: AppColors.textDark,
-        elevation: 0.5,
-        title: Text('Restore Management', style: AppTextStyles.heading(size: 13)),
+        elevation: 0,
+        shape: const Border(bottom: BorderSide(color: AppColors.border)),
+        title: Text('Restore Management', style: AppTextStyles.heading(size: 17)),
         actions: [
           IconButton(
             key: const Key('restoreManagementRefreshButton'),
-            icon: const FaIcon(FontAwesomeIcons.rotateRight, size: 18),
+            tooltip: 'Refresh',
+            icon: const Icon(Icons.refresh_rounded, size: 22),
             onPressed: _refreshAll,
           ),
+          const SizedBox(width: 4),
         ],
       ),
       body: SafeArea(
@@ -193,49 +200,29 @@ class _RestoreManagementScreenState extends State<RestoreManagementScreen> {
 
   Widget _buildTabSwitcher() {
     return Container(
-      color: Colors.white,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      child: Row(
-        children: [
-          _tabButton(_RestoreTab.deletedScans, 'Deleted Scans'),
-          const SizedBox(width: 8),
-          _tabButton(_RestoreTab.restoreRequests, 'Restore Requests'),
+      width: double.infinity,
+      decoration: const BoxDecoration(
+        color: AppColors.surface,
+        border: Border(bottom: BorderSide(color: AppColors.border)),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: AppSpace.lg, vertical: AppSpace.md),
+      child: SegmentedTabs<_RestoreTab>(
+        selected: _tab,
+        onChanged: (tab) => setState(() => _tab = tab),
+        items: const [
+          SegmentedTabItem(value: _RestoreTab.deletedScans, label: 'Deleted Scans'),
+          SegmentedTabItem(value: _RestoreTab.restoreRequests, label: 'Restore Requests'),
         ],
       ),
     );
   }
 
-  Widget _tabButton(_RestoreTab tab, String label) {
-    final selected = _tab == tab;
-    return TextButton(
-      onPressed: () => setState(() => _tab = tab),
-      style: TextButton.styleFrom(
-        backgroundColor: selected ? AppColors.emerald100 : Colors.transparent,
-        foregroundColor: selected ? AppColors.primaryGreen : AppColors.textGray,
-      ),
-      child: Text(label, style: AppTextStyles.body(size: 11.5, weight: FontWeight.w700)),
-    );
-  }
-
-  Widget _buildMessage(FaIconData icon, String message, {bool isError = false}) {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          FaIcon(icon, size: 36, color: isError ? AppColors.warmRedOrange : AppColors.textGray),
-          const SizedBox(height: 14),
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 360),
-            child: Text(
-              message,
-              textAlign: TextAlign.center,
-              style: AppTextStyles.body(size: 11.5, color: isError ? AppColors.warmRedOrange : AppColors.textGray),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+  /// Keeps card lists readable on wide desktop windows instead of stretching
+  /// each card across the whole viewport.
+  Widget _centered(Widget child) => Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 960), child: child),
+      );
 
   // -------------------------------------------------------------------
   // Deleted Scans tab -- metadata only, via
@@ -243,18 +230,28 @@ class _RestoreManagementScreenState extends State<RestoreManagementScreen> {
   // -------------------------------------------------------------------
 
   Widget _buildDeletedScansTab() {
-    if (_loadingDeleted) return _buildMessage(FontAwesomeIcons.spinner, 'Loading deleted scans...');
+    if (_loadingDeleted) return const LoadingState(message: 'Loading deleted scans...');
     if (_deletedError != null) {
-      return _buildMessage(FontAwesomeIcons.triangleExclamation, _deletedError!, isError: true);
+      return ErrorState(
+        title: 'Could not load deleted scans',
+        message: _deletedError!,
+        onRetry: _loadDeletedScans,
+      );
     }
     if (_deletedScans.isEmpty) {
-      return _buildMessage(FontAwesomeIcons.circleCheck, 'No soft-deleted scans.');
+      return const EmptyState(
+        icon: Icons.check_circle_outline_rounded,
+        title: 'No soft-deleted scans.',
+        message: 'Deleted unlinked scans stay here for 30 days before they expire.',
+      );
     }
-    return ListView.separated(
-      padding: const EdgeInsets.all(16),
-      itemCount: _deletedScans.length,
-      separatorBuilder: (_, _) => const SizedBox(height: 12),
-      itemBuilder: (context, index) => _DeletedScanCard(scan: _deletedScans[index]),
+    return _centered(
+      ListView.separated(
+        padding: const EdgeInsets.all(AppSpace.lg),
+        itemCount: _deletedScans.length,
+        separatorBuilder: (_, _) => const SizedBox(height: AppSpace.md),
+        itemBuilder: (context, index) => _DeletedScanCard(scan: _deletedScans[index]),
+      ),
     );
   }
 
@@ -264,26 +261,35 @@ class _RestoreManagementScreenState extends State<RestoreManagementScreen> {
   // -------------------------------------------------------------------
 
   Widget _buildRestoreRequestsTab() {
-    if (_loadingRequests) return _buildMessage(FontAwesomeIcons.spinner, 'Loading restore requests...');
+    if (_loadingRequests) return const LoadingState(message: 'Loading restore requests...');
     if (_requestsError != null) {
-      return _buildMessage(FontAwesomeIcons.triangleExclamation, _requestsError!, isError: true);
+      return ErrorState(
+        title: 'Could not load restore requests',
+        message: _requestsError!,
+        onRetry: _loadRestoreRequests,
+      );
     }
     if (_requests.isEmpty) {
-      return _buildMessage(FontAwesomeIcons.inbox, 'No restore requests.');
+      return const EmptyState(
+        title: 'No restore requests.',
+        message: 'Requests from Guidance Council to bring back a deleted scan appear here.',
+      );
     }
-    return ListView.separated(
-      padding: const EdgeInsets.all(16),
-      itemCount: _requests.length,
-      separatorBuilder: (_, _) => const SizedBox(height: 12),
-      itemBuilder: (context, index) {
-        final request = _requests[index];
-        return _RestoreRequestCard(
-          request: request,
-          onApprove: _reviewingRequestId != null ? null : () => _openReview(request, approve: true),
-          onReject: _reviewingRequestId != null ? null : () => _openReview(request, approve: false),
-          onRestore: _restoringRequestId != null ? null : () => _openRestore(request),
-        );
-      },
+    return _centered(
+      ListView.separated(
+        padding: const EdgeInsets.all(AppSpace.lg),
+        itemCount: _requests.length,
+        separatorBuilder: (_, _) => const SizedBox(height: AppSpace.md),
+        itemBuilder: (context, index) {
+          final request = _requests[index];
+          return _RestoreRequestCard(
+            request: request,
+            onApprove: _reviewingRequestId != null ? null : () => _openReview(request, approve: true),
+            onReject: _reviewingRequestId != null ? null : () => _openReview(request, approve: false),
+            onRestore: _restoringRequestId != null ? null : () => _openRestore(request),
+          );
+        },
+      ),
     );
   }
 }
@@ -308,30 +314,18 @@ class _DeletedScanCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.cardBorder),
-      ),
+    return SurfaceCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  'Scan ${scan.scanId}',
-                  style: AppTextStyles.body(size: 12, weight: FontWeight.w700),
-                ),
-              ),
-              _examChip(scan.examCode),
-            ],
+          _CardTitleRow(
+            scanId: scan.scanId,
+            batchId: scan.batchId,
+            badges: [_examBadge(scan.examCode)],
           ),
-          const SizedBox(height: 4),
-          Text('Batch ${scan.batchId}', style: AppTextStyles.body(size: 10.5, color: AppColors.textGray)),
-          const SizedBox(height: 10),
+          const SizedBox(height: AppSpace.md),
+          const Divider(),
+          const SizedBox(height: AppSpace.md),
           _detailRow('Deleted', _formatDateTime(scan.deletedAt)),
           _detailRow('Expires', _formatDateTime(scan.retentionUntil)),
           _detailRow('Reason', scan.deletionReason ?? '—'),
@@ -361,32 +355,18 @@ class _RestoreRequestCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.cardBorder),
-      ),
+    return SurfaceCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  'Scan ${request.scanId}',
-                  style: AppTextStyles.body(size: 12, weight: FontWeight.w700),
-                ),
-              ),
-              _examChip(request.examCode),
-              const SizedBox(width: 6),
-              _statusChip(request.status),
-            ],
+          _CardTitleRow(
+            scanId: request.scanId,
+            batchId: request.batchId,
+            badges: [_examBadge(request.examCode), _statusBadge(request.status)],
           ),
-          const SizedBox(height: 4),
-          Text('Batch ${request.batchId}', style: AppTextStyles.body(size: 10.5, color: AppColors.textGray)),
-          const SizedBox(height: 10),
+          const SizedBox(height: AppSpace.md),
+          const Divider(),
+          const SizedBox(height: AppSpace.md),
           _detailRow('Request reason', request.reason),
           _detailRow('Requested by', request.requestedByName ?? '—'),
           _detailRow('Requested at', _formatDateTime(request.requestedAt)),
@@ -394,24 +374,43 @@ class _RestoreRequestCard extends StatelessWidget {
           if (request.reviewedAt != null) _detailRow('Reviewed at', _formatDateTime(request.reviewedAt!)),
           if (request.reviewNote != null) _detailRow('Review note', request.reviewNote!),
           if (request.isPending || request.isApproved) ...[
-            const SizedBox(height: 10),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
+            const SizedBox(height: AppSpace.sm),
+            Wrap(
+              alignment: WrapAlignment.end,
+              spacing: AppSpace.sm,
+              runSpacing: AppSpace.sm,
               children: [
                 if (request.isPending) ...[
                   TextButton(
                     onPressed: onReject,
-                    child: Text('Reject', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w700, color: AppColors.warmRedOrange)),
+                    style: TextButton.styleFrom(
+                      minimumSize: const Size(0, AppHit.minTarget),
+                      foregroundColor: AppColors.dangerFg,
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                    ),
+                    child: const Text('Reject'),
                   ),
                   TextButton(
                     onPressed: onApprove,
-                    child: Text('Approve', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w700, color: AppColors.primaryGreen)),
+                    style: TextButton.styleFrom(
+                      minimumSize: const Size(0, AppHit.minTarget),
+                      foregroundColor: AppColors.primaryGreen,
+                      backgroundColor: AppColors.successBg,
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                    ),
+                    child: const Text('Approve'),
                   ),
                 ],
                 if (request.isApproved)
                   TextButton(
                     onPressed: onRestore,
-                    child: Text('Restore Scan', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w700, color: AppColors.primaryGreen)),
+                    style: TextButton.styleFrom(
+                      minimumSize: const Size(0, AppHit.minTarget),
+                      foregroundColor: AppColors.primaryGreen,
+                      backgroundColor: AppColors.successBg,
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                    ),
+                    child: const Text('Restore Scan'),
                   ),
               ],
             ),
@@ -422,52 +421,62 @@ class _RestoreRequestCard extends StatelessWidget {
   }
 }
 
-Widget _examChip(String examCode) {
-  return Container(
-    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-    decoration: BoxDecoration(color: AppColors.lightBg, borderRadius: BorderRadius.circular(16)),
-    child: Text(examCode, style: AppTextStyles.body(size: 8.5, weight: FontWeight.w700, color: AppColors.textGray)),
-  );
+/// "Scan [id]" with its batch underneath and status/exam badges on the right
+/// (wrapping below the title on narrow screens instead of overflowing).
+class _CardTitleRow extends StatelessWidget {
+  const _CardTitleRow({required this.scanId, required this.batchId, required this.badges});
+
+  final String scanId;
+  final String batchId;
+  final List<Widget> badges;
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      alignment: WrapAlignment.spaceBetween,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: AppSpace.md,
+      runSpacing: AppSpace.sm,
+      children: [
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('Scan $scanId', style: AppTextStyles.subtitle()),
+            const SizedBox(height: 2),
+            Text('Batch $batchId', style: AppTextStyles.caption()),
+          ],
+        ),
+        Wrap(spacing: AppSpace.sm, runSpacing: AppSpace.xs, children: badges),
+      ],
+    );
+  }
 }
 
-Widget _statusChip(String status) {
+Widget _examBadge(String examCode) => StatusBadge(label: examCode, tone: StatusTone.neutral);
+
+Widget _statusBadge(String status) {
   final upper = status.toUpperCase();
-  final Color bg;
-  final Color fg;
-  switch (upper) {
-    case 'PENDING':
-      bg = const Color(0xFFFEF3C7);
-      fg = const Color(0xFF92400E);
-    case 'APPROVED':
-    case 'RESTORED':
-      bg = AppColors.emerald100;
-      fg = const Color(0xFF065F46);
-    case 'REJECTED':
-    case 'PURGED':
-      bg = const Color(0xFFFEE2E2);
-      fg = AppColors.warmRedOrange;
-    default:
-      bg = AppColors.lightBg;
-      fg = AppColors.textGray;
-  }
-  return Container(
-    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-    decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(16)),
-    child: Text(upper, style: AppTextStyles.body(size: 9, weight: FontWeight.w700, color: fg)),
-  );
+  final tone = switch (upper) {
+    'PENDING' => StatusTone.warning,
+    'APPROVED' || 'RESTORED' => StatusTone.success,
+    'REJECTED' || 'PURGED' => StatusTone.danger,
+    _ => StatusTone.neutral,
+  };
+  return StatusBadge(label: upper, tone: tone);
 }
 
 Widget _detailRow(String label, String value) {
   return Padding(
-    padding: const EdgeInsets.only(bottom: 6),
+    padding: const EdgeInsets.only(bottom: AppSpace.sm),
     child: Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         SizedBox(
-          width: 90,
-          child: Text(label, style: AppTextStyles.body(size: 9.5, weight: FontWeight.w700, color: AppColors.textGray)),
+          width: 112,
+          child: Text(label, style: AppTextStyles.caption(weight: FontWeight.w700)),
         ),
-        Expanded(child: Text(value, style: AppTextStyles.body(size: 10.5))),
+        Expanded(child: Text(value, style: AppTextStyles.text())),
       ],
     ),
   );

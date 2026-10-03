@@ -173,7 +173,7 @@ class _CreateBatchScreenState extends State<CreateBatchScreen> {
                 label: 'Description',
                 controller: _descriptionController,
                 hint: 'e.g., BSIT - 1A',
-                required: false,
+                required: true,
               ),
               const SizedBox(height: 16),
               _buildSection('Exam Type'),
@@ -264,10 +264,15 @@ class _CreateBatchScreenState extends State<CreateBatchScreen> {
           ],
         ),
         const SizedBox(height: 6),
-        TextField(
+        TextFormField(
           controller: controller,
           enabled: enabled,
           decoration: FormFieldStyle.outlined(hint: hint, enabled: enabled),
+          validator: required
+              ? (value) => value == null || value.trim().isEmpty
+                  ? 'Please enter a description'
+                  : null
+              : null,
         ),
       ],
     );

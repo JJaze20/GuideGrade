@@ -18,6 +18,10 @@ import 'package:guidegrade/models/local_batch.dart';
 /// [archiveBatch] only ever adds a `batch_archives` row -- it has no access to
 /// `batches`/`scans` state at all, mirroring the real INSERT.
 class _FakeClient implements SyncClient {
+  CloudScansRead? scanReadOverride;
+  CloudExamineesRead? peopleReadOverride;
+  int? countOverride;
+  final List<CloudScanRow> softDeletedScans = [];
   final List<CloudBatchRow> batches = [];
   final Map<String, List<CloudScanRow>> scansByBatch = {};
   final List<CloudBatchArchiveRow> archives = [];
@@ -44,7 +48,8 @@ class _FakeClient implements SyncClient {
   @override
   Future<CloudScansRead> readCloudScans(String batchId) async {
     calls.add('readCloudScans:$batchId');
-    return CloudScansRead.found(List.of(scansByBatch[batchId] ?? const []));
+    return scanReadOverride ??
+        CloudScansRead.found(List.of(scansByBatch[batchId] ?? const []));
   }
 
   @override
@@ -54,7 +59,10 @@ class _FakeClient implements SyncClient {
   }
 
   @override
-  Future<SyncOutcome> archiveBatch({required String batchId, String? reason}) async {
+  Future<SyncOutcome> archiveBatch({
+    required String batchId,
+    String? reason,
+  }) async {
     calls.add('archiveBatch:$batchId');
     lastArchiveBatchId = batchId;
     lastArchiveReason = reason;
@@ -67,13 +75,15 @@ class _FakeClient implements SyncClient {
     if (archives.any((a) => a.batchId == batchId)) {
       return const SyncOutcome.permanent('23505');
     }
-    archives.add(CloudBatchArchiveRow(
-      batchId: batchId,
-      archivedAt: DateTime.utc(2026, 3, 1),
-      archivedByUid: 'uid-1',
-      archivedByName: 'Council Member',
-      reason: reason,
-    ));
+    archives.add(
+      CloudBatchArchiveRow(
+        batchId: batchId,
+        archivedAt: DateTime.utc(2026, 3, 1),
+        archivedByUid: 'uid-1',
+        archivedByName: 'Council Member',
+        reason: reason,
+      ),
+    );
     return const SyncOutcome.success();
   }
 
@@ -81,7 +91,8 @@ class _FakeClient implements SyncClient {
   Future<CloudScanCountsRead> readScanCounts(List<String> batchIds) async {
     calls.add('readScanCounts');
     return CloudScanCountsRead.found({
-      for (final id in batchIds) id: (scansByBatch[id] ?? const []).length,
+      for (final id in batchIds)
+        id: countOverride ?? (scansByBatch[id] ?? const []).length,
     });
   }
 
@@ -123,25 +134,32 @@ class _FakeClient implements SyncClient {
     return const CloudImageRead.absent();
   }
 
-
   @override
   Future<SyncOutcome> pushBatch(String batchId) => _no('pushBatch');
   @override
-  Future<SyncOutcome> pushScan(String batchId, String scanId, {Map<String, String> meta = const {}}) =>
-      _no('pushScan');
+  Future<SyncOutcome> pushScan(
+    String batchId,
+    String scanId, {
+    Map<String, String> meta = const {},
+  }) => _no('pushScan');
   @override
   Future<SyncOutcome> uploadImage(SyncJob job) => _no('uploadImage');
   @override
-  Future<SyncOutcome> patchImageStatus(String batchId, String scanId) => _no('patchImageStatus');
+  Future<SyncOutcome> patchImageStatus(String batchId, String scanId) =>
+      _no('patchImageStatus');
   @override
-  Future<SyncOutcome> pushAnswerKey(String examCode, {Map<String, String> meta = const {}}) =>
-      _no('pushAnswerKey');
+  Future<SyncOutcome> pushAnswerKey(
+    String examCode, {
+    Map<String, String> meta = const {},
+  }) => _no('pushAnswerKey');
   @override
   Future<SyncOutcome> deleteBatch(String batchId) => _no('deleteBatch');
   @override
-  Future<SyncOutcome> deleteScan(String batchId, String scanId) => _no('deleteScan');
+  Future<SyncOutcome> deleteScan(String batchId, String scanId) =>
+      _no('deleteScan');
   @override
-  Future<SyncOutcome> deleteStoragePrefix(String batchId) => _no('deleteStoragePrefix');
+  Future<SyncOutcome> deleteStoragePrefix(String batchId) =>
+      _no('deleteStoragePrefix');
 
   /// Registered examinees, resolved by [GuidanceWebResultsService.
   /// loadResultsForBatch] for any scan seeded with a matching `examineeId`
@@ -151,8 +169,9 @@ class _FakeClient implements SyncClient {
   @override
   Future<CloudExamineesRead> readCloudExaminees() async {
     calls.add('readCloudExaminees');
-    return CloudExamineesRead.found(List.of(examinees));
+    return peopleReadOverride ?? CloudExamineesRead.found(List.of(examinees));
   }
+
   @override
   Future<CloudExamineeWrite> createExamineeFromScan({
     required String batchId,
@@ -160,32 +179,29 @@ class _FakeClient implements SyncClient {
     required String firstName,
     String? middleName,
     required String lastName,
-  }) =>
-      _no('createExamineeFromScan');
+  }) => _no('createExamineeFromScan');
   @override
   Future<CloudExamineeWrite> updateCloudExaminee({
     required String id,
     required String firstName,
     String? middleName,
     required String lastName,
-  }) =>
-      _no('updateCloudExaminee');
+  }) => _no('updateCloudExaminee');
   @override
-  Future<CloudExamineeWrite> setExamineeArchived(String id, bool archived) => _no('setExamineeArchived');
+  Future<CloudExamineeWrite> setExamineeArchived(String id, bool archived) =>
+      _no('setExamineeArchived');
   @override
   Future<SyncOutcome> linkScanToExaminee({
     required String batchId,
     required String scanId,
     required String? examineeId,
-  }) =>
-      _no('linkScanToExaminee');
+  }) => _no('linkScanToExaminee');
   @override
   Future<SyncOutcome> unlinkScanFromExaminee({
     required String batchId,
     required String scanId,
     required String examineeId,
-  }) =>
-      _no('unlinkScanFromExaminee');
+  }) => _no('unlinkScanFromExaminee');
 }
 
 CloudBatchRow _batch({
@@ -193,60 +209,77 @@ CloudBatchRow _batch({
   String code = '',
   String examCode = 'AT',
   String status = 'Completed',
-}) =>
-    CloudBatchRow(
-      id: id,
-      batchCode: code.isEmpty ? 'B-$id' : code,
-      examCode: examCode,
-      examTitle: 'Title $examCode',
-      description: '',
-      expectedCount: 10,
-      status: status,
-      createdByUid: 'uid',
-      createdByName: 'Officer',
-      createdAt: DateTime.utc(2026, 1, 1),
-      updatedAt: DateTime.utc(2026, 1, 2),
-    );
+  int expectedCount = 10,
+}) => CloudBatchRow(
+  id: id,
+  batchCode: code.isEmpty ? 'B-$id' : code,
+  examCode: examCode,
+  examTitle: 'Title $examCode',
+  description: '',
+  expectedCount: expectedCount,
+  status: status,
+  createdByUid: 'uid',
+  createdByName: 'Officer',
+  createdAt: DateTime.utc(2026, 1, 1),
+  updatedAt: DateTime.utc(2026, 1, 2),
+);
 
 CloudScanRow _scan(
   String id,
   String batchId, {
   String examCode = 'AT',
   int rawScore = 50,
+  bool graded = true,
   String first = 'Juan',
   String? examineeId,
-}) =>
-    CloudScanRow(
-      id: id,
-      batchId: batchId,
-      examCode: examCode,
-      capturedAt: DateTime.utc(2026, 1, 1),
-      decoded: {'examCode': examCode, 'items': <dynamic>[]},
-      rawScore: rawScore,
-      totalGraded: 72,
-      totalItems: 72,
-      resultStatus: 'Graded',
-      scannedAt: DateTime.utc(2026, 1, 1),
-      processedByUid: 'uid',
-      processedByName: 'Officer',
-      firstName: first,
-      lastName: 'Dela Cruz',
-      examineeNumber: 'EX-legacy-$id',
-      examineeId: examineeId,
-    );
+}) => CloudScanRow(
+  id: id,
+  batchId: batchId,
+  examCode: examCode,
+  capturedAt: DateTime.utc(2026, 1, 1),
+  decoded: {'examCode': examCode, 'items': <dynamic>[]},
+  rawScore: rawScore,
+  totalGraded: 72,
+  totalItems: 72,
+  resultStatus: graded ? 'Graded' : 'Ungraded',
+  scannedAt: DateTime.utc(2026, 1, 1),
+  processedByUid: 'uid',
+  processedByName: 'Officer',
+  firstName: first,
+  lastName: 'Dela Cruz',
+  examineeNumber: 'EX-legacy-$id',
+  examineeId: examineeId,
+);
 
-CloudExamineeRow _examinee(String id, String temporaryId, String first, String last) =>
-    CloudExamineeRow(
-      id: id,
-      temporaryExamineeId: temporaryId,
-      firstName: first,
-      lastName: last,
-      status: 'active',
-      createdAt: DateTime.utc(2026, 1, 1),
-      createdByUid: 'uid',
-      updatedAt: DateTime.utc(2026, 1, 1),
-      updatedByUid: 'uid',
-    );
+CloudExamineeRow _examinee(
+  String id,
+  String temporaryId,
+  String first,
+  String last,
+) => CloudExamineeRow(
+  id: id,
+  temporaryExamineeId: temporaryId,
+  firstName: first,
+  lastName: last,
+  status: 'active',
+  createdAt: DateTime.utc(2026, 1, 1),
+  createdByUid: 'uid',
+  updatedAt: DateTime.utc(2026, 1, 1),
+  updatedByUid: 'uid',
+);
+
+class _CompletionClient extends _FakeClient implements BatchCompletionClient {
+  SyncOutcome completionOutcome = const SyncOutcome.success();
+  @override
+  Future<SyncOutcome> completeBatchForArchive(CloudBatchRow expected) async {
+    calls.add('completeBatch');
+    if (completionOutcome.isSuccess) {
+      final index = batches.indexWhere((b) => b.id == expected.id);
+      batches[index] = _batch(id: expected.id, status: 'Completed');
+    }
+    return completionOutcome;
+  }
+}
 
 void main() {
   late _FakeClient client;
@@ -257,6 +290,135 @@ void main() {
     client = _FakeClient();
     archiveService = GuidanceWebArchiveService(client: client);
     resultsService = GuidanceWebResultsService(client: client);
+  });
+
+  group('Active batch completion', () {
+    late _CompletionClient completing;
+    setUp(() {
+      completing = _CompletionClient();
+      completing.batches.add(_batch(id: 'full', status: 'Active'));
+      completing.examinees.add(_examinee('person', 'EX-1', 'Juan', 'Cruz'));
+      completing.scansByBatch['full'] = [
+        for (var i = 0; i < 10; i++)
+          _scan('scan-$i', 'full', examineeId: 'person'),
+      ];
+    });
+    test('full graded linked batch completes before archive', () async {
+      await GuidanceWebArchiveService(
+        client: completing,
+      ).archiveBatch(mapCloudBatch(completing.batches.single));
+      expect(completing.batches.single.status, 'Completed');
+      expect(completing.archives.single.batchId, 'full');
+      expect(
+        completing.calls.indexOf('completeBatch'),
+        lessThan(completing.calls.indexOf('archiveBatch:full')),
+      );
+    });
+    test('partial batch cannot complete or archive', () async {
+      completing.scansByBatch['full']!.removeLast();
+      await expectLater(
+        GuidanceWebArchiveService(
+          client: completing,
+        ).archiveBatch(mapCloudBatch(completing.batches.single)),
+        throwsA(isA<GuidanceWebArchiveException>()),
+      );
+      expect(completing.calls, isNot(contains('completeBatch')));
+      expect(completing.archives, isEmpty);
+    });
+    test('unlinked or missing canonical examinee blocks completion', () async {
+      completing.examinees.clear();
+      await expectLater(
+        GuidanceWebArchiveService(
+          client: completing,
+        ).archiveBatch(mapCloudBatch(completing.batches.single)),
+        throwsA(isA<GuidanceWebArchiveException>()),
+      );
+      expect(completing.calls, isNot(contains('completeBatch')));
+    });
+    test('ungraded scan blocks completion', () async {
+      completing.scansByBatch['full']![0] = _scan(
+        'scan-0',
+        'full',
+        examineeId: 'person',
+        graded: false,
+      );
+      await expectLater(
+        GuidanceWebArchiveService(
+          client: completing,
+        ).archiveBatch(mapCloudBatch(completing.batches.single)),
+        throwsA(isA<GuidanceWebArchiveException>()),
+      );
+      expect(completing.calls, isNot(contains('completeBatch')));
+    });
+    test('full Active batch with one unlinked scan cannot archive', () async {
+      completing.scansByBatch['full']![0] = _scan('scan-0', 'full');
+      await expectLater(
+        GuidanceWebArchiveService(
+          client: completing,
+        ).archiveBatch(mapCloudBatch(completing.batches.single)),
+        throwsA(isA<GuidanceWebArchiveException>()),
+      );
+      expect(completing.archives, isEmpty);
+      expect(completing.calls, isNot(contains('completeBatch')));
+    });
+    test('above expected count uses existing fullness rule', () async {
+      completing.scansByBatch['full']!.add(
+        _scan('extra', 'full', examineeId: 'person'),
+      );
+      await GuidanceWebArchiveService(
+        client: completing,
+      ).archiveBatch(mapCloudBatch(completing.batches.single));
+      expect(completing.archives, hasLength(1));
+    });
+    test('zero or negative expected count is not full', () async {
+      for (final count in [0, -1]) {
+        completing.batches[0] = _batch(
+          id: 'full',
+          status: 'Active',
+          expectedCount: count,
+        );
+        await expectLater(
+          GuidanceWebArchiveService(
+            client: completing,
+          ).archiveBatch(mapCloudBatch(completing.batches.single)),
+          throwsA(isA<GuidanceWebArchiveException>()),
+        );
+      }
+      expect(completing.archives, isEmpty);
+    });
+    test('archived attempt still blocks Active completion', () async {
+      completing.scansByBatch['full']![0] = CloudScanRow(
+        id: 'scan-0',
+        batchId: 'full',
+        examCode: 'AT',
+        capturedAt: DateTime.utc(2026),
+        decoded: const {},
+        examineeId: 'person',
+        resultStatus: 'Graded',
+        rawScore: 50,
+        attemptStatus: 'ARCHIVED',
+      );
+      await expectLater(
+        GuidanceWebArchiveService(
+          client: completing,
+        ).archiveBatch(mapCloudBatch(completing.batches.single)),
+        throwsA(isA<GuidanceWebArchiveException>()),
+      );
+      expect(completing.archives, isEmpty);
+    });
+    test('completion conflict never inserts archive marker', () async {
+      completing.completionOutcome = const SyncOutcome.conflict(
+        'batch_changed',
+      );
+      await expectLater(
+        GuidanceWebArchiveService(
+          client: completing,
+        ).archiveBatch(mapCloudBatch(completing.batches.single)),
+        throwsA(isA<GuidanceWebArchiveException>()),
+      );
+      expect(completing.archives, isEmpty);
+      expect(completing.calls, isNot(contains('archiveBatch:full')));
+    });
   });
 
   void seed() {
@@ -281,39 +443,162 @@ void main() {
   Future<dynamic> localBatch(String id) async =>
       (await resultsService.loadBatches()).firstWhere((b) => b.id == id);
 
-  group('Archive eligibility', () {
-    test('a Completed batch can be archived (marker inserted with the reason)', () async {
-      seed();
-      await archiveService.archiveBatch(await localBatch('b1'), reason: 'Batch processed');
-      expect(client.archives.single.batchId, 'b1');
-      expect(client.lastArchiveReason, 'Batch processed');
-    });
-
-    for (final status in ['Active', 'Draft']) {
-      test('a $status batch cannot be archived and no marker is written', () async {
+  group('Completed canonical-link regression', () {
+    for (final count in [1, 3]) {
+      test('$count active unlinked sheets block marker insertion', () async {
         seed();
-        final id = status == 'Active' ? 'b3' : 'b4';
+        client.scansByBatch['b1'] = [
+          for (var i = 0; i < count; i++) _scan('unlinked-$i', 'b1'),
+        ];
         await expectLater(
-          archiveService.archiveBatch(await localBatch(id)),
-          throwsA(isA<GuidanceWebArchiveException>().having(
-              (e) => e.message, 'message', contains('Only completed batches can be archived'))),
+          archiveService.archiveBatch(await localBatch('b1')),
+          throwsA(
+            isA<GuidanceWebArchiveException>().having(
+              (e) => e.message,
+              'message',
+              contains('$count scanned'),
+            ),
+          ),
         );
         expect(client.archives, isEmpty);
-        expect(client.calls.where((c) => c.startsWith('archiveBatch')), isEmpty);
+        expect(client.calls, isNot(contains('archiveBatch:b1')));
       });
     }
-
-    test('eligibility is re-verified against the database, not a stale in-memory status', () async {
+    test('unresolvable non-null link blocks marker insertion', () async {
       seed();
-      final stale = await localBatch('b1'); // loaded while Completed
-      final i = client.batches.indexWhere((b) => b.id == 'b1');
-      client.batches[i] = _batch(id: 'b1', code: 'BATCH-ONE', status: 'Active'); // changed since
+      client.scansByBatch['b1'] = [
+        _scan('missing', 'b1', examineeId: 'missing'),
+      ];
       await expectLater(
-        archiveService.archiveBatch(stale),
+        archiveService.archiveBatch(await localBatch('b1')),
+        throwsA(
+          isA<GuidanceWebArchiveException>().having(
+            (e) => e.message,
+            'message',
+            contains('links could not be verified'),
+          ),
+        ),
+      );
+      expect(client.archives, isEmpty);
+    });
+    test(
+      'soft-deleted unlinked sheets excluded by active reader do not block',
+      () async {
+        seed();
+        client.softDeletedScans.addAll([
+          for (var i = 0; i < 3; i++) _scan('deleted-$i', 'b1'),
+        ]);
+        await archiveService.archiveBatch(await localBatch('b1'));
+        expect(client.archives, hasLength(1));
+        expect(client.softDeletedScans, hasLength(3));
+      },
+    );
+    test('failed scan read blocks', () async {
+      seed();
+      final batch = await localBatch('b1');
+      client.scanReadOverride = const CloudScansRead.failed(
+        SyncOutcome.transient('network'),
+      );
+      await expectLater(
+        archiveService.archiveBatch(batch),
         throwsA(isA<GuidanceWebArchiveException>()),
       );
       expect(client.archives, isEmpty);
     });
+    test('failed or incomplete Examinee read blocks', () async {
+      seed();
+      final batch = await localBatch('b1');
+      client.peopleReadOverride = const CloudExamineesRead.failed(
+        SyncOutcome.transient('network'),
+      );
+      await expectLater(
+        archiveService.archiveBatch(batch),
+        throwsA(isA<GuidanceWebArchiveException>()),
+      );
+      client.peopleReadOverride = CloudExamineesRead.found([]);
+      await expectLater(
+        archiveService.archiveBatch(batch),
+        throwsA(isA<GuidanceWebArchiveException>()),
+      );
+      expect(client.archives, isEmpty);
+    });
+    test('incomplete scan population blocks', () async {
+      seed();
+      client.countOverride = 3;
+      await expectLater(
+        archiveService.archiveBatch(await localBatch('b1')),
+        throwsA(isA<GuidanceWebArchiveException>()),
+      );
+      expect(client.archives, isEmpty);
+    });
+    test(
+      'Completed does not require fullness but still requires valid links',
+      () async {
+        seed();
+        client.batches[0] = _batch(id: 'b1', expectedCount: 0);
+        await archiveService.archiveBatch(await localBatch('b1'));
+        expect(client.archives, hasLength(1));
+      },
+    );
+  });
+
+  group('Archive eligibility', () {
+    test(
+      'a Completed batch can be archived (marker inserted with the reason)',
+      () async {
+        seed();
+        await archiveService.archiveBatch(
+          await localBatch('b1'),
+          reason: 'Batch processed',
+        );
+        expect(client.archives.single.batchId, 'b1');
+        expect(client.lastArchiveReason, 'Batch processed');
+      },
+    );
+
+    for (final status in ['Active', 'Draft']) {
+      test(
+        'a $status batch cannot be archived and no marker is written',
+        () async {
+          seed();
+          final id = status == 'Active' ? 'b3' : 'b4';
+          await expectLater(
+            archiveService.archiveBatch(await localBatch(id)),
+            throwsA(
+              isA<GuidanceWebArchiveException>().having(
+                (e) => e.message,
+                'message',
+                contains('Only completed batches can be archived'),
+              ),
+            ),
+          );
+          expect(client.archives, isEmpty);
+          expect(
+            client.calls.where((c) => c.startsWith('archiveBatch')),
+            isEmpty,
+          );
+        },
+      );
+    }
+
+    test(
+      'eligibility is re-verified against the database, not a stale in-memory status',
+      () async {
+        seed();
+        final stale = await localBatch('b1'); // loaded while Completed
+        final i = client.batches.indexWhere((b) => b.id == 'b1');
+        client.batches[i] = _batch(
+          id: 'b1',
+          code: 'BATCH-ONE',
+          status: 'Active',
+        ); // changed since
+        await expectLater(
+          archiveService.archiveBatch(stale),
+          throwsA(isA<GuidanceWebArchiveException>()),
+        );
+        expect(client.archives, isEmpty);
+      },
+    );
 
     test('an already archived batch cannot be archived twice', () async {
       seed();
@@ -321,25 +606,33 @@ void main() {
       await archiveService.archiveBatch(batch);
       await expectLater(
         archiveService.archiveBatch(batch),
-        throwsA(isA<GuidanceWebArchiveException>()
-            .having((e) => e.message, 'message', contains('already archived'))),
+        throwsA(
+          isA<GuidanceWebArchiveException>().having(
+            (e) => e.message,
+            'message',
+            contains('already archived'),
+          ),
+        ),
       );
       expect(client.archives, hasLength(1));
     });
 
-    test('a database duplicate (race) becomes a friendly message, never a raw code', () async {
-      seed();
-      client.archiveOverride = const SyncOutcome.permanent('23505');
-      Object? error;
-      try {
-        await archiveService.archiveBatch(await localBatch('b1'));
-      } catch (e) {
-        error = e;
-      }
-      final message = (error as GuidanceWebArchiveException).message;
-      expect(message, contains('already archived'));
-      expect(message, isNot(contains('23505')));
-    });
+    test(
+      'a database duplicate (race) becomes a friendly message, never a raw code',
+      () async {
+        seed();
+        client.archiveOverride = const SyncOutcome.permanent('23505');
+        Object? error;
+        try {
+          await archiveService.archiveBatch(await localBatch('b1'));
+        } catch (e) {
+          error = e;
+        }
+        final message = (error as GuidanceWebArchiveException).message;
+        expect(message, contains('already archived'));
+        expect(message, isNot(contains('23505')));
+      },
+    );
 
     test('a batch that no longer exists cannot be archived', () async {
       seed();
@@ -347,101 +640,144 @@ void main() {
       client.batches.removeWhere((b) => b.id == 'b1');
       await expectLater(
         archiveService.archiveBatch(batch),
-        throwsA(isA<GuidanceWebArchiveException>()
-            .having((e) => e.message, 'message', contains('no longer exists'))),
+        throwsA(
+          isA<GuidanceWebArchiveException>().having(
+            (e) => e.message,
+            'message',
+            contains('no longer exists'),
+          ),
+        ),
       );
     });
   });
 
   group('After archiving', () {
-    test('the batch is listed in Archive and marked archived, with scan count and actor', () async {
-      seed();
-      await archiveService.archiveBatch(await localBatch('b1'));
-      final entries = await archiveService.loadArchivedBatches();
-      expect(entries, hasLength(1));
-      expect(entries.single.batch.id, 'b1');
-      expect(entries.single.scanCount, 2);
-      expect(entries.single.archive.archivedByName, 'Council Member');
-      expect((await resultsService.loadArchivedBatchIds()), {'b1'});
-    });
+    test(
+      'the batch is listed in Archive and marked archived, with scan count and actor',
+      () async {
+        seed();
+        await archiveService.archiveBatch(await localBatch('b1'));
+        final entries = await archiveService.loadArchivedBatches();
+        expect(entries, hasLength(1));
+        expect(entries.single.batch.id, 'b1');
+        expect(entries.single.scanCount, 2);
+        expect(entries.single.archive.archivedByName, 'Council Member');
+        expect((await resultsService.loadArchivedBatchIds()), {'b1'});
+      },
+    );
 
-    test('the underlying batch, its status, scans, scores and answers are untouched', () async {
-      seed();
-      final before = client.batches.map((b) => (b.id, b.status, b.updatedAt)).toList();
-      final scansBefore = (await resultsService.loadScansForBatch(await localBatch('b1')))
-          .map((s) => (s.id, s.result?.rawScore, s.decoded.items.length))
-          .toList();
+    test(
+      'the underlying batch, its status, scans, scores and answers are untouched',
+      () async {
+        seed();
+        final before = client.batches
+            .map((b) => (b.id, b.status, b.updatedAt))
+            .toList();
+        final scansBefore =
+            (await resultsService.loadScansForBatch(await localBatch('b1')))
+                .map((s) => (s.id, s.result?.rawScore, s.decoded.items.length))
+                .toList();
 
-      await archiveService.archiveBatch(await localBatch('b1'));
+        await archiveService.archiveBatch(await localBatch('b1'));
 
-      // batches.status / updated_at exactly as before (the marker is separate).
-      expect(client.batches.map((b) => (b.id, b.status, b.updatedAt)).toList(), before);
-      expect(client.batches.firstWhere((b) => b.id == 'b1').status, 'Completed');
-      // Still readable through the same calls Results uses -- no unarchive step.
-      expect((await resultsService.loadBatches()).any((b) => b.id == 'b1'), isTrue);
-      final scansAfter = (await resultsService.loadScansForBatch(await localBatch('b1')))
-          .map((s) => (s.id, s.result?.rawScore, s.decoded.items.length))
-          .toList();
-      expect(scansAfter, scansBefore);
-      expect(scansAfter.first.$2, 61);
-    });
+        // batches.status / updated_at exactly as before (the marker is separate).
+        expect(
+          client.batches.map((b) => (b.id, b.status, b.updatedAt)).toList(),
+          before,
+        );
+        expect(
+          client.batches.firstWhere((b) => b.id == 'b1').status,
+          'Completed',
+        );
+        // Still readable through the same calls Results uses -- no unarchive step.
+        expect(
+          (await resultsService.loadBatches()).any((b) => b.id == 'b1'),
+          isTrue,
+        );
+        final scansAfter =
+            (await resultsService.loadScansForBatch(await localBatch('b1')))
+                .map((s) => (s.id, s.result?.rawScore, s.decoded.items.length))
+                .toList();
+        expect(scansAfter, scansBefore);
+        expect(scansAfter.first.$2, 61);
+      },
+    );
 
-    test('archiving performs no push, upload, delete, or link operation', () async {
-      seed();
-      await archiveService.archiveBatch(await localBatch('b1'));
-      await archiveService.loadArchivedBatches();
-      for (final call in client.calls) {
-        expect(call, isNot(startsWith('push')));
-        expect(call, isNot(startsWith('upload')));
-        expect(call, isNot(startsWith('delete')));
-        expect(call, isNot(contains('link')));
-      }
-    });
+    test(
+      'archiving performs no push, upload, delete, or link operation',
+      () async {
+        seed();
+        await archiveService.archiveBatch(await localBatch('b1'));
+        await archiveService.loadArchivedBatches();
+        for (final call in client.calls) {
+          expect(call, isNot(startsWith('push')));
+          expect(call, isNot(startsWith('upload')));
+          expect(call, isNot(startsWith('delete')));
+          expect(call, isNot(contains('link')));
+        }
+      },
+    );
 
-    test('the marker is independent of batches.status: a later mobile status change leaves it archived',
-        () async {
-      seed();
-      await archiveService.archiveBatch(await localBatch('b1'));
-      // Simulate a mobile sync pushing a different status for the batch.
-      final i = client.batches.indexWhere((b) => b.id == 'b1');
-      client.batches[i] = _batch(id: 'b1', code: 'BATCH-ONE', status: 'Archived');
-      expect(await resultsService.loadArchivedBatchIds(), {'b1'});
-      expect((await archiveService.loadArchivedBatches()).single.batch.status, 'Archived');
-    });
+    test(
+      'the marker is independent of batches.status: a later mobile status change leaves it archived',
+      () async {
+        seed();
+        await archiveService.archiveBatch(await localBatch('b1'));
+        // Simulate a mobile sync pushing a different status for the batch.
+        final i = client.batches.indexWhere((b) => b.id == 'b1');
+        client.batches[i] = _batch(
+          id: 'b1',
+          code: 'BATCH-ONE',
+          status: 'Archived',
+        );
+        expect(await resultsService.loadArchivedBatchIds(), {'b1'});
+        expect(
+          (await archiveService.loadArchivedBatches()).single.batch.status,
+          'Archived',
+        );
+      },
+    );
   });
 
   group('Examinee Records and Unlinked Scans keep archived-batch data', () {
-    test('examinee history still includes scans from an archived batch', () async {
-      seed();
-      await archiveService.archiveBatch(await localBatch('b1'));
-      client.scansByExamineeId['e1'] = CloudScansRead.found([client.scansByBatch['b1']!.first]);
-      client.calls.clear(); // only what the Examinee Records service does from here
-      final service = GuidanceWebExamineeRecordsService(client: client);
-      final history = await service.loadHistoryFor(ExamineeRecord(
-        id: 'e1',
-        temporaryExamineeId: 'EX-000001',
-        firstName: 'Juan',
-        lastName: 'Dela Cruz',
-        status: 'active',
-        createdAt: DateTime.utc(2026, 1, 1),
-        createdByUid: 'u',
-        updatedAt: DateTime.utc(2026, 1, 1),
-        updatedByUid: 'u',
-      ));
-      expect(history.single.scan.id, 's1');
-      expect(history.single.batch.id, 'b1');
-      expect(client.calls, isNot(contains('readBatchArchives')));
-    });
+    test(
+      'examinee history still includes scans from an archived batch',
+      () async {
+        seed();
+        await archiveService.archiveBatch(await localBatch('b1'));
+        client.scansByExamineeId['e1'] = CloudScansRead.found([
+          client.scansByBatch['b1']!.first,
+        ]);
+        client.calls
+            .clear(); // only what the Examinee Records service does from here
+        final service = GuidanceWebExamineeRecordsService(client: client);
+        final history = await service.loadHistoryFor(
+          ExamineeRecord(
+            id: 'e1',
+            temporaryExamineeId: 'EX-000001',
+            firstName: 'Juan',
+            lastName: 'Dela Cruz',
+            status: 'active',
+            createdAt: DateTime.utc(2026, 1, 1),
+            createdByUid: 'u',
+            updatedAt: DateTime.utc(2026, 1, 1),
+            updatedByUid: 'u',
+          ),
+        );
+        expect(history.single.scan.id, 's1');
+        expect(history.single.batch.id, 'b1');
+        expect(client.calls, isNot(contains('readBatchArchives')));
+      },
+    );
 
-    test('Unlinked Scans still lists an unlinked scan whose batch is archived', () async {
+    test('an active unlinked sheet prevents entry into Web Archive', () async {
       seed();
-      await archiveService.archiveBatch(await localBatch('b1'));
-      client.unlinkedScans = CloudScansRead.found([client.scansByBatch['b1']!.last]);
-      client.calls.clear();
-      final unlinked = await GuidanceWebExamineeRecordsService(client: client).loadUnlinkedScans();
-      expect(unlinked.single.scan.id, 's2');
-      expect(unlinked.single.batch.id, 'b1');
-      expect(client.calls, isNot(contains('readBatchArchives')));
+      client.scansByBatch['b1']!.add(_scan('unlinked', 'b1'));
+      await expectLater(
+        archiveService.archiveBatch(await localBatch('b1')),
+        throwsA(isA<GuidanceWebArchiveException>()),
+      );
+      expect(client.archives, isEmpty);
     });
   });
 
@@ -451,12 +787,19 @@ void main() {
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
-      await tester.pumpWidget(MaterialApp(
-        home: Scaffold(
-          body: home ??
-              GuidanceWebResultsView(service: resultsService, archiveService: archiveService, refreshInterval: null),
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body:
+                home ??
+                GuidanceWebResultsView(
+                  service: resultsService,
+                  archiveService: archiveService,
+                  refreshInterval: null,
+                ),
+          ),
         ),
-      ));
+      );
       await tester.pumpAndSettle();
     }
 
@@ -467,13 +810,17 @@ void main() {
       await tester.pumpAndSettle();
     }
 
-    testWidgets('archived batches are excluded from the normal Results list', (tester) async {
+    testWidgets('archived batches are excluded from the normal Results list', (
+      tester,
+    ) async {
       seed();
-      client.archives.add(CloudBatchArchiveRow(
-        batchId: 'b1',
-        archivedAt: DateTime.utc(2026, 3, 1),
-        archivedByUid: 'u',
-      ));
+      client.archives.add(
+        CloudBatchArchiveRow(
+          batchId: 'b1',
+          archivedAt: DateTime.utc(2026, 3, 1),
+          archivedByUid: 'u',
+        ),
+      );
       await pumpResults(tester);
 
       await tester.tap(find.byType(DropdownButtonFormField<LocalBatch>).first);
@@ -482,34 +829,62 @@ void main() {
       expect(find.textContaining('BATCH-ONE'), findsNothing);
     });
 
-    testWidgets('a Completed batch: confirmation, then it leaves Results and joins Archive', (tester) async {
-      seed();
-      await pumpResults(tester);
-      await pickAtBatch(tester, 'BATCH-ONE');
+    testWidgets(
+      'a Completed batch: confirmation, then it leaves Results and joins Archive',
+      (tester) async {
+        seed();
+        await pumpResults(tester);
+        await pickAtBatch(tester, 'BATCH-ONE');
 
-      await tester.tap(find.byKey(const Key('archiveBatchButton')));
-      await tester.pumpAndSettle();
-      expect(find.text('Archive this completed batch?'), findsOneWidget);
-      expect(find.textContaining('removed from the normal Results list and moved to Archive'), findsOneWidget);
-      expect(client.calls.where((c) => c.startsWith('archiveBatch')), isEmpty); // not yet
+        await tester.tap(find.byKey(const Key('archiveBatchButton')));
+        await tester.pumpAndSettle();
+        expect(find.text('Archive this completed batch?'), findsOneWidget);
+        expect(
+          find.textContaining(
+            'removed from the normal Results list and moved to Completed Batch',
+          ),
+          findsOneWidget,
+        );
+        expect(
+          client.calls.where((c) => c.startsWith('archiveBatch')),
+          isEmpty,
+        ); // not yet
 
-      await tester.enterText(find.byKey(const Key('archiveReasonField')), 'Done');
-      await tester.tap(find.widgetWithText(FilledButton, 'Archive'));
-      await tester.pumpAndSettle();
+        await tester.enterText(
+          find.byKey(const Key('archiveReasonField')),
+          'Done',
+        );
+        await tester.tap(find.widgetWithText(FilledButton, 'Archive'));
+        await tester.pumpAndSettle();
 
-      expect(client.lastArchiveBatchId, 'b1');
-      expect(client.lastArchiveReason, 'Done');
-      expect(client.archives.single.batchId, 'b1');
-      // Gone from the normal list.
-      await tester.tap(find.byType(DropdownButtonFormField<LocalBatch>).first);
-      await tester.pumpAndSettle();
-      final items = find.byType(DropdownMenuItem<LocalBatch>);
-      expect(find.descendant(of: items, matching: find.textContaining('BATCH-ONE')), findsNothing);
-      expect(find.descendant(of: items, matching: find.textContaining('BATCH-TWO')), findsWidgets);
-      // The batch and its scans still exist.
-      expect(client.batches.any((b) => b.id == 'b1'), isTrue);
-      expect(client.scansByBatch['b1'], hasLength(2));
-    });
+        expect(client.lastArchiveBatchId, 'b1');
+        expect(client.lastArchiveReason, 'Done');
+        expect(client.archives.single.batchId, 'b1');
+        // Gone from the normal list.
+        await tester.tap(
+          find.byType(DropdownButtonFormField<LocalBatch>).first,
+        );
+        await tester.pumpAndSettle();
+        final items = find.byType(DropdownMenuItem<LocalBatch>);
+        expect(
+          find.descendant(
+            of: items,
+            matching: find.textContaining('BATCH-ONE'),
+          ),
+          findsNothing,
+        );
+        expect(
+          find.descendant(
+            of: items,
+            matching: find.textContaining('BATCH-TWO'),
+          ),
+          findsWidgets,
+        );
+        // The batch and its scans still exist.
+        expect(client.batches.any((b) => b.id == 'b1'), isTrue);
+        expect(client.scansByBatch['b1'], hasLength(2));
+      },
+    );
 
     testWidgets('Cancel leaves the batch un-archived', (tester) async {
       seed();
@@ -523,52 +898,67 @@ void main() {
       expect(client.calls.where((c) => c.startsWith('archiveBatch')), isEmpty);
     });
 
-    testWidgets('an Active batch cannot be archived and the user is told why', (tester) async {
+    testWidgets('an Active batch cannot be archived and the user is told why', (
+      tester,
+    ) async {
       seed();
       await pumpResults(tester);
       await pickAtBatch(tester, 'BATCH-ACTIVE');
       await tester.tap(find.byKey(const Key('archiveBatchButton')));
       await tester.pumpAndSettle();
 
-      expect(find.text('Cannot Archive This Batch'), findsOneWidget);
-      expect(find.textContaining('Only completed batches can be archived'), findsOneWidget);
+      expect(find.text('Complete and archive this batch?'), findsOneWidget);
+      await tester.tap(find.widgetWithText(FilledButton, 'Archive'));
+      await tester.pumpAndSettle();
+      expect(
+        find.textContaining('Only completed batches can be archived'),
+        findsOneWidget,
+      );
       expect(client.calls.where((c) => c.startsWith('archiveBatch')), isEmpty);
       expect(client.archives, isEmpty);
     });
 
-    testWidgets('a failed archive keeps the batch in Results and shows a friendly message', (tester) async {
-      seed();
-      client.archiveOverride = const SyncOutcome.permanent('42501');
-      await pumpResults(tester);
-      await pickAtBatch(tester, 'BATCH-ONE');
-      await tester.tap(find.byKey(const Key('archiveBatchButton')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(FilledButton, 'Archive'));
-      await tester.pumpAndSettle();
+    testWidgets(
+      'a failed archive keeps the batch in Results and shows a friendly message',
+      (tester) async {
+        seed();
+        client.archiveOverride = const SyncOutcome.permanent('42501');
+        await pumpResults(tester);
+        await pickAtBatch(tester, 'BATCH-ONE');
+        await tester.tap(find.byKey(const Key('archiveBatchButton')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.widgetWithText(FilledButton, 'Archive'));
+        await tester.pumpAndSettle();
 
-      expect(find.textContaining('could not be archived'), findsOneWidget);
-      expect(find.textContaining('42501'), findsNothing);
-      expect(client.archives, isEmpty);
-    });
+        expect(find.textContaining('could not be archived'), findsOneWidget);
+        expect(find.textContaining('42501'), findsNothing);
+        expect(client.archives, isEmpty);
+      },
+    );
 
-    testWidgets('an archived batch opened in archive mode reuses the Results table and has no Archive action',
-        (tester) async {
-      seed();
-      final batch = await localBatch('b1');
-      await pumpResults(
-        tester,
-        home: GuidanceWebResultsView(
-          service: resultsService,
-          archivedBatch: batch,
-          onBackToArchive: () {},
-        ),
-      );
-      expect(find.textContaining('(Archived)'), findsOneWidget);
-      expect(find.text('Back to Archive'), findsOneWidget);
-      expect(find.text('Dela Cruz, Juan'), findsWidgets); // the same scan table
-      expect(find.byKey(const Key('archiveBatchButton')), findsNothing);
-      expect(find.text('Restore'), findsNothing);
-    });
+    testWidgets(
+      'an archived batch opened in archive mode reuses the Results table and has no Archive action',
+      (tester) async {
+        seed();
+        final batch = await localBatch('b1');
+        await pumpResults(
+          tester,
+          home: GuidanceWebResultsView(
+            service: resultsService,
+            archivedBatch: batch,
+            onBackToArchive: () {},
+          ),
+        );
+        expect(find.textContaining('(Archived)'), findsOneWidget);
+        expect(find.text('Back to Archive'), findsOneWidget);
+        expect(
+          find.text('Dela Cruz, Juan'),
+          findsWidgets,
+        ); // the same scan table
+        expect(find.byKey(const Key('archiveBatchButton')), findsNothing);
+        expect(find.text('Restore'), findsNothing);
+      },
+    );
   });
 
   group('Web Archive page', () {
@@ -577,11 +967,16 @@ void main() {
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
-      await tester.pumpWidget(MaterialApp(
-        home: Scaffold(
-          body: GuidanceWebArchiveView(service: archiveService, resultsService: resultsService),
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: GuidanceWebArchiveView(
+              service: archiveService,
+              resultsService: resultsService,
+            ),
+          ),
         ),
-      ));
+      );
       await tester.pumpAndSettle();
     }
 
@@ -589,21 +984,36 @@ void main() {
       seed();
       client.batches.add(_batch(id: 'b5', code: 'BATCH-TAT', examCode: 'TAT'));
       client.archives
-        ..add(CloudBatchArchiveRow(
-            batchId: 'b1', archivedAt: DateTime.utc(2026, 3, 1), archivedByUid: 'u', archivedByName: 'Council Member'))
-        ..add(CloudBatchArchiveRow(batchId: 'b5', archivedAt: DateTime.utc(2026, 3, 2), archivedByUid: 'u'));
+        ..add(
+          CloudBatchArchiveRow(
+            batchId: 'b1',
+            archivedAt: DateTime.utc(2026, 3, 1),
+            archivedByUid: 'u',
+            archivedByName: 'Council Member',
+          ),
+        )
+        ..add(
+          CloudBatchArchiveRow(
+            batchId: 'b5',
+            archivedAt: DateTime.utc(2026, 3, 2),
+            archivedByUid: 'u',
+          ),
+        );
     }
 
-    testWidgets('lists archived batches with code, exam, scans, status, date and archived by', (tester) async {
-      archiveTwo();
-      await pumpArchive(tester);
-      expect(find.text('BATCH-ONE'), findsOneWidget);
-      expect(find.text('BATCH-TAT'), findsOneWidget);
-      expect(find.text('BATCH-TWO'), findsNothing); // not archived
-      expect(find.text('Mar 1, 2026'), findsOneWidget);
-      expect(find.text('Council Member'), findsOneWidget);
-      expect(find.text('Completed'), findsWidgets);
-    });
+    testWidgets(
+      'lists archived batches with code, exam, scans, status, date and archived by',
+      (tester) async {
+        archiveTwo();
+        await pumpArchive(tester);
+        expect(find.text('BATCH-ONE'), findsOneWidget);
+        expect(find.text('BATCH-TAT'), findsOneWidget);
+        expect(find.text('BATCH-TWO'), findsNothing); // not archived
+        expect(find.text('Mar 1, 2026'), findsOneWidget);
+        expect(find.text('Council Member'), findsOneWidget);
+        expect(find.text('Completed'), findsWidgets);
+      },
+    );
 
     testWidgets('search and exam-type filter narrow the list', (tester) async {
       archiveTwo();
@@ -614,32 +1024,39 @@ void main() {
       expect(find.text('BATCH-ONE'), findsNothing);
     });
 
-    testWidgets('View opens the existing Results table for that batch; Back returns', (tester) async {
-      archiveTwo();
-      await pumpArchive(tester);
-      await tester.tap(find.widgetWithText(TextButton, 'View').first);
-      await tester.pumpAndSettle();
-      // newest archive first -> BATCH-TAT; open BATCH-ONE instead for scans
-      await tester.tap(find.text('Back to Archive'));
-      await tester.pumpAndSettle();
-      final rows = find.widgetWithText(TextButton, 'View');
-      await tester.tap(rows.last);
-      await tester.pumpAndSettle();
-      expect(find.text('Dela Cruz, Juan'), findsWidgets);
-      expect(find.text('Dela Cruz, Maria'), findsWidgets);
+    testWidgets(
+      'View opens the existing Results table for that batch; Back returns',
+      (tester) async {
+        archiveTwo();
+        await pumpArchive(tester);
+        await tester.tap(find.widgetWithText(TextButton, 'View').first);
+        await tester.pumpAndSettle();
+        // newest archive first -> BATCH-TAT; open BATCH-ONE instead for scans
+        await tester.tap(find.text('Back to Archive'));
+        await tester.pumpAndSettle();
+        final rows = find.widgetWithText(TextButton, 'View');
+        await tester.tap(rows.last);
+        await tester.pumpAndSettle();
+        expect(find.text('Dela Cruz, Juan'), findsWidgets);
+        expect(find.text('Dela Cruz, Maria'), findsWidgets);
 
-      await tester.tap(find.text('Back to Archive'));
-      await tester.pumpAndSettle();
-      expect(find.text('BATCH-ONE'), findsOneWidget);
-    });
+        await tester.tap(find.text('Back to Archive'));
+        await tester.pumpAndSettle();
+        expect(find.text('BATCH-ONE'), findsOneWidget);
+      },
+    );
 
-    testWidgets('shows an empty state when nothing is archived', (tester) async {
+    testWidgets('shows an empty state when nothing is archived', (
+      tester,
+    ) async {
       seed();
       await pumpArchive(tester);
       expect(find.text('No completed batches yet.'), findsOneWidget);
     });
 
-    testWidgets('an archive list has no Restore or Unarchive button', (tester) async {
+    testWidgets('an archive list has no Restore or Unarchive button', (
+      tester,
+    ) async {
       archiveTwo();
       await pumpArchive(tester);
       expect(find.textContaining('Restore'), findsNothing);
@@ -648,27 +1065,37 @@ void main() {
   });
 
   group('No Restore workflow anywhere in the Web Archive', () {
-    test('the archive service, view, and migration contain no restore/unarchive logic', () {
-      for (final path in [
-        'lib/features/guidance_web/services/guidance_web_archive_service.dart',
-        'lib/features/guidance_web/screens/guidance_web_archive_view.dart',
-        'lib/models/batch_archive.dart',
-        'supabase/migrations/0007_create_batch_archives.sql',
-      ]) {
-        final text = File(path).readAsStringSync().toLowerCase();
-        // Comments may say "there is no restore"; forbid actual restore
-        // identifiers/actions instead.
-        expect(text, isNot(contains('restorebatch')), reason: path);
-        expect(text, isNot(contains('unarchivebatch')), reason: path);
-        expect(text, isNot(contains('batch_restored')), reason: path);
-        expect(text, isNot(contains("'restore'")), reason: path);
-        expect(text, isNot(contains('child: const text(\'restore')), reason: path);
-      }
-    });
+    test(
+      'the archive service, view, and migration contain no restore/unarchive logic',
+      () {
+        for (final path in [
+          'lib/features/guidance_web/services/guidance_web_archive_service.dart',
+          'lib/features/guidance_web/screens/guidance_web_archive_view.dart',
+          'lib/models/batch_archive.dart',
+          'supabase/migrations/0007_create_batch_archives.sql',
+        ]) {
+          final text = File(path).readAsStringSync().toLowerCase();
+          // Comments may say "there is no restore"; forbid actual restore
+          // identifiers/actions instead.
+          expect(text, isNot(contains('restorebatch')), reason: path);
+          expect(text, isNot(contains('unarchivebatch')), reason: path);
+          expect(text, isNot(contains('batch_restored')), reason: path);
+          expect(text, isNot(contains("'restore'")), reason: path);
+          expect(
+            text,
+            isNot(contains('child: const text(\'restore')),
+            reason: path,
+          );
+        }
+      },
+    );
   });
 
-  test('mapCloudBatch keeps the cloud status untouched (Web Archive never rewrites it)', () {
-    final mapped = mapCloudBatch(_batch(id: 'x', status: 'Completed'));
-    expect(mapped.status, 'Completed');
-  });
+  test(
+    'mapCloudBatch keeps the cloud status untouched (Web Archive never rewrites it)',
+    () {
+      final mapped = mapCloudBatch(_batch(id: 'x', status: 'Completed'));
+      expect(mapped.status, 'Completed');
+    },
+  );
 }

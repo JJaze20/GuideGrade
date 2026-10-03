@@ -8,7 +8,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:guidegrade/core/sync/scan_delete_client.dart';
 import 'package:guidegrade/core/sync/scan_restore_client.dart';
-import 'package:guidegrade/core/sync/supabase_sync_client.dart' show SyncIdentity;
+import 'package:guidegrade/core/sync/supabase_sync_client.dart'
+    show SyncIdentity;
 import 'package:guidegrade/core/sync/sync_client.dart';
 import 'package:guidegrade/core/sync/sync_job.dart';
 import 'package:guidegrade/core/sync/sync_outcome.dart';
@@ -16,7 +17,8 @@ import 'package:guidegrade/features/guidance_web/screens/guidance_web_examinee_r
 import 'package:guidegrade/features/guidance_web/services/guidance_web_examinee_records_service.dart';
 import 'package:guidegrade/features/guidance_web/services/guidance_web_results_service.dart';
 
-class _FakeSyncClient implements SyncClient, ScanDeleteClient, ScanRestoreClient {
+class _FakeSyncClient
+    implements SyncClient, ScanDeleteClient, ScanRestoreClient {
   /// When set, [deleteUnlinkedScan] returns it verbatim.
   SyncOutcome? deleteUnlinkedScanResult;
   final List<Map<String, String>> deleteUnlinkedScanCalls = [];
@@ -31,7 +33,9 @@ class _FakeSyncClient implements SyncClient, ScanDeleteClient, ScanRestoreClient
     final override = deleteUnlinkedScanResult;
     if (override != null) return override;
     final match = unlinkedScansToReturn.scans
-        .where((s) => s.batchId == batchId && s.id == scanId && !s.isArchivedAttempt)
+        .where(
+          (s) => s.batchId == batchId && s.id == scanId && !s.isArchivedAttempt,
+        )
         .toList();
     if (match.isEmpty) return const SyncOutcome.conflict('scan_not_unlinked');
     unlinkedScansToReturn = CloudScansRead.found(
@@ -97,7 +101,8 @@ class _FakeSyncClient implements SyncClient, ScanDeleteClient, ScanRestoreClient
   @override
   Future<CloudRetainedDeletedScansRead> listRetainedSoftDeletedScans() async {
     calls.add('listRetainedSoftDeletedScans');
-    return retainedScansResult ?? CloudRetainedDeletedScansRead.found(retainedScansToReturn);
+    return retainedScansResult ??
+        CloudRetainedDeletedScansRead.found(retainedScansToReturn);
   }
 
   /// When set, [createScanRestoreRequest] returns it verbatim.
@@ -195,10 +200,7 @@ class _FakeSyncClient implements SyncClient, ScanDeleteClient, ScanRestoreClient
       _no('readBatchArchives');
 
   @override
-  Future<SyncOutcome> archiveBatch({
-    required String batchId,
-    String? reason,
-  }) =>
+  Future<SyncOutcome> archiveBatch({required String batchId, String? reason}) =>
       _no('archiveBatch');
 
   @override
@@ -221,18 +223,20 @@ class _FakeSyncClient implements SyncClient, ScanDeleteClient, ScanRestoreClient
   }) async {
     calls.add('createExamineeFromScan:$batchId/$scanId');
     _serverSequence++;
-    return CloudExamineeWrite.success(CloudExamineeRow(
-      id: 'new-$_serverSequence',
-      temporaryExamineeId: 'EX-${_serverSequence.toString().padLeft(6, '0')}',
-      firstName: firstName,
-      middleName: middleName,
-      lastName: lastName,
-      status: 'active',
-      createdAt: DateTime.utc(2026, 1, 1),
-      createdByUid: 'uid1',
-      updatedAt: DateTime.utc(2026, 1, 1),
-      updatedByUid: 'uid1',
-    ));
+    return CloudExamineeWrite.success(
+      CloudExamineeRow(
+        id: 'new-$_serverSequence',
+        temporaryExamineeId: 'EX-${_serverSequence.toString().padLeft(6, '0')}',
+        firstName: firstName,
+        middleName: middleName,
+        lastName: lastName,
+        status: 'active',
+        createdAt: DateTime.utc(2026, 1, 1),
+        createdByUid: 'uid1',
+        updatedAt: DateTime.utc(2026, 1, 1),
+        updatedByUid: 'uid1',
+      ),
+    );
   }
 
   @override
@@ -241,27 +245,31 @@ class _FakeSyncClient implements SyncClient, ScanDeleteClient, ScanRestoreClient
     required String firstName,
     String? middleName,
     required String lastName,
-  }) =>
-      _no('updateCloudExaminee');
+  }) => _no('updateCloudExaminee');
 
   @override
-  Future<CloudExamineeWrite> setExamineeArchived(String id, bool archived) async {
+  Future<CloudExamineeWrite> setExamineeArchived(
+    String id,
+    bool archived,
+  ) async {
     calls.add('setExamineeArchived:$id/$archived');
     final existing = examineesToReturn.examinees.firstWhere((e) => e.id == id);
-    return CloudExamineeWrite.success(CloudExamineeRow(
-      id: existing.id,
-      temporaryExamineeId: existing.temporaryExamineeId,
-      firstName: existing.firstName,
-      middleName: existing.middleName,
-      lastName: existing.lastName,
-      status: archived ? 'archived' : 'active',
-      archivedAt: archived ? DateTime.utc(2026, 2, 1) : null,
-      archivedByUid: archived ? 'uid2' : null,
-      createdAt: existing.createdAt,
-      createdByUid: existing.createdByUid,
-      updatedAt: DateTime.utc(2026, 2, 1),
-      updatedByUid: 'uid2',
-    ));
+    return CloudExamineeWrite.success(
+      CloudExamineeRow(
+        id: existing.id,
+        temporaryExamineeId: existing.temporaryExamineeId,
+        firstName: existing.firstName,
+        middleName: existing.middleName,
+        lastName: existing.lastName,
+        status: archived ? 'archived' : 'active',
+        archivedAt: archived ? DateTime.utc(2026, 2, 1) : null,
+        archivedByUid: archived ? 'uid2' : null,
+        createdAt: existing.createdAt,
+        createdByUid: existing.createdByUid,
+        updatedAt: DateTime.utc(2026, 2, 1),
+        updatedByUid: 'uid2',
+      ),
+    );
   }
 
   @override
@@ -286,34 +294,48 @@ class _FakeSyncClient implements SyncClient, ScanDeleteClient, ScanRestoreClient
     final linked = scansByExamineeId[examineeId];
     final match = (linked == null)
         ? <CloudScanRow>[]
-        : linked.scans.where((s) => s.batchId == batchId && s.id == scanId).toList();
-    if (match.isEmpty) return const SyncOutcome.conflict('scan_not_linked_to_examinee');
-    scansByExamineeId[examineeId] =
-        CloudScansRead.found(linked!.scans.where((s) => s != match.first).toList());
-    unlinkedScansToReturn =
-        CloudScansRead.found([...unlinkedScansToReturn.scans, match.first]);
+        : linked.scans
+              .where((s) => s.batchId == batchId && s.id == scanId)
+              .toList();
+    if (match.isEmpty)
+      return const SyncOutcome.conflict('scan_not_linked_to_examinee');
+    scansByExamineeId[examineeId] = CloudScansRead.found(
+      linked!.scans.where((s) => s != match.first).toList(),
+    );
+    unlinkedScansToReturn = CloudScansRead.found([
+      ...unlinkedScansToReturn.scans,
+      match.first,
+    ]);
     return const SyncOutcome.success();
   }
 
   @override
   Future<SyncOutcome> pushBatch(String batchId) => _no('pushBatch');
   @override
-  Future<SyncOutcome> pushScan(String batchId, String scanId, {Map<String, String> meta = const {}}) =>
-      _no('pushScan');
+  Future<SyncOutcome> pushScan(
+    String batchId,
+    String scanId, {
+    Map<String, String> meta = const {},
+  }) => _no('pushScan');
   @override
   Future<SyncOutcome> uploadImage(SyncJob job) => _no('uploadImage');
   @override
-  Future<SyncOutcome> patchImageStatus(String batchId, String scanId) => _no('patchImageStatus');
+  Future<SyncOutcome> patchImageStatus(String batchId, String scanId) =>
+      _no('patchImageStatus');
   @override
-  Future<SyncOutcome> pushAnswerKey(String examCode, {Map<String, String> meta = const {}}) =>
-      _no('pushAnswerKey');
+  Future<SyncOutcome> pushAnswerKey(
+    String examCode, {
+    Map<String, String> meta = const {},
+  }) => _no('pushAnswerKey');
   @override
   Future<CloudAnswerKeyRead> readAnswerKey(String examCode) async {
     calls.add('readAnswerKey:$examCode');
     return const CloudAnswerKeyRead.absent();
   }
+
   @override
-  Future<CloudScansRead> readCloudScans(String batchId) => _no('readCloudScans');
+  Future<CloudScansRead> readCloudScans(String batchId) =>
+      _no('readCloudScans');
   @override
   Future<CloudImageRead> downloadScanImage({
     required String batchId,
@@ -322,7 +344,9 @@ class _FakeSyncClient implements SyncClient, ScanDeleteClient, ScanRestoreClient
   }) async {
     calls.add('downloadScanImage:$batchId/$scanId/$rectified');
     final bytes = imageToReturn;
-    return bytes == null ? const CloudImageRead.absent() : CloudImageRead.found(bytes);
+    return bytes == null
+        ? const CloudImageRead.absent()
+        : CloudImageRead.found(bytes);
   }
 
   @override
@@ -345,9 +369,11 @@ class _FakeSyncClient implements SyncClient, ScanDeleteClient, ScanRestoreClient
   @override
   Future<SyncOutcome> deleteBatch(String batchId) => _no('deleteBatch');
   @override
-  Future<SyncOutcome> deleteScan(String batchId, String scanId) => _no('deleteScan');
+  Future<SyncOutcome> deleteScan(String batchId, String scanId) =>
+      _no('deleteScan');
   @override
-  Future<SyncOutcome> deleteStoragePrefix(String batchId) => _no('deleteStoragePrefix');
+  Future<SyncOutcome> deleteStoragePrefix(String batchId) =>
+      _no('deleteStoragePrefix');
 }
 
 CloudExamineeRow _row({
@@ -356,20 +382,20 @@ CloudExamineeRow _row({
   required String firstName,
   required String lastName,
   String status = 'active',
-}) =>
-    CloudExamineeRow(
-      id: id,
-      temporaryExamineeId: temporaryExamineeId,
-      firstName: firstName,
-      lastName: lastName,
-      status: status,
-      createdAt: DateTime.utc(2026, 1, 1),
-      createdByUid: 'uid1',
-      updatedAt: DateTime.utc(2026, 1, 1),
-      updatedByUid: 'uid1',
-    );
+}) => CloudExamineeRow(
+  id: id,
+  temporaryExamineeId: temporaryExamineeId,
+  firstName: firstName,
+  lastName: lastName,
+  status: status,
+  createdAt: DateTime.utc(2026, 1, 1),
+  createdByUid: 'uid1',
+  updatedAt: DateTime.utc(2026, 1, 1),
+  updatedByUid: 'uid1',
+);
 
-CloudBatchRow _batchRow({String id = 'b1', String examCode = 'AT'}) => CloudBatchRow(
+CloudBatchRow _batchRow({String id = 'b1', String examCode = 'AT'}) =>
+    CloudBatchRow(
       id: id,
       batchCode: 'B-$examCode',
       examCode: examCode,
@@ -392,37 +418,37 @@ CloudScanRow _scanRow({
   DateTime? capturedAt,
   int attemptNo = 1,
   String attemptStatus = 'active',
-}) =>
-    CloudScanRow(
-      id: id,
-      batchId: batchId,
-      examCode: examCode,
-      capturedAt: capturedAt ?? DateTime.utc(2026, 1, 1),
-      decoded: {'examCode': examCode, 'items': <dynamic>[]},
-      resultStatus: null,
-      firstName: firstName,
-      lastName: lastName,
-      examineeNumber: (firstName == null && lastName == null) ? null : 'EX-legacy-1',
-      attemptNo: attemptNo,
-      attemptStatus: attemptStatus,
-    );
+}) => CloudScanRow(
+  id: id,
+  batchId: batchId,
+  examCode: examCode,
+  capturedAt: capturedAt ?? DateTime.utc(2026, 1, 1),
+  decoded: {'examCode': examCode, 'items': <dynamic>[]},
+  resultStatus: null,
+  firstName: firstName,
+  lastName: lastName,
+  examineeNumber: (firstName == null && lastName == null)
+      ? null
+      : 'EX-legacy-1',
+  attemptNo: attemptNo,
+  attemptStatus: attemptStatus,
+);
 
 CloudRetainedDeletedScanRow _retainedScanRow({
   String batchId = 'b1',
   required String scanId,
   String examCode = 'TAT',
   String? activeRestoreRequestStatus,
-}) =>
-    CloudRetainedDeletedScanRow(
-      batchId: batchId,
-      scanId: scanId,
-      examCode: examCode,
-      deletedAt: DateTime.utc(2026, 3, 1),
-      retentionUntil: DateTime.utc(2026, 3, 31),
-      deletionReason: 'Duplicate capture',
-      deletedByName: 'Council Member',
-      activeRestoreRequestStatus: activeRestoreRequestStatus,
-    );
+}) => CloudRetainedDeletedScanRow(
+  batchId: batchId,
+  scanId: scanId,
+  examCode: examCode,
+  deletedAt: DateTime.utc(2026, 3, 1),
+  retentionUntil: DateTime.utc(2026, 3, 31),
+  deletionReason: 'Duplicate capture',
+  deletedByName: 'Council Member',
+  activeRestoreRequestStatus: activeRestoreRequestStatus,
+);
 
 /// Test-only [SyncIdentity] so [GuidanceWebExamineeRecordsService
 /// .softDeleteUnlinkedScan] never reaches `FirebaseAuth.instance` (which
@@ -455,7 +481,10 @@ void main() {
       MaterialApp(
         home: Scaffold(
           body: GuidanceWebExamineeRecordsView(
-            service: GuidanceWebExamineeRecordsService(client: client, identity: _Identity()),
+            service: GuidanceWebExamineeRecordsService(
+              client: client,
+              identity: _Identity(),
+            ),
             resultsService: GuidanceWebResultsService(client: client),
           ),
         ),
@@ -464,21 +493,106 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  testWidgets('renders every loaded active examinee, hides archived by default', (tester) async {
-    client.examineesToReturn = CloudExamineesRead.found([
-      _row(id: 'e1', temporaryExamineeId: 'EX-1', firstName: 'Juan', lastName: 'Dela Cruz'),
-      _row(id: 'e2', temporaryExamineeId: 'EX-2', firstName: 'Maria', lastName: 'Santos', status: 'archived'),
-    ]);
-    await pumpView(tester);
+  for (final width in [320.0, 390.0, 768.0, 1280.0]) {
+    testWidgets('Records tabs and actions remain usable at $width', (
+      tester,
+    ) async {
+      client.examineesToReturn = CloudExamineesRead.found([
+        _row(
+          id: 'e1',
+          temporaryExamineeId: 'EX-1',
+          firstName: 'Juan',
+          lastName: 'Dela Cruz',
+        ),
+      ]);
+      client.batchesToReturn = CloudBatchesRead.found([
+        _batchRow(id: 'b1', examCode: 'QTM'),
+      ]);
+      client.unlinkedScansToReturn = CloudScansRead.found([
+        _scanRow(id: 's1', batchId: 'b1', examCode: 'QTM'),
+      ]);
+      client.retainedScansToReturn = [_retainedScanRow(scanId: 'deleted1')];
+      await pumpView(tester);
+      tester.view.physicalSize = Size(width, 1000);
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      if (width < 600) {
+        expect(find.byKey(const Key('examineeCards')), findsOneWidget);
+      }
+      expect(
+        tester.getSize(find.widgetWithText(TextButton, 'View')).height,
+        greaterThanOrEqualTo(44),
+      );
+      await tester.enterText(
+        find.byKey(const Key('recordsSearch')),
+        'not-a-person',
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Clear search'));
+      await tester.pumpAndSettle();
+      expect(find.text('Dela Cruz, Juan'), findsOneWidget);
+      await tester.tap(find.textContaining('Unlinked Scans'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      await tester.drag(
+        find.byKey(const Key('recordsTableScroll')),
+        const Offset(-2000, 0),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Link to Existing').hitTestable(), findsOneWidget);
+      await tester.tap(find.textContaining('Soft-Deleted Scans'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      await tester.drag(
+        find.byKey(const Key('recordsTableScroll')),
+        const Offset(-2000, 0),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Request Restore').hitTestable(), findsOneWidget);
+      expect(client.softDeleteUnlinkedScanCalls, isEmpty);
+    });
+  }
 
-    expect(find.text('Dela Cruz, Juan'), findsOneWidget);
-    expect(find.text('Santos, Maria'), findsNothing);
-  });
+  testWidgets(
+    'renders every loaded active examinee, hides archived by default',
+    (tester) async {
+      client.examineesToReturn = CloudExamineesRead.found([
+        _row(
+          id: 'e1',
+          temporaryExamineeId: 'EX-1',
+          firstName: 'Juan',
+          lastName: 'Dela Cruz',
+        ),
+        _row(
+          id: 'e2',
+          temporaryExamineeId: 'EX-2',
+          firstName: 'Maria',
+          lastName: 'Santos',
+          status: 'archived',
+        ),
+      ]);
+      await pumpView(tester);
+
+      expect(find.text('Dela Cruz, Juan'), findsOneWidget);
+      expect(find.text('Santos, Maria'), findsNothing);
+    },
+  );
 
   testWidgets('Status: Archived shows only archived examinees', (tester) async {
     client.examineesToReturn = CloudExamineesRead.found([
-      _row(id: 'e1', temporaryExamineeId: 'EX-1', firstName: 'Juan', lastName: 'Dela Cruz'),
-      _row(id: 'e2', temporaryExamineeId: 'EX-2', firstName: 'Maria', lastName: 'Santos', status: 'archived'),
+      _row(
+        id: 'e1',
+        temporaryExamineeId: 'EX-1',
+        firstName: 'Juan',
+        lastName: 'Dela Cruz',
+      ),
+      _row(
+        id: 'e2',
+        temporaryExamineeId: 'EX-2',
+        firstName: 'Maria',
+        lastName: 'Santos',
+        status: 'archived',
+      ),
     ]);
     await pumpView(tester);
 
@@ -493,8 +607,18 @@ void main() {
 
   testWidgets('search filters by Temporary Examinee ID', (tester) async {
     client.examineesToReturn = CloudExamineesRead.found([
-      _row(id: 'e1', temporaryExamineeId: 'EX-1', firstName: 'Juan', lastName: 'Dela Cruz'),
-      _row(id: 'e2', temporaryExamineeId: 'EX-2', firstName: 'Maria', lastName: 'Santos'),
+      _row(
+        id: 'e1',
+        temporaryExamineeId: 'EX-1',
+        firstName: 'Juan',
+        lastName: 'Dela Cruz',
+      ),
+      _row(
+        id: 'e2',
+        temporaryExamineeId: 'EX-2',
+        firstName: 'Maria',
+        lastName: 'Santos',
+      ),
     ]);
     await pumpView(tester);
 
@@ -505,52 +629,75 @@ void main() {
     expect(find.text('Dela Cruz, Juan'), findsNothing);
   });
 
-  testWidgets('13/15. Archiving an active examinee updates its status and it disappears from the default (Active) view',
-      (tester) async {
-    client.examineesToReturn = CloudExamineesRead.found([
-      _row(id: 'e1', temporaryExamineeId: 'EX-1', firstName: 'Juan', lastName: 'Dela Cruz'),
-    ]);
-    await pumpView(tester);
-    expect(find.text('Dela Cruz, Juan'), findsOneWidget);
+  testWidgets(
+    '13/15. Archiving an active examinee updates its status and it disappears from the default (Active) view',
+    (tester) async {
+      client.examineesToReturn = CloudExamineesRead.found([
+        _row(
+          id: 'e1',
+          temporaryExamineeId: 'EX-1',
+          firstName: 'Juan',
+          lastName: 'Dela Cruz',
+        ),
+      ]);
+      await pumpView(tester);
+      expect(find.text('Dela Cruz, Juan'), findsOneWidget);
 
-    await tester.tap(find.widgetWithText(TextButton, 'Archive'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(FilledButton, 'Archive'));
-    await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(TextButton, 'Archive'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Archive'));
+      await tester.pumpAndSettle();
 
-    expect(find.text('Dela Cruz, Juan'), findsNothing);
-    expect(client.calls, contains('setExamineeArchived:e1/true'));
-  });
+      expect(find.text('Dela Cruz, Juan'), findsNothing);
+      expect(client.calls, contains('setExamineeArchived:e1/true'));
+    },
+  );
 
-  testWidgets('14. Restoring an archived examinee brings it back without touching history (no scan call made)',
-      (tester) async {
-    client.examineesToReturn = CloudExamineesRead.found([
-      _row(id: 'e1', temporaryExamineeId: 'EX-1', firstName: 'Juan', lastName: 'Dela Cruz', status: 'archived'),
-    ]);
-    await pumpView(tester);
+  testWidgets(
+    '14. Restoring an archived examinee brings it back without touching history (no scan call made)',
+    (tester) async {
+      client.examineesToReturn = CloudExamineesRead.found([
+        _row(
+          id: 'e1',
+          temporaryExamineeId: 'EX-1',
+          firstName: 'Juan',
+          lastName: 'Dela Cruz',
+          status: 'archived',
+        ),
+      ]);
+      await pumpView(tester);
 
-    await tester.tap(find.byType(DropdownButtonFormField<String>));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Archived').last);
-    await tester.pumpAndSettle();
+      await tester.tap(find.byType(DropdownButtonFormField<String>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Archived').last);
+      await tester.pumpAndSettle();
 
-    await tester.tap(find.widgetWithText(TextButton, 'Restore'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(FilledButton, 'Restore'));
-    await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(TextButton, 'Restore'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Restore'));
+      await tester.pumpAndSettle();
 
-    expect(client.calls, contains('setExamineeArchived:e1/false'));
-    // Restoring never reads/writes a linked scan or touches the Unlinked
-    // Scans queue's own linking machinery -- the initial page-load's own
-    // (unrelated) readUnlinkedScans call is expected and not what this
-    // guards against.
-    expect(client.calls, isNot(contains(startsWith('readCloudScansForExaminee'))));
-    expect(client.calls, isNot(contains(startsWith('linkScanToExaminee'))));
-    expect(client.calls, isNot(contains(startsWith('createExamineeFromScan'))));
-  });
+      expect(client.calls, contains('setExamineeArchived:e1/false'));
+      // Restoring never reads/writes a linked scan or touches the Unlinked
+      // Scans queue's own linking machinery -- the initial page-load's own
+      // (unrelated) readUnlinkedScans call is expected and not what this
+      // guards against.
+      expect(
+        client.calls,
+        isNot(contains(startsWith('readCloudScansForExaminee'))),
+      );
+      expect(client.calls, isNot(contains(startsWith('linkScanToExaminee'))));
+      expect(
+        client.calls,
+        isNot(contains(startsWith('createExamineeFromScan'))),
+      );
+    },
+  );
 
   group('6. No Add Examinee / no blank-record creation', () {
-    testWidgets('there is no Add Examinee button anywhere on the page', (tester) async {
+    testWidgets('there is no Add Examinee button anywhere on the page', (
+      tester,
+    ) async {
       await pumpView(tester);
       expect(find.widgetWithText(FilledButton, 'Add Examinee'), findsNothing);
       expect(find.text('Add Examinee'), findsNothing);
@@ -560,7 +707,12 @@ void main() {
   group('5. No Official Student ID anywhere in the Examinees list', () {
     testWidgets('the table has no Student ID column', (tester) async {
       client.examineesToReturn = CloudExamineesRead.found([
-        _row(id: 'e1', temporaryExamineeId: 'EX-1', firstName: 'Juan', lastName: 'Dela Cruz'),
+        _row(
+          id: 'e1',
+          temporaryExamineeId: 'EX-1',
+          firstName: 'Juan',
+          lastName: 'Dela Cruz',
+        ),
       ]);
       await pumpView(tester);
       expect(find.text('STUDENT ID'), findsNothing);
@@ -568,22 +720,39 @@ void main() {
   });
 
   group('1. Unlinked Scans tab', () {
-    testWidgets('lists a scan with no examinee, "Unnamed" when OCR found nothing', (tester) async {
-      client.batchesToReturn = CloudBatchesRead.found([_batchRow(id: 'b1', examCode: 'QTM')]);
-      client.unlinkedScansToReturn = CloudScansRead.found([
-        _scanRow(id: 's1', batchId: 'b1', examCode: 'QTM', firstName: null, lastName: null),
-      ]);
-      await pumpView(tester);
+    testWidgets(
+      'lists a scan with no examinee, "Unnamed" when OCR found nothing',
+      (tester) async {
+        client.batchesToReturn = CloudBatchesRead.found([
+          _batchRow(id: 'b1', examCode: 'QTM'),
+        ]);
+        client.unlinkedScansToReturn = CloudScansRead.found([
+          _scanRow(
+            id: 's1',
+            batchId: 'b1',
+            examCode: 'QTM',
+            firstName: null,
+            lastName: null,
+          ),
+        ]);
+        await pumpView(tester);
 
-      await tester.tap(find.textContaining('Unlinked Scans'));
-      await tester.pumpAndSettle();
+        await tester.tap(find.textContaining('Unlinked Scans'));
+        await tester.pumpAndSettle();
 
-      expect(find.text('Unnamed'), findsOneWidget);
-      expect(find.text('QTM'), findsWidgets);
-      expect(find.text('B-QTM'), findsOneWidget);
-      expect(find.widgetWithText(TextButton, 'Confirm and Create Examinee'), findsOneWidget);
-      expect(find.widgetWithText(TextButton, 'Link to Existing'), findsOneWidget);
-    });
+        expect(find.text('Unnamed'), findsOneWidget);
+        expect(find.text('QTM'), findsWidgets);
+        expect(find.text('B-QTM'), findsOneWidget);
+        expect(
+          find.widgetWithText(TextButton, 'Confirm and Create Examinee'),
+          findsOneWidget,
+        );
+        expect(
+          find.widgetWithText(TextButton, 'Link to Existing'),
+          findsOneWidget,
+        );
+      },
+    );
   });
 
   group('View Image in Unlinked Scans', () {
@@ -592,70 +761,110 @@ void main() {
       'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
     );
 
-    testWidgets('clicking the previewed image opens a zoomable full-screen viewer that can be closed',
-        (tester) async {
-      client.imageToReturn = png;
-      client.batchesToReturn = CloudBatchesRead.found([_batchRow(id: 'b1', examCode: 'QTM')]);
-      client.unlinkedScansToReturn = CloudScansRead.found([
-        _scanRow(id: 's1', batchId: 'b1', examCode: 'QTM', firstName: 'Juan', lastName: 'Dela Cruz'),
-      ]);
-      await pumpView(tester);
-      await tester.tap(find.textContaining('Unlinked Scans'));
-      await tester.pumpAndSettle();
+    testWidgets(
+      'clicking the previewed image opens a zoomable full-screen viewer that can be closed',
+      (tester) async {
+        client.imageToReturn = png;
+        client.batchesToReturn = CloudBatchesRead.found([
+          _batchRow(id: 'b1', examCode: 'QTM'),
+        ]);
+        client.unlinkedScansToReturn = CloudScansRead.found([
+          _scanRow(
+            id: 's1',
+            batchId: 'b1',
+            examCode: 'QTM',
+            firstName: 'Juan',
+            lastName: 'Dela Cruz',
+          ),
+        ]);
+        await pumpView(tester);
+        await tester.tap(find.textContaining('Unlinked Scans'));
+        await tester.pumpAndSettle();
 
-      await tester.tap(find.widgetWithText(TextButton, 'View Image'));
-      await tester.pumpAndSettle();
-      expect(find.byKey(const Key('scanPreviewImage')), findsOneWidget);
-      expect(find.byKey(const Key('zoomableScanImage')), findsNothing);
+        await tester.tap(find.widgetWithText(TextButton, 'View Image'));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('scanPreviewImage')), findsOneWidget);
+        expect(find.byKey(const Key('zoomableScanImage')), findsNothing);
 
-      await tester.tap(find.byKey(const Key('scanPreviewImage')));
-      await tester.pumpAndSettle();
-      expect(find.byKey(const Key('zoomableScanImage')), findsOneWidget);
-      final viewer = tester.widget<InteractiveViewer>(find.byKey(const Key('zoomableScanImage')));
-      expect(viewer.maxScale, greaterThan(1));
+        await tester.tap(find.byKey(const Key('scanPreviewImage')));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('zoomableScanImage')), findsOneWidget);
+        final viewer = tester.widget<InteractiveViewer>(
+          find.byKey(const Key('zoomableScanImage')),
+        );
+        expect(viewer.maxScale, greaterThan(1));
 
-      await tester.tap(find.byTooltip('Close'));
-      await tester.pumpAndSettle();
-      expect(find.byKey(const Key('zoomableScanImage')), findsNothing);
-      // Viewing never changed the scan.
-      expect(client.calls, isNot(contains(startsWith('linkScanToExaminee'))));
-    });
+        await tester.tap(find.byTooltip('Close'));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('zoomableScanImage')), findsNothing);
+        // Viewing never changed the scan.
+        expect(client.calls, isNot(contains(startsWith('linkScanToExaminee'))));
+      },
+    );
   });
 
   group('2. Create Examinee Record from this Scan', () {
-    testWidgets('creates the record, shows it, and removes the scan from Unlinked Scans', (tester) async {
-      client.batchesToReturn = CloudBatchesRead.found([_batchRow(id: 'b1', examCode: 'QTM')]);
-      client.unlinkedScansToReturn = CloudScansRead.found([
-        _scanRow(id: 's1', batchId: 'b1', examCode: 'QTM', firstName: 'Juan', lastName: 'Dela Cruz'),
-      ]);
-      await pumpView(tester);
-      await tester.tap(find.textContaining('Unlinked Scans'));
-      await tester.pumpAndSettle();
+    testWidgets(
+      'creates the record, shows it, and removes the scan from Unlinked Scans',
+      (tester) async {
+        client.batchesToReturn = CloudBatchesRead.found([
+          _batchRow(id: 'b1', examCode: 'QTM'),
+        ]);
+        client.unlinkedScansToReturn = CloudScansRead.found([
+          _scanRow(
+            id: 's1',
+            batchId: 'b1',
+            examCode: 'QTM',
+            firstName: 'Juan',
+            lastName: 'Dela Cruz',
+          ),
+        ]);
+        await pumpView(tester);
+        await tester.tap(find.textContaining('Unlinked Scans'));
+        await tester.pumpAndSettle();
 
-      await tester.tap(find.widgetWithText(TextButton, 'Confirm and Create Examinee'));
-      await tester.pumpAndSettle();
+        await tester.tap(
+          find.widgetWithText(TextButton, 'Confirm and Create Examinee'),
+        );
+        await tester.pumpAndSettle();
 
-      expect(find.text('Create Examinee Record from this Scan'), findsOneWidget);
+        expect(
+          find.text('Create Examinee Record from this Scan'),
+          findsOneWidget,
+        );
 
-      // Pre-filled from the scan's own confirmed tag -- saved without
-      // changing anything, so a successful create proves the pre-fill was
-      // there (an empty name would fail nothing here since names aren't
-      // required, but the resulting display name below proves the fields
-      // carried 'Juan'/'Dela Cruz' through unedited).
-      await tester.tap(find.widgetWithText(FilledButton, 'Create Examinee Record'));
-      await tester.pumpAndSettle();
+        // Pre-filled from the scan's own confirmed tag -- saved without
+        // changing anything, so a successful create proves the pre-fill was
+        // there (an empty name would fail nothing here since names aren't
+        // required, but the resulting display name below proves the fields
+        // carried 'Juan'/'Dela Cruz' through unedited).
+        await tester.tap(
+          find.widgetWithText(FilledButton, 'Create Examinee Record'),
+        );
+        await tester.pumpAndSettle();
 
-      expect(client.calls, contains('createExamineeFromScan:b1/s1'));
-      // "show the new Examinee Record" -- navigated straight to its detail page.
-      expect(find.text('Dela Cruz, Juan'), findsOneWidget);
-      expect(find.text('EX-000001'), findsOneWidget);
-    });
+        expect(client.calls, contains('createExamineeFromScan:b1/s1'));
+        // "show the new Examinee Record" -- navigated straight to its detail page.
+        expect(find.text('Dela Cruz, Juan'), findsOneWidget);
+        expect(find.text('EX-000001'), findsOneWidget);
+      },
+    );
   });
 
-  testWidgets('Unlinked Scans column headers line up with their row cells', (tester) async {
-    client.batchesToReturn = CloudBatchesRead.found([_batchRow(id: 'bq', examCode: 'QTM')]);
+  testWidgets('Unlinked Scans column headers line up with their row cells', (
+    tester,
+  ) async {
+    client.batchesToReturn = CloudBatchesRead.found([
+      _batchRow(id: 'bq', examCode: 'QTM'),
+    ]);
     client.unlinkedScansToReturn = CloudScansRead.found([
-      _scanRow(id: 's1', batchId: 'bq', examCode: 'QTM', firstName: 'Juan', lastName: 'Cruz'),
+      _scanRow(
+        id: 's1',
+        batchId: 'bq',
+        examCode: 'QTM',
+        firstName: 'Juan',
+        lastName: 'Cruz',
+      ),
     ]);
     await pumpView(tester);
     await tester.tap(find.textContaining('Unlinked Scans'));
@@ -676,10 +885,34 @@ void main() {
         _batchRow(id: 'ba', examCode: 'AT'),
       ]);
       client.unlinkedScansToReturn = CloudScansRead.found([
-        _scanRow(id: 's1', batchId: 'bq', examCode: 'QTM', firstName: 'Juan', lastName: 'Cruz'),
-        _scanRow(id: 's2', batchId: 'bt', examCode: 'TAT', firstName: 'Maria', lastName: 'Santos'),
-        _scanRow(id: 's3', batchId: 'ba', examCode: 'AT', firstName: 'Pedro', lastName: 'Reyes'),
-        _scanRow(id: 's4', batchId: 'bt', examCode: 'TAT', firstName: 'Ana', lastName: 'Lopez'),
+        _scanRow(
+          id: 's1',
+          batchId: 'bq',
+          examCode: 'QTM',
+          firstName: 'Juan',
+          lastName: 'Cruz',
+        ),
+        _scanRow(
+          id: 's2',
+          batchId: 'bt',
+          examCode: 'TAT',
+          firstName: 'Maria',
+          lastName: 'Santos',
+        ),
+        _scanRow(
+          id: 's3',
+          batchId: 'ba',
+          examCode: 'AT',
+          firstName: 'Pedro',
+          lastName: 'Reyes',
+        ),
+        _scanRow(
+          id: 's4',
+          batchId: 'bt',
+          examCode: 'TAT',
+          firstName: 'Ana',
+          lastName: 'Lopez',
+        ),
       ]);
       await pumpView(tester);
       await tester.tap(find.textContaining('Unlinked Scans'));
@@ -693,7 +926,9 @@ void main() {
       await tester.pumpAndSettle();
     }
 
-    testWidgets('defaults to All and shows every unlinked scan', (tester) async {
+    testWidgets('defaults to All and shows every unlinked scan', (
+      tester,
+    ) async {
       await openUnlinked(tester);
       expect(find.text('Cruz, Juan'), findsOneWidget);
       expect(find.text('Santos, Maria'), findsOneWidget);
@@ -702,47 +937,65 @@ void main() {
       expect(find.text('Showing 4 of 4'), findsOneWidget);
     });
 
-    testWidgets('QTM / TAT / AT each show only that exam type, and All restores the full list',
-        (tester) async {
-      await openUnlinked(tester);
+    testWidgets(
+      'QTM / TAT / AT each show only that exam type, and All restores the full list',
+      (tester) async {
+        await openUnlinked(tester);
 
-      await pick(tester, 'TAT');
-      expect(find.text('Santos, Maria'), findsOneWidget);
-      expect(find.text('Lopez, Ana'), findsOneWidget);
-      expect(find.text('Cruz, Juan'), findsNothing);
-      expect(find.text('Reyes, Pedro'), findsNothing);
-      expect(find.text('Showing 2 of 4'), findsOneWidget);
+        await pick(tester, 'TAT');
+        expect(find.text('Santos, Maria'), findsOneWidget);
+        expect(find.text('Lopez, Ana'), findsOneWidget);
+        expect(find.text('Cruz, Juan'), findsNothing);
+        expect(find.text('Reyes, Pedro'), findsNothing);
+        expect(find.text('Showing 2 of 4'), findsOneWidget);
 
-      await pick(tester, 'QTM');
-      expect(find.text('Cruz, Juan'), findsOneWidget);
-      expect(find.text('Santos, Maria'), findsNothing);
-      expect(find.text('Showing 1 of 4'), findsOneWidget);
+        await pick(tester, 'QTM');
+        expect(find.text('Cruz, Juan'), findsOneWidget);
+        expect(find.text('Santos, Maria'), findsNothing);
+        expect(find.text('Showing 1 of 4'), findsOneWidget);
 
-      await pick(tester, 'AT');
-      expect(find.text('Reyes, Pedro'), findsOneWidget);
-      expect(find.text('Cruz, Juan'), findsNothing);
+        await pick(tester, 'AT');
+        expect(find.text('Reyes, Pedro'), findsOneWidget);
+        expect(find.text('Cruz, Juan'), findsNothing);
 
-      await pick(tester, 'All');
-      expect(find.text('Showing 4 of 4'), findsOneWidget);
-      expect(find.text('Lopez, Ana'), findsOneWidget);
-    });
+        await pick(tester, 'All');
+        expect(find.text('Showing 4 of 4'), findsOneWidget);
+        expect(find.text('Lopez, Ana'), findsOneWidget);
+      },
+    );
 
-    testWidgets('changing the filter is view-only: no reload and nothing linked',
-        (tester) async {
-      await openUnlinked(tester);
-      client.calls.clear();
-      client.unlinkedScansToReturn = CloudScansRead.found(const []);
-      // Filter is view-only: switching it makes no request and links nothing.
-      await pick(tester, 'AT');
-      await pick(tester, 'QTM');
-      expect(client.calls.where((c) => c == 'readUnlinkedScans' || c.startsWith('linkScanToExaminee')), isEmpty);
-      expect(find.text('Cruz, Juan'), findsOneWidget);
-    });
+    testWidgets(
+      'changing the filter is view-only: no reload and nothing linked',
+      (tester) async {
+        await openUnlinked(tester);
+        client.calls.clear();
+        client.unlinkedScansToReturn = CloudScansRead.found(const []);
+        // Filter is view-only: switching it makes no request and links nothing.
+        await pick(tester, 'AT');
+        await pick(tester, 'QTM');
+        expect(
+          client.calls.where(
+            (c) =>
+                c == 'readUnlinkedScans' || c.startsWith('linkScanToExaminee'),
+          ),
+          isEmpty,
+        );
+        expect(find.text('Cruz, Juan'), findsOneWidget);
+      },
+    );
 
     testWidgets('a filter with no matches says so', (tester) async {
-      client.batchesToReturn = CloudBatchesRead.found([_batchRow(id: 'bt', examCode: 'TAT')]);
+      client.batchesToReturn = CloudBatchesRead.found([
+        _batchRow(id: 'bt', examCode: 'TAT'),
+      ]);
       client.unlinkedScansToReturn = CloudScansRead.found([
-        _scanRow(id: 's2', batchId: 'bt', examCode: 'TAT', firstName: 'Maria', lastName: 'Santos'),
+        _scanRow(
+          id: 's2',
+          batchId: 'bt',
+          examCode: 'TAT',
+          firstName: 'Maria',
+          lastName: 'Santos',
+        ),
       ]);
       await pumpView(tester);
       await tester.tap(find.textContaining('Unlinked Scans'));
@@ -769,17 +1022,49 @@ void main() {
         _batchRow(id: 'bt', examCode: 'TAT'),
       ]);
       client.unlinkedScansToReturn = CloudScansRead.found([
-        _scanRow(id: 's1', batchId: 'bt', examCode: 'TAT', firstName: 'Juan', lastName: 'Cruz', capturedAt: day(9)),
-        _scanRow(id: 's2', batchId: 'bt', examCode: 'TAT', firstName: 'Maria', lastName: 'Santos', capturedAt: day(10)),
-        _scanRow(id: 's3', batchId: 'bq', examCode: 'QTM', firstName: 'Pedro', lastName: 'Reyes', capturedAt: day(15)),
-        _scanRow(id: 's4', batchId: 'bt', examCode: 'TAT', firstName: 'Ana', lastName: 'Lopez', capturedAt: day(16)),
+        _scanRow(
+          id: 's1',
+          batchId: 'bt',
+          examCode: 'TAT',
+          firstName: 'Juan',
+          lastName: 'Cruz',
+          capturedAt: day(9),
+        ),
+        _scanRow(
+          id: 's2',
+          batchId: 'bt',
+          examCode: 'TAT',
+          firstName: 'Maria',
+          lastName: 'Santos',
+          capturedAt: day(10),
+        ),
+        _scanRow(
+          id: 's3',
+          batchId: 'bq',
+          examCode: 'QTM',
+          firstName: 'Pedro',
+          lastName: 'Reyes',
+          capturedAt: day(15),
+        ),
+        _scanRow(
+          id: 's4',
+          batchId: 'bt',
+          examCode: 'TAT',
+          firstName: 'Ana',
+          lastName: 'Lopez',
+          capturedAt: day(16),
+        ),
       ]);
       await pumpView(tester);
       await tester.tap(find.textContaining('Unlinked Scans'));
       await tester.pumpAndSettle();
     }
 
-    Future<void> pickDay(WidgetTester tester, String fieldKey, int dayOfMonth) async {
+    Future<void> pickDay(
+      WidgetTester tester,
+      String fieldKey,
+      int dayOfMonth,
+    ) async {
       await tester.tap(find.byKey(Key(fieldKey)));
       await tester.pumpAndSettle();
       await tester.tap(find.text('$dayOfMonth'));
@@ -800,17 +1085,26 @@ void main() {
       expect(find.byKey(const Key('unlinkedDateClear')), findsNothing);
     });
 
-    testWidgets('a date range keeps scans captured on or between its first and last day', (tester) async {
-      await openUnlinked(tester);
-      await pickRange(tester, 10, 15);
+    testWidgets(
+      'a date range keeps scans captured on or between its first and last day',
+      (tester) async {
+        await openUnlinked(tester);
+        await pickRange(tester, 10, 15);
 
-      expect(find.text('Santos, Maria'), findsOneWidget); // first day, inclusive
-      expect(find.text('Reyes, Pedro'), findsOneWidget); // last day, inclusive
-      expect(find.text('Cruz, Juan'), findsNothing); // day before
-      expect(find.text('Lopez, Ana'), findsNothing); // day after
-      expect(find.text('Showing 2 of 4'), findsOneWidget);
-      expect(find.byKey(const Key('unlinkedDateClear')), findsOneWidget);
-    });
+        expect(
+          find.text('Santos, Maria'),
+          findsOneWidget,
+        ); // first day, inclusive
+        expect(
+          find.text('Reyes, Pedro'),
+          findsOneWidget,
+        ); // last day, inclusive
+        expect(find.text('Cruz, Juan'), findsNothing); // day before
+        expect(find.text('Lopez, Ana'), findsNothing); // day after
+        expect(find.text('Showing 2 of 4'), findsOneWidget);
+        expect(find.byKey(const Key('unlinkedDateClear')), findsOneWidget);
+      },
+    );
 
     testWidgets('Clear brings every date back', (tester) async {
       await openUnlinked(tester);
@@ -824,99 +1118,116 @@ void main() {
       expect(find.text('Cruz, Juan'), findsOneWidget);
     });
 
-    testWidgets('a From date alone means "on or after"; a To date alone means "on or before"', (tester) async {
-      await openUnlinked(tester);
+    testWidgets(
+      'a From date alone means "on or after"; a To date alone means "on or before"',
+      (tester) async {
+        await openUnlinked(tester);
 
-      await pickDay(tester, 'unlinkedDateFrom', 15);
-      expect(find.text('Reyes, Pedro'), findsOneWidget);
-      expect(find.text('Lopez, Ana'), findsOneWidget);
-      expect(find.text('Santos, Maria'), findsNothing);
-      expect(find.text('Showing 2 of 4'), findsOneWidget);
+        await pickDay(tester, 'unlinkedDateFrom', 15);
+        expect(find.text('Reyes, Pedro'), findsOneWidget);
+        expect(find.text('Lopez, Ana'), findsOneWidget);
+        expect(find.text('Santos, Maria'), findsNothing);
+        expect(find.text('Showing 2 of 4'), findsOneWidget);
 
-      await tester.tap(find.byKey(const Key('unlinkedDateClear')));
-      await tester.pumpAndSettle();
-      await pickDay(tester, 'unlinkedDateTo', 10);
-      expect(find.text('Cruz, Juan'), findsOneWidget);
-      expect(find.text('Santos, Maria'), findsOneWidget);
-      expect(find.text('Reyes, Pedro'), findsNothing);
-      expect(find.text('Showing 2 of 4'), findsOneWidget);
-    });
-
-    testWidgets('the fields show MM/DD/YYYY dates, and a From after To pulls To along', (tester) async {
-      await openUnlinked(tester);
-      final now = DateTime.now();
-      String fmt(int d) =>
-          '${now.month.toString().padLeft(2, '0')}/${d.toString().padLeft(2, '0')}/${now.year}';
-
-      await pickRange(tester, 10, 15);
-      expect(find.text(fmt(10)), findsOneWidget);
-      expect(find.text(fmt(15)), findsOneWidget);
-
-      await pickDay(tester, 'unlinkedDateFrom', 20); // after To (15)
-      expect(find.text(fmt(20)), findsNWidgets(2)); // To follows: never inverted
-    });
-
-    testWidgets('the calendar opens under the field and closes on an outside tap without changing anything',
-        (tester) async {
-      await openUnlinked(tester);
-      expect(find.byType(CalendarDatePicker), findsNothing);
-
-      await tester.tap(find.byKey(const Key('unlinkedDateFrom')));
-      await tester.pumpAndSettle();
-      expect(find.byType(CalendarDatePicker), findsOneWidget);
-      // Sits directly below the From field.
-      expect(
-        tester.getTopLeft(find.byType(CalendarDatePicker)).dy,
-        greaterThan(tester.getBottomLeft(find.byKey(const Key('unlinkedDateFrom'))).dy),
-      );
-
-      await tester.tapAt(const Offset(1300, 1500)); // outside the popover
-      await tester.pumpAndSettle();
-      expect(find.byType(CalendarDatePicker), findsNothing);
-      expect(find.text('From'), findsOneWidget);
-      expect(find.text('Showing 4 of 4'), findsOneWidget);
-    });
-
-    testWidgets('month arrows and arrow keys in the calendar work with a mouse (desktop web) without assertions',
-        (tester) async {
-      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
-      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
-      await mouse.addPointer(location: Offset.zero);
-      addTearDown(mouse.removePointer);
-
-      await openUnlinked(tester);
-      await tester.tap(find.byKey(const Key('unlinkedDateFrom')));
-      await tester.pumpAndSettle();
-
-      Future<void> click(String tooltip) async {
-        final at = tester.getCenter(find.byTooltip(tooltip));
-        await mouse.moveTo(at); // hover shows the tooltip
-        await tester.pump(const Duration(milliseconds: 700));
-        await mouse.down(at);
-        await mouse.up();
+        await tester.tap(find.byKey(const Key('unlinkedDateClear')));
         await tester.pumpAndSettle();
-      }
+        await pickDay(tester, 'unlinkedDateTo', 10);
+        expect(find.text('Cruz, Juan'), findsOneWidget);
+        expect(find.text('Santos, Maria'), findsOneWidget);
+        expect(find.text('Reyes, Pedro'), findsNothing);
+        expect(find.text('Showing 2 of 4'), findsOneWidget);
+      },
+    );
 
-      await click('Next month');
-      await click('Next month');
-      await click('Previous month');
-      await click('Previous month');
-      await click('Previous month');
-      expect(find.byType(CalendarDatePicker), findsOneWidget);
+    testWidgets(
+      'the fields show MM/DD/YYYY dates, and a From after To pulls To along',
+      (tester) async {
+        await openUnlinked(tester);
+        final now = DateTime.now();
+        String fmt(int d) =>
+            '${now.month.toString().padLeft(2, '0')}/${d.toString().padLeft(2, '0')}/${now.year}';
 
-      for (var i = 0; i < 40; i++) {
-        await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
-        await tester.pump();
-      }
-      await tester.pumpAndSettle();
+        await pickRange(tester, 10, 15);
+        expect(find.text(fmt(10)), findsOneWidget);
+        expect(find.text(fmt(15)), findsOneWidget);
 
-      expect(tester.takeException(), isNull);
-      expect(find.byType(CalendarDatePicker), findsOneWidget);
-      // Must be unset before the test ends (the framework checks it).
-      debugDefaultTargetPlatformOverride = null;
-    });
+        await pickDay(tester, 'unlinkedDateFrom', 20); // after To (15)
+        expect(
+          find.text(fmt(20)),
+          findsNWidgets(2),
+        ); // To follows: never inverted
+      },
+    );
 
-    testWidgets('combines with the Exam Type filter (both must match)', (tester) async {
+    testWidgets(
+      'the calendar opens under the field and closes on an outside tap without changing anything',
+      (tester) async {
+        await openUnlinked(tester);
+        expect(find.byType(CalendarDatePicker), findsNothing);
+
+        await tester.tap(find.byKey(const Key('unlinkedDateFrom')));
+        await tester.pumpAndSettle();
+        expect(find.byType(CalendarDatePicker), findsOneWidget);
+        // Sits directly below the From field.
+        expect(
+          tester.getTopLeft(find.byType(CalendarDatePicker)).dy,
+          greaterThan(
+            tester.getBottomLeft(find.byKey(const Key('unlinkedDateFrom'))).dy,
+          ),
+        );
+
+        await tester.tapAt(const Offset(1300, 1500)); // outside the popover
+        await tester.pumpAndSettle();
+        expect(find.byType(CalendarDatePicker), findsNothing);
+        expect(find.text('From'), findsOneWidget);
+        expect(find.text('Showing 4 of 4'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'month arrows and arrow keys in the calendar work with a mouse (desktop web) without assertions',
+      (tester) async {
+        debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+        final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+        await mouse.addPointer(location: Offset.zero);
+        addTearDown(mouse.removePointer);
+
+        await openUnlinked(tester);
+        await tester.tap(find.byKey(const Key('unlinkedDateFrom')));
+        await tester.pumpAndSettle();
+
+        Future<void> click(String tooltip) async {
+          final at = tester.getCenter(find.byTooltip(tooltip));
+          await mouse.moveTo(at); // hover shows the tooltip
+          await tester.pump(const Duration(milliseconds: 700));
+          await mouse.down(at);
+          await mouse.up();
+          await tester.pumpAndSettle();
+        }
+
+        await click('Next month');
+        await click('Next month');
+        await click('Previous month');
+        await click('Previous month');
+        await click('Previous month');
+        expect(find.byType(CalendarDatePicker), findsOneWidget);
+
+        for (var i = 0; i < 40; i++) {
+          await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+          await tester.pump();
+        }
+        await tester.pumpAndSettle();
+
+        expect(tester.takeException(), isNull);
+        expect(find.byType(CalendarDatePicker), findsOneWidget);
+        // Must be unset before the test ends (the framework checks it).
+        debugDefaultTargetPlatformOverride = null;
+      },
+    );
+
+    testWidgets('combines with the Exam Type filter (both must match)', (
+      tester,
+    ) async {
       await openUnlinked(tester);
       await pickRange(tester, 10, 15);
 
@@ -931,14 +1242,24 @@ void main() {
       expect(find.text('Showing 1 of 4'), findsOneWidget);
     });
 
-    testWidgets('a range with no scans says so and changes nothing', (tester) async {
+    testWidgets('a range with no scans says so and changes nothing', (
+      tester,
+    ) async {
       await openUnlinked(tester);
       client.calls.clear();
       await pickRange(tester, 20, 21);
 
-      expect(find.text('No unlinked scans match the selected filters.'), findsOneWidget);
+      expect(
+        find.text('No unlinked scans match the selected filters.'),
+        findsOneWidget,
+      );
       expect(find.text('Showing 0 of 4'), findsOneWidget);
-      expect(client.calls.where((c) => c == 'readUnlinkedScans' || c.startsWith('linkScanToExaminee')), isEmpty);
+      expect(
+        client.calls.where(
+          (c) => c == 'readUnlinkedScans' || c.startsWith('linkScanToExaminee'),
+        ),
+        isEmpty,
+      );
     });
   });
 
@@ -1445,88 +1766,148 @@ void main() {
   });
 
   group('3. Link to Existing Examinee', () {
-    testWidgets('the picker lists only ACTIVE examinees and says archived ones must be restored first',
-        (tester) async {
-      client.examineesToReturn = CloudExamineesRead.found([
-        _row(id: 'e1', temporaryExamineeId: 'EX-000001', firstName: 'Juan', lastName: 'Dela Cruz'),
-        _row(id: 'e2', temporaryExamineeId: 'EX-000002', firstName: 'Maria', lastName: 'Santos', status: 'archived'),
-      ]);
-      client.batchesToReturn = CloudBatchesRead.found([_batchRow(id: 'b1', examCode: 'TAT')]);
-      client.unlinkedScansToReturn = CloudScansRead.found([
-        _scanRow(id: 's1', batchId: 'b1', examCode: 'TAT', firstName: null, lastName: null),
-      ]);
-      await pumpView(tester);
-      await tester.tap(find.textContaining('Unlinked Scans'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(TextButton, 'Link to Existing'));
-      await tester.pumpAndSettle();
+    testWidgets(
+      'the picker lists only ACTIVE examinees and says archived ones must be restored first',
+      (tester) async {
+        client.examineesToReturn = CloudExamineesRead.found([
+          _row(
+            id: 'e1',
+            temporaryExamineeId: 'EX-000001',
+            firstName: 'Juan',
+            lastName: 'Dela Cruz',
+          ),
+          _row(
+            id: 'e2',
+            temporaryExamineeId: 'EX-000002',
+            firstName: 'Maria',
+            lastName: 'Santos',
+            status: 'archived',
+          ),
+        ]);
+        client.batchesToReturn = CloudBatchesRead.found([
+          _batchRow(id: 'b1', examCode: 'TAT'),
+        ]);
+        client.unlinkedScansToReturn = CloudScansRead.found([
+          _scanRow(
+            id: 's1',
+            batchId: 'b1',
+            examCode: 'TAT',
+            firstName: null,
+            lastName: null,
+          ),
+        ]);
+        await pumpView(tester);
+        await tester.tap(find.textContaining('Unlinked Scans'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.widgetWithText(TextButton, 'Link to Existing'));
+        await tester.pumpAndSettle();
 
-      expect(find.widgetWithText(ListTile, 'Dela Cruz, Juan'), findsOneWidget);
-      expect(find.widgetWithText(ListTile, 'Santos, Maria'), findsNothing);
-      expect(find.byKey(const Key('linkPickerActiveOnlyHint')), findsOneWidget);
-      expect(
-        find.text('Only active examinees can be linked to a scan. Restore an archived examinee first.'),
-        findsOneWidget,
-      );
+        expect(
+          find.widgetWithText(ListTile, 'Dela Cruz, Juan'),
+          findsOneWidget,
+        );
+        expect(find.widgetWithText(ListTile, 'Santos, Maria'), findsNothing);
+        expect(
+          find.byKey(const Key('linkPickerActiveOnlyHint')),
+          findsOneWidget,
+        );
+        expect(
+          find.text(
+            'Only active examinees can be linked to a scan. Restore an archived examinee first.',
+          ),
+          findsOneWidget,
+        );
 
-      // Searching for the archived examinee's name / ID still does not offer it.
-      await tester.enterText(find.byType(TextField), 'Santos');
-      await tester.pumpAndSettle();
-      expect(find.widgetWithText(ListTile, 'Santos, Maria'), findsNothing);
-      expect(find.text('No matching Examinee Records.'), findsOneWidget);
-      await tester.enterText(find.byType(TextField), 'EX-000002');
-      await tester.pumpAndSettle();
-      expect(find.widgetWithText(ListTile, 'Santos, Maria'), findsNothing);
-    });
+        // Searching for the archived examinee's name / ID still does not offer it.
+        await tester.enterText(find.byType(TextField), 'Santos');
+        await tester.pumpAndSettle();
+        expect(find.widgetWithText(ListTile, 'Santos, Maria'), findsNothing);
+        expect(find.text('No matching Examinee Records.'), findsOneWidget);
+        await tester.enterText(find.byType(TextField), 'EX-000002');
+        await tester.pumpAndSettle();
+        expect(find.widgetWithText(ListTile, 'Santos, Maria'), findsNothing);
+      },
+    );
 
-    testWidgets('never links without an explicit selection and a final confirmation', (tester) async {
-      client.examineesToReturn = CloudExamineesRead.found([
-        _row(id: 'e1', temporaryExamineeId: 'EX-000001', firstName: 'Juan', lastName: 'Dela Cruz'),
-      ]);
-      client.batchesToReturn = CloudBatchesRead.found([_batchRow(id: 'b1', examCode: 'TAT')]);
-      client.unlinkedScansToReturn = CloudScansRead.found([
-        _scanRow(id: 's1', batchId: 'b1', examCode: 'TAT', firstName: 'Juan', lastName: 'Dela Cruz'),
-      ]);
-      await pumpView(tester);
-      await tester.tap(find.textContaining('Unlinked Scans'));
-      await tester.pumpAndSettle();
+    testWidgets(
+      'never links without an explicit selection and a final confirmation',
+      (tester) async {
+        client.examineesToReturn = CloudExamineesRead.found([
+          _row(
+            id: 'e1',
+            temporaryExamineeId: 'EX-000001',
+            firstName: 'Juan',
+            lastName: 'Dela Cruz',
+          ),
+        ]);
+        client.batchesToReturn = CloudBatchesRead.found([
+          _batchRow(id: 'b1', examCode: 'TAT'),
+        ]);
+        client.unlinkedScansToReturn = CloudScansRead.found([
+          _scanRow(
+            id: 's1',
+            batchId: 'b1',
+            examCode: 'TAT',
+            firstName: 'Juan',
+            lastName: 'Dela Cruz',
+          ),
+        ]);
+        await pumpView(tester);
+        await tester.tap(find.textContaining('Unlinked Scans'));
+        await tester.pumpAndSettle();
 
-      await tester.tap(find.widgetWithText(TextButton, 'Link to Existing'));
-      await tester.pumpAndSettle();
+        await tester.tap(find.widgetWithText(TextButton, 'Link to Existing'));
+        await tester.pumpAndSettle();
 
-      // Nothing is linked just by opening the dialog.
-      expect(client.calls, isNot(contains(startsWith('linkScanToExaminee'))));
+        // Nothing is linked just by opening the dialog.
+        expect(client.calls, isNot(contains(startsWith('linkScanToExaminee'))));
 
-      await tester.tap(find.widgetWithText(ListTile, 'Dela Cruz, Juan').first);
-      await tester.pumpAndSettle();
+        await tester.tap(
+          find.widgetWithText(ListTile, 'Dela Cruz, Juan').first,
+        );
+        await tester.pumpAndSettle();
 
-      // The confirmation names both sides explicitly.
-      expect(find.textContaining('EX-000001'), findsWidgets);
-      expect(find.textContaining('B-TAT'), findsWidgets);
+        // The confirmation names both sides explicitly.
+        expect(find.textContaining('EX-000001'), findsWidgets);
+        expect(find.textContaining('B-TAT'), findsWidgets);
 
-      // Cancel (the confirmation dialog's own Cancel, the most recently
-      // opened one) -> no change. The underlying "Link to Existing"
-      // picker dialog is still open behind it.
-      await tester.tap(find.widgetWithText(TextButton, 'Cancel').last);
-      await tester.pumpAndSettle();
-      expect(client.calls, isNot(contains(startsWith('linkScanToExaminee'))));
+        // Cancel (the confirmation dialog's own Cancel, the most recently
+        // opened one) -> no change. The underlying "Link to Existing"
+        // picker dialog is still open behind it.
+        await tester.tap(find.widgetWithText(TextButton, 'Cancel').last);
+        await tester.pumpAndSettle();
+        expect(client.calls, isNot(contains(startsWith('linkScanToExaminee'))));
 
-      // Select the same candidate again and this time confirm.
-      await tester.tap(find.widgetWithText(ListTile, 'Dela Cruz, Juan').first);
-      await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(FilledButton, 'Confirm Attach'));
-      await tester.pumpAndSettle();
+        // Select the same candidate again and this time confirm.
+        await tester.tap(
+          find.widgetWithText(ListTile, 'Dela Cruz, Juan').first,
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.widgetWithText(FilledButton, 'Confirm Attach'));
+        await tester.pumpAndSettle();
 
-      expect(client.calls, contains('linkScanToExaminee:b1/s1/e1'));
-    });
+        expect(client.calls, contains('linkScanToExaminee:b1/s1/e1'));
+      },
+    );
   });
 
   group('4. Delete Unlinked Scan (soft-delete, 30-day retention)', () {
-    Future<void> openUnlinked(WidgetTester tester, {String attemptStatus = 'active'}) async {
-      client.batchesToReturn = CloudBatchesRead.found([_batchRow(id: 'b1', examCode: 'TAT')]);
+    Future<void> openUnlinked(
+      WidgetTester tester, {
+      String attemptStatus = 'active',
+    }) async {
+      client.batchesToReturn = CloudBatchesRead.found([
+        _batchRow(id: 'b1', examCode: 'TAT'),
+      ]);
       client.unlinkedScansToReturn = CloudScansRead.found([
-        _scanRow(id: 's1', batchId: 'b1', examCode: 'TAT', firstName: 'Juan', lastName: 'Dela Cruz',
-            attemptStatus: attemptStatus),
+        _scanRow(
+          id: 's1',
+          batchId: 'b1',
+          examCode: 'TAT',
+          firstName: 'Juan',
+          lastName: 'Dela Cruz',
+          attemptStatus: attemptStatus,
+        ),
       ]);
       await pumpView(tester);
       await tester.tap(find.textContaining('Unlinked Scans'));
@@ -1538,34 +1919,50 @@ void main() {
       await tester.pumpAndSettle();
     }
 
-    Future<void> enterReasonAndSubmit(WidgetTester tester, String reason) async {
-      await tester.enterText(find.byKey(const Key('softDeleteReasonField')), reason);
+    Future<void> enterReasonAndSubmit(
+      WidgetTester tester,
+      String reason,
+    ) async {
+      await tester.enterText(
+        find.byKey(const Key('softDeleteReasonField')),
+        reason,
+      );
       await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
       await tester.pumpAndSettle();
     }
 
-    testWidgets('1. a Delete action is shown for a normal unlinked scan, alongside the existing actions',
-        (tester) async {
-      await openUnlinked(tester);
-      expect(find.widgetWithText(TextButton, 'Delete'), findsOneWidget);
-      expect(find.widgetWithText(TextButton, 'View Image'), findsOneWidget);
-      expect(find.widgetWithText(TextButton, 'Link to Existing'), findsOneWidget);
-      expect(find.widgetWithText(TextButton, 'Confirm and Create Examinee'), findsOneWidget);
-    });
+    testWidgets(
+      '1. a Delete action is shown for a normal unlinked scan, alongside the existing actions',
+      (tester) async {
+        await openUnlinked(tester);
+        expect(find.widgetWithText(TextButton, 'Delete'), findsOneWidget);
+        expect(find.widgetWithText(TextButton, 'View Image'), findsOneWidget);
+        expect(
+          find.widgetWithText(TextButton, 'Link to Existing'),
+          findsOneWidget,
+        );
+        expect(
+          find.widgetWithText(TextButton, 'Confirm and Create Examinee'),
+          findsOneWidget,
+        );
+      },
+    );
 
-    testWidgets('2. tapping Delete opens a reason-required dialog explaining the 30-day retention',
-        (tester) async {
-      await openUnlinked(tester);
-      await openDeleteDialog(tester);
+    testWidgets(
+      '2. tapping Delete opens a reason-required dialog explaining the 30-day retention',
+      (tester) async {
+        await openUnlinked(tester);
+        await openDeleteDialog(tester);
 
-      expect(find.text('Delete This Scan?'), findsOneWidget);
-      expect(find.textContaining('retained for 30 days'), findsOneWidget);
-      expect(find.byKey(const Key('softDeleteReasonField')), findsOneWidget);
-      expect(find.widgetWithText(TextButton, 'Cancel'), findsOneWidget);
-      expect(find.widgetWithText(FilledButton, 'Delete'), findsOneWidget);
-      // Nothing is deleted just by opening the dialog.
-      expect(client.softDeleteUnlinkedScanCalls, isEmpty);
-    });
+        expect(find.text('Delete This Scan?'), findsOneWidget);
+        expect(find.textContaining('retained for 30 days'), findsOneWidget);
+        expect(find.byKey(const Key('softDeleteReasonField')), findsOneWidget);
+        expect(find.widgetWithText(TextButton, 'Cancel'), findsOneWidget);
+        expect(find.widgetWithText(FilledButton, 'Delete'), findsOneWidget);
+        // Nothing is deleted just by opening the dialog.
+        expect(client.softDeleteUnlinkedScanCalls, isEmpty);
+      },
+    );
 
     testWidgets('an empty reason cannot be submitted', (tester) async {
       await openUnlinked(tester);
@@ -1575,11 +1972,16 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('A reason is required'), findsOneWidget);
-      expect(find.text('Delete This Scan?'), findsOneWidget); // dialog still open
+      expect(
+        find.text('Delete This Scan?'),
+        findsOneWidget,
+      ); // dialog still open
       expect(client.softDeleteUnlinkedScanCalls, isEmpty);
     });
 
-    testWidgets('3. Cancel closes the dialog without deleting anything', (tester) async {
+    testWidgets('3. Cancel closes the dialog without deleting anything', (
+      tester,
+    ) async {
       await openUnlinked(tester);
       await openDeleteDialog(tester);
 
@@ -1591,73 +1993,96 @@ void main() {
       expect(find.text('Dela Cruz, Juan'), findsOneWidget);
     });
 
-    testWidgets('4/7. a valid reason calls softDeleteUnlinkedScan with the exact batch/scan id and '
-        'the entered reason', (tester) async {
-      await openUnlinked(tester);
-      await openDeleteDialog(tester);
-      await enterReasonAndSubmit(tester, 'Duplicate capture');
+    testWidgets(
+      '4/7. a valid reason calls softDeleteUnlinkedScan with the exact batch/scan id and '
+      'the entered reason',
+      (tester) async {
+        await openUnlinked(tester);
+        await openDeleteDialog(tester);
+        await enterReasonAndSubmit(tester, 'Duplicate capture');
 
-      expect(client.softDeleteUnlinkedScanCalls, hasLength(1));
-      final call = client.softDeleteUnlinkedScanCalls.single;
-      expect(call['batchId'], 'b1');
-      expect(call['scanId'], 's1');
-      expect(call['deletionReason'], 'Duplicate capture');
-    });
+        expect(client.softDeleteUnlinkedScanCalls, hasLength(1));
+        final call = client.softDeleteUnlinkedScanCalls.single;
+        expect(call['batchId'], 'b1');
+        expect(call['scanId'], 's1');
+        expect(call['deletionReason'], 'Duplicate capture');
+      },
+    );
 
-    testWidgets('8. never falls back to the broad mobile deleteScan path, and never uses the old '
-        'permanent deleteUnlinkedScan RPC', (tester) async {
-      await openUnlinked(tester);
-      await openDeleteDialog(tester);
-      await enterReasonAndSubmit(tester, 'Duplicate capture');
+    testWidgets(
+      '8. never falls back to the broad mobile deleteScan path, and never uses the old '
+      'permanent deleteUnlinkedScan RPC',
+      (tester) async {
+        await openUnlinked(tester);
+        await openDeleteDialog(tester);
+        await enterReasonAndSubmit(tester, 'Duplicate capture');
 
-      expect(client.calls, isNot(contains(startsWith('deleteScan:'))));
-      expect(client.calls, isNot(contains(startsWith('deleteUnlinkedScan:'))));
-    });
+        expect(client.calls, isNot(contains(startsWith('deleteScan:'))));
+        expect(
+          client.calls,
+          isNot(contains(startsWith('deleteUnlinkedScan:'))),
+        );
+      },
+    );
 
-    testWidgets('5. a successful soft-delete removes the row from the Unlinked Scans list',
-        (tester) async {
-      await openUnlinked(tester);
-      expect(find.text('Dela Cruz, Juan'), findsOneWidget);
+    testWidgets(
+      '5. a successful soft-delete removes the row from the Unlinked Scans list',
+      (tester) async {
+        await openUnlinked(tester);
+        expect(find.text('Dela Cruz, Juan'), findsOneWidget);
 
-      await openDeleteDialog(tester);
-      await enterReasonAndSubmit(tester, 'Duplicate capture');
+        await openDeleteDialog(tester);
+        await enterReasonAndSubmit(tester, 'Duplicate capture');
 
-      expect(find.text('Dela Cruz, Juan'), findsNothing);
-    });
+        expect(find.text('Dela Cruz, Juan'), findsNothing);
+      },
+    );
 
-    testWidgets('the success message says soft-deleted/recoverable within 30 days, never that it '
-        'was permanently deleted', (tester) async {
-      await openUnlinked(tester);
-      await openDeleteDialog(tester);
-      await enterReasonAndSubmit(tester, 'Duplicate capture');
+    testWidgets(
+      'the success message says soft-deleted/recoverable within 30 days, never that it '
+      'was permanently deleted',
+      (tester) async {
+        await openUnlinked(tester);
+        await openDeleteDialog(tester);
+        await enterReasonAndSubmit(tester, 'Duplicate capture');
 
-      expect(find.textContaining('soft-deleted'), findsOneWidget);
-      expect(find.textContaining('30 days'), findsOneWidget);
-      expect(find.text('Scan deleted.'), findsNothing);
-    });
+        expect(find.textContaining('soft-deleted'), findsOneWidget);
+        expect(find.textContaining('30 days'), findsOneWidget);
+        expect(find.text('Scan deleted.'), findsNothing);
+      },
+    );
 
-    testWidgets('6. a soft-delete failure keeps the row visible and shows the dialog error',
-        (tester) async {
-      await openUnlinked(tester);
-      client.softDeleteUnlinkedScanResult = const SyncOutcome.permanent('42501');
+    testWidgets(
+      '6. a soft-delete failure keeps the row visible and shows the dialog error',
+      (tester) async {
+        await openUnlinked(tester);
+        client.softDeleteUnlinkedScanResult = const SyncOutcome.permanent(
+          '42501',
+        );
 
-      await openDeleteDialog(tester);
-      await enterReasonAndSubmit(tester, 'Duplicate capture');
+        await openDeleteDialog(tester);
+        await enterReasonAndSubmit(tester, 'Duplicate capture');
 
-      // The dialog surfaces its own friendly error and stays open -- the
-      // row underneath is untouched because the service call never
-      // reported success.
-      expect(find.textContaining('linked, archived, or already deleted'), findsOneWidget);
-      expect(find.text('Dela Cruz, Juan'), findsOneWidget);
-    });
+        // The dialog surfaces its own friendly error and stays open -- the
+        // row underneath is untouched because the service call never
+        // reported success.
+        expect(
+          find.textContaining('linked, archived, or already deleted'),
+          findsOneWidget,
+        );
+        expect(find.text('Dela Cruz, Juan'), findsOneWidget);
+      },
+    );
 
-    testWidgets('9. an archived historical attempt has no Delete action, and cannot be deleted',
-        (tester) async {
-      await openUnlinked(tester, attemptStatus: 'archived');
+    testWidgets(
+      '9. an archived historical attempt has no Delete action, and cannot be deleted',
+      (tester) async {
+        await openUnlinked(tester, attemptStatus: 'archived');
 
-      expect(find.widgetWithText(TextButton, 'Delete'), findsNothing);
-      expect(client.softDeleteUnlinkedScanCalls, isEmpty);
-    });
+        expect(find.widgetWithText(TextButton, 'Delete'), findsNothing);
+        expect(client.softDeleteUnlinkedScanCalls, isEmpty);
+      },
+    );
 
     testWidgets(
       '10. a successful soft-delete also reloads the Soft-Deleted Scans tab, so the deleted '
@@ -1702,21 +2127,31 @@ void main() {
       await tester.pumpAndSettle();
     }
 
-    Future<void> enterReasonAndSubmit(WidgetTester tester, String reason) async {
-      await tester.enterText(find.byKey(const Key('restoreReasonField')), reason);
+    Future<void> enterReasonAndSubmit(
+      WidgetTester tester,
+      String reason,
+    ) async {
+      await tester.enterText(
+        find.byKey(const Key('restoreReasonField')),
+        reason,
+      );
       await tester.tap(find.widgetWithText(FilledButton, 'Submit Request'));
       await tester.pumpAndSettle();
     }
 
-    testWidgets('1. a third Soft-Deleted Scans tab exists alongside Examinees and Unlinked Scans',
-        (tester) async {
-      await pumpView(tester);
-      expect(find.textContaining('Examinees'), findsWidgets);
-      expect(find.textContaining('Unlinked Scans'), findsWidgets);
-      expect(find.textContaining('Soft-Deleted Scans'), findsOneWidget);
-    });
+    testWidgets(
+      '1. a third Soft-Deleted Scans tab exists alongside Examinees and Unlinked Scans',
+      (tester) async {
+        await pumpView(tester);
+        expect(find.textContaining('Examinees'), findsWidgets);
+        expect(find.textContaining('Unlinked Scans'), findsWidgets);
+        expect(find.textContaining('Soft-Deleted Scans'), findsOneWidget);
+      },
+    );
 
-    testWidgets('2. retained scans returned by the service are displayed', (tester) async {
+    testWidgets('2. retained scans returned by the service are displayed', (
+      tester,
+    ) async {
       client.retainedScansToReturn = [
         _retainedScanRow(scanId: 's1', examCode: 'TAT'),
       ];
@@ -1728,35 +2163,55 @@ void main() {
       expect(find.text('Council Member'), findsOneWidget);
     });
 
-    testWidgets('empty state explains there is nothing currently needing restoration',
-        (tester) async {
-      await openSoftDeleted(tester);
-      expect(find.textContaining('No retained soft-deleted scans'), findsOneWidget);
-    });
+    testWidgets(
+      'empty state explains there is nothing currently needing restoration',
+      (tester) async {
+        await openSoftDeleted(tester);
+        expect(
+          find.textContaining('No retained soft-deleted scans'),
+          findsOneWidget,
+        );
+      },
+    );
 
-    testWidgets('3. a scan with an active PENDING request does not show Request Restore',
-        (tester) async {
-      client.retainedScansToReturn = [
-        _retainedScanRow(scanId: 's1', activeRestoreRequestStatus: 'PENDING'),
-      ];
-      await openSoftDeleted(tester);
+    testWidgets(
+      '3. a scan with an active PENDING request does not show Request Restore',
+      (tester) async {
+        client.retainedScansToReturn = [
+          _retainedScanRow(scanId: 's1', activeRestoreRequestStatus: 'PENDING'),
+        ];
+        await openSoftDeleted(tester);
 
-      expect(find.widgetWithText(TextButton, 'Request Restore'), findsNothing);
-      expect(find.textContaining('Restore Requested'), findsOneWidget);
-    });
+        expect(
+          find.widgetWithText(TextButton, 'Request Restore'),
+          findsNothing,
+        );
+        expect(find.textContaining('Restore Requested'), findsOneWidget);
+      },
+    );
 
-    testWidgets('3. a scan with an active APPROVED request does not show Request Restore',
-        (tester) async {
-      client.retainedScansToReturn = [
-        _retainedScanRow(scanId: 's1', activeRestoreRequestStatus: 'APPROVED'),
-      ];
-      await openSoftDeleted(tester);
+    testWidgets(
+      '3. a scan with an active APPROVED request does not show Request Restore',
+      (tester) async {
+        client.retainedScansToReturn = [
+          _retainedScanRow(
+            scanId: 's1',
+            activeRestoreRequestStatus: 'APPROVED',
+          ),
+        ];
+        await openSoftDeleted(tester);
 
-      expect(find.widgetWithText(TextButton, 'Request Restore'), findsNothing);
-      expect(find.textContaining('Restore Approved'), findsOneWidget);
-    });
+        expect(
+          find.widgetWithText(TextButton, 'Request Restore'),
+          findsNothing,
+        );
+        expect(find.textContaining('Restore Approved'), findsOneWidget);
+      },
+    );
 
-    testWidgets('4. Request Restore opens a reason-required dialog', (tester) async {
+    testWidgets('4. Request Restore opens a reason-required dialog', (
+      tester,
+    ) async {
       client.retainedScansToReturn = [_retainedScanRow(scanId: 's1')];
       await openSoftDeleted(tester);
       await openRestoreDialog(tester);
@@ -1765,83 +2220,123 @@ void main() {
       expect(find.textContaining('30-day retention window'), findsOneWidget);
       expect(find.byKey(const Key('restoreReasonField')), findsOneWidget);
       expect(find.widgetWithText(TextButton, 'Cancel'), findsOneWidget);
-      expect(find.widgetWithText(FilledButton, 'Submit Request'), findsOneWidget);
+      expect(
+        find.widgetWithText(FilledButton, 'Submit Request'),
+        findsOneWidget,
+      );
       // Nothing is submitted just by opening the dialog.
       expect(client.createScanRestoreRequestCalls, isEmpty);
     });
 
-    testWidgets('5. a blank/whitespace reason cannot be submitted', (tester) async {
+    testWidgets('5. a blank/whitespace reason cannot be submitted', (
+      tester,
+    ) async {
       client.retainedScansToReturn = [_retainedScanRow(scanId: 's1')];
       await openSoftDeleted(tester);
       await openRestoreDialog(tester);
 
-      await tester.enterText(find.byKey(const Key('restoreReasonField')), '   ');
+      await tester.enterText(
+        find.byKey(const Key('restoreReasonField')),
+        '   ',
+      );
       await tester.tap(find.widgetWithText(FilledButton, 'Submit Request'));
       await tester.pumpAndSettle();
 
       expect(find.text('A reason is required'), findsOneWidget);
-      expect(find.text('Request Scan Restoration'), findsOneWidget); // dialog still open
+      expect(
+        find.text('Request Scan Restoration'),
+        findsOneWidget,
+      ); // dialog still open
       expect(client.createScanRestoreRequestCalls, isEmpty);
     });
 
-    testWidgets('6. a valid reason calls the restore-request service with the exact batch/scan id',
-        (tester) async {
-      client.retainedScansToReturn = [_retainedScanRow(scanId: 's1')];
-      await openSoftDeleted(tester);
-      await openRestoreDialog(tester);
-      await enterReasonAndSubmit(tester, 'Need this scan back for review');
+    testWidgets(
+      '6. a valid reason calls the restore-request service with the exact batch/scan id',
+      (tester) async {
+        client.retainedScansToReturn = [_retainedScanRow(scanId: 's1')];
+        await openSoftDeleted(tester);
+        await openRestoreDialog(tester);
+        await enterReasonAndSubmit(tester, 'Need this scan back for review');
 
-      expect(client.createScanRestoreRequestCalls, hasLength(1));
-      final call = client.createScanRestoreRequestCalls.single;
-      expect(call['batchId'], 'b1');
-      expect(call['scanId'], 's1');
-      expect(call['reason'], 'Need this scan back for review');
-    });
+        expect(client.createScanRestoreRequestCalls, hasLength(1));
+        final call = client.createScanRestoreRequestCalls.single;
+        expect(call['batchId'], 'b1');
+        expect(call['scanId'], 's1');
+        expect(call['reason'], 'Need this scan back for review');
+      },
+    );
 
-    testWidgets('7. a successful request closes the dialog, refreshes the list, and the row now '
-        'shows PENDING with no Request Restore action', (tester) async {
-      client.retainedScansToReturn = [_retainedScanRow(scanId: 's1')];
-      await openSoftDeleted(tester);
-      await openRestoreDialog(tester);
-      await enterReasonAndSubmit(tester, 'Need this scan back for review');
+    testWidgets(
+      '7. a successful request closes the dialog, refreshes the list, and the row now '
+      'shows PENDING with no Request Restore action',
+      (tester) async {
+        client.retainedScansToReturn = [_retainedScanRow(scanId: 's1')];
+        await openSoftDeleted(tester);
+        await openRestoreDialog(tester);
+        await enterReasonAndSubmit(tester, 'Need this scan back for review');
 
-      expect(find.text('Request Scan Restoration'), findsNothing); // dialog closed
-      expect(find.widgetWithText(TextButton, 'Request Restore'), findsNothing);
-      expect(find.textContaining('Restore Requested'), findsOneWidget);
-      expect(find.textContaining('Restoration request submitted'), findsOneWidget);
-      // Never claims the scan was already restored.
-      expect(find.textContaining('restored'), findsNothing);
-    });
+        expect(
+          find.text('Request Scan Restoration'),
+          findsNothing,
+        ); // dialog closed
+        expect(
+          find.widgetWithText(TextButton, 'Request Restore'),
+          findsNothing,
+        );
+        expect(find.textContaining('Restore Requested'), findsOneWidget);
+        expect(
+          find.textContaining('Restoration request submitted'),
+          findsOneWidget,
+        );
+        // Never claims the scan was already restored.
+        expect(find.textContaining('restored'), findsNothing);
+      },
+    );
 
-    testWidgets('8. a request failure keeps the dialog open and the row still shows Request Restore',
-        (tester) async {
-      client.retainedScansToReturn = [_retainedScanRow(scanId: 's1')];
-      client.createScanRestoreRequestResult = const SyncOutcome.permanent('42501');
-      await openSoftDeleted(tester);
-      await openRestoreDialog(tester);
-      await enterReasonAndSubmit(tester, 'Need this scan back for review');
+    testWidgets(
+      '8. a request failure keeps the dialog open and the row still shows Request Restore',
+      (tester) async {
+        client.retainedScansToReturn = [_retainedScanRow(scanId: 's1')];
+        client.createScanRestoreRequestResult = const SyncOutcome.permanent(
+          '42501',
+        );
+        await openSoftDeleted(tester);
+        await openRestoreDialog(tester);
+        await enterReasonAndSubmit(tester, 'Need this scan back for review');
 
-      expect(find.text('Request Scan Restoration'), findsOneWidget); // dialog still open
-      expect(find.textContaining('retention window may have expired'), findsOneWidget);
-      // The list is never re-fetched after a failed request -- only a
-      // successful one triggers a refresh.
-      expect(
-        client.calls.where((c) => c == 'listRetainedSoftDeletedScans'),
-        hasLength(1),
-      );
-    });
+        expect(
+          find.text('Request Scan Restoration'),
+          findsOneWidget,
+        ); // dialog still open
+        expect(
+          find.textContaining('retention window may have expired'),
+          findsOneWidget,
+        );
+        // The list is never re-fetched after a failed request -- only a
+        // successful one triggers a refresh.
+        expect(
+          client.calls.where((c) => c == 'listRetainedSoftDeletedScans'),
+          hasLength(1),
+        );
+      },
+    );
 
-    testWidgets('9. no decoded answer, score, result, or image data is ever displayed',
-        (tester) async {
-      client.retainedScansToReturn = [_retainedScanRow(scanId: 's1')];
-      await openSoftDeleted(tester);
+    testWidgets(
+      '9. no decoded answer, score, result, or image data is ever displayed',
+      (tester) async {
+        client.retainedScansToReturn = [_retainedScanRow(scanId: 's1')];
+        await openSoftDeleted(tester);
 
-      expect(find.byType(Image), findsNothing);
-      expect(find.textContaining('Score'), findsNothing);
-      expect(find.textContaining('score'), findsNothing);
-      expect(find.widgetWithText(TextButton, 'View Image'), findsNothing);
-      expect(client.calls, isNot(contains(startsWith('downloadScanImage'))));
-      expect(client.calls, isNot(contains(startsWith('downloadNameCropImage'))));
-    });
+        expect(find.byType(Image), findsNothing);
+        expect(find.textContaining('Score'), findsNothing);
+        expect(find.textContaining('score'), findsNothing);
+        expect(find.widgetWithText(TextButton, 'View Image'), findsNothing);
+        expect(client.calls, isNot(contains(startsWith('downloadScanImage'))));
+        expect(
+          client.calls,
+          isNot(contains(startsWith('downloadNameCropImage'))),
+        );
+      },
+    );
   });
 }

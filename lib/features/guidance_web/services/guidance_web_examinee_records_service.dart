@@ -19,7 +19,10 @@ import '../../../models/local_batch.dart';
 /// Supabase error code, or a stack trace. Mirrors
 /// `GuidanceWebResultsException` exactly.
 class GuidanceWebExamineeRecordsException implements Exception {
-  GuidanceWebExamineeRecordsException(this.message, {this.scanWasDeleted = false});
+  GuidanceWebExamineeRecordsException(
+    this.message, {
+    this.scanWasDeleted = false,
+  });
   final String message;
 
   /// Set only by [GuidanceWebExamineeRecordsService.deleteUnlinkedScan] for
@@ -39,6 +42,17 @@ class GuidanceWebExamineeRecordsException implements Exception {
 /// service rule and the Examinee Detail hint), so both say the same thing.
 const String archivedExamineeLinkMessage =
     'Archived examinees cannot be linked to new scans. Restore the examinee first.';
+
+/// Analytics population: unique linked people and unresolved scan records.
+class ExamineeAnalyticsPopulation {
+  ExamineeAnalyticsPopulation({
+    required Iterable<ExamineeRecord> examinees,
+    required Iterable<ExamineeHistoryItem> unlinked,
+  }) : examinees = List.unmodifiable(examinees),
+       unlinked = List.unmodifiable(unlinked);
+  final List<ExamineeRecord> examinees;
+  final List<ExamineeHistoryItem> unlinked;
+}
 
 /// Supabase access for the Guidance Council Web Console's Examinee Records
 /// page — the canonical applicant/examinee record (`examinees`) and the
@@ -74,11 +88,11 @@ class GuidanceWebExamineeRecordsService {
     ScanDeleteClient? scanDeleteClient,
     ScanRestoreClient? scanRestoreClient,
     SyncIdentity? identity,
-  })  : _client = client ?? _buildDefaultClient(),
-        _explicitRetakeClient = retakeClient,
-        _explicitScanDeleteClient = scanDeleteClient,
-        _explicitScanRestoreClient = scanRestoreClient,
-        _explicitIdentity = identity;
+  }) : _client = client ?? _buildDefaultClient(),
+       _explicitRetakeClient = retakeClient,
+       _explicitScanDeleteClient = scanDeleteClient,
+       _explicitScanRestoreClient = scanRestoreClient,
+       _explicitIdentity = identity;
 
   final SyncClient _client;
   final RetakeClient? _explicitRetakeClient;
@@ -100,16 +114,22 @@ class GuidanceWebExamineeRecordsService {
   /// every existing caller and test, which never touches a retake method --
   /// never pays for (or crashes on) building a real [SupabaseSyncClient]
   /// just to satisfy this field.
-  late final RetakeClient _retakeClient = _explicitRetakeClient ??
-      (_client is RetakeClient ? _client as RetakeClient : _buildDefaultClient());
+  late final RetakeClient _retakeClient =
+      _explicitRetakeClient ??
+      (_client is RetakeClient
+          ? _client as RetakeClient
+          : _buildDefaultClient());
 
   /// Same lazy-resolution reasoning as [_retakeClient]: a caller that
   /// supplies neither [scanDeleteClient] nor a [client] implementing
   /// [ScanDeleteClient] -- every existing caller and test, which never
   /// touches [deleteUnlinkedScan] -- never pays for (or crashes on)
   /// building a real [SupabaseSyncClient] just to satisfy this field.
-  late final ScanDeleteClient _scanDeleteClient = _explicitScanDeleteClient ??
-      (_client is ScanDeleteClient ? _client as ScanDeleteClient : _buildDefaultClient());
+  late final ScanDeleteClient _scanDeleteClient =
+      _explicitScanDeleteClient ??
+      (_client is ScanDeleteClient
+          ? _client as ScanDeleteClient
+          : _buildDefaultClient());
 
   /// Same lazy-resolution reasoning as [_retakeClient]/[_scanDeleteClient]:
   /// a caller that supplies neither [scanRestoreClient] nor a [client]
@@ -117,8 +137,11 @@ class GuidanceWebExamineeRecordsService {
   /// which never touches [loadRetainedSoftDeletedScans]/
   /// [requestScanRestoration] -- never pays for (or crashes on) building a
   /// real [SupabaseSyncClient] just to satisfy this field.
-  late final ScanRestoreClient _scanRestoreClient = _explicitScanRestoreClient ??
-      (_client is ScanRestoreClient ? _client as ScanRestoreClient : _buildDefaultClient());
+  late final ScanRestoreClient _scanRestoreClient =
+      _explicitScanRestoreClient ??
+      (_client is ScanRestoreClient
+          ? _client as ScanRestoreClient
+          : _buildDefaultClient());
 
   /// See `GuidanceWebResultsService._buildDefaultClient`'s doc comment —
   /// identical reasoning: [LocalBatchRepository]/[LocalStorageService] are
@@ -143,6 +166,53 @@ class GuidanceWebExamineeRecordsService {
       throw GuidanceWebExamineeRecordsException(_messageFor(read.error));
     }
     return read.examinees.map(_toExamineeRecord).toList();
+  }
+
+  /// Analytics-only population. Existing Records/history/queue behavior is
+  /// unchanged. Resolve identities once, and load each visible batch once.
+  /// readCloudScans excludes deleted_at rows; superseded attempts are excluded
+  /// here. A failed identity lookup fails the load, never fabricates unlinks.
+  Future<ExamineeAnalyticsPopulation> loadAnalyticsPopulation() async {
+    final people = {
+      for (final person in await loadExaminees()) person.id: person,
+    };
+    final batchesRead = await _client.readCloudBatches();
+    if (!batchesRead.isSuccess) {
+      throw GuidanceWebExamineeRecordsException(_messageFor(batchesRead.error));
+    }
+    final linked = <String, ExamineeRecord>{};
+    final unlinked = <ExamineeHistoryItem>[];
+    final seenScans = <String>{};
+    for (final row in batchesRead.batches) {
+      final batch = mapCloudBatch(row);
+      final read = await _client.readCloudScans(batch.id);
+      if (!read.isSuccess) {
+        throw GuidanceWebExamineeRecordsException(_messageFor(read.error));
+      }
+      for (final scan in read.scans) {
+        if (scan.isArchivedAttempt || !seenScans.add(scan.id)) continue;
+        final person = people[scan.examineeId];
+        if (person != null) {
+          linked[person.id] = person;
+        } else {
+          unlinked.add(
+            ExamineeHistoryItem(
+              batch: batch,
+              scan: mapCloudScan(scan),
+              attemptNo: scan.attemptNo,
+              attemptStatus: scan.attemptStatus,
+            ),
+          );
+        }
+      }
+    }
+    final examinees = linked.values.toList()
+      ..sort((a, b) => a.displayName.compareTo(b.displayName));
+    unlinked.sort((a, b) => b.scan.capturedAt.compareTo(a.scan.capturedAt));
+    return ExamineeAnalyticsPopulation(
+      examinees: examinees,
+      unlinked: unlinked,
+    );
   }
 
   /// [examinee]'s full examination history: every scan linked to it via
@@ -193,15 +263,17 @@ class GuidanceWebExamineeRecordsService {
     for (final row in scans) {
       final batch = batchesById[row.batchId];
       if (batch == null) continue;
-      items.add(ExamineeHistoryItem(
-        batch: batch,
-        scan: mapCloudScan(row),
-        attemptNo: row.attemptNo,
-        attemptStatus: row.attemptStatus,
-        archivedAt: row.archivedAt,
-        archivedByName: row.archivedByName,
-        archiveReason: row.archiveReason,
-      ));
+      items.add(
+        ExamineeHistoryItem(
+          batch: batch,
+          scan: mapCloudScan(row),
+          attemptNo: row.attemptNo,
+          attemptStatus: row.attemptStatus,
+          archivedAt: row.archivedAt,
+          archivedByName: row.archivedByName,
+          archiveReason: row.archiveReason,
+        ),
+      );
     }
     items.sort((a, b) => b.scan.capturedAt.compareTo(a.scan.capturedAt));
     return items;
@@ -313,7 +385,9 @@ class GuidanceWebExamineeRecordsService {
           !(s.batchId == batchId && s.id == scan.id),
     );
     if (alreadyHasType) {
-      throw GuidanceWebExamineeRecordsException(_duplicateExamMessage(examCode));
+      throw GuidanceWebExamineeRecordsException(
+        _duplicateExamMessage(examCode),
+      );
     }
 
     final outcome = await _client.linkScanToExaminee(
@@ -331,7 +405,9 @@ class GuidanceWebExamineeRecordsService {
         );
       }
       if (outcome.isPermanent && outcome.code == '23505') {
-        throw GuidanceWebExamineeRecordsException(_duplicateExamMessage(examCode));
+        throw GuidanceWebExamineeRecordsException(
+          _duplicateExamMessage(examCode),
+        );
       }
       throw GuidanceWebExamineeRecordsException(_messageFor(outcome));
     }
@@ -504,7 +580,8 @@ class GuidanceWebExamineeRecordsService {
   /// whose retention window has since expired, or that has since been
   /// restored, simply stops appearing here on the next call -- this method
   /// never filters or recomputes that itself.
-  Future<List<CloudRetainedDeletedScanRow>> loadRetainedSoftDeletedScans() async {
+  Future<List<CloudRetainedDeletedScanRow>>
+  loadRetainedSoftDeletedScans() async {
     final read = await _scanRestoreClient.listRetainedSoftDeletedScans();
     if (!read.isSuccess) {
       throw GuidanceWebExamineeRecordsException(_messageFor(read.error));
@@ -624,7 +701,9 @@ class GuidanceWebExamineeRecordsService {
   }) async {
     final trimmed = reason.trim();
     if (trimmed.isEmpty) {
-      throw GuidanceWebExamineeRecordsException('A reason is required to request a retake.');
+      throw GuidanceWebExamineeRecordsException(
+        'A reason is required to request a retake.',
+      );
     }
     final outcome = await _retakeClient.createRetakeRequest(
       examineeId: examineeId,
@@ -649,7 +728,9 @@ class GuidanceWebExamineeRecordsService {
     final outcome = await _retakeClient.reviewRetakeRequest(
       requestId: requestId,
       approve: approve,
-      reviewNote: (trimmedNote == null || trimmedNote.isEmpty) ? null : trimmedNote,
+      reviewNote: (trimmedNote == null || trimmedNote.isEmpty)
+          ? null
+          : trimmedNote,
     );
     if (!outcome.isSuccess) {
       throw GuidanceWebExamineeRecordsException(_retakeMessageFor(outcome));
@@ -665,7 +746,9 @@ class GuidanceWebExamineeRecordsService {
   }) async {
     final trimmed = archiveReason.trim();
     if (trimmed.isEmpty) {
-      throw GuidanceWebExamineeRecordsException('A reason is required to archive this attempt.');
+      throw GuidanceWebExamineeRecordsException(
+        'A reason is required to archive this attempt.',
+      );
     }
     final outcome = await _retakeClient.archiveRetakeAttempt(
       requestId: requestId,
@@ -703,7 +786,9 @@ class GuidanceWebExamineeRecordsService {
     if (!read.isSuccess) {
       throw GuidanceWebExamineeRecordsException(_messageFor(read.error));
     }
-    final current = read.examinees.where((e) => e.id == examinee.id).firstOrNull;
+    final current = read.examinees
+        .where((e) => e.id == examinee.id)
+        .firstOrNull;
     if (current == null) {
       throw GuidanceWebExamineeRecordsException(
         'This examinee record is no longer available. '
@@ -755,7 +840,8 @@ class _WebSyncIdentity implements SyncIdentity {
 /// One `examinees` row as the canonical [ExamineeRecord]. Shared by the
 /// Examinee Records page and the Results page, which resolves each scan's
 /// linked examinee through it, so both read the same fields the same way.
-ExamineeRecord examineeRecordFromCloudRow(CloudExamineeRow row) => ExamineeRecord(
+ExamineeRecord examineeRecordFromCloudRow(CloudExamineeRow row) =>
+    ExamineeRecord(
       id: row.id,
       temporaryExamineeId: row.temporaryExamineeId,
       officialStudentId: row.officialStudentId,

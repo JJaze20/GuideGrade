@@ -8,11 +8,14 @@ import 'package:printing/printing.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
+import '../../../core/constants/app_tokens.dart';
+import '../../../shared/widgets/state_views.dart';
 import '../../../models/examinee_record.dart';
 import '../../../models/local_batch.dart';
 import '../export/guidance_web_export_service.dart';
 import '../services/guidance_web_analytics_service.dart';
 import '../services/guidance_web_results_service.dart';
+import 'guidance_web_result_detail_view.dart';
 
 /// What the person chose in the export confirmation popup.
 enum ExportChoice { exportNow, viewOutput }
@@ -43,8 +46,9 @@ class IncludeCertificatesSwitch extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
+    return Wrap(
+      spacing: 8,
+      crossAxisAlignment: WrapCrossAlignment.center,
       children: [
         Text(
           'Include Certificates?',
@@ -54,7 +58,6 @@ class IncludeCertificatesSwitch extends StatelessWidget {
             color: _certificatesCyan,
           ).copyWith(fontStyle: FontStyle.italic),
         ),
-        const SizedBox(width: 8),
         Switch(
           key: const Key('includeCertificatesSwitch'),
           value: value,
@@ -201,6 +204,10 @@ class _GuidanceWebExportBatchViewState
   bool _includeSummary = true;
   late bool _includeCertificates = widget.initialIncludeCertificates;
   final Set<String> _selected = {};
+  LocalScan? _unlinkedViewing;
+  bool _showLinked = true;
+  String _categoryFilter = 'All';
+  String _examineeSearch = '';
   _Preview? _preview;
   Future<Uint8List>? _pdf;
   bool _exporting = false;
@@ -239,7 +246,9 @@ class _GuidanceWebExportBatchViewState
         _loading = false;
       });
       if (widget.startInPreview && _preview == null) {
-        _openPreview(_Preview(includeSummary: _includeSummary, scans: _selectedScans));
+        _openPreview(
+          _Preview(includeSummary: _includeSummary, scans: _selectedScans),
+        );
       }
     } on GuidanceWebResultsException catch (e) {
       if (!mounted) return;
@@ -262,8 +271,10 @@ class _GuidanceWebExportBatchViewState
   /// meant to reflect the batch's whole official population, not just what
   /// happens to be checked, but (per the official-result Export rule) they
   /// must never include an unlinked/dangling scan either.
-  List<LocalScan> get _officialScans =>
-      [for (final s in _scans) if (_linkedExaminees.containsKey(s.id)) s];
+  List<LocalScan> get _officialScans => [
+    for (final s in _scans)
+      if (_linkedExaminees.containsKey(s.id)) s,
+  ];
 
   /// Builds the PDF for [p] (batch summary and/or the given scans). Official
   /// identity is used for every linked scan -- see [_linkedExaminees] --
@@ -280,6 +291,11 @@ class _GuidanceWebExportBatchViewState
   );
 
   void _openPreview(_Preview p) {
+    if (p.scans.length == 1 &&
+        !_linkedExaminees.containsKey(p.scans.single.id)) {
+      setState(() => _unlinkedViewing = p.scans.single);
+      return;
+    }
     setState(() {
       _preview = p;
       _pdf = _buildPdf(p);
@@ -332,7 +348,9 @@ class _GuidanceWebExportBatchViewState
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not create the PDF. Please try again.')),
+        const SnackBar(
+          content: Text('Could not create the PDF. Please try again.'),
+        ),
       );
     } finally {
       if (mounted) setState(() => _exporting = false);
@@ -374,7 +392,8 @@ class _GuidanceWebExportBatchViewState
   String _nameOf(LocalScan s) {
     final official = _linkedExaminees[s.id];
     if (official != null) {
-      return (official.firstName.trim().isNotEmpty || official.lastName.trim().isNotEmpty)
+      return (official.firstName.trim().isNotEmpty ||
+              official.lastName.trim().isNotEmpty)
           ? official.displayName
           : 'No name on file';
     }
@@ -397,9 +416,25 @@ class _GuidanceWebExportBatchViewState
 
   String _statusOf(LocalScan s) => s.result?.status ?? 'Ungraded';
 
+  String _categoryOf(LocalScan scan) {
+    final result = scan.result;
+    if (result == null || result.status != 'Graded') return '—';
+    return exportCategoryLetter(widget.batch.examCode, result.rawScore) ?? '—';
+  }
+
   static const _months = [
-    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
   ];
 
   String _fmtDate(DateTime d) => '${_months[d.month - 1]} ${d.day}, ${d.year}';
@@ -418,10 +453,56 @@ class _GuidanceWebExportBatchViewState
 
   @override
   Widget build(BuildContext context) {
+    final unlinked = _unlinkedViewing;
+    if (unlinked != null) {
+      return Padding(
+        padding: EdgeInsets.all(
+          AppSpace.gutterFor(MediaQuery.sizeOf(context).width),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Wrap(
+              spacing: 12,
+              runSpacing: 8,
+              children: [
+                TextButton.icon(
+                  onPressed: () => setState(() => _unlinkedViewing = null),
+                  icon: const Icon(Icons.arrow_back),
+                  label: const Text('Back to Checklist'),
+                ),
+                const OutlinedButton(onPressed: null, child: Text('Print')),
+                const OutlinedButton(onPressed: null, child: Text('Download')),
+                const FilledButton(onPressed: null, child: Text('Export')),
+              ],
+            ),
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 12),
+              child: Text(
+                'View only — create or link an examinee record to enable printing and export.',
+              ),
+            ),
+            Expanded(
+              child: GuidanceWebResultDetailView(
+                key: ValueKey('unlinkedPreview_${unlinked.id}'),
+                scan: unlinked,
+                batch: widget.batch,
+                service: _service,
+                showClusterAnalysis: true,
+                onBack: () => setState(() => _unlinkedViewing = null),
+                backLabel: 'Back to Checklist',
+              ),
+            ),
+          ],
+        ),
+      );
+    }
     final preview = _preview;
     if (preview != null) {
       return _PdfPreviewPane(
+        key: ObjectKey(_pdf),
         pdf: _pdf!,
+        onRefresh: () => _openPreview(preview),
         fileName: _fileName,
         onBack: () => setState(() {
           _preview = null;
@@ -430,24 +511,27 @@ class _GuidanceWebExportBatchViewState
       );
     }
     return Padding(
-      padding: const EdgeInsets.all(24),
+      padding: EdgeInsets.all(
+        AppSpace.gutterFor(MediaQuery.sizeOf(context).width),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
+          Wrap(
+            spacing: 16,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               TextButton.icon(
                 onPressed: widget.onBack,
                 icon: const Icon(Icons.arrow_back, size: 16),
                 label: const Text('Back to List'),
               ),
-              const Spacer(),
               if (!_loading && _scans.isNotEmpty) ...[
                 IncludeCertificatesSwitch(
                   value: _includeCertificates,
                   onChanged: (v) => setState(() => _includeCertificates = v),
                 ),
-                const SizedBox(width: 24),
               ],
               if (!_loading && _scans.isNotEmpty)
                 Padding(
@@ -458,7 +542,7 @@ class _GuidanceWebExportBatchViewState
                       Text(
                         'Check all',
                         style: AppTextStyles.body(
-                          size: 11,
+                          size: 13,
                           weight: FontWeight.w700,
                           color: AppColors.textGray,
                         ),
@@ -506,6 +590,7 @@ class _GuidanceWebExportBatchViewState
 
   Widget _viewButton(VoidCallback onPressed, {Key? key}) => TextButton(
     key: key,
+    style: TextButton.styleFrom(minimumSize: const Size(64, 44)),
     onPressed: onPressed,
     child: Text(
       'view',
@@ -521,56 +606,83 @@ class _GuidanceWebExportBatchViewState
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       decoration: _cardDecoration,
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              _batchTitle,
-              overflow: TextOverflow.ellipsis,
-              style: AppTextStyles.body(size: 13, weight: FontWeight.w600),
+      child: LayoutBuilder(
+        builder: (context, box) => Wrap(
+          spacing: 12,
+          runSpacing: 8,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            SizedBox(
+              width: box.maxWidth < 600 ? box.maxWidth : box.maxWidth - 260,
+              child: Text(
+                _batchTitle,
+                overflow: TextOverflow.ellipsis,
+                style: AppTextStyles.body(size: 13, weight: FontWeight.w600),
+              ),
             ),
-          ),
-          Text(
-            'Batch summary',
-            style: AppTextStyles.body(size: 11, color: AppColors.textGray),
-          ),
-          const SizedBox(width: 12),
-          _viewButton(
-            () => _openPreview(
-              const _Preview(includeSummary: true, scans: []),
+            Text(
+              'Batch summary',
+              style: AppTextStyles.body(size: 13, color: AppColors.textGray),
             ),
-            key: const Key('summaryView'),
-          ),
-          _selectionCheckbox(
-            key: const Key('summaryDot'),
-            on: _includeSummary,
-            tooltip: _includeSummary
-                ? 'Included in export'
-                : 'Not included in export',
-            onTap: () => setState(() => _includeSummary = !_includeSummary),
-          ),
-        ],
+            const SizedBox(width: 12),
+            _viewButton(
+              () =>
+                  _openPreview(const _Preview(includeSummary: true, scans: [])),
+              key: const Key('summaryView'),
+            ),
+            _selectionCheckbox(
+              key: const Key('summaryDot'),
+              on: _includeSummary,
+              tooltip: _includeSummary
+                  ? 'Included in export'
+                  : 'Not included in export',
+              onTap: () => setState(() => _includeSummary = !_includeSummary),
+            ),
+          ],
+        ),
       ),
     );
   }
 
-  Widget _message(String text, {bool isError = false}) => Center(
-    child: Text(
-      text,
-      style: AppTextStyles.body(
-        size: 11.5,
-        color: isError ? AppColors.warmRedOrange : AppColors.textGray,
+  Widget _message(String text, {bool isError = false}) {
+    if (isError) return ErrorState(message: text, onRetry: _load);
+    if (text.startsWith('Loading')) return LoadingState(message: text);
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Text(
+          text,
+          textAlign: TextAlign.center,
+          style: AppTextStyles.body(size: 13, color: AppColors.textGray),
+        ),
       ),
-    ),
-  );
+    );
+  }
 
   Widget _buildBody() {
     if (_loading) return _message('Loading results...');
     if (_error != null) return _message(_error!, isError: true);
     if (_scans.isEmpty) return _message('No results found for this batch.');
 
+    final term = _examineeSearch.trim().toLowerCase();
+    final visible = _scans
+        .where(
+          (scan) =>
+              _linkedExaminees.containsKey(scan.id) == _showLinked &&
+              (_categoryFilter == 'All' ||
+                  _categoryOf(scan) == _categoryFilter) &&
+              (term.isEmpty ||
+                  _nameOf(scan).toLowerCase().contains(term) ||
+                  (_linkedExaminees[scan.id]?.temporaryExamineeId ??
+                          scan.examinee?.examineeNumber ??
+                          '')
+                      .toLowerCase()
+                      .contains(term)),
+        )
+        .toList();
+    final linkedCount = _officialScans.length;
     final headerStyle = AppTextStyles.body(
-      size: 9.5,
+      size: 11.5,
       weight: FontWeight.w800,
       color: AppColors.textGray,
     );
@@ -579,25 +691,148 @@ class _GuidanceWebExportBatchViewState
       child: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-            child: Row(
-              children: [
-                SizedBox(width: 32, child: Text('#', style: headerStyle)),
-                Expanded(flex: 4, child: Text('EXAMINEE', style: headerStyle)),
-                Expanded(flex: 2, child: Text('SCORE', style: headerStyle)),
-                Expanded(flex: 1, child: Text('%', style: headerStyle)),
-                Expanded(flex: 2, child: Text('STATUS', style: headerStyle)),
-                const SizedBox(width: 128),
-              ],
+            padding: const EdgeInsets.all(16),
+            child: LayoutBuilder(
+              builder: (context, constraints) => Wrap(
+                spacing: 16,
+                runSpacing: 12,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  for (final linked in [true, false])
+                    ChoiceChip(
+                      key: Key(
+                        linked ? 'exportLinkedFilter' : 'exportUnlinkedFilter',
+                      ),
+                      label: Text(
+                        '${linked ? 'Examinees' : 'Unlinked Examinees'} (${linked ? linkedCount : _scans.length - linkedCount})',
+                      ),
+                      selected: _showLinked == linked,
+                      onSelected: (_) => setState(() => _showLinked = linked),
+                    ),
+                  SizedBox(
+                    width: constraints.maxWidth < 180
+                        ? constraints.maxWidth
+                        : 180,
+                    child: DropdownButtonFormField<String>(
+                      key: const Key('exportCategoryFilter'),
+                      initialValue: _categoryFilter,
+                      isExpanded: true,
+                      decoration: InputDecoration(
+                        labelText: 'Category',
+                        isDense: true,
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                      items: [
+                        for (final category in ['All', 'A', 'B', 'C', 'D', '—'])
+                          DropdownMenuItem(
+                            value: category,
+                            child: Text(
+                              category == '—' ? 'Not categorized' : category,
+                            ),
+                          ),
+                      ],
+                      onChanged: (value) {
+                        if (value != null)
+                          setState(() => _categoryFilter = value);
+                      },
+                    ),
+                  ),
+                  SizedBox(
+                    width: constraints.maxWidth < 360
+                        ? constraints.maxWidth
+                        : 360,
+                    child: TextField(
+                      key: const Key('exportExamineeSearch'),
+                      decoration: InputDecoration(
+                        hintText: 'Search name or Examinee ID',
+                        prefixIcon: const Icon(Icons.search),
+                        isDense: true,
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                      onChanged: (value) =>
+                          setState(() => _examineeSearch = value),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
-          const Divider(height: 1, color: AppColors.cardBorder),
+          if (!_showLinked)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: Text(
+                'Create or link an examinee record before exporting these results.',
+                style: AppTextStyles.body(size: 12, color: AppColors.textGray),
+              ),
+            ),
           Expanded(
-            child: ListView.separated(
-              itemCount: _scans.length,
-              separatorBuilder: (_, _) =>
-                  const Divider(height: 1, color: AppColors.cardBorder),
-              itemBuilder: (_, i) => _scanRow(i, _scans[i]),
+            child: LayoutBuilder(
+              builder: (context, box) => SingleChildScrollView(
+                key: const Key('exportTableScroll'),
+                scrollDirection: Axis.horizontal,
+                child: SizedBox(
+                  width: box.maxWidth < 900 ? 900 : box.maxWidth,
+                  height: box.maxHeight,
+                  child: Column(
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                        child: Row(
+                          children: [
+                            SizedBox(
+                              width: 32,
+                              child: Text('#', style: headerStyle),
+                            ),
+                            Expanded(
+                              flex: 4,
+                              child: Text('EXAMINEE', style: headerStyle),
+                            ),
+                            Expanded(
+                              flex: 2,
+                              child: Text('SCORE', style: headerStyle),
+                            ),
+                            Expanded(
+                              flex: 1,
+                              child: Text('%', style: headerStyle),
+                            ),
+                            Expanded(
+                              flex: 2,
+                              child: Text('STATUS', style: headerStyle),
+                            ),
+                            Expanded(
+                              child: Text('CATEGORY', style: headerStyle),
+                            ),
+                            const SizedBox(width: 128),
+                          ],
+                        ),
+                      ),
+                      const Divider(height: 1, color: AppColors.cardBorder),
+                      Expanded(
+                        child: visible.isEmpty
+                            ? _message(
+                                term.isNotEmpty || _categoryFilter != 'All'
+                                    ? 'No matching examinees.'
+                                    : _showLinked
+                                    ? 'No linked examinees in this batch.'
+                                    : 'No unlinked examinees in this batch.',
+                              )
+                            : ListView.separated(
+                                itemCount: visible.length,
+                                separatorBuilder: (_, _) => const Divider(
+                                  height: 1,
+                                  color: AppColors.cardBorder,
+                                ),
+                                itemBuilder: (_, i) => _scanRow(i, visible[i]),
+                              ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             ),
           ),
         ],
@@ -614,7 +849,7 @@ class _GuidanceWebExportBatchViewState
     final tagged = _linkedExaminees.containsKey(s.id);
     final on = _selected.contains(s.id);
     final textStyle = AppTextStyles.body(
-      size: 11,
+      size: 13,
       color: tagged ? AppColors.textDark : AppColors.textGray,
     );
     return Padding(
@@ -635,6 +870,13 @@ class _GuidanceWebExportBatchViewState
           Expanded(flex: 2, child: Text(_scoreOf(s), style: textStyle)),
           Expanded(flex: 1, child: Text(_percentOf(s), style: textStyle)),
           Expanded(flex: 2, child: Text(_statusOf(s), style: textStyle)),
+          Expanded(
+            child: Text(
+              _categoryOf(s),
+              key: Key('exportCategory_${s.id}'),
+              style: textStyle.copyWith(fontWeight: FontWeight.w700),
+            ),
+          ),
           SizedBox(
             // Pre-existing overflow fix, widened again: 96 was too narrow
             // for the "view" button plus the old status dot (found while
@@ -649,7 +891,8 @@ class _GuidanceWebExportBatchViewState
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
                 _viewButton(
-                  () => _openPreview(_Preview(includeSummary: false, scans: [s])),
+                  () =>
+                      _openPreview(_Preview(includeSummary: false, scans: [s])),
                   key: Key('scanView_${s.id}'),
                 ),
                 _selectionCheckbox(
@@ -671,16 +914,18 @@ class _GuidanceWebExportBatchViewState
   Widget _buildActions() {
     final count = _exportableSelectedCount;
     final summary = _includeSummary ? 'batch summary + ' : '';
-    return Row(
+    return Wrap(
+      spacing: 12,
+      runSpacing: 8,
+      crossAxisAlignment: WrapCrossAlignment.center,
       children: [
         Text(
           _hasSelection
               ? 'Selected: $summary$count examinee${count == 1 ? '' : 's'}'
               : 'Nothing selected',
           key: const Key('selectionLabel'),
-          style: AppTextStyles.body(size: 11, color: AppColors.textGray),
+          style: AppTextStyles.body(size: 13, color: AppColors.textGray),
         ),
-        const Spacer(),
         OutlinedButton(
           key: const Key('viewOutputButton'),
           style: OutlinedButton.styleFrom(
@@ -689,7 +934,9 @@ class _GuidanceWebExportBatchViewState
               color: _hasSelection ? AppColors.darkNavy : AppColors.cardBorder,
             ),
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
           ),
           onPressed: _hasSelection
               ? () => _openPreview(
@@ -708,10 +955,11 @@ class _GuidanceWebExportBatchViewState
             ),
           ),
         ),
-        const SizedBox(width: 16),
         FilledButton(
           key: const Key('exportPdfButton'),
-          onPressed: (_hasSelection && !_exporting) ? _confirmExport : null,
+          onPressed: (_showLinked && _hasSelection && !_exporting)
+              ? _confirmExport
+              : null,
           style: FilledButton.styleFrom(
             backgroundColor: AppColors.primaryGreen,
             padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
@@ -767,14 +1015,17 @@ class _PageImage {
 ///  * The frame and the toolbar above it never change size.
 class _PdfPreviewPane extends StatefulWidget {
   const _PdfPreviewPane({
+    super.key,
     required this.pdf,
     required this.fileName,
     required this.onBack,
+    required this.onRefresh,
   });
 
   final Future<Uint8List> pdf;
   final String fileName;
   final VoidCallback onBack;
+  final VoidCallback onRefresh;
 
   @override
   State<_PdfPreviewPane> createState() => _PdfPreviewPaneState();
@@ -855,9 +1106,9 @@ class _PdfPreviewPaneState extends State<_PdfPreviewPane> {
   }
 
   Widget _zoomControls() {
-    return Row(
+    return Wrap(
       key: const Key('previewZoomControls'),
-      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: WrapCrossAlignment.center,
       children: [
         IconButton(
           key: const Key('zoomOut'),
@@ -866,7 +1117,7 @@ class _PdfPreviewPaneState extends State<_PdfPreviewPane> {
           onPressed: _zoom > _minZoom ? () => _setZoom(_zoom - 0.1) : null,
         ),
         SizedBox(
-          width: 170,
+          width: MediaQuery.sizeOf(context).width < 600 ? 96 : 170,
           child: Slider(
             key: const Key('zoomSlider'),
             min: _minZoom,
@@ -902,17 +1153,24 @@ class _PdfPreviewPaneState extends State<_PdfPreviewPane> {
 
   Widget _toolbar() {
     final bytes = _bytes;
-    return Row(
+    return Wrap(
+      spacing: 12,
+      runSpacing: 8,
+      crossAxisAlignment: WrapCrossAlignment.center,
       children: [
         TextButton.icon(
           onPressed: widget.onBack,
           icon: const Icon(Icons.arrow_back, size: 16),
           label: const Text('Back to Checklist'),
         ),
-        const Spacer(),
+        IconButton(
+          key: const Key('previewRefresh'),
+          tooltip: 'Refresh export preview',
+          onPressed: widget.onRefresh,
+          icon: const Icon(Icons.refresh),
+        ),
         if (_pages.isNotEmpty) _zoomControls(),
         if (bytes != null) ...[
-          const SizedBox(width: 12),
           OutlinedButton.icon(
             key: const Key('previewPrint'),
             onPressed: () => Printing.layoutPdf(
@@ -922,7 +1180,6 @@ class _PdfPreviewPaneState extends State<_PdfPreviewPane> {
             icon: const Icon(Icons.print, size: 16),
             label: const Text('Print'),
           ),
-          const SizedBox(width: 8),
           FilledButton.icon(
             key: const Key('previewDownload'),
             onPressed: () => Printing.sharePdf(
@@ -943,7 +1200,9 @@ class _PdfPreviewPaneState extends State<_PdfPreviewPane> {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.all(24),
+      padding: EdgeInsets.all(
+        AppSpace.gutterFor(MediaQuery.sizeOf(context).width),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -965,7 +1224,11 @@ class _PdfPreviewPaneState extends State<_PdfPreviewPane> {
       decoration: const BoxDecoration(
         color: Colors.white,
         boxShadow: [
-          BoxShadow(color: Color(0x33000000), blurRadius: 6, offset: Offset(0, 2)),
+          BoxShadow(
+            color: Color(0x33000000),
+            blurRadius: 6,
+            offset: Offset(0, 2),
+          ),
         ],
       ),
       child: Text(
@@ -981,7 +1244,11 @@ class _PdfPreviewPaneState extends State<_PdfPreviewPane> {
       decoration: const BoxDecoration(
         color: Colors.white,
         boxShadow: [
-          BoxShadow(color: Color(0x33000000), blurRadius: 6, offset: Offset(0, 2)),
+          BoxShadow(
+            color: Color(0x33000000),
+            blurRadius: 6,
+            offset: Offset(0, 2),
+          ),
         ],
       ),
       child: Image.memory(
@@ -1003,10 +1270,7 @@ class _PdfPreviewPaneState extends State<_PdfPreviewPane> {
         child: Text(
           'Could not build the export preview. Please try again.',
           key: const Key('previewError'),
-          style: AppTextStyles.body(
-            size: 11.5,
-            color: AppColors.warmRedOrange,
-          ),
+          style: AppTextStyles.body(size: 11.5, color: AppColors.warmRedOrange),
         ),
       );
     } else {

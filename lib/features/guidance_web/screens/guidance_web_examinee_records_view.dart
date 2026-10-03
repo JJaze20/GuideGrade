@@ -1,11 +1,16 @@
 import 'dart:async';
 import 'dart:typed_data';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
+import '../../../core/constants/app_tokens.dart';
+import '../../../shared/widgets/state_views.dart';
+import '../../../shared/widgets/status_badge.dart';
+import '../../../shared/widgets/surface_card.dart';
 import '../../../core/sync/scan_restore_client.dart';
 import '../../../models/examinee_record.dart';
 import '../../../models/local_batch.dart';
@@ -47,8 +52,8 @@ class GuidanceWebExamineeRecordsView extends StatefulWidget {
     super.key,
     GuidanceWebExamineeRecordsService? service,
     GuidanceWebResultsService? resultsService,
-  })  : _service = service,
-        _resultsService = resultsService;
+  }) : _service = service,
+       _resultsService = resultsService;
 
   final GuidanceWebExamineeRecordsService? _service;
 
@@ -68,10 +73,12 @@ class _GuidanceWebExamineeRecordsViewState
       widget._service ?? GuidanceWebExamineeRecordsService();
   late final GuidanceWebResultsService _resultsService =
       widget._resultsService ?? GuidanceWebResultsService();
+
   /// Name-crop downloads for the Unlinked Scans rows, kept so a row scrolled
   /// out and back in is not downloaded again.
   late final _NameCropCache _nameCropCache = _NameCropCache(_resultsService);
   final TextEditingController _searchController = TextEditingController();
+  final ScrollController _tableScroll = ScrollController();
 
   _RecordsTab _tab = _RecordsTab.examinees;
 
@@ -120,6 +127,7 @@ class _GuidanceWebExamineeRecordsViewState
   @override
   void dispose() {
     _searchController.dispose();
+    _tableScroll.dispose();
     super.dispose();
   }
 
@@ -256,21 +264,25 @@ class _GuidanceWebExamineeRecordsViewState
       });
     } on GuidanceWebExamineeRecordsException catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.message)));
     }
   }
 
   Future<void> _createFromScan(ExamineeHistoryItem item) async {
     final created = await showDialog<ExamineeRecord>(
       context: context,
-      builder: (_) => _CreateExamineeFromScanDialog(service: _service, item: item),
+      builder: (_) =>
+          _CreateExamineeFromScanDialog(service: _service, item: item),
     );
     if (created == null || !mounted) return;
     setState(() {
       _examinees = [..._examinees, created]
         ..sort((a, b) => a.displayName.compareTo(b.displayName));
       _unlinkedScans = [
-        for (final s in _unlinkedScans) if (s.scan.id != item.scan.id) s,
+        for (final s in _unlinkedScans)
+          if (s.scan.id != item.scan.id) s,
       ];
       // "show the new Examinee Record" -- go straight to its detail page.
       _viewingExaminee = created;
@@ -289,11 +301,14 @@ class _GuidanceWebExamineeRecordsViewState
     if (linked != true || !mounted) return;
     setState(() {
       _unlinkedScans = [
-        for (final s in _unlinkedScans) if (s.scan.id != item.scan.id) s,
+        for (final s in _unlinkedScans)
+          if (s.scan.id != item.scan.id) s,
       ];
     });
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Scan attached to the selected Examinee Record.')),
+      const SnackBar(
+        content: Text('Scan attached to the selected Examinee Record.'),
+      ),
     );
   }
 
@@ -315,7 +330,9 @@ class _GuidanceWebExamineeRecordsViewState
     if (item.isArchivedAttempt) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Archived historical attempts are protected and cannot be deleted.'),
+          content: Text(
+            'Archived historical attempts are protected and cannot be deleted.',
+          ),
         ),
       );
       return;
@@ -336,7 +353,8 @@ class _GuidanceWebExamineeRecordsViewState
 
     setState(() {
       _unlinkedScans = [
-        for (final s in _unlinkedScans) if (s.scan.id != item.scan.id) s,
+        for (final s in _unlinkedScans)
+          if (s.scan.id != item.scan.id) s,
       ];
     });
     // Re-read the Soft-Deleted Scans tab from the database (same convention
@@ -407,7 +425,9 @@ class _GuidanceWebExamineeRecordsViewState
   Widget build(BuildContext context) {
     final viewing = _viewingExaminee;
     return Padding(
-      padding: const EdgeInsets.all(24),
+      padding: EdgeInsets.all(
+        AppSpace.gutterFor(MediaQuery.sizeOf(context).width),
+      ),
       child: viewing != null
           ? GuidanceWebExamineeDetailView(
               examinee: viewing,
@@ -442,15 +462,15 @@ class _GuidanceWebExamineeRecordsViewState
   }
 
   Widget _buildTabSwitcher() {
-    return Row(
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
       children: [
         _tabButton(_RecordsTab.examinees, 'Examinees'),
-        const SizedBox(width: 8),
         _tabButton(
           _RecordsTab.unlinkedScans,
           'Unlinked Scans${_unlinkedScans.isEmpty ? '' : ' (${_unlinkedScans.length})'}',
         ),
-        const SizedBox(width: 8),
         _tabButton(
           _RecordsTab.softDeletedScans,
           'Soft-Deleted Scans${_retainedScans.isEmpty ? '' : ' (${_retainedScans.length})'}',
@@ -461,13 +481,22 @@ class _GuidanceWebExamineeRecordsViewState
 
   Widget _tabButton(_RecordsTab tab, String label) {
     final selected = _tab == tab;
-    return TextButton(
-      onPressed: () => setState(() => _tab = tab),
-      style: TextButton.styleFrom(
-        backgroundColor: selected ? AppColors.emerald100 : Colors.transparent,
-        foregroundColor: selected ? AppColors.primaryGreen : AppColors.textGray,
+    return Semantics(
+      selected: selected,
+      child: TextButton(
+        onPressed: () => setState(() => _tab = tab),
+        style: TextButton.styleFrom(
+          backgroundColor: selected ? AppColors.emerald100 : Colors.transparent,
+          foregroundColor: selected
+              ? AppColors.primaryGreen
+              : AppColors.textGray,
+          minimumSize: const Size(44, 44),
+        ),
+        child: Text(
+          label,
+          style: AppTextStyles.body(size: 13, weight: FontWeight.w700),
+        ),
       ),
-      child: Text(label, style: AppTextStyles.body(size: 11.5, weight: FontWeight.w700)),
     );
   }
 
@@ -487,20 +516,29 @@ class _GuidanceWebExamineeRecordsViewState
   }
 
   Widget _buildExamineesControls() {
-    return Container(
+    return SurfaceCard(
       padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.cardBorder),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(flex: 2, child: _buildSearchField()),
-          const SizedBox(width: 16),
-          Expanded(child: _buildStatusFilter()),
-        ],
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          if (constraints.maxWidth < 600) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _buildSearchField(),
+                const SizedBox(height: 12),
+                _buildStatusFilter(),
+              ],
+            );
+          }
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(flex: 2, child: _buildSearchField()),
+              const SizedBox(width: 16),
+              Expanded(child: _buildStatusFilter()),
+            ],
+          );
+        },
       ),
     );
   }
@@ -509,13 +547,24 @@ class _GuidanceWebExamineeRecordsViewState
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Search', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600)),
+        Text(
+          'Search',
+          style: AppTextStyles.body(size: 12, weight: FontWeight.w600),
+        ),
         const SizedBox(height: 6),
         TextField(
+          key: const Key('recordsSearch'),
           controller: _searchController,
-          decoration: _fieldDecoration(
-            hint: 'Search name or Temporary Examinee ID...',
-          ).copyWith(prefixIcon: const Icon(Icons.search, size: 18)),
+          decoration: _fieldDecoration(hint: 'Name or examinee ID').copyWith(
+            prefixIcon: const Icon(Icons.search, size: 18),
+            suffixIcon: _searchController.text.isEmpty
+                ? null
+                : IconButton(
+                    tooltip: 'Clear search',
+                    onPressed: _searchController.clear,
+                    icon: const Icon(Icons.close),
+                  ),
+          ),
         ),
       ],
     );
@@ -525,13 +574,22 @@ class _GuidanceWebExamineeRecordsViewState
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Status', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600)),
+        Text(
+          'Status',
+          style: AppTextStyles.body(size: 12, weight: FontWeight.w600),
+        ),
         const SizedBox(height: 6),
         DropdownButtonFormField<String>(
           initialValue: _statusFilter,
+          isExpanded: true,
           decoration: _fieldDecoration(),
           items: _statusFilterOptions
-              .map((s) => DropdownMenuItem(value: s, child: Text(s, style: AppTextStyles.body(size: 11))))
+              .map(
+                (s) => DropdownMenuItem(
+                  value: s,
+                  child: Text(s, style: AppTextStyles.body(size: 13)),
+                ),
+              )
               .toList(),
           onChanged: (v) => setState(() => _statusFilter = v ?? 'Active'),
         ),
@@ -560,66 +618,194 @@ class _GuidanceWebExamineeRecordsViewState
   }
 
   Widget _buildExamineesBody() {
-    if (_loadingExaminees) return _buildMessage(FontAwesomeIcons.spinner, 'Loading examinee records...');
+    if (_loadingExaminees) {
+      return const LoadingState(message: 'Loading examinee records...');
+    }
     if (_examineesError != null) {
-      return _buildMessage(FontAwesomeIcons.triangleExclamation, _examineesError!, isError: true);
+      return _buildMessage(
+        FontAwesomeIcons.triangleExclamation,
+        _examineesError!,
+        isError: true,
+      );
     }
     if (_examinees.isEmpty) {
-      return _buildMessage(FontAwesomeIcons.userGraduate, 'No examinee records found.');
+      return _buildMessage(
+        FontAwesomeIcons.userGraduate,
+        'No examinee records found.',
+      );
     }
     final filtered = _filteredExaminees;
     if (filtered.isEmpty) {
-      return _buildMessage(FontAwesomeIcons.magnifyingGlass, 'No examinees match your search or filter.');
+      return _buildMessage(
+        FontAwesomeIcons.magnifyingGlass,
+        'No examinees match your search or filter.',
+      );
     }
     return _buildExamineeTable(filtered);
   }
 
-  Widget _buildMessage(FaIconData icon, String message, {bool isError = false}) {
+  Widget _buildMessage(
+    FaIconData icon,
+    String message, {
+    bool isError = false,
+  }) {
+    if (isError) {
+      return ErrorState(
+        message: message,
+        onRetry: switch (_tab) {
+          _RecordsTab.examinees => _loadExaminees,
+          _RecordsTab.unlinkedScans => _loadUnlinkedScans,
+          _RecordsTab.softDeletedScans => _loadRetainedScans,
+        },
+      );
+    }
     return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          FaIcon(icon, size: 36, color: isError ? AppColors.warmRedOrange : AppColors.textGray),
-          const SizedBox(height: 14),
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 360),
-            child: Text(
-              message,
-              textAlign: TextAlign.center,
-              style: AppTextStyles.body(size: 11.5, color: isError ? AppColors.warmRedOrange : AppColors.textGray),
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            FaIcon(
+              icon,
+              size: 36,
+              color: isError ? AppColors.warmRedOrange : AppColors.textGray,
             ),
-          ),
-        ],
+            const SizedBox(height: 14),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 360),
+              child: Text(
+                message,
+                textAlign: TextAlign.center,
+                style: AppTextStyles.body(size: 13, color: AppColors.textGray),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
   Widget _buildExamineeTable(List<ExamineeRecord> examinees) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.cardBorder),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          _buildExamineeTableHeader(),
-          const Divider(height: 1, color: AppColors.cardBorder),
-          Expanded(
-            child: ListView.separated(
-              itemCount: examinees.length,
-              separatorBuilder: (_, _) => const Divider(height: 1, color: AppColors.cardBorder),
-              itemBuilder: (context, index) => _buildExamineeRow(examinees[index]),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < 600) {
+          return ListView.separated(
+            key: const Key('examineeCards'),
+            itemCount: examinees.length,
+            separatorBuilder: (_, _) => const SizedBox(height: 12),
+            itemBuilder: (_, index) {
+              final examinee = examinees[index];
+              return SurfaceCard(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      examinee.displayName,
+                      style: AppTextStyles.body(
+                        size: 14,
+                        weight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      examinee.temporaryExamineeId,
+                      style: AppTextStyles.caption(),
+                    ),
+                    const SizedBox(height: 12),
+                    _statusChip(examinee),
+                    const SizedBox(height: 8),
+                    _examineeActions(examinee),
+                  ],
+                ),
+              );
+            },
+          );
+        }
+        return _scrollableTable(
+          minWidth: 760,
+          child: SurfaceCard(
+            padding: EdgeInsets.zero,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _buildExamineeTableHeader(),
+                const Divider(height: 1, color: AppColors.cardBorder),
+                Expanded(
+                  child: ListView.separated(
+                    itemCount: examinees.length,
+                    separatorBuilder: (_, _) =>
+                        const Divider(height: 1, color: AppColors.cardBorder),
+                    itemBuilder: (context, index) =>
+                        _buildExamineeRow(examinees[index]),
+                  ),
+                ),
+              ],
             ),
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 
+  Widget _scrollableTable({required double minWidth, required Widget child}) =>
+      LayoutBuilder(
+        builder: (context, constraints) {
+          final scale = MediaQuery.textScalerOf(context).scale(13) / 13;
+          return Scrollbar(
+            controller: _tableScroll,
+            thumbVisibility: true,
+            child: SingleChildScrollView(
+              key: const Key('recordsTableScroll'),
+              controller: _tableScroll,
+              scrollDirection: Axis.horizontal,
+              child: SizedBox(
+                width: math.max(
+                  constraints.maxWidth,
+                  minWidth * scale.clamp(1, 2),
+                ),
+                child: child,
+              ),
+            ),
+          );
+        },
+      );
+
+  Widget _examineeActions(ExamineeRecord examinee) => Wrap(
+    spacing: 8,
+    children: [
+      TextButton(
+        style: TextButton.styleFrom(minimumSize: const Size(64, 44)),
+        onPressed: () => _toggleArchive(examinee),
+        child: Text(
+          examinee.isActive ? 'Archive' : 'Restore',
+          style: AppTextStyles.body(
+            size: 13,
+            weight: FontWeight.w600,
+            color: AppColors.textGray,
+          ),
+        ),
+      ),
+      TextButton(
+        style: TextButton.styleFrom(minimumSize: const Size(64, 44)),
+        onPressed: () => setState(() => _viewingExaminee = examinee),
+        child: Text(
+          'View',
+          style: AppTextStyles.body(
+            size: 13,
+            weight: FontWeight.w700,
+            color: AppColors.primaryGreen,
+          ),
+        ),
+      ),
+    ],
+  );
+
   Widget _buildExamineeTableHeader() {
-    final style = AppTextStyles.body(size: 9.5, weight: FontWeight.w800, color: AppColors.textGray);
+    final style = AppTextStyles.body(
+      size: 11.5,
+      weight: FontWeight.w800,
+      color: AppColors.textGray,
+    );
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Row(
@@ -642,36 +828,20 @@ class _GuidanceWebExamineeRecordsViewState
             flex: 3,
             child: Text(
               examinee.displayName,
-              style: AppTextStyles.body(size: 11, weight: FontWeight.w600),
+              style: AppTextStyles.body(size: 13, weight: FontWeight.w600),
+              maxLines: 2,
               overflow: TextOverflow.ellipsis,
             ),
           ),
-          Expanded(flex: 2, child: Text(examinee.temporaryExamineeId, style: AppTextStyles.body(size: 11))),
-          Expanded(flex: 1, child: _statusChip(examinee)),
-          SizedBox(
-            width: 175,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                TextButton(
-                  style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 8)),
-                  onPressed: () => _toggleArchive(examinee),
-                  child: Text(
-                    examinee.isActive ? 'Archive' : 'Restore',
-                    style: AppTextStyles.body(size: 10.5, weight: FontWeight.w700, color: AppColors.textGray),
-                  ),
-                ),
-                TextButton(
-                  style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 8)),
-                  onPressed: () => setState(() => _viewingExaminee = examinee),
-                  child: Text(
-                    'View',
-                    style: AppTextStyles.body(size: 10.5, weight: FontWeight.w700, color: AppColors.primaryGreen),
-                  ),
-                ),
-              ],
+          Expanded(
+            flex: 2,
+            child: Text(
+              examinee.temporaryExamineeId,
+              style: AppTextStyles.body(size: 13),
             ),
           ),
+          Expanded(flex: 1, child: _statusChip(examinee)),
+          SizedBox(width: 175, child: _examineeActions(examinee)),
         ],
       ),
     );
@@ -681,20 +851,9 @@ class _GuidanceWebExamineeRecordsViewState
     final isActive = examinee.isActive;
     return Align(
       alignment: Alignment.centerLeft,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-        decoration: BoxDecoration(
-          color: isActive ? AppColors.emerald100 : const Color(0xFFF3F4F6),
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Text(
-          isActive ? 'Active' : 'Archived',
-          style: AppTextStyles.body(
-            size: 9.5,
-            weight: FontWeight.w700,
-            color: isActive ? const Color(0xFF065F46) : AppColors.textGray,
-          ),
-        ),
+      child: StatusBadge(
+        label: isActive ? 'Active' : 'Archived',
+        tone: isActive ? StatusTone.success : StatusTone.neutral,
       ),
     );
   }
@@ -704,12 +863,21 @@ class _GuidanceWebExamineeRecordsViewState
   // -------------------------------------------------------------------
 
   Widget _buildUnlinkedScansTab() {
-    if (_loadingUnlinked) return _buildMessage(FontAwesomeIcons.spinner, 'Loading unlinked scans...');
+    if (_loadingUnlinked) {
+      return const LoadingState(message: 'Loading unlinked scans...');
+    }
     if (_unlinkedError != null) {
-      return _buildMessage(FontAwesomeIcons.triangleExclamation, _unlinkedError!, isError: true);
+      return _buildMessage(
+        FontAwesomeIcons.triangleExclamation,
+        _unlinkedError!,
+        isError: true,
+      );
     }
     if (_unlinkedScans.isEmpty) {
-      return _buildMessage(FontAwesomeIcons.circleCheck, 'No unlinked scans — every scan has an Examinee Record.');
+      return _buildMessage(
+        FontAwesomeIcons.circleCheck,
+        'No unlinked scans — every scan has an Examinee Record.',
+      );
     }
     final visible = _visibleUnlinkedScans;
     return Column(
@@ -725,25 +893,32 @@ class _GuidanceWebExamineeRecordsViewState
                       ? 'No unlinked $_unlinkedExamFilter scans.'
                       : 'No unlinked scans match the selected filters.',
                 )
-              : Container(
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: AppColors.cardBorder),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      _buildUnlinkedTableHeader(),
-                      const Divider(height: 1, color: AppColors.cardBorder),
-                      Expanded(
-                        child: ListView.separated(
-                          itemCount: visible.length,
-                          separatorBuilder: (_, _) => const Divider(height: 1, color: AppColors.cardBorder),
-                          itemBuilder: (context, index) => _buildUnlinkedRow(visible[index]),
+              : _scrollableTable(
+                  minWidth: 1200,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: AppColors.cardBorder),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _buildUnlinkedTableHeader(),
+                        const Divider(height: 1, color: AppColors.cardBorder),
+                        Expanded(
+                          child: ListView.separated(
+                            itemCount: visible.length,
+                            separatorBuilder: (_, _) => const Divider(
+                              height: 1,
+                              color: AppColors.cardBorder,
+                            ),
+                            itemBuilder: (context, index) =>
+                                _buildUnlinkedRow(visible[index]),
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
         ),
@@ -802,7 +977,9 @@ class _GuidanceWebExamineeRecordsViewState
           style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600),
         ),
         const SizedBox(height: 6),
-        Row(
+        Wrap(
+          spacing: 12,
+          runSpacing: 12,
           children: [
             _dateBoundField(
               fieldKey: const Key('unlinkedDateFrom'),
@@ -810,7 +987,6 @@ class _GuidanceWebExamineeRecordsViewState
               value: _unlinkedDateFrom,
               onPicked: (d) => _setUnlinkedDate(isFrom: true, picked: d),
             ),
-            const SizedBox(width: 12),
             _dateBoundField(
               fieldKey: const Key('unlinkedDateTo'),
               hint: 'to',
@@ -863,31 +1039,43 @@ class _GuidanceWebExamineeRecordsViewState
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: AppColors.cardBorder),
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
+      child: Wrap(
+        spacing: 16,
+        runSpacing: 12,
+        crossAxisAlignment: WrapCrossAlignment.end,
         children: [
           SizedBox(
             width: 240,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Exam Type', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600)),
+                Text(
+                  'Exam Type',
+                  style: AppTextStyles.body(
+                    size: 10.5,
+                    weight: FontWeight.w600,
+                  ),
+                ),
                 const SizedBox(height: 6),
                 DropdownButtonFormField<String>(
                   key: const Key('unlinkedExamTypeFilter'),
                   initialValue: _unlinkedExamFilter,
                   decoration: _fieldDecoration(),
                   items: _examTypeFilterOptions
-                      .map((t) => DropdownMenuItem(value: t, child: Text(t, style: AppTextStyles.body(size: 11))))
+                      .map(
+                        (t) => DropdownMenuItem(
+                          value: t,
+                          child: Text(t, style: AppTextStyles.body(size: 11)),
+                        ),
+                      )
                       .toList(),
-                  onChanged: (v) => setState(() => _unlinkedExamFilter = v ?? 'All'),
+                  onChanged: (v) =>
+                      setState(() => _unlinkedExamFilter = v ?? 'All'),
                 ),
               ],
             ),
           ),
-          const SizedBox(width: 16),
           _buildUnlinkedDateFilter(),
-          const Spacer(),
           Text(
             'Showing $shown of ${_unlinkedScans.length}',
             key: const Key('unlinkedShowingCount'),
@@ -904,7 +1092,7 @@ class _GuidanceWebExamineeRecordsViewState
   /// the rest of the row goes to the name crops. The buttons are wrapped in a
   /// scale-down FittedBox, so a narrower window shrinks them slightly instead
   /// of overflowing.
-  static const double _unlinkedActionsWidth = 460;
+  static const double _unlinkedActionsWidth = 240;
 
   /// The NAME CROP column (between OCR NAME and EXAM): its share of the row's
   /// flexible width, and the gap that separates it from the OCR name. Header
@@ -913,7 +1101,11 @@ class _GuidanceWebExamineeRecordsViewState
   static const double _nameCropGap = 8;
 
   Widget _buildUnlinkedTableHeader() {
-    final style = AppTextStyles.body(size: 9.5, weight: FontWeight.w800, color: AppColors.textGray);
+    final style = AppTextStyles.body(
+      size: 9.5,
+      weight: FontWeight.w800,
+      color: AppColors.textGray,
+    );
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Row(
@@ -948,7 +1140,9 @@ class _GuidanceWebExamineeRecordsViewState
               style: AppTextStyles.body(
                 size: 11,
                 weight: FontWeight.w600,
-                color: (name == null || name.isEmpty) ? AppColors.textGray : AppColors.textDark,
+                color: (name == null || name.isEmpty)
+                    ? AppColors.textGray
+                    : AppColors.textDark,
               ),
               overflow: TextOverflow.ellipsis,
             ),
@@ -968,40 +1162,93 @@ class _GuidanceWebExamineeRecordsViewState
               ),
             ),
           ),
-          Expanded(flex: 1, child: Text(item.examCode, style: AppTextStyles.body(size: 11))),
-          Expanded(flex: 2, child: Text(item.batch.batchCode, style: AppTextStyles.body(size: 11))),
-          Expanded(flex: 2, child: Text(_formatDate(item.scan.capturedAt), style: AppTextStyles.body(size: 11))),
+          Expanded(
+            flex: 1,
+            child: Text(item.examCode, style: AppTextStyles.body(size: 11)),
+          ),
+          Expanded(
+            flex: 2,
+            child: Text(
+              item.batch.batchCode,
+              style: AppTextStyles.body(size: 11),
+            ),
+          ),
+          Expanded(
+            flex: 2,
+            child: Text(
+              _formatDate(item.scan.capturedAt),
+              style: AppTextStyles.body(size: 11),
+            ),
+          ),
           SizedBox(
             width: _unlinkedActionsWidth,
-            child: FittedBox(
-              fit: BoxFit.scaleDown,
-              alignment: Alignment.centerRight,
-              child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextButton(
-                  style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 6)),
-                  onPressed: () => _previewImage(item),
-                  child: Text('View Image', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w700, color: AppColors.textGray)),
-                ),
-                TextButton(
-                  style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 6)),
-                  onPressed: () => _linkToExisting(item),
-                  child: Text('Link to Existing', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w700, color: AppColors.textGray)),
-                ),
-                TextButton(
-                  style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 6)),
-                  onPressed: () => _createFromScan(item),
-                  child: Text('Confirm and Create Examinee', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w700, color: AppColors.primaryGreen)),
-                ),
-                if (!item.isArchivedAttempt)
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+
+              child: Wrap(
+                alignment: WrapAlignment.end,
+                children: [
                   TextButton(
-                    style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 6)),
-                    onPressed: _deletingScanId != null ? null : () => _deleteUnlinkedScan(item),
-                    child: Text('Delete', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w700, color: AppColors.warmRedOrange)),
+                    style: TextButton.styleFrom(
+                      minimumSize: const Size(64, 44),
+                    ),
+                    onPressed: () => _previewImage(item),
+                    child: Text(
+                      'View Image',
+                      style: AppTextStyles.body(
+                        size: 13,
+                        weight: FontWeight.w700,
+                        color: AppColors.textGray,
+                      ),
+                    ),
                   ),
-              ],
-            ),
+                  TextButton(
+                    style: TextButton.styleFrom(
+                      minimumSize: const Size(64, 44),
+                    ),
+                    onPressed: () => _linkToExisting(item),
+                    child: Text(
+                      'Link to Existing',
+                      style: AppTextStyles.body(
+                        size: 13,
+                        weight: FontWeight.w700,
+                        color: AppColors.textGray,
+                      ),
+                    ),
+                  ),
+                  TextButton(
+                    style: TextButton.styleFrom(
+                      minimumSize: const Size(64, 44),
+                    ),
+                    onPressed: () => _createFromScan(item),
+                    child: Text(
+                      'Confirm and Create Examinee',
+                      style: AppTextStyles.body(
+                        size: 13,
+                        weight: FontWeight.w700,
+                        color: AppColors.primaryGreen,
+                      ),
+                    ),
+                  ),
+                  if (!item.isArchivedAttempt)
+                    TextButton(
+                      style: TextButton.styleFrom(
+                        minimumSize: const Size(64, 44),
+                      ),
+                      onPressed: _deletingScanId != null
+                          ? null
+                          : () => _deleteUnlinkedScan(item),
+                      child: Text(
+                        'Delete',
+                        style: AppTextStyles.body(
+                          size: 13,
+                          weight: FontWeight.w700,
+                          color: AppColors.warmRedOrange,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
             ),
           ),
         ],
@@ -1019,9 +1266,15 @@ class _GuidanceWebExamineeRecordsViewState
   // -------------------------------------------------------------------
 
   Widget _buildSoftDeletedScansTab() {
-    if (_loadingRetained) return _buildMessage(FontAwesomeIcons.spinner, 'Loading soft-deleted scans...');
+    if (_loadingRetained) {
+      return const LoadingState(message: 'Loading soft-deleted scans...');
+    }
     if (_retainedError != null) {
-      return _buildMessage(FontAwesomeIcons.triangleExclamation, _retainedError!, isError: true);
+      return _buildMessage(
+        FontAwesomeIcons.triangleExclamation,
+        _retainedError!,
+        isError: true,
+      );
     }
     if (_retainedScans.isEmpty) {
       return _buildMessage(
@@ -1035,25 +1288,30 @@ class _GuidanceWebExamineeRecordsViewState
         _buildRetainedControls(),
         const SizedBox(height: 16),
         Expanded(
-          child: Container(
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: AppColors.cardBorder),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _buildRetainedTableHeader(),
-                const Divider(height: 1, color: AppColors.cardBorder),
-                Expanded(
-                  child: ListView.separated(
-                    itemCount: _retainedScans.length,
-                    separatorBuilder: (_, _) => const Divider(height: 1, color: AppColors.cardBorder),
-                    itemBuilder: (context, index) => _buildRetainedRow(_retainedScans[index]),
+          child: _scrollableTable(
+            minWidth: 1050,
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppColors.cardBorder),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _buildRetainedTableHeader(),
+                  const Divider(height: 1, color: AppColors.cardBorder),
+                  Expanded(
+                    child: ListView.separated(
+                      itemCount: _retainedScans.length,
+                      separatorBuilder: (_, _) =>
+                          const Divider(height: 1, color: AppColors.cardBorder),
+                      itemBuilder: (context, index) =>
+                          _buildRetainedRow(_retainedScans[index]),
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
@@ -1069,7 +1327,10 @@ class _GuidanceWebExamineeRecordsViewState
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: AppColors.cardBorder),
       ),
-      child: Row(
+      child: Wrap(
+        spacing: 16,
+        runSpacing: 8,
+        crossAxisAlignment: WrapCrossAlignment.center,
         children: [
           Text(
             'Showing ${_retainedScans.length} retained soft-deleted scan'
@@ -1077,12 +1338,14 @@ class _GuidanceWebExamineeRecordsViewState
             key: const Key('retainedShowingCount'),
             style: AppTextStyles.body(size: 10.5, color: AppColors.textGray),
           ),
-          const Spacer(),
           TextButton.icon(
             key: const Key('retainedRefreshButton'),
             onPressed: _loadRetainedScans,
             icon: const Icon(Icons.refresh, size: 16),
-            label: Text('Refresh', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w700)),
+            label: Text(
+              'Refresh',
+              style: AppTextStyles.body(size: 10.5, weight: FontWeight.w700),
+            ),
           ),
         ],
       ),
@@ -1090,7 +1353,11 @@ class _GuidanceWebExamineeRecordsViewState
   }
 
   Widget _buildRetainedTableHeader() {
-    final style = AppTextStyles.body(size: 9.5, weight: FontWeight.w800, color: AppColors.textGray);
+    final style = AppTextStyles.body(
+      size: 9.5,
+      weight: FontWeight.w800,
+      color: AppColors.textGray,
+    );
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Row(
@@ -1115,11 +1382,32 @@ class _GuidanceWebExamineeRecordsViewState
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(flex: 2, child: Text(row.batchId, style: AppTextStyles.body(size: 11))),
-          Expanded(flex: 1, child: Text(row.examCode, style: AppTextStyles.body(size: 11))),
-          Expanded(flex: 2, child: Text(row.scanId, style: AppTextStyles.body(size: 11))),
-          Expanded(flex: 2, child: Text(_formatDateTime(row.deletedAt), style: AppTextStyles.body(size: 11))),
-          Expanded(flex: 2, child: Text(_formatDateTime(row.retentionUntil), style: AppTextStyles.body(size: 11))),
+          Expanded(
+            flex: 2,
+            child: Text(row.batchId, style: AppTextStyles.body(size: 11)),
+          ),
+          Expanded(
+            flex: 1,
+            child: Text(row.examCode, style: AppTextStyles.body(size: 11)),
+          ),
+          Expanded(
+            flex: 2,
+            child: Text(row.scanId, style: AppTextStyles.body(size: 11)),
+          ),
+          Expanded(
+            flex: 2,
+            child: Text(
+              _formatDateTime(row.deletedAt),
+              style: AppTextStyles.body(size: 11),
+            ),
+          ),
+          Expanded(
+            flex: 2,
+            child: Text(
+              _formatDateTime(row.retentionUntil),
+              style: AppTextStyles.body(size: 11),
+            ),
+          ),
           Expanded(
             flex: 3,
             child: Text(
@@ -1131,7 +1419,10 @@ class _GuidanceWebExamineeRecordsViewState
           ),
           Expanded(
             flex: 2,
-            child: Text(row.deletedByName ?? '—', style: AppTextStyles.body(size: 11)),
+            child: Text(
+              row.deletedByName ?? '—',
+              style: AppTextStyles.body(size: 11),
+            ),
           ),
           SizedBox(
             width: 170,
@@ -1140,11 +1431,19 @@ class _GuidanceWebExamineeRecordsViewState
               child: status != null
                   ? _restoreRequestStatusChip(status)
                   : TextButton(
-                      style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 6)),
-                      onPressed: _requestingRestoreScanId != null ? null : () => _requestRestore(row),
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 6),
+                      ),
+                      onPressed: _requestingRestoreScanId != null
+                          ? null
+                          : () => _requestRestore(row),
                       child: Text(
                         'Request Restore',
-                        style: AppTextStyles.body(size: 10.5, weight: FontWeight.w700, color: AppColors.primaryGreen),
+                        style: AppTextStyles.body(
+                          size: 10.5,
+                          weight: FontWeight.w700,
+                          color: AppColors.primaryGreen,
+                        ),
                       ),
                     ),
             ),
@@ -1163,14 +1462,29 @@ class _GuidanceWebExamineeRecordsViewState
       ),
       child: Text(
         status == 'APPROVED' ? 'Restore Approved' : 'Restore Requested',
-        style: AppTextStyles.body(size: 9.5, weight: FontWeight.w700, color: const Color(0xFF065F46)),
+        style: AppTextStyles.body(
+          size: 9.5,
+          weight: FontWeight.w700,
+          color: const Color(0xFF065F46),
+        ),
       ),
     );
   }
 }
 
 const List<String> _months = [
-  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
 ];
 
 String _formatDate(DateTime d) => '${_months[d.month - 1]} ${d.day}, ${d.year}';
@@ -1192,22 +1506,30 @@ String _formatDateTime(DateTime d) {
 /// block creating the record — the Temporary Examinee ID exists
 /// independently of whether a name was ever captured.
 class _CreateExamineeFromScanDialog extends StatefulWidget {
-  const _CreateExamineeFromScanDialog({required this.service, required this.item});
+  const _CreateExamineeFromScanDialog({
+    required this.service,
+    required this.item,
+  });
 
   final GuidanceWebExamineeRecordsService service;
   final ExamineeHistoryItem item;
 
   @override
-  State<_CreateExamineeFromScanDialog> createState() => _CreateExamineeFromScanDialogState();
+  State<_CreateExamineeFromScanDialog> createState() =>
+      _CreateExamineeFromScanDialogState();
 }
 
-class _CreateExamineeFromScanDialogState extends State<_CreateExamineeFromScanDialog> {
-  late final TextEditingController _firstName =
-      TextEditingController(text: widget.item.scan.examinee?.firstName ?? '');
-  late final TextEditingController _middleName =
-      TextEditingController(text: widget.item.scan.examinee?.middleName ?? '');
-  late final TextEditingController _lastName =
-      TextEditingController(text: widget.item.scan.examinee?.lastName ?? '');
+class _CreateExamineeFromScanDialogState
+    extends State<_CreateExamineeFromScanDialog> {
+  late final TextEditingController _firstName = TextEditingController(
+    text: widget.item.scan.examinee?.firstName ?? '',
+  );
+  late final TextEditingController _middleName = TextEditingController(
+    text: widget.item.scan.examinee?.middleName ?? '',
+  );
+  late final TextEditingController _lastName = TextEditingController(
+    text: widget.item.scan.examinee?.lastName ?? '',
+  );
   bool _saving = false;
   String? _error;
 
@@ -1229,7 +1551,9 @@ class _CreateExamineeFromScanDialogState extends State<_CreateExamineeFromScanDi
         batchId: widget.item.batch.id,
         scan: widget.item.scan,
         firstName: _firstName.text.trim(),
-        middleName: _middleName.text.trim().isEmpty ? null : _middleName.text.trim(),
+        middleName: _middleName.text.trim().isEmpty
+            ? null
+            : _middleName.text.trim(),
         lastName: _lastName.text.trim(),
       );
       if (!mounted) return;
@@ -1275,7 +1599,9 @@ class _CreateExamineeFromScanDialogState extends State<_CreateExamineeFromScanDi
             const SizedBox(height: 10),
             TextFormField(
               controller: _middleName,
-              decoration: const InputDecoration(labelText: 'Middle name (optional)'),
+              decoration: const InputDecoration(
+                labelText: 'Middle name (optional)',
+              ),
             ),
             const SizedBox(height: 10),
             TextFormField(
@@ -1284,7 +1610,13 @@ class _CreateExamineeFromScanDialogState extends State<_CreateExamineeFromScanDi
             ),
             if (_error != null) ...[
               const SizedBox(height: 10),
-              Text(_error!, style: AppTextStyles.body(size: 11, color: AppColors.warmRedOrange)),
+              Text(
+                _error!,
+                style: AppTextStyles.body(
+                  size: 11,
+                  color: AppColors.warmRedOrange,
+                ),
+              ),
             ],
           ],
         ),
@@ -1390,12 +1722,22 @@ class _SoftDeleteScanDialogState extends State<_SoftDeleteScanDialog> {
                 enabled: !_saving,
                 minLines: 2,
                 maxLines: 4,
-                decoration: const InputDecoration(labelText: 'Reason for deletion'),
-                validator: (v) => (v == null || v.trim().isEmpty) ? 'A reason is required' : null,
+                decoration: const InputDecoration(
+                  labelText: 'Reason for deletion',
+                ),
+                validator: (v) => (v == null || v.trim().isEmpty)
+                    ? 'A reason is required'
+                    : null,
               ),
               if (_error != null) ...[
                 const SizedBox(height: 10),
-                Text(_error!, style: AppTextStyles.body(size: 11, color: AppColors.warmRedOrange)),
+                Text(
+                  _error!,
+                  style: AppTextStyles.body(
+                    size: 11,
+                    color: AppColors.warmRedOrange,
+                  ),
+                ),
               ],
             ],
           ),
@@ -1408,7 +1750,9 @@ class _SoftDeleteScanDialogState extends State<_SoftDeleteScanDialog> {
         ),
         FilledButton(
           onPressed: _saving ? null : _submit,
-          style: FilledButton.styleFrom(backgroundColor: AppColors.warmRedOrange),
+          style: FilledButton.styleFrom(
+            backgroundColor: AppColors.warmRedOrange,
+          ),
           child: Text(_saving ? 'Deleting...' : 'Delete'),
         ),
       ],
@@ -1503,12 +1847,22 @@ class _RequestRestoreDialogState extends State<_RequestRestoreDialog> {
                 enabled: !_saving,
                 minLines: 2,
                 maxLines: 4,
-                decoration: const InputDecoration(labelText: 'Reason for restoration'),
-                validator: (v) => (v == null || v.trim().isEmpty) ? 'A reason is required' : null,
+                decoration: const InputDecoration(
+                  labelText: 'Reason for restoration',
+                ),
+                validator: (v) => (v == null || v.trim().isEmpty)
+                    ? 'A reason is required'
+                    : null,
               ),
               if (_error != null) ...[
                 const SizedBox(height: 10),
-                Text(_error!, style: AppTextStyles.body(size: 11, color: AppColors.warmRedOrange)),
+                Text(
+                  _error!,
+                  style: AppTextStyles.body(
+                    size: 11,
+                    color: AppColors.warmRedOrange,
+                  ),
+                ),
               ],
             ],
           ),
@@ -1546,12 +1900,15 @@ class _LinkExistingExamineeDialog extends StatefulWidget {
   final List<ExamineeRecord> examinees;
 
   @override
-  State<_LinkExistingExamineeDialog> createState() => _LinkExistingExamineeDialogState();
+  State<_LinkExistingExamineeDialog> createState() =>
+      _LinkExistingExamineeDialogState();
 }
 
-class _LinkExistingExamineeDialogState extends State<_LinkExistingExamineeDialog> {
-  late final TextEditingController _search =
-      TextEditingController(text: widget.item.scan.examinee?.displayName ?? '');
+class _LinkExistingExamineeDialogState
+    extends State<_LinkExistingExamineeDialog> {
+  late final TextEditingController _search = TextEditingController(
+    text: widget.item.scan.examinee?.displayName ?? '',
+  );
   ExamineeRecord? _selected;
   bool _linking = false;
   String? _error;
@@ -1576,9 +1933,11 @@ class _LinkExistingExamineeDialogState extends State<_LinkExistingExamineeDialog
     final active = widget.examinees.where((e) => e.isActive);
     if (term.isEmpty) return active.toList();
     return active
-        .where((e) =>
-            e.displayName.toLowerCase().contains(term) ||
-            e.temporaryExamineeId.toLowerCase().contains(term))
+        .where(
+          (e) =>
+              e.displayName.toLowerCase().contains(term) ||
+              e.temporaryExamineeId.toLowerCase().contains(term),
+        )
         .toList();
   }
 
@@ -1592,8 +1951,14 @@ class _LinkExistingExamineeDialogState extends State<_LinkExistingExamineeDialog
           'to Examinee Record ${examinee.temporaryExamineeId} (${examinee.displayName})?',
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Confirm Attach')),
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Confirm Attach'),
+          ),
         ],
       ),
     );
@@ -1659,19 +2024,44 @@ class _LinkExistingExamineeDialogState extends State<_LinkExistingExamineeDialog
             Expanded(
               child: candidates.isEmpty
                   ? Center(
-                      child: Text('No matching Examinee Records.', style: AppTextStyles.body(size: 11, color: AppColors.textGray)),
+                      child: Text(
+                        'No matching Examinee Records.',
+                        style: AppTextStyles.body(
+                          size: 11,
+                          color: AppColors.textGray,
+                        ),
+                      ),
                     )
                   : ListView.separated(
                       itemCount: candidates.length,
-                      separatorBuilder: (_, _) => const Divider(height: 1, color: AppColors.cardBorder),
+                      separatorBuilder: (_, _) =>
+                          const Divider(height: 1, color: AppColors.cardBorder),
                       itemBuilder: (context, index) {
                         final e = candidates[index];
                         return ListTile(
                           dense: true,
-                          title: Text(e.displayName, style: AppTextStyles.body(size: 12, weight: FontWeight.w600)),
-                          subtitle: Text(e.temporaryExamineeId, style: AppTextStyles.body(size: 10.5, color: AppColors.textGray)),
+                          title: Text(
+                            e.displayName,
+                            style: AppTextStyles.body(
+                              size: 12,
+                              weight: FontWeight.w600,
+                            ),
+                          ),
+                          subtitle: Text(
+                            e.temporaryExamineeId,
+                            style: AppTextStyles.body(
+                              size: 10.5,
+                              color: AppColors.textGray,
+                            ),
+                          ),
                           trailing: (_linking && _selected?.id == e.id)
-                              ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
                               : null,
                           onTap: _linking ? null : () => _confirmAndLink(e),
                         );
@@ -1680,7 +2070,13 @@ class _LinkExistingExamineeDialogState extends State<_LinkExistingExamineeDialog
             ),
             if (_error != null) ...[
               const SizedBox(height: 8),
-              Text(_error!, style: AppTextStyles.body(size: 11, color: AppColors.warmRedOrange)),
+              Text(
+                _error!,
+                style: AppTextStyles.body(
+                  size: 11,
+                  color: AppColors.warmRedOrange,
+                ),
+              ),
             ],
           ],
         ),
@@ -1701,14 +2097,19 @@ class _LinkExistingExamineeDialogState extends State<_LinkExistingExamineeDialog
 /// have). Rectified image preferred, original as a fallback, matching
 /// [GuidanceWebResultDetailView]'s own convention.
 class _ScanImagePreviewDialog extends StatefulWidget {
-  const _ScanImagePreviewDialog({required this.service, required this.batch, required this.scan});
+  const _ScanImagePreviewDialog({
+    required this.service,
+    required this.batch,
+    required this.scan,
+  });
 
   final GuidanceWebResultsService service;
   final LocalBatch batch;
   final LocalScan scan;
 
   @override
-  State<_ScanImagePreviewDialog> createState() => _ScanImagePreviewDialogState();
+  State<_ScanImagePreviewDialog> createState() =>
+      _ScanImagePreviewDialogState();
 }
 
 class _ScanImagePreviewDialogState extends State<_ScanImagePreviewDialog> {
@@ -1726,9 +2127,17 @@ class _ScanImagePreviewDialogState extends State<_ScanImagePreviewDialog> {
     try {
       Uint8List? bytes;
       if (widget.scan.rectifiedImageFileName != null) {
-        bytes = await widget.service.loadScanImage(widget.batch.id, widget.scan.id, rectified: true);
+        bytes = await widget.service.loadScanImage(
+          widget.batch.id,
+          widget.scan.id,
+          rectified: true,
+        );
       }
-      bytes ??= await widget.service.loadScanImage(widget.batch.id, widget.scan.id, rectified: false);
+      bytes ??= await widget.service.loadScanImage(
+        widget.batch.id,
+        widget.scan.id,
+        rectified: false,
+      );
       if (!mounted) return;
       setState(() {
         _bytes = bytes;
@@ -1761,43 +2170,65 @@ class _ScanImagePreviewDialogState extends State<_ScanImagePreviewDialog> {
             children: [
               Align(
                 alignment: Alignment.topRight,
-                child: IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(context)),
+                child: IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: () => Navigator.pop(context),
+                ),
               ),
               Expanded(
                 child: Center(
                   child: _loading
                       ? const CircularProgressIndicator()
                       : _error != null
-                          ? Text(_error!, style: AppTextStyles.body(size: 11, color: AppColors.warmRedOrange))
-                          : _bytes == null
-                              ? Text('No image available.', style: AppTextStyles.body(size: 11, color: AppColors.textGray))
-                              : Column(
-                                  // Stretch so the click target is the whole
-                                  // preview box, even before the image decodes.
-                                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                                  children: [
-                                    Expanded(
-                                      child: MouseRegion(
-                                        cursor: SystemMouseCursors.zoomIn,
-                                        child: GestureDetector(
-                                          key: const Key('scanPreviewImage'),
-                                          behavior: HitTestBehavior.opaque,
-                                          onTap: () => showDialog<void>(
-                                            context: context,
-                                            builder: (_) => _ZoomableImageViewer(bytes: _bytes!),
-                                          ),
-                                          child: Image.memory(_bytes!, fit: BoxFit.contain),
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(height: 6),
-                                    Text(
-                                      'Click the image to zoom',
-                                      textAlign: TextAlign.center,
-                                      style: AppTextStyles.body(size: 10, color: AppColors.textGray),
-                                    ),
-                                  ],
+                      ? Text(
+                          _error!,
+                          style: AppTextStyles.body(
+                            size: 11,
+                            color: AppColors.warmRedOrange,
+                          ),
+                        )
+                      : _bytes == null
+                      ? Text(
+                          'No image available.',
+                          style: AppTextStyles.body(
+                            size: 11,
+                            color: AppColors.textGray,
+                          ),
+                        )
+                      : Column(
+                          // Stretch so the click target is the whole
+                          // preview box, even before the image decodes.
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Expanded(
+                              child: MouseRegion(
+                                cursor: SystemMouseCursors.zoomIn,
+                                child: GestureDetector(
+                                  key: const Key('scanPreviewImage'),
+                                  behavior: HitTestBehavior.opaque,
+                                  onTap: () => showDialog<void>(
+                                    context: context,
+                                    builder: (_) =>
+                                        _ZoomableImageViewer(bytes: _bytes!),
+                                  ),
+                                  child: Image.memory(
+                                    _bytes!,
+                                    fit: BoxFit.contain,
+                                  ),
                                 ),
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              'Click the image to zoom',
+                              textAlign: TextAlign.center,
+                              style: AppTextStyles.body(
+                                size: 10,
+                                color: AppColors.textGray,
+                              ),
+                            ),
+                          ],
+                        ),
                 ),
               ),
             ],
@@ -1896,7 +2327,9 @@ class _DatePopoverFieldState extends State<_DatePopoverField> {
               widget.text,
               style: AppTextStyles.body(
                 size: 11,
-                color: widget.isPlaceholder ? AppColors.textGray : AppColors.textDark,
+                color: widget.isPlaceholder
+                    ? AppColors.textGray
+                    : AppColors.textDark,
               ),
             ),
           ),
@@ -1919,7 +2352,10 @@ class _DatePopoverFieldState extends State<_DatePopoverField> {
       info.childPaintTransform,
       Offset.zero & info.childSize,
     );
-    final maxLeft = (info.overlaySize.width - popoverWidth).clamp(0.0, double.infinity);
+    final maxLeft = (info.overlaySize.width - popoverWidth).clamp(
+      0.0,
+      double.infinity,
+    );
     final left = field.left.clamp(0.0, maxLeft);
     var top = field.bottom + 6;
     if (top + popoverHeight > info.overlaySize.height) {

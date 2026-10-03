@@ -62,19 +62,19 @@ class AnswerKeyDecision {
   AnswerKeyDecision.upsert({
     required this.version,
     required this.baselineUpdatedAt,
-  })  : action = AnswerKeyAction.upsert,
-        conflictCode = null;
+  }) : action = AnswerKeyAction.upsert,
+       conflictCode = null;
 
   AnswerKeyDecision.adopt({
     required this.version,
     required this.baselineUpdatedAt,
-  })  : action = AnswerKeyAction.adopt,
-        conflictCode = null;
+  }) : action = AnswerKeyAction.adopt,
+       conflictCode = null;
 
   const AnswerKeyDecision.conflict(this.conflictCode)
-      : action = AnswerKeyAction.conflict,
-        version = null,
-        baselineUpdatedAt = null;
+    : action = AnswerKeyAction.conflict,
+      version = null,
+      baselineUpdatedAt = null;
 
   final AnswerKeyAction action;
 
@@ -107,15 +107,21 @@ class AnswerKeyDecision {
 /// token-refresh retry on an auth error; scheduling is the sync manager's
 /// job.
 class SupabaseSyncClient
-    implements SyncClient, RetakeClient, ScanDeleteClient, ScanRestoreClient, AdminScanRestoreClient {
+    implements
+        SyncClient,
+        BatchCompletionClient,
+        RetakeClient,
+        ScanDeleteClient,
+        ScanRestoreClient,
+        AdminScanRestoreClient {
   SupabaseSyncClient({
     required this.batches,
     required this.localStorage,
     required this.identity,
     required SyncState Function() getSyncState,
     SupabaseClient? client,
-  })  : _syncStateGetter = getSyncState,
-        _client = client ?? Supabase.instance.client;
+  }) : _syncStateGetter = getSyncState,
+       _client = client ?? Supabase.instance.client;
 
   final LocalBatchRepository batches;
   final LocalStorageService localStorage;
@@ -202,16 +208,15 @@ class SupabaseSyncClient
     required String? updatedByUid,
     required String? updatedByName,
     required DateTime updatedAt,
-  }) =>
-      {
-        'exam_code': examCode,
-        'answers': Map<String, String>.from(answers),
-        'version': version,
-        'updated_by_uid': updatedByUid,
-        'updated_by_name': updatedByName,
-        'updated_at': isoUtc(updatedAt),
-        'schema_version': _answerKeySchemaVersion,
-      };
+  }) => {
+    'exam_code': examCode,
+    'answers': Map<String, String>.from(answers),
+    'version': version,
+    'updated_by_uid': updatedByUid,
+    'updated_by_name': updatedByName,
+    'updated_at': isoUtc(updatedAt),
+    'schema_version': _answerKeySchemaVersion,
+  };
 
   /// Parse a raw `answer_keys` row (as returned by `.maybeSingle()`) into a
   /// [CloudAnswerKeyRead]. A null row -> [CloudAnswerKeyRead.absent]. Never
@@ -269,7 +274,10 @@ class SupabaseSyncClient
     }
 
     if (cloudVersion == null) {
-      return AnswerKeyDecision.upsert(version: 1, baselineUpdatedAt: resolvedNow);
+      return AnswerKeyDecision.upsert(
+        version: 1,
+        baselineUpdatedAt: resolvedNow,
+      );
     }
 
     if (lastPushedVersion == null) {
@@ -666,7 +674,10 @@ class SupabaseSyncClient
       'batch_id': batch.id,
       'captured_at': isoUtc(scan.capturedAt),
       'exam_code': batch.examCode,
-      'decoded': ScanCloudExtensions.decodedForCloud(scan, cloudDecoded: cloudDecoded),
+      'decoded': ScanCloudExtensions.decodedForCloud(
+        scan,
+        cloudDecoded: cloudDecoded,
+      ),
 
       // result (null as a group when ungraded)
       'raw_score': result?.rawScore,
@@ -696,8 +707,9 @@ class SupabaseSyncClient
       // reconciles them) — never regress a true flag back to false.
       'image_path': originalImageKey(batch.id, scan.id),
       'image_uploaded': syncState.scanOriginalUploaded(batch.id, scan.id),
-      'rectified_image_path':
-          hasRectified ? rectifiedImageKey(batch.id, scan.id) : null,
+      'rectified_image_path': hasRectified
+          ? rectifiedImageKey(batch.id, scan.id)
+          : null,
       'rectified_image_uploaded':
           hasRectified && syncState.scanRectifiedUploaded(batch.id, scan.id),
 
@@ -708,12 +720,14 @@ class SupabaseSyncClient
 
     // Tag-audit columns: written only for a tag/clear-triggered push, with
     // tagged-vs-cleared taken from the CURRENT local scan (not the label).
-    row.addAll(examineeAuditColumns(
-      meta: meta,
-      isTagged: examineeTagged(examinee),
-      identityUid: identity.uid,
-      identityDisplayName: identity.displayName,
-    ));
+    row.addAll(
+      examineeAuditColumns(
+        meta: meta,
+        isTagged: examineeTagged(examinee),
+        identityUid: identity.uid,
+        identityDisplayName: identity.displayName,
+      ),
+    );
 
     return _guardPostgrest(() async {
       await _client.from('scans').upsert(row, onConflict: 'batch_id,id');
@@ -760,11 +774,15 @@ class SupabaseSyncClient
         return const SyncOutcome.permanent('local_file_missing');
       }
       return _guardStorage(StorageOp.write, () async {
-        await _client.storage.from(storageBucket).uploadBinary(
+        await _client.storage
+            .from(storageBucket)
+            .uploadBinary(
               originalImageKey(batchId, scanId),
               bytes,
-              fileOptions:
-                  const FileOptions(upsert: true, contentType: 'image/jpeg'),
+              fileOptions: const FileOptions(
+                upsert: true,
+                contentType: 'image/jpeg',
+              ),
             );
         syncState.setScanUploaded(batchId, scanId, original: true);
         return const SyncOutcome.success();
@@ -780,16 +798,23 @@ class SupabaseSyncClient
       // the photos there is no *_uploaded flag to record.
       final cropBytes = switch (variant) {
         variantNameLast => await batches.resolveScanNameCropLast(batchId, scan),
-        variantNameFirst => await batches.resolveScanNameCropFirst(batchId, scan),
+        variantNameFirst => await batches.resolveScanNameCropFirst(
+          batchId,
+          scan,
+        ),
         _ => await batches.resolveScanNameCropMiddle(batchId, scan),
       };
       if (cropBytes == null) return const SyncOutcome.success();
       return _guardStorage(StorageOp.write, () async {
-        await _client.storage.from(storageBucket).uploadBinary(
+        await _client.storage
+            .from(storageBucket)
+            .uploadBinary(
               nameCropImageKey(batchId, scanId, variant!),
               cropBytes,
-              fileOptions:
-                  const FileOptions(upsert: true, contentType: 'image/jpeg'),
+              fileOptions: const FileOptions(
+                upsert: true,
+                contentType: 'image/jpeg',
+              ),
             );
         return const SyncOutcome.success();
       });
@@ -801,19 +826,23 @@ class SupabaseSyncClient
       // The local rescan dropped the rectified overlay: make the cloud
       // match by removing any existing object. 404 counts as done.
       return _guardStorage(StorageOp.delete, () async {
-        await _client.storage
-            .from(storageBucket)
-            .remove([rectifiedImageKey(batchId, scanId)]);
+        await _client.storage.from(storageBucket).remove([
+          rectifiedImageKey(batchId, scanId),
+        ]);
         syncState.setScanUploaded(batchId, scanId, rectified: false);
         return const SyncOutcome.success();
       });
     }
     return _guardStorage(StorageOp.write, () async {
-      await _client.storage.from(storageBucket).uploadBinary(
+      await _client.storage
+          .from(storageBucket)
+          .uploadBinary(
             rectifiedImageKey(batchId, scanId),
             bytes,
-            fileOptions:
-                const FileOptions(upsert: true, contentType: 'image/jpeg'),
+            fileOptions: const FileOptions(
+              upsert: true,
+              contentType: 'image/jpeg',
+            ),
           );
       syncState.setScanUploaded(batchId, scanId, rectified: true);
       return const SyncOutcome.success();
@@ -836,8 +865,10 @@ class SupabaseSyncClient
 
     final patch = <String, dynamic>{
       'image_uploaded': syncState.scanOriginalUploaded(batchId, scanId),
-      'rectified_image_uploaded':
-          syncState.scanRectifiedUploaded(batchId, scanId),
+      'rectified_image_uploaded': syncState.scanRectifiedUploaded(
+        batchId,
+        scanId,
+      ),
       // No local timestamp for "flags flipped" — wall-clock now, in UTC.
       'updated_at': isoUtc(DateTime.now()),
     };
@@ -882,9 +913,13 @@ class SupabaseSyncClient
         }
         return CloudAnswerKeyRead.failed(classifyPostgrestCode(code));
       } on TimeoutException {
-        return const CloudAnswerKeyRead.failed(SyncOutcome.transient('network'));
+        return const CloudAnswerKeyRead.failed(
+          SyncOutcome.transient('network'),
+        );
       } on SocketException {
-        return const CloudAnswerKeyRead.failed(SyncOutcome.transient('network'));
+        return const CloudAnswerKeyRead.failed(
+          SyncOutcome.transient('network'),
+        );
       } catch (e) {
         _logUnclassified(e);
         return CloudAnswerKeyRead.failed(classifyUnexpectedError(e));
@@ -932,10 +967,12 @@ class SupabaseSyncClient
         cloudVersion: existing == null
             ? null
             : (existing['version'] as num?)?.toInt() ?? 0,
-        cloudAnswers:
-            existing == null ? null : _asStringMap(existing['answers']),
-        cloudUpdatedAt:
-            existing == null ? null : _dateOrNull(existing['updated_at']),
+        cloudAnswers: existing == null
+            ? null
+            : _asStringMap(existing['answers']),
+        cloudUpdatedAt: existing == null
+            ? null
+            : _dateOrNull(existing['updated_at']),
       );
 
       switch (decision.action) {
@@ -1038,7 +1075,9 @@ class SupabaseSyncClient
     var refreshed = false;
     while (true) {
       try {
-        final rows = await _client.from('batches').select(
+        final rows = await _client
+            .from('batches')
+            .select(
               'id, batch_code, exam_code, exam_title, description, '
               'expected_count, status, created_by_uid, created_by_name, '
               'created_at, updated_at',
@@ -1171,9 +1210,13 @@ class SupabaseSyncClient
         }
         return CloudExamineesRead.failed(classifyPostgrestCode(code));
       } on TimeoutException {
-        return const CloudExamineesRead.failed(SyncOutcome.transient('network'));
+        return const CloudExamineesRead.failed(
+          SyncOutcome.transient('network'),
+        );
       } on SocketException {
-        return const CloudExamineesRead.failed(SyncOutcome.transient('network'));
+        return const CloudExamineesRead.failed(
+          SyncOutcome.transient('network'),
+        );
       } catch (e) {
         _logUnclassified(e);
         return CloudExamineesRead.failed(classifyUnexpectedError(e));
@@ -1291,13 +1334,16 @@ class SupabaseSyncClient
     var refreshed = false;
     while (true) {
       try {
-        final result = await _client.rpc('create_examinee_from_scan', params: {
-          'p_batch_id': batchId,
-          'p_scan_id': scanId,
-          'p_first_name': firstName,
-          'p_middle_name': middleName ?? '',
-          'p_last_name': lastName,
-        });
+        final result = await _client.rpc(
+          'create_examinee_from_scan',
+          params: {
+            'p_batch_id': batchId,
+            'p_scan_id': scanId,
+            'p_first_name': firstName,
+            'p_middle_name': middleName ?? '',
+            'p_last_name': lastName,
+          },
+        );
         final row = result is List
             ? Map<String, dynamic>.from(result.first as Map)
             : Map<String, dynamic>.from(result as Map);
@@ -1310,9 +1356,13 @@ class SupabaseSyncClient
         }
         return CloudExamineeWrite.failed(classifyPostgrestCode(code));
       } on TimeoutException {
-        return const CloudExamineeWrite.failed(SyncOutcome.transient('network'));
+        return const CloudExamineeWrite.failed(
+          SyncOutcome.transient('network'),
+        );
       } on SocketException {
-        return const CloudExamineeWrite.failed(SyncOutcome.transient('network'));
+        return const CloudExamineeWrite.failed(
+          SyncOutcome.transient('network'),
+        );
       } catch (e) {
         _logUnclassified(e);
         return CloudExamineeWrite.failed(classifyUnexpectedError(e));
@@ -1338,13 +1388,18 @@ class SupabaseSyncClient
     var refreshed = false;
     while (true) {
       try {
-        final updated = await _client.from('examinees').update({
-          'first_name': firstName,
-          'middle_name': middleName,
-          'last_name': lastName,
-          'updated_at': isoUtc(DateTime.now()),
-          'updated_by_uid': identity.uid ?? '',
-        }).eq('id', id).select(_examineeColumns.join(', ')).single();
+        final updated = await _client
+            .from('examinees')
+            .update({
+              'first_name': firstName,
+              'middle_name': middleName,
+              'last_name': lastName,
+              'updated_at': isoUtc(DateTime.now()),
+              'updated_by_uid': identity.uid ?? '',
+            })
+            .eq('id', id)
+            .select(_examineeColumns.join(', '))
+            .single();
         return CloudExamineeWrite.success(parseCloudExamineeRow(updated));
       } on PostgrestException catch (e) {
         final code = _sanitizeCode(e.code);
@@ -1354,9 +1409,13 @@ class SupabaseSyncClient
         }
         return CloudExamineeWrite.failed(classifyPostgrestCode(code));
       } on TimeoutException {
-        return const CloudExamineeWrite.failed(SyncOutcome.transient('network'));
+        return const CloudExamineeWrite.failed(
+          SyncOutcome.transient('network'),
+        );
       } on SocketException {
-        return const CloudExamineeWrite.failed(SyncOutcome.transient('network'));
+        return const CloudExamineeWrite.failed(
+          SyncOutcome.transient('network'),
+        );
       } catch (e) {
         _logUnclassified(e);
         return CloudExamineeWrite.failed(classifyUnexpectedError(e));
@@ -1369,18 +1428,26 @@ class SupabaseSyncClient
   /// any linked scan/result. Returns the row as it now stands in the
   /// database.
   @override
-  Future<CloudExamineeWrite> setExamineeArchived(String id, bool archived) async {
+  Future<CloudExamineeWrite> setExamineeArchived(
+    String id,
+    bool archived,
+  ) async {
     var refreshed = false;
     while (true) {
       try {
         final now = isoUtc(DateTime.now());
-        final updated = await _client.from('examinees').update({
-          'status': archived ? 'archived' : 'active',
-          'archived_at': archived ? now : null,
-          'archived_by_uid': archived ? (identity.uid ?? '') : null,
-          'updated_at': now,
-          'updated_by_uid': identity.uid ?? '',
-        }).eq('id', id).select(_examineeColumns.join(', ')).single();
+        final updated = await _client
+            .from('examinees')
+            .update({
+              'status': archived ? 'archived' : 'active',
+              'archived_at': archived ? now : null,
+              'archived_by_uid': archived ? (identity.uid ?? '') : null,
+              'updated_at': now,
+              'updated_by_uid': identity.uid ?? '',
+            })
+            .eq('id', id)
+            .select(_examineeColumns.join(', '))
+            .single();
         return CloudExamineeWrite.success(parseCloudExamineeRow(updated));
       } on PostgrestException catch (e) {
         final code = _sanitizeCode(e.code);
@@ -1390,9 +1457,13 @@ class SupabaseSyncClient
         }
         return CloudExamineeWrite.failed(classifyPostgrestCode(code));
       } on TimeoutException {
-        return const CloudExamineeWrite.failed(SyncOutcome.transient('network'));
+        return const CloudExamineeWrite.failed(
+          SyncOutcome.transient('network'),
+        );
       } on SocketException {
-        return const CloudExamineeWrite.failed(SyncOutcome.transient('network'));
+        return const CloudExamineeWrite.failed(
+          SyncOutcome.transient('network'),
+        );
       } catch (e) {
         _logUnclassified(e);
         return CloudExamineeWrite.failed(classifyUnexpectedError(e));
@@ -1490,26 +1561,27 @@ class SupabaseSyncClient
 
   /// Parses one raw `exam_retake_requests` row (as returned by
   /// `.select()`) into a [CloudRetakeRequestRow].
-  static CloudRetakeRequestRow parseCloudRetakeRequestRow(Map<String, dynamic> row) =>
-      CloudRetakeRequestRow(
-        id: row['id'] as String,
-        examineeId: row['examinee_id'] as String? ?? '',
-        examCode: row['exam_code'] as String? ?? '',
-        previousScanBatchId: row['previous_scan_batch_id'] as String?,
-        previousScanId: row['previous_scan_id'] as String?,
-        reason: row['reason'] as String? ?? '',
-        status: row['status'] as String? ?? 'PENDING',
-        requestedByUid: row['requested_by_uid'] as String?,
-        requestedByName: row['requested_by_name'] as String?,
-        requestedAt: _dateOrNull(row['requested_at']) ?? DateTime.now().toUtc(),
-        reviewedByUid: row['reviewed_by_uid'] as String?,
-        reviewedByName: row['reviewed_by_name'] as String?,
-        reviewedAt: _dateOrNull(row['reviewed_at']),
-        reviewNote: row['review_note'] as String?,
-        eligibleOn: _dateOrNull(row['eligible_on']),
-        createdAt: _dateOrNull(row['created_at']) ?? DateTime.now().toUtc(),
-        updatedAt: _dateOrNull(row['updated_at']) ?? DateTime.now().toUtc(),
-      );
+  static CloudRetakeRequestRow parseCloudRetakeRequestRow(
+    Map<String, dynamic> row,
+  ) => CloudRetakeRequestRow(
+    id: row['id'] as String,
+    examineeId: row['examinee_id'] as String? ?? '',
+    examCode: row['exam_code'] as String? ?? '',
+    previousScanBatchId: row['previous_scan_batch_id'] as String?,
+    previousScanId: row['previous_scan_id'] as String?,
+    reason: row['reason'] as String? ?? '',
+    status: row['status'] as String? ?? 'PENDING',
+    requestedByUid: row['requested_by_uid'] as String?,
+    requestedByName: row['requested_by_name'] as String?,
+    requestedAt: _dateOrNull(row['requested_at']) ?? DateTime.now().toUtc(),
+    reviewedByUid: row['reviewed_by_uid'] as String?,
+    reviewedByName: row['reviewed_by_name'] as String?,
+    reviewedAt: _dateOrNull(row['reviewed_at']),
+    reviewNote: row['review_note'] as String?,
+    eligibleOn: _dateOrNull(row['eligible_on']),
+    createdAt: _dateOrNull(row['created_at']) ?? DateTime.now().toUtc(),
+    updatedAt: _dateOrNull(row['updated_at']) ?? DateTime.now().toUtc(),
+  );
 
   /// Read-only fetch of every `exam_retake_requests` row for
   /// [examineeId]/[examCode], newest first -- Guidance Council RLS grants
@@ -1539,9 +1611,13 @@ class SupabaseSyncClient
         }
         return CloudRetakeRequestsRead.failed(classifyPostgrestCode(code));
       } on TimeoutException {
-        return const CloudRetakeRequestsRead.failed(SyncOutcome.transient('network'));
+        return const CloudRetakeRequestsRead.failed(
+          SyncOutcome.transient('network'),
+        );
       } on SocketException {
-        return const CloudRetakeRequestsRead.failed(SyncOutcome.transient('network'));
+        return const CloudRetakeRequestsRead.failed(
+          SyncOutcome.transient('network'),
+        );
       } catch (e) {
         _logUnclassified(e);
         return CloudRetakeRequestsRead.failed(classifyUnexpectedError(e));
@@ -1565,13 +1641,16 @@ class SupabaseSyncClient
     }
     final name = identity.displayName?.trim();
     return _guardPostgrest(() async {
-      await _client.rpc('create_exam_retake_request', params: {
-        'p_examinee_id': examineeId,
-        'p_exam_code': examCode,
-        'p_reason': reason,
-        'p_requested_by_uid': uid,
-        'p_requested_by_name': (name == null || name.isEmpty) ? null : name,
-      });
+      await _client.rpc(
+        'create_exam_retake_request',
+        params: {
+          'p_examinee_id': examineeId,
+          'p_exam_code': examCode,
+          'p_reason': reason,
+          'p_requested_by_uid': uid,
+          'p_requested_by_name': (name == null || name.isEmpty) ? null : name,
+        },
+      );
       return const SyncOutcome.success();
     });
   }
@@ -1592,13 +1671,16 @@ class SupabaseSyncClient
     }
     final name = identity.displayName?.trim();
     return _guardPostgrest(() async {
-      await _client.rpc('review_exam_retake_request', params: {
-        'p_request_id': requestId,
-        'p_action': approve ? 'APPROVE' : 'REJECT',
-        'p_reviewer_uid': uid,
-        'p_reviewer_name': (name == null || name.isEmpty) ? null : name,
-        'p_review_note': reviewNote,
-      });
+      await _client.rpc(
+        'review_exam_retake_request',
+        params: {
+          'p_request_id': requestId,
+          'p_action': approve ? 'APPROVE' : 'REJECT',
+          'p_reviewer_uid': uid,
+          'p_reviewer_name': (name == null || name.isEmpty) ? null : name,
+          'p_review_note': reviewNote,
+        },
+      );
       return const SyncOutcome.success();
     });
   }
@@ -1618,12 +1700,15 @@ class SupabaseSyncClient
     }
     final name = identity.displayName?.trim();
     return _guardPostgrest(() async {
-      await _client.rpc('archive_approved_retake_attempt', params: {
-        'p_request_id': requestId,
-        'p_archived_by_uid': uid,
-        'p_archived_by_name': (name == null || name.isEmpty) ? null : name,
-        'p_archive_reason': archiveReason,
-      });
+      await _client.rpc(
+        'archive_approved_retake_attempt',
+        params: {
+          'p_request_id': requestId,
+          'p_archived_by_uid': uid,
+          'p_archived_by_name': (name == null || name.isEmpty) ? null : name,
+          'p_archive_reason': archiveReason,
+        },
+      );
       return const SyncOutcome.success();
     });
   }
@@ -1635,14 +1720,15 @@ class SupabaseSyncClient
   // ---------------------------------------------------------------------------
 
   /// Parses one raw `batch_archives` row into a [CloudBatchArchiveRow].
-  static CloudBatchArchiveRow parseCloudBatchArchiveRow(Map<String, dynamic> row) =>
-      CloudBatchArchiveRow(
-        batchId: row['batch_id'] as String,
-        archivedAt: _dateOrNull(row['archived_at']) ?? DateTime.now().toUtc(),
-        archivedByUid: row['archived_by_uid'] as String? ?? '',
-        archivedByName: row['archived_by_name'] as String?,
-        reason: row['reason'] as String?,
-      );
+  static CloudBatchArchiveRow parseCloudBatchArchiveRow(
+    Map<String, dynamic> row,
+  ) => CloudBatchArchiveRow(
+    batchId: row['batch_id'] as String,
+    archivedAt: _dateOrNull(row['archived_at']) ?? DateTime.now().toUtc(),
+    archivedByUid: row['archived_by_uid'] as String? ?? '',
+    archivedByName: row['archived_by_name'] as String?,
+    reason: row['reason'] as String?,
+  );
 
   /// Read-only fetch of every `batch_archives` marker visible under RLS.
   @override
@@ -1650,7 +1736,9 @@ class SupabaseSyncClient
     var refreshed = false;
     while (true) {
       try {
-        final rows = await _client.from('batch_archives').select(
+        final rows = await _client
+            .from('batch_archives')
+            .select(
               'batch_id, archived_at, archived_by_uid, archived_by_name, reason',
             );
         return CloudBatchArchivesRead.found(
@@ -1664,9 +1752,13 @@ class SupabaseSyncClient
         }
         return CloudBatchArchivesRead.failed(classifyPostgrestCode(code));
       } on TimeoutException {
-        return const CloudBatchArchivesRead.failed(SyncOutcome.transient('network'));
+        return const CloudBatchArchivesRead.failed(
+          SyncOutcome.transient('network'),
+        );
       } on SocketException {
-        return const CloudBatchArchivesRead.failed(SyncOutcome.transient('network'));
+        return const CloudBatchArchivesRead.failed(
+          SyncOutcome.transient('network'),
+        );
       } catch (e) {
         _logUnclassified(e);
         return CloudBatchArchivesRead.failed(classifyUnexpectedError(e));
@@ -1681,10 +1773,27 @@ class SupabaseSyncClient
   /// `23505`; the database's insert policy also rejects a batch that is not
   /// Completed (42501). No update/delete method exists — there is no restore.
   @override
-  Future<SyncOutcome> archiveBatch({
-    required String batchId,
-    String? reason,
-  }) {
+  Future<SyncOutcome> completeBatchForArchive(CloudBatchRow expected) {
+    return _guardPostgrest(() async {
+      final rows = await _client
+          .from('batches')
+          .update({
+            'status': 'Completed',
+            'updated_at': DateTime.now().toUtc().toIso8601String(),
+          })
+          .eq('id', expected.id)
+          .eq('status', 'Active')
+          .eq('updated_at', expected.updatedAt.toUtc().toIso8601String())
+          .eq('expected_count', expected.expectedCount)
+          .select('id');
+      return rows.length == 1
+          ? const SyncOutcome.success()
+          : const SyncOutcome.conflict('batch_changed');
+    });
+  }
+
+  @override
+  Future<SyncOutcome> archiveBatch({required String batchId, String? reason}) {
     final uid = identity.uid;
     if (uid == null || uid.isEmpty) {
       return Future.value(const SyncOutcome.permanent('no_uid'));
@@ -1696,7 +1805,9 @@ class SupabaseSyncClient
         'batch_id': batchId,
         'archived_by_uid': uid,
         'archived_by_name': (name == null || name.isEmpty) ? null : name,
-        'reason': (trimmedReason == null || trimmedReason.isEmpty) ? null : trimmedReason,
+        'reason': (trimmedReason == null || trimmedReason.isEmpty)
+            ? null
+            : trimmedReason,
       });
       return const SyncOutcome.success();
     });
@@ -1732,9 +1843,13 @@ class SupabaseSyncClient
         }
         return CloudScanCountsRead.failed(classifyPostgrestCode(code));
       } on TimeoutException {
-        return const CloudScanCountsRead.failed(SyncOutcome.transient('network'));
+        return const CloudScanCountsRead.failed(
+          SyncOutcome.transient('network'),
+        );
       } on SocketException {
-        return const CloudScanCountsRead.failed(SyncOutcome.transient('network'));
+        return const CloudScanCountsRead.failed(
+          SyncOutcome.transient('network'),
+        );
       } catch (e) {
         _logUnclassified(e);
         return CloudScanCountsRead.failed(classifyUnexpectedError(e));
@@ -1771,7 +1886,9 @@ class SupabaseSyncClient
           if (await _safeRefresh()) continue;
         }
         _logGuard('storage error status=$status op=read (${e.runtimeType})');
-        return CloudImageRead.failed(classifyStorageStatus(status, StorageOp.read));
+        return CloudImageRead.failed(
+          classifyStorageStatus(status, StorageOp.read),
+        );
       } on TimeoutException {
         return const CloudImageRead.failed(SyncOutcome.transient('network'));
       } on SocketException {
@@ -1838,7 +1955,11 @@ class SupabaseSyncClient
   @override
   Future<SyncOutcome> deleteScan(String batchId, String scanId) async {
     final rowOutcome = await _guardPostgrest(() async {
-      await _client.from('scans').delete().eq('batch_id', batchId).eq('id', scanId);
+      await _client
+          .from('scans')
+          .delete()
+          .eq('batch_id', batchId)
+          .eq('id', scanId);
       return const SyncOutcome.success();
     });
     if (!rowOutcome.isSuccess) return rowOutcome;
@@ -1938,13 +2059,16 @@ class SupabaseSyncClient
     required String deletionReason,
   }) {
     return _guardPostgrest(() async {
-      await _client.rpc('soft_delete_unlinked_scan', params: {
-        'p_batch_id': batchId,
-        'p_scan_id': scanId,
-        'p_deleted_by_uid': deletedByUid,
-        'p_deleted_by_name': deletedByName,
-        'p_deletion_reason': deletionReason,
-      });
+      await _client.rpc(
+        'soft_delete_unlinked_scan',
+        params: {
+          'p_batch_id': batchId,
+          'p_scan_id': scanId,
+          'p_deleted_by_uid': deletedByUid,
+          'p_deleted_by_name': deletedByName,
+          'p_deletion_reason': deletionReason,
+        },
+      );
       return const SyncOutcome.success();
     });
   }
@@ -1953,22 +2077,26 @@ class SupabaseSyncClient
   /// a [CloudRetainedDeletedScanRow].
   static CloudRetainedDeletedScanRow parseCloudRetainedDeletedScanRow(
     Map<String, dynamic> row,
-  ) =>
-      CloudRetainedDeletedScanRow(
-        batchId: row['batch_id'] as String,
-        scanId: row['scan_id'] as String,
-        examCode: row['exam_code'] as String,
-        deletedAt: _requiredDateTime(row['deleted_at'], 'deleted_at'),
-        retentionUntil: _requiredDateTime(row['retention_until'], 'retention_until'),
-        deletionReason: row['deletion_reason'] as String?,
-        deletedByName: row['deleted_by_name'] as String?,
-        activeRestoreRequestStatus: row['active_restore_request_status'] as String?,
-      );
+  ) => CloudRetainedDeletedScanRow(
+    batchId: row['batch_id'] as String,
+    scanId: row['scan_id'] as String,
+    examCode: row['exam_code'] as String,
+    deletedAt: _requiredDateTime(row['deleted_at'], 'deleted_at'),
+    retentionUntil: _requiredDateTime(
+      row['retention_until'],
+      'retention_until',
+    ),
+    deletionReason: row['deletion_reason'] as String?,
+    deletedByName: row['deleted_by_name'] as String?,
+    activeRestoreRequestStatus: row['active_restore_request_status'] as String?,
+  );
 
   static DateTime _requiredDateTime(Object? raw, String fieldName) {
     final parsed = _dateOrNull(raw);
     if (parsed == null) {
-      throw FormatException('Required timestamp "$fieldName" is missing or invalid.');
+      throw FormatException(
+        'Required timestamp "$fieldName" is missing or invalid.',
+      );
     }
     return parsed;
   }
@@ -1984,8 +2112,12 @@ class SupabaseSyncClient
     var refreshed = false;
     while (true) {
       try {
-        final result = await _client.rpc('list_retained_soft_deleted_scans_for_guidance');
-        final rows = (result as List).map((r) => Map<String, dynamic>.from(r as Map));
+        final result = await _client.rpc(
+          'list_retained_soft_deleted_scans_for_guidance',
+        );
+        final rows = (result as List).map(
+          (r) => Map<String, dynamic>.from(r as Map),
+        );
         return CloudRetainedDeletedScansRead.found(
           rows.map(parseCloudRetainedDeletedScanRow).toList(),
         );
@@ -1995,11 +2127,17 @@ class SupabaseSyncClient
           refreshed = true;
           if (await _safeRefresh()) continue;
         }
-        return CloudRetainedDeletedScansRead.failed(classifyPostgrestCode(code));
+        return CloudRetainedDeletedScansRead.failed(
+          classifyPostgrestCode(code),
+        );
       } on TimeoutException {
-        return const CloudRetainedDeletedScansRead.failed(SyncOutcome.transient('network'));
+        return const CloudRetainedDeletedScansRead.failed(
+          SyncOutcome.transient('network'),
+        );
       } on SocketException {
-        return const CloudRetainedDeletedScansRead.failed(SyncOutcome.transient('network'));
+        return const CloudRetainedDeletedScansRead.failed(
+          SyncOutcome.transient('network'),
+        );
       } catch (e) {
         _logUnclassified(e);
         return CloudRetainedDeletedScansRead.failed(classifyUnexpectedError(e));
@@ -2028,13 +2166,16 @@ class SupabaseSyncClient
     String? requestedByName,
   }) {
     return _guardPostgrest(() async {
-      await _client.rpc('create_scan_restore_request', params: {
-        'p_batch_id': batchId,
-        'p_scan_id': scanId,
-        'p_reason': reason,
-        'p_requested_by_uid': requestedByUid,
-        'p_requested_by_name': requestedByName,
-      });
+      await _client.rpc(
+        'create_scan_restore_request',
+        params: {
+          'p_batch_id': batchId,
+          'p_scan_id': scanId,
+          'p_reason': reason,
+          'p_requested_by_uid': requestedByUid,
+          'p_requested_by_name': requestedByName,
+        },
+      );
       return const SyncOutcome.success();
     });
   }
@@ -2066,16 +2207,18 @@ class SupabaseSyncClient
   /// [CloudAdminSoftDeletedScanRow].
   static CloudAdminSoftDeletedScanRow parseCloudAdminSoftDeletedScanRow(
     Map<String, dynamic> row,
-  ) =>
-      CloudAdminSoftDeletedScanRow(
-        batchId: row['batch_id'] as String,
-        scanId: row['scan_id'] as String,
-        examCode: row['exam_code'] as String,
-        deletedAt: _requireAdminDate(row['deleted_at'], 'deleted_at'),
-        retentionUntil: _requireAdminDate(row['retention_until'], 'retention_until'),
-        deletionReason: row['deletion_reason'] as String?,
-        deletedByName: row['deleted_by_name'] as String?,
-      );
+  ) => CloudAdminSoftDeletedScanRow(
+    batchId: row['batch_id'] as String,
+    scanId: row['scan_id'] as String,
+    examCode: row['exam_code'] as String,
+    deletedAt: _requireAdminDate(row['deleted_at'], 'deleted_at'),
+    retentionUntil: _requireAdminDate(
+      row['retention_until'],
+      'retention_until',
+    ),
+    deletionReason: row['deletion_reason'] as String?,
+    deletedByName: row['deleted_by_name'] as String?,
+  );
 
   /// See [AdminScanRestoreClient.listDeletedScansForAdmin]. Calls the
   /// `list_soft_deleted_unlinked_scans_for_admin` RPC exactly as declared in
@@ -2088,8 +2231,12 @@ class SupabaseSyncClient
     var refreshed = false;
     while (true) {
       try {
-        final result = await _client.rpc('list_soft_deleted_unlinked_scans_for_admin');
-        final rows = (result as List).map((r) => Map<String, dynamic>.from(r as Map));
+        final result = await _client.rpc(
+          'list_soft_deleted_unlinked_scans_for_admin',
+        );
+        final rows = (result as List).map(
+          (r) => Map<String, dynamic>.from(r as Map),
+        );
         return CloudAdminSoftDeletedScansRead.found(
           rows.map(parseCloudAdminSoftDeletedScanRow).toList(),
         );
@@ -2099,14 +2246,22 @@ class SupabaseSyncClient
           refreshed = true;
           if (await _safeRefresh()) continue;
         }
-        return CloudAdminSoftDeletedScansRead.failed(classifyPostgrestCode(code));
+        return CloudAdminSoftDeletedScansRead.failed(
+          classifyPostgrestCode(code),
+        );
       } on TimeoutException {
-        return const CloudAdminSoftDeletedScansRead.failed(SyncOutcome.transient('network'));
+        return const CloudAdminSoftDeletedScansRead.failed(
+          SyncOutcome.transient('network'),
+        );
       } on SocketException {
-        return const CloudAdminSoftDeletedScansRead.failed(SyncOutcome.transient('network'));
+        return const CloudAdminSoftDeletedScansRead.failed(
+          SyncOutcome.transient('network'),
+        );
       } catch (e) {
         _logUnclassified(e);
-        return CloudAdminSoftDeletedScansRead.failed(classifyUnexpectedError(e));
+        return CloudAdminSoftDeletedScansRead.failed(
+          classifyUnexpectedError(e),
+        );
       }
     }
   }
@@ -2115,20 +2270,19 @@ class SupabaseSyncClient
   /// [CloudAdminRestoreRequestRow].
   static CloudAdminRestoreRequestRow parseCloudAdminRestoreRequestRow(
     Map<String, dynamic> row,
-  ) =>
-      CloudAdminRestoreRequestRow(
-        requestId: row['request_id'] as String,
-        batchId: row['batch_id'] as String,
-        scanId: row['scan_id'] as String,
-        examCode: row['exam_code'] as String,
-        status: row['status'] as String,
-        reason: row['reason'] as String,
-        requestedByName: row['requested_by_name'] as String?,
-        requestedAt: _requireAdminDate(row['requested_at'], 'requested_at'),
-        reviewedByName: row['reviewed_by_name'] as String?,
-        reviewedAt: _dateOrNull(row['reviewed_at']),
-        reviewNote: row['review_note'] as String?,
-      );
+  ) => CloudAdminRestoreRequestRow(
+    requestId: row['request_id'] as String,
+    batchId: row['batch_id'] as String,
+    scanId: row['scan_id'] as String,
+    examCode: row['exam_code'] as String,
+    status: row['status'] as String,
+    reason: row['reason'] as String,
+    requestedByName: row['requested_by_name'] as String?,
+    requestedAt: _requireAdminDate(row['requested_at'], 'requested_at'),
+    reviewedByName: row['reviewed_by_name'] as String?,
+    reviewedAt: _dateOrNull(row['reviewed_at']),
+    reviewNote: row['review_note'] as String?,
+  );
 
   /// See [AdminScanRestoreClient.listRestoreRequestsForAdmin]. Calls the
   /// `list_scan_restore_requests_for_admin` RPC exactly as declared in
@@ -2141,8 +2295,12 @@ class SupabaseSyncClient
     var refreshed = false;
     while (true) {
       try {
-        final result = await _client.rpc('list_scan_restore_requests_for_admin');
-        final rows = (result as List).map((r) => Map<String, dynamic>.from(r as Map));
+        final result = await _client.rpc(
+          'list_scan_restore_requests_for_admin',
+        );
+        final rows = (result as List).map(
+          (r) => Map<String, dynamic>.from(r as Map),
+        );
         return CloudAdminRestoreRequestsRead.found(
           rows.map(parseCloudAdminRestoreRequestRow).toList(),
         );
@@ -2152,11 +2310,17 @@ class SupabaseSyncClient
           refreshed = true;
           if (await _safeRefresh()) continue;
         }
-        return CloudAdminRestoreRequestsRead.failed(classifyPostgrestCode(code));
+        return CloudAdminRestoreRequestsRead.failed(
+          classifyPostgrestCode(code),
+        );
       } on TimeoutException {
-        return const CloudAdminRestoreRequestsRead.failed(SyncOutcome.transient('network'));
+        return const CloudAdminRestoreRequestsRead.failed(
+          SyncOutcome.transient('network'),
+        );
       } on SocketException {
-        return const CloudAdminRestoreRequestsRead.failed(SyncOutcome.transient('network'));
+        return const CloudAdminRestoreRequestsRead.failed(
+          SyncOutcome.transient('network'),
+        );
       } catch (e) {
         _logUnclassified(e);
         return CloudAdminRestoreRequestsRead.failed(classifyUnexpectedError(e));
@@ -2185,13 +2349,16 @@ class SupabaseSyncClient
     String? reviewNote,
   }) {
     return _guardPostgrest(() async {
-      await _client.rpc('review_scan_restore_request', params: {
-        'p_request_id': requestId,
-        'p_action': approve ? 'APPROVE' : 'REJECT',
-        'p_reviewer_uid': reviewerUid,
-        'p_reviewer_name': reviewerName,
-        'p_review_note': reviewNote,
-      });
+      await _client.rpc(
+        'review_scan_restore_request',
+        params: {
+          'p_request_id': requestId,
+          'p_action': approve ? 'APPROVE' : 'REJECT',
+          'p_reviewer_uid': reviewerUid,
+          'p_reviewer_name': reviewerName,
+          'p_review_note': reviewNote,
+        },
+      );
       return const SyncOutcome.success();
     });
   }
@@ -2212,11 +2379,14 @@ class SupabaseSyncClient
     String? reviewerName,
   }) {
     return _guardPostgrest(() async {
-      await _client.rpc('restore_soft_deleted_scan', params: {
-        'p_request_id': requestId,
-        'p_reviewer_uid': reviewerUid,
-        'p_reviewer_name': reviewerName,
-      });
+      await _client.rpc(
+        'restore_soft_deleted_scan',
+        params: {
+          'p_request_id': requestId,
+          'p_reviewer_uid': reviewerUid,
+          'p_reviewer_name': reviewerName,
+        },
+      );
       return const SyncOutcome.success();
     });
   }
@@ -2274,8 +2444,9 @@ class SupabaseSyncClient
   /// Depth-first walk of a Storage prefix (Supabase `list` is one level;
   /// folder pseudo-entries have a null `id`).
   Future<List<String>> _listAllKeys(String prefix) async {
-    final normalizedRoot =
-        prefix.endsWith('/') ? prefix.substring(0, prefix.length - 1) : prefix;
+    final normalizedRoot = prefix.endsWith('/')
+        ? prefix.substring(0, prefix.length - 1)
+        : prefix;
     final out = <String>[];
     final pending = <String>[normalizedRoot];
 
@@ -2283,10 +2454,14 @@ class SupabaseSyncClient
       final dir = pending.removeLast();
       var offset = 0;
       while (true) {
-        final page = await _client.storage.from(storageBucket).list(
+        final page = await _client.storage
+            .from(storageBucket)
+            .list(
               path: dir,
-              searchOptions:
-                  SearchOptions(limit: _listPageSize, offset: offset),
+              searchOptions: SearchOptions(
+                limit: _listPageSize,
+                offset: offset,
+              ),
             );
         for (final entry in page) {
           final fullPath = '$dir/${entry.name}';
@@ -2345,7 +2520,9 @@ class SupabaseSyncClient
           refreshed = true;
           if (await _safeRefresh()) continue;
         }
-        _logGuard('storage error status=$status op=${op.name} (${e.runtimeType})');
+        _logGuard(
+          'storage error status=$status op=${op.name} (${e.runtimeType})',
+        );
         return classifyStorageStatus(status, op);
       } on TimeoutException {
         _logGuard('storage transport error op=${op.name} (TimeoutException)');

@@ -1,3 +1,5 @@
+import 'package:guidegrade/features/guidance_web/screens/guidance_web_export_view.dart';
+import 'package:guidegrade/features/guidance_web/services/guidance_web_analytics_service.dart';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -37,15 +39,21 @@ class _FakeSyncClient implements SyncClient {
   @override
   Future<SyncOutcome> pushBatch(String batchId) => _no('pushBatch');
   @override
-  Future<SyncOutcome> pushScan(String batchId, String scanId, {Map<String, String> meta = const {}}) =>
-      _no('pushScan');
+  Future<SyncOutcome> pushScan(
+    String batchId,
+    String scanId, {
+    Map<String, String> meta = const {},
+  }) => _no('pushScan');
   @override
   Future<SyncOutcome> uploadImage(SyncJob job) => _no('uploadImage');
   @override
-  Future<SyncOutcome> patchImageStatus(String batchId, String scanId) => _no('patchImageStatus');
+  Future<SyncOutcome> patchImageStatus(String batchId, String scanId) =>
+      _no('patchImageStatus');
   @override
-  Future<SyncOutcome> pushAnswerKey(String examCode, {Map<String, String> meta = const {}}) =>
-      _no('pushAnswerKey');
+  Future<SyncOutcome> pushAnswerKey(
+    String examCode, {
+    Map<String, String> meta = const {},
+  }) => _no('pushAnswerKey');
   @override
   Future<CloudImageRead> downloadScanImage({
     required String batchId,
@@ -61,9 +69,11 @@ class _FakeSyncClient implements SyncClient {
   @override
   Future<SyncOutcome> deleteBatch(String batchId) => _no('deleteBatch');
   @override
-  Future<SyncOutcome> deleteScan(String batchId, String scanId) => _no('deleteScan');
+  Future<SyncOutcome> deleteScan(String batchId, String scanId) =>
+      _no('deleteScan');
   @override
-  Future<SyncOutcome> deleteStoragePrefix(String batchId) => _no('deleteStoragePrefix');
+  Future<SyncOutcome> deleteStoragePrefix(String batchId) =>
+      _no('deleteStoragePrefix');
   @override
   Future<CloudExamineeWrite> createExamineeFromScan({
     required String batchId,
@@ -80,7 +90,8 @@ class _FakeSyncClient implements SyncClient {
     required String lastName,
   }) => _no('updateCloudExaminee');
   @override
-  Future<CloudExamineeWrite> setExamineeArchived(String id, bool archived) => _no('setExamineeArchived');
+  Future<CloudExamineeWrite> setExamineeArchived(String id, bool archived) =>
+      _no('setExamineeArchived');
   @override
   Future<SyncOutcome> linkScanToExaminee({
     required String batchId,
@@ -94,13 +105,17 @@ class _FakeSyncClient implements SyncClient {
     required String examineeId,
   }) => _no('unlinkScanFromExaminee');
   @override
-  Future<CloudBatchArchivesRead> readBatchArchives() async => CloudBatchArchivesRead.found(const []);
+  Future<CloudBatchArchivesRead> readBatchArchives() async =>
+      CloudBatchArchivesRead.found(const []);
   @override
-  Future<SyncOutcome> archiveBatch({required String batchId, String? reason}) => _no('archiveBatch');
+  Future<SyncOutcome> archiveBatch({required String batchId, String? reason}) =>
+      _no('archiveBatch');
   @override
-  Future<CloudScanCountsRead> readScanCounts(List<String> batchIds) => _no('readScanCounts');
+  Future<CloudScanCountsRead> readScanCounts(List<String> batchIds) =>
+      _no('readScanCounts');
   @override
-  Future<CloudScansRead> readCloudScansForExaminee(String examineeId) => _no('readCloudScansForExaminee');
+  Future<CloudScansRead> readCloudScansForExaminee(String examineeId) =>
+      _no('readCloudScansForExaminee');
   @override
   Future<CloudScansRead> readUnlinkedScans() => _no('readUnlinkedScans');
 }
@@ -171,18 +186,22 @@ CloudScanRow _scanRow({
   examineeId: examineeId,
 );
 
-CloudExamineeRow _examineeRow({required String id, required String temporaryId, required String first, required String last}) =>
-    CloudExamineeRow(
-      id: id,
-      temporaryExamineeId: temporaryId,
-      firstName: first,
-      lastName: last,
-      status: 'active',
-      createdAt: DateTime.utc(2026, 1, 1),
-      createdByUid: 'uid',
-      updatedAt: DateTime.utc(2026, 1, 1),
-      updatedByUid: 'uid',
-    );
+CloudExamineeRow _examineeRow({
+  required String id,
+  required String temporaryId,
+  required String first,
+  required String last,
+}) => CloudExamineeRow(
+  id: id,
+  temporaryExamineeId: temporaryId,
+  firstName: first,
+  lastName: last,
+  status: 'active',
+  createdAt: DateTime.utc(2026, 1, 1),
+  createdByUid: 'uid',
+  updatedAt: DateTime.utc(2026, 1, 1),
+  updatedByUid: 'uid',
+);
 
 void main() {
   late _FakeSyncClient client;
@@ -195,7 +214,10 @@ void main() {
     exportService = _FakeExportService();
   });
 
-  Future<void> pumpView(WidgetTester tester, {bool startInPreview = false}) async {
+  Future<void> pumpView(
+    WidgetTester tester, {
+    bool startInPreview = false,
+  }) async {
     tester.view.physicalSize = const Size(1600, 1400);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.resetPhysicalSize);
@@ -220,112 +242,312 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  group('manual-selection Export follows the same official-identity rule as the default Export', () {
-    void seed() {
-      client.batchesToReturn = CloudBatchesRead.found([_batchRow()]);
-      client.scansByBatchId['b1'] = CloudScansRead.found([
-        _scanRow(id: 's_linked', number: 'A-1', examineeId: 'e1'),
-        _scanRow(id: 's_unlinked', firstName: 'Ana', lastName: 'Lim', number: 'OLD-7'),
-        _scanRow(id: 's_dangling', number: 'A-3', examineeId: 'e_gone'),
-      ]);
-      client.examineesToReturn = CloudExamineesRead.found([
-        _examineeRow(id: 'e1', temporaryId: 'EX-000004', first: 'Merch', last: 'Andulana'),
-      ]);
-    }
+  group(
+    'manual-selection Export follows the same official-identity rule as the default Export',
+    () {
+      void seed() {
+        client.batchesToReturn = CloudBatchesRead.found([_batchRow()]);
+        client.scansByBatchId['b1'] = CloudScansRead.found([
+          _scanRow(id: 's_linked', number: 'A-1', examineeId: 'e1'),
+          _scanRow(
+            id: 's_unlinked',
+            firstName: 'Ana',
+            lastName: 'Lim',
+            number: 'OLD-7',
+          ),
+          _scanRow(id: 's_dangling', number: 'A-3', examineeId: 'e_gone'),
+        ]);
+        client.examineesToReturn = CloudExamineesRead.found([
+          _examineeRow(
+            id: 'e1',
+            temporaryId: 'EX-000004',
+            first: 'Merch',
+            last: 'Andulana',
+          ),
+        ]);
+      }
 
-    testWidgets('a linked selected scan is exported with its official identity mapped', (tester) async {
-      seed();
-      await pumpView(tester);
+      for (final width in [320.0, 390.0, 768.0, 1280.0]) {
+        testWidgets('Export checklist is usable at $width', (tester) async {
+          seed();
+          await pumpView(tester);
+          tester.view.physicalSize = Size(width, 1100);
+          await tester.pumpAndSettle();
+          expect(tester.takeException(), isNull);
+          expect(
+            find.byKey(const Key('exportPdfButton')).hitTestable(),
+            findsOneWidget,
+          );
+          await tester.drag(
+            find.byKey(const Key('exportTableScroll')),
+            const Offset(-2000, 0),
+          );
+          await tester.pumpAndSettle();
+          expect(
+            find.byKey(const Key('scanView_s_linked')).hitTestable(),
+            findsOneWidget,
+          );
+          await tester.tap(find.byKey(const Key('exportUnlinkedFilter')));
+          await tester.pumpAndSettle();
+          expect(
+            tester
+                .widget<FilledButton>(find.byKey(const Key('exportPdfButton')))
+                .onPressed,
+            isNull,
+          );
+          expect(tester.takeException(), isNull);
+        });
+        testWidgets('Export batch list fits at $width', (tester) async {
+          seed();
+          tester.view.physicalSize = Size(width, 1000);
+          tester.view.devicePixelRatio = 1;
+          addTearDown(tester.view.resetPhysicalSize);
+          addTearDown(tester.view.resetDevicePixelRatio);
+          await tester.pumpWidget(
+            MaterialApp(
+              home: Scaffold(
+                body: GuidanceWebExportView(
+                  analyticsService: GuidanceWebAnalyticsService(client: client),
+                  resultsService: resultsService,
+                ),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+          expect(tester.takeException(), isNull);
+          expect(
+            find.byKey(const Key('viewButton_b1')).hitTestable(),
+            findsOneWidget,
+          );
+          expect(
+            tester.getSize(find.byKey(const Key('viewButton_b1'))).height,
+            greaterThanOrEqualTo(44),
+          );
+        });
+      }
+      testWidgets('unlinked examinee preview is view only', (tester) async {
+        seed();
+        await pumpView(tester);
+        await tester.tap(find.byKey(const Key('exportUnlinkedFilter')));
+        await tester.pumpAndSettle();
+        expect(
+          tester
+              .widget<FilledButton>(find.byKey(const Key('exportPdfButton')))
+              .onPressed,
+          isNull,
+        );
+        await tester.tap(find.byKey(const Key('scanView_s_unlinked')));
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const ValueKey('unlinkedPreview_s_unlinked')),
+          findsOneWidget,
+        );
+        expect(
+          tester
+              .widget<OutlinedButton>(
+                find.widgetWithText(OutlinedButton, 'Print'),
+              )
+              .onPressed,
+          isNull,
+        );
+        expect(
+          tester
+              .widget<OutlinedButton>(
+                find.widgetWithText(OutlinedButton, 'Download'),
+              )
+              .onPressed,
+          isNull,
+        );
+        expect(
+          tester
+              .widget<FilledButton>(find.widgetWithText(FilledButton, 'Export'))
+              .onPressed,
+          isNull,
+        );
+        expect(exportService.buildPdfCalls, 0);
+        expect(tester.takeException(), isNull);
+      });
 
-      // All three rows start checked by default (every row has some tag, or
-      // is the generated number) -- tap "view output" to trigger buildPdf.
-      await tester.tap(find.byKey(const Key('viewOutputButton')));
-      await tester.pumpAndSettle();
+      testWidgets('category filter combines with examinee groups', (
+        tester,
+      ) async {
+        seed();
+        await pumpView(tester);
+        expect(find.byKey(const Key('exportScanRow_s_linked')), findsOneWidget);
+        await tester.tap(find.byKey(const Key('exportCategoryFilter')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('B').last);
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('exportScanRow_s_linked')), findsNothing);
+        expect(find.text('No matching examinees.'), findsOneWidget);
+        await tester.tap(find.byKey(const Key('exportCategoryFilter')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('A').last);
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('exportScanRow_s_linked')), findsOneWidget);
+        await tester.tap(find.byKey(const Key('exportUnlinkedFilter')));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('exportScanRow_s_linked')), findsNothing);
+        expect(
+          find.byKey(const Key('exportScanRow_s_unlinked')),
+          findsOneWidget,
+        );
+        expect(tester.takeException(), isNull);
+      });
 
-      expect(exportService.buildPdfCalls, greaterThan(0));
-      final linked = exportService.lastLinkedExamineeByScanId!;
-      expect(linked.containsKey('s_linked'), isTrue);
-      expect(linked['s_linked']!.displayName, 'Andulana, Merch');
-    });
+      testWidgets('refresh preview rebuilds the selected examinee export', (
+        tester,
+      ) async {
+        seed();
+        await pumpView(tester);
+        await tester.tap(find.byKey(const Key('scanView_s_linked')));
+        await tester.pumpAndSettle();
+        final previousCalls = exportService.buildPdfCalls;
+        expect(find.byKey(const Key('previewRefresh')), findsOneWidget);
+        await tester.tap(find.byKey(const Key('previewRefresh')));
+        await tester.pumpAndSettle();
+        expect(exportService.buildPdfCalls, previousCalls + 1);
+        expect(exportService.lastSelected!.single.id, 's_linked');
+        expect(tester.takeException(), isNull);
+      });
 
-    testWidgets('an unlinked selected scan has no entry in the identity map -- never silently exported as official',
+      testWidgets(
+        'a linked selected scan is exported with its official identity mapped',
         (tester) async {
-      seed();
-      await pumpView(tester);
+          seed();
+          await pumpView(tester);
 
-      await tester.tap(find.byKey(const Key('viewOutputButton')));
-      await tester.pumpAndSettle();
+          // All three rows start checked by default (every row has some tag, or
+          // is the generated number) -- tap "view output" to trigger buildPdf.
+          await tester.tap(find.byKey(const Key('viewOutputButton')));
+          await tester.pumpAndSettle();
 
-      final linked = exportService.lastLinkedExamineeByScanId!;
-      expect(linked.containsKey('s_unlinked'), isFalse);
-      // The scan itself is still part of the selection/export (existing
-      // selection semantics preserved) -- only its identity source differs.
-      expect(exportService.lastSelected!.map((s) => s.id), contains('s_unlinked'));
-    });
+          expect(exportService.buildPdfCalls, greaterThan(0));
+          final linked = exportService.lastLinkedExamineeByScanId!;
+          expect(linked.containsKey('s_linked'), isTrue);
+          expect(linked['s_linked']!.displayName, 'Andulana, Merch');
+        },
+      );
 
-    testWidgets(
+      testWidgets(
+        'an unlinked selected scan has no entry in the identity map -- never silently exported as official',
+        (tester) async {
+          seed();
+          await pumpView(tester);
+
+          await tester.tap(find.byKey(const Key('viewOutputButton')));
+          await tester.pumpAndSettle();
+
+          final linked = exportService.lastLinkedExamineeByScanId!;
+          expect(linked.containsKey('s_unlinked'), isFalse);
+          // The scan itself is still part of the selection/export (existing
+          // selection semantics preserved) -- only its identity source differs.
+          expect(
+            exportService.lastSelected!.map((s) => s.id),
+            contains('s_unlinked'),
+          );
+        },
+      );
+
+      testWidgets(
         'a dangling-examinee_id selected scan has no entry in the identity map -- never silently exported as '
-        'official', (tester) async {
-      seed();
-      await pumpView(tester);
+        'official',
+        (tester) async {
+          seed();
+          await pumpView(tester);
 
-      await tester.tap(find.byKey(const Key('viewOutputButton')));
-      await tester.pumpAndSettle();
+          await tester.tap(find.byKey(const Key('viewOutputButton')));
+          await tester.pumpAndSettle();
 
-      final linked = exportService.lastLinkedExamineeByScanId!;
-      expect(linked.containsKey('s_dangling'), isFalse);
-      expect(exportService.lastSelected!.map((s) => s.id), contains('s_dangling'));
-    });
+          final linked = exportService.lastLinkedExamineeByScanId!;
+          expect(linked.containsKey('s_dangling'), isFalse);
+          expect(
+            exportService.lastSelected!.map((s) => s.id),
+            contains('s_dangling'),
+          );
+        },
+      );
 
-    testWidgets('the checklist shows the official name for a linked row, in the normal (dark) style', (tester) async {
-      seed();
-      await pumpView(tester);
+      testWidgets(
+        'the checklist shows the official name for a linked row, in the normal (dark) style',
+        (tester) async {
+          seed();
+          await pumpView(tester);
 
-      expect(find.text('Andulana, Merch'), findsOneWidget);
-      final text = tester.widget<Text>(find.text('Andulana, Merch'));
-      expect(text.style?.color, AppColors.textDark);
-    });
+          expect(find.text('Andulana, Merch'), findsOneWidget);
+          final text = tester.widget<Text>(find.text('Andulana, Merch'));
+          expect(text.style?.color, AppColors.textDark);
+        },
+      );
 
-    testWidgets('the checklist shows the OCR tag (not the official style) for an unlinked row', (tester) async {
-      seed();
-      await pumpView(tester);
+      testWidgets(
+        'the checklist shows the OCR tag (not the official style) for an unlinked row',
+        (tester) async {
+          seed();
+          await pumpView(tester);
 
-      // The unlinked scan's own OCR tag is shown as plain scan information,
-      // never invented, never upgraded to official styling.
-      expect(find.text('Lim, Ana'), findsOneWidget);
-    });
+          // The unlinked scan's own OCR tag is shown as plain scan information,
+          // never invented, never upgraded to official styling.
+          await tester.tap(find.byKey(const Key('exportUnlinkedFilter')));
+          await tester.pumpAndSettle();
+          expect(find.text('Lim, Ana'), findsOneWidget);
+        },
+      );
 
-    testWidgets(
+      testWidgets(
         'checklist pre-checking is unchanged (every scan with some tag or generated number starts checked), '
         'but the shown selection count reflects only exportable official-result scans, not the raw checked count',
         (tester) async {
-      seed();
-      await pumpView(tester);
+          seed();
+          await pumpView(tester);
 
-      expect(find.byKey(const Key('selectionLabel')), findsOneWidget);
-      final label = tester.widget<Text>(find.byKey(const Key('selectionLabel')));
-      // All 3 rows start checked (unchanged pre-check behavior), but only
-      // s_linked is officially linked -- the label must say 1, never 3.
-      expect(label.data, contains('1 examinee'));
-      expect(label.data, isNot(contains('3 examinee')));
-    });
+          expect(find.byKey(const Key('selectionLabel')), findsOneWidget);
+          final label = tester.widget<Text>(
+            find.byKey(const Key('selectionLabel')),
+          );
+          // All 3 rows start checked (unchanged pre-check behavior), but only
+          // s_linked is officially linked -- the label must say 1, never 3.
+          expect(label.data, contains('1 examinee'));
+          expect(label.data, isNot(contains('3 examinee')));
+        },
+      );
 
-    testWidgets('export count only counts exportable official-result scans, even across multiple linked scans',
+      testWidgets(
+        'export count only counts exportable official-result scans, even across multiple linked scans',
         (tester) async {
-      client.batchesToReturn = CloudBatchesRead.found([_batchRow()]);
-      client.scansByBatchId['b1'] = CloudScansRead.found([
-        _scanRow(id: 's_linked_1', number: 'A-1', examineeId: 'e1'),
-        _scanRow(id: 's_linked_2', number: 'A-2', examineeId: 'e2'),
-        _scanRow(id: 's_unlinked', firstName: 'Ana', lastName: 'Lim', number: 'OLD-7'),
-      ]);
-      client.examineesToReturn = CloudExamineesRead.found([
-        _examineeRow(id: 'e1', temporaryId: 'EX-000004', first: 'Merch', last: 'Andulana'),
-        _examineeRow(id: 'e2', temporaryId: 'EX-000005', first: 'Maria', last: 'Santos'),
-      ]);
-      await pumpView(tester);
+          client.batchesToReturn = CloudBatchesRead.found([_batchRow()]);
+          client.scansByBatchId['b1'] = CloudScansRead.found([
+            _scanRow(id: 's_linked_1', number: 'A-1', examineeId: 'e1'),
+            _scanRow(id: 's_linked_2', number: 'A-2', examineeId: 'e2'),
+            _scanRow(
+              id: 's_unlinked',
+              firstName: 'Ana',
+              lastName: 'Lim',
+              number: 'OLD-7',
+            ),
+          ]);
+          client.examineesToReturn = CloudExamineesRead.found([
+            _examineeRow(
+              id: 'e1',
+              temporaryId: 'EX-000004',
+              first: 'Merch',
+              last: 'Andulana',
+            ),
+            _examineeRow(
+              id: 'e2',
+              temporaryId: 'EX-000005',
+              first: 'Maria',
+              last: 'Santos',
+            ),
+          ]);
+          await pumpView(tester);
 
-      final label = tester.widget<Text>(find.byKey(const Key('selectionLabel')));
-      expect(label.data, contains('2 examinees'));
-    });
-  });
+          final label = tester.widget<Text>(
+            find.byKey(const Key('selectionLabel')),
+          );
+          expect(label.data, contains('2 examinees'));
+        },
+      );
+    },
+  );
 }

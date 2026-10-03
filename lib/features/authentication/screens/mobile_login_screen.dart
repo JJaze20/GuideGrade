@@ -139,7 +139,7 @@ class _MobileLoginScreenState extends State<MobileLoginScreen> {
                   Text(
                     'Guidance automated test diagnostic checking',
                     style: AppTextStyles.body(
-                      size: 10,
+                      size: 12,
                       color: Colors.grey.shade400,
                     ),
                   ),
@@ -183,7 +183,7 @@ class _MobileLoginScreenState extends State<MobileLoginScreen> {
                                   child: Text(
                                     'or sign in with email',
                                     style: AppTextStyles.body(
-                                      size: 11,
+                                      size: 12.5,
                                       color: AppColors.textGray,
                                     ),
                                   ),
@@ -231,6 +231,7 @@ class _MobileLoginScreenState extends State<MobileLoginScreen> {
                               decoration: InputDecoration(
                                 hintText: '••••••••',
                                 suffixIcon: IconButton(
+                                  tooltip: _obscurePassword ? 'Show password' : 'Hide password',
                                   icon: Icon(
                                     _obscurePassword
                                         ? Icons.visibility_off
@@ -257,6 +258,7 @@ class _MobileLoginScreenState extends State<MobileLoginScreen> {
                       label: _isLoading ? 'SIGNING IN...' : 'LOGIN',
                       icon: FontAwesomeIcons.arrowRight,
                       color: AppColors.textDark,
+                      loading: _isLoading,
                       onPressed: _isLoading ? null : _handleEmailLogin,
                     ),
                   ],

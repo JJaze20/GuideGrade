@@ -18,6 +18,7 @@ import '../services/guidance_web_results_service.dart';
 import 'guidance_web_certificate.dart';
 import 'guidance_web_export_models.dart';
 import 'guidance_web_export_pdf.dart';
+import 'tat_export_clusters.dart';
 
 /// Category bands as printed, D first. Same score ranges the Analytics
 /// detail screen shows; QTM and TAT carry the template's percentage labels.
@@ -118,11 +119,12 @@ class GuidanceWebExportService {
         ? await _batchSection(batch, allScans)
         : null;
     // Every examinee uses the same whole-batch baseline for this export.
-    final averages = eligible.isNotEmpty && key != null && clusterDefsFor(batch.examCode) != null
-        ? computeClusterAverages(batch.examCode, [
-            for (final scan in allScans) scoreOmrResult(scan.decoded, key).items,
-          ])
-        : const <String, double>{};
+    final scoredBatch = eligible.isNotEmpty && key != null
+        ? [for (final scan in allScans) scoreOmrResult(scan.decoded, key).items]
+        : <List<ScoredItem>>[];
+    final averages = batch.examCode == 'TAT'
+        ? tatClusterAverages(scoredBatch)
+        : computeClusterAverages(batch.examCode, scoredBatch);
     final examinees = [
       for (final s in eligible)
         _examineeSection(
@@ -156,13 +158,12 @@ class GuidanceWebExportService {
       linkedExamineeByScanId: linkedExamineeByScanId,
     );
 
-    final left = (await rootBundle.load('assets/images/ndmu_logo.png'))
-        .buffer
-        .asUint8List();
-    final right =
-        (await rootBundle.load('assets/images/guidance_council_logo.png'))
-            .buffer
-            .asUint8List();
+    final left = (await rootBundle.load(
+      'assets/images/ndmu_logo.png',
+    )).buffer.asUint8List();
+    final right = (await rootBundle.load(
+      'assets/images/guidance_council_logo.png',
+    )).buffer.asUint8List();
     return buildExportPdf(document, leftLogo: left, rightLogo: right);
   }
 
@@ -218,13 +219,12 @@ class GuidanceWebExportService {
       includeCertificates: includeCertificates,
     );
 
-    final left = (await rootBundle.load('assets/images/ndmu_logo.png'))
-        .buffer
-        .asUint8List();
-    final right =
-        (await rootBundle.load('assets/images/guidance_council_logo.png'))
-            .buffer
-            .asUint8List();
+    final left = (await rootBundle.load(
+      'assets/images/ndmu_logo.png',
+    )).buffer.asUint8List();
+    final right = (await rootBundle.load(
+      'assets/images/guidance_council_logo.png',
+    )).buffer.asUint8List();
     return buildExportPdf(document, leftLogo: left, rightLogo: right);
   }
 
@@ -275,7 +275,8 @@ class GuidanceWebExportService {
           stats: const [],
           scoreBars: const [],
           categoryBars: categoryBars,
-          unavailableNote: 'All examination attempts in this batch are '
+          unavailableNote:
+              'All examination attempts in this batch are '
               'archived. No active attempts are included in this export.',
         );
       }
@@ -309,7 +310,8 @@ class GuidanceWebExportService {
     return pct == null ? s : '$s ($pct)';
   }
 
-  static String? _pct(double? p) => p == null ? null : '${p.toStringAsFixed(1)}%';
+  static String? _pct(double? p) =>
+      p == null ? null : '${p.toStringAsFixed(1)}%';
 
   /// The same figures and formatting the Analytics screen shows.
   (List<(String, String)>, List<ExportBar>) _statsFrom(AnalyticsResult r) {
@@ -324,7 +326,10 @@ class GuidanceWebExportService {
             ('Average', _combine(a.averageRawScore, _pct(a.averagePercentage))),
             (
               'Highest',
-              _combine(a.highestRawScore?.toDouble(), _pct(a.highestPercentage)),
+              _combine(
+                a.highestRawScore?.toDouble(),
+                _pct(a.highestPercentage),
+              ),
             ),
             (
               'Lowest',
@@ -423,8 +428,18 @@ class GuidanceWebExportService {
   // --- examinee page ---------------------------------------------------------
 
   static const _months = [
-    'January', 'February', 'March', 'April', 'May', 'June', 'July', 'August',
-    'September', 'October', 'November', 'December',
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
   ];
 
   String _date(DateTime d) => '${_months[d.month - 1]} ${d.day}, ${d.year}';
@@ -451,7 +466,12 @@ class GuidanceWebExportService {
         : (result?.totalItems ?? 0);
 
     List<ClusterRow>? clusterRows;
-    if (clusterDefsFor(batch.examCode) != null) {
+    if (batch.examCode == 'TAT') {
+      clusterRows = tatClusterRows(
+        scoreOmrResult(scan.decoded, key).items,
+        averages: averages,
+      );
+    } else if (clusterDefsFor(batch.examCode) != null) {
       clusterRows = computeClusterRows(
         batch.examCode,
         scoreOmrResult(scan.decoded, key).items,
@@ -485,6 +505,7 @@ class GuidanceWebExportService {
           ? '-'
           : '${result.percentage.toStringAsFixed(2)}%',
       clusterRows: clusterRows,
+      clusterNote: batch.examCode == 'TAT' ? tatClusterScoringNote : null,
       categoryBands: exportCategoryBands(batch.examCode),
       categoryLetter: result == null
           ? null

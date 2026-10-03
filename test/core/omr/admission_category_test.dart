@@ -9,14 +9,14 @@ void main() {
     test('upper A boundary 54 -> A', () {
       expect(admissionCategory(54), AdmissionCategory.a);
     });
-    test('gap 55 -> null', () {
-      expect(admissionCategory(55), isNull);
+    test('55 -> B', () {
+      expect(admissionCategory(55), AdmissionCategory.b);
     });
-    test('gap 56 -> null', () {
-      expect(admissionCategory(56), isNull);
+    test('56 -> B', () {
+      expect(admissionCategory(56), AdmissionCategory.b);
     });
-    test('gap 57 -> null', () {
-      expect(admissionCategory(57), isNull);
+    test('57 -> B', () {
+      expect(admissionCategory(57), AdmissionCategory.b);
     });
     test('lower B boundary 58 -> B', () {
       expect(admissionCategory(58), AdmissionCategory.b);
@@ -50,9 +50,9 @@ void main() {
         expect(admissionCategory(s), AdmissionCategory.a, reason: 'score $s');
       }
     });
-    test('55..57 all map to null (the gap)', () {
+    test('55..57 all map to B', () {
       for (var s = 55; s <= 57; s++) {
-        expect(admissionCategory(s), isNull, reason: 'score $s');
+        expect(admissionCategory(s), AdmissionCategory.b, reason: 'score $s');
       }
     });
     test('58..60 all map to B', () {

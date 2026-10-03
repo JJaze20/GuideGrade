@@ -223,4 +223,40 @@ void main() {
     expect(find.textContaining('server'), findsOneWidget);
     expect(find.text('Could not load users'), findsNothing);
   });
+
+  testWidgets('K. an empty filtered result offers Clear filters, which restores the list', (tester) async {
+    await pumpScreen(tester, [jeric, maria]);
+
+    await tester.enterText(find.byType(TextField), 'zzz-no-match');
+    await tester.pumpAndSettle();
+    expect(find.text('No users found'), findsOneWidget);
+    expect(find.text('Try adjusting your search or filters'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Clear filters'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Jeric Ryan Caday'), findsOneWidget);
+    expect(find.text('Maria Santos'), findsOneWidget);
+    expect(find.text('No users found'), findsNothing);
+  });
+
+  testWidgets('L. the screen lays out on a phone with large text (no overflow)', (tester) async {
+    tester.view.physicalSize = const Size(360, 740);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    firestoreService = _FakeFirestoreService([jeric, maria, admin, inactiveStaff]);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MediaQuery(
+          data: const MediaQueryData(textScaler: TextScaler.linear(1.6)),
+          child: UserManagementScreen(firestoreService: firestoreService),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    expect(find.text('Jeric Ryan Caday'), findsOneWidget);
+  });
 }

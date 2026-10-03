@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
-import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
+import '../../../core/constants/app_tokens.dart';
 import '../../../core/routes/app_routes.dart';
 import '../../../core/services/firestore_service.dart';
 import '../../../models/user.dart';
+import '../../../shared/widgets/form_field_decoration.dart';
+import '../../../shared/widgets/state_views.dart';
 import '../widgets/user_list_item.dart';
 
 /// User Management screen for the System Administrator.
@@ -80,6 +82,23 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     Navigator.of(context).pushNamed(AppRoutes.editUser, arguments: user);
   }
 
+  bool get _filtersActive =>
+      _searchController.text.isNotEmpty || _roleFilter != 'All' || _statusFilter != 'All';
+
+  void _clearFilters() {
+    setState(() {
+      _searchController.clear();
+      _roleFilter = 'All';
+      _statusFilter = 'All';
+    });
+  }
+
+  /// Keeps the toolbar and list readable on wide desktop windows.
+  Widget _centered(Widget child) => Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 960), child: child),
+      );
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -87,8 +106,9 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
       appBar: AppBar(
         backgroundColor: Colors.white,
         foregroundColor: AppColors.textDark,
-        elevation: 0.5,
-        title: Text('User Management', style: AppTextStyles.heading(size: 13)),
+        elevation: 0,
+        shape: const Border(bottom: BorderSide(color: AppColors.border)),
+        title: Text('User Management', style: AppTextStyles.heading(size: 17)),
       ),
       body: SafeArea(
         child: StreamBuilder<List<UserModel>>(
@@ -99,7 +119,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
           stream: _usersStream,
           builder: (context, snapshot) {
             if (snapshot.connectionState == ConnectionState.waiting) {
-              return const Center(child: CircularProgressIndicator());
+              return const LoadingState(message: 'Loading users…');
             }
             if (snapshot.hasError) {
               return _buildErrorState(snapshot.error);
@@ -121,129 +141,111 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _navigateToCreateUser,
         backgroundColor: AppColors.primaryGreen,
-        icon: const FaIcon(FontAwesomeIcons.userPlus, size: 16),
-        label: Text('Create User', style: AppTextStyles.body(size: 11, color: Colors.white)),
+        foregroundColor: Colors.white,
+        icon: const Icon(Icons.person_add_alt_1_rounded, size: 20),
+        label: Text('Create User', style: AppTextStyles.body(size: 13, weight: FontWeight.w700, color: Colors.white)),
       ),
     );
   }
 
   Widget _buildSearchAndFilterBar() {
     return Container(
-      padding: const EdgeInsets.all(16),
-      color: Colors.white,
-      child: Column(
-        children: [
-          TextField(
-            controller: _searchController,
-            decoration: InputDecoration(
-              hintText: 'Search by name or email...',
-              prefixIcon: const Icon(Icons.search, size: 20),
-              suffixIcon: _searchController.text.isNotEmpty
-                  ? IconButton(
-                      icon: const Icon(Icons.clear, size: 20),
-                      onPressed: _searchController.clear,
-                    )
-                  : null,
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide(color: AppColors.cardBorder),
-              ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide(color: AppColors.cardBorder),
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide(color: AppColors.primaryGreen),
-              ),
-              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            ),
-          ),
-          const SizedBox(height: 12),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: [
-                Text('Role: ', style: AppTextStyles.body(size: 10, color: AppColors.textGray)),
-                const SizedBox(width: 4),
-                _buildFilterChip(_roleFilter, 'All', (v) => setState(() => _roleFilter = v)),
-                const SizedBox(width: 8),
-                _buildFilterChip(_roleFilter, 'System Admin', (v) => setState(() => _roleFilter = v)),
-                const SizedBox(width: 8),
-                _buildFilterChip(_roleFilter, 'Guidance Council', (v) => setState(() => _roleFilter = v)),
-              ],
-            ),
-          ),
-          const SizedBox(height: 8),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: [
-                Text('Status: ', style: AppTextStyles.body(size: 10, color: AppColors.textGray)),
-                const SizedBox(width: 4),
-                _buildFilterChip(_statusFilter, 'All', (v) => setState(() => _statusFilter = v)),
-                const SizedBox(width: 8),
-                _buildFilterChip(_statusFilter, 'Active', (v) => setState(() => _statusFilter = v)),
-                const SizedBox(width: 8),
-                _buildFilterChip(_statusFilter, 'Inactive', (v) => setState(() => _statusFilter = v)),
-              ],
-            ),
-          ),
-        ],
+      width: double.infinity,
+      decoration: const BoxDecoration(
+        color: AppColors.surface,
+        border: Border(bottom: BorderSide(color: AppColors.border)),
       ),
+      padding: const EdgeInsets.all(AppSpace.lg),
+      child: _centered(
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: _searchController,
+              decoration: FormFieldStyle.outlined(
+                hint: 'Search by name or email',
+                prefixIcon: const Icon(Icons.search, size: 20),
+                suffixIcon: _searchController.text.isNotEmpty
+                    ? IconButton(
+                        tooltip: 'Clear search',
+                        icon: const Icon(Icons.clear, size: 20),
+                        onPressed: _searchController.clear,
+                      )
+                    : null,
+              ),
+            ),
+            const SizedBox(height: AppSpace.md),
+            _filterGroup('Role', _roleFilter, const ['All', 'System Admin', 'Guidance Council'],
+                (v) => setState(() => _roleFilter = v)),
+            const SizedBox(height: AppSpace.sm),
+            _filterGroup('Status', _statusFilter, const ['All', 'Active', 'Inactive'],
+                (v) => setState(() => _statusFilter = v)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// A labelled group of filter chips that WRAPS on narrow screens instead of
+  /// forcing a sideways scroll.
+  Widget _filterGroup(
+    String label,
+    String current,
+    List<String> options,
+    void Function(String) onSelect,
+  ) {
+    return Wrap(
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: AppSpace.sm,
+      runSpacing: AppSpace.xs,
+      children: [
+        SizedBox(width: 52, child: Text(label, style: AppTextStyles.label())),
+        for (final option in options) _buildFilterChip(current, option, onSelect),
+      ],
     );
   }
 
   Widget _buildFilterChip(String currentValue, String label, void Function(String) onSelect) {
     final isSelected = currentValue == label;
     return FilterChip(
-      label: Text(label, style: AppTextStyles.body(size: 10.5)),
+      label: Text(label),
       selected: isSelected,
       onSelected: (_) => onSelect(label),
-      selectedColor: AppColors.primaryGreen.withOpacity(0.1),
-      checkmarkColor: AppColors.primaryGreen,
-      backgroundColor: AppColors.lightBg,
+      showCheckmark: false,
+      selectedColor: AppColors.successBg,
+      backgroundColor: AppColors.surface,
+      side: BorderSide(color: isSelected ? AppColors.successBorder : AppColors.borderStrong),
       labelStyle: AppTextStyles.body(
-        size: 10.5,
+        size: 12.5,
+        weight: isSelected ? FontWeight.w800 : FontWeight.w600,
         color: isSelected ? AppColors.primaryGreen : AppColors.textDark,
       ),
     );
   }
 
   Widget _buildUserList(List<UserModel> users) {
-    return ListView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: users.length,
-      itemBuilder: (context, index) {
-        final user = users[index];
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 12),
-          child: UserListItem(
-            user: user,
-            onTap: () => _navigateToEditUser(user),
-          ),
-        );
-      },
+    return _centered(
+      ListView.separated(
+        padding: const EdgeInsets.all(AppSpace.lg),
+        // Leaves room so the last card is never hidden behind the FAB.
+        itemCount: users.length,
+        separatorBuilder: (_, _) => const SizedBox(height: AppSpace.md),
+        itemBuilder: (context, index) {
+          final user = users[index];
+          return UserListItem(user: user, onTap: () => _navigateToEditUser(user));
+        },
+      ),
     );
   }
 
   Widget _buildEmptyState() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const FaIcon(FontAwesomeIcons.userGroup, size: 48, color: AppColors.textGray),
-          const SizedBox(height: 16),
-          Text('No users found', style: AppTextStyles.body(size: 12, weight: FontWeight.w600)),
-          const SizedBox(height: 8),
-          Text(
-            _searchController.text.isNotEmpty || _roleFilter != 'All' || _statusFilter != 'All'
-                ? 'Try adjusting your search or filters'
-                : 'Create a user to get started',
-            style: AppTextStyles.body(size: 10, color: AppColors.textGray),
-          ),
-        ],
-      ),
+    return EmptyState(
+      icon: Icons.group_outlined,
+      title: 'No users found',
+      message: _filtersActive ? 'Try adjusting your search or filters' : 'Create a user to get started',
+      action: _filtersActive
+          ? OutlinedButton(onPressed: _clearFilters, child: const Text('Clear filters'))
+          : null,
     );
   }
 
@@ -251,15 +253,6 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     final message = error == null
         ? 'Could not load users'
         : FirestoreService.messageFor(error, fallback: 'Could not load users');
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const FaIcon(FontAwesomeIcons.triangleExclamation, size: 40, color: AppColors.warmRedOrange),
-          const SizedBox(height: 12),
-          Text(message, style: AppTextStyles.body(size: 12, weight: FontWeight.w600)),
-        ],
-      ),
-    );
+    return ErrorState(message: message);
   }
 }

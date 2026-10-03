@@ -406,4 +406,46 @@ void main() {
       expect(find.text('PENDING'), findsOneWidget);
     },
   );
+
+  testWidgets('15. both tabs lay out on a phone with large text (no overflow)', (tester) async {
+    tester.view.physicalSize = const Size(360, 740);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    client.deletedScans = [_scanRow()];
+    client.requests = [_requestRow(), _requestRow(requestId: 'req-2', status: 'APPROVED', scanId: 's2')];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MediaQuery(
+          data: const MediaQueryData(textScaler: TextScaler.linear(1.6)),
+          child: RestoreManagementScreen(
+            service: AdminScanRestoreService(client: client, identity: _Identity()),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(find.textContaining('Scan s1'), findsOneWidget);
+
+    await openRequestsTab(tester);
+    expect(tester.takeException(), isNull);
+    expect(find.widgetWithText(TextButton, 'Approve'), findsOneWidget);
+    // The second card is below the fold at this size/scale: scroll to it.
+    await tester.scrollUntilVisible(
+      find.widgetWithText(TextButton, 'Restore Scan'),
+      200,
+      scrollable: find.byType(Scrollable).last,
+    );
+    expect(tester.takeException(), isNull);
+    expect(find.widgetWithText(TextButton, 'Restore Scan'), findsOneWidget);
+  });
+
+  testWidgets('16. an empty list explains itself and the refresh button has a tooltip', (tester) async {
+    await pumpScreen(tester);
+    expect(find.text('No soft-deleted scans.'), findsOneWidget);
+    expect(find.byTooltip('Refresh'), findsOneWidget);
+    await openRequestsTab(tester);
+    expect(find.text('No restore requests.'), findsOneWidget);
+  });
 }

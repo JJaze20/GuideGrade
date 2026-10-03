@@ -10,6 +10,7 @@ import '../../../models/local_batch.dart';
 import '../../../shared/widgets/app_bottom_nav.dart';
 import '../../../shared/widgets/needs_review_badge.dart';
 import '../../../shared/widgets/app_header_bar.dart';
+import '../../../shared/widgets/status_badge.dart';
 
 /// Archive — every locally saved batch, organized around the batch rather
 /// than around individual scans. Each card is a batch container (exam type,
@@ -311,7 +312,7 @@ class _CloudArchiveScreenState extends State<CloudArchiveScreen> {
                       ],
                     ),
                   ),
-                  _statusChip(batch.status),
+                  BatchStatusBadge(status: batch.status),
                 ],
               ),
               if (batch.needsReview) ...[
@@ -364,39 +365,6 @@ class _CloudArchiveScreenState extends State<CloudArchiveScreen> {
           ),
         ),
       ],
-    );
-  }
-
-  Widget _statusChip(String status) {
-    Color bg;
-    Color fg;
-    switch (status) {
-      case 'Draft':
-        bg = const Color(0xFFFEF3C7);
-        fg = const Color(0xFF92400E);
-        break;
-      case 'Active':
-        bg = const Color(0xFFDBEAFE);
-        fg = const Color(0xFF1E40AF);
-        break;
-      case 'Completed':
-        bg = const Color(0xFFD1FAE5);
-        fg = const Color(0xFF065F46);
-        break;
-      default:
-        bg = const Color(0xFFF3F4F6);
-        fg = const Color(0xFF374151);
-    }
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Text(
-        status,
-        style: AppTextStyles.body(size: 12, weight: FontWeight.w600, color: fg),
-      ),
     );
   }
 

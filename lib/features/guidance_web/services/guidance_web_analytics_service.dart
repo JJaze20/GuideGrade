@@ -17,6 +17,11 @@ import '../../../core/sync/sync_outcome.dart';
 import '../../../core/sync/sync_queue.dart' show SyncState;
 import '../../../models/answer_key.dart';
 import '../../../models/local_batch.dart';
+import '../../../models/examinee_record.dart';
+import '../../../core/omr/admission_category.dart';
+import '../../../core/omr/qtm_result.dart' show qtmEligibility, QtmEligibility;
+import 'guidance_web_examinee_records_service.dart'
+    show examineeRecordFromCloudRow;
 
 /// Thrown by [GuidanceWebAnalyticsService] on any failure. Carries only an
 /// already-sanitized, user-safe message.
@@ -32,10 +37,10 @@ class GuidanceWebAnalyticsException implements Exception {
 /// analyze. Nothing is loaded and nothing is partially analyzed.
 class AnalyticsTooManyBatchesException extends GuidanceWebAnalyticsException {
   AnalyticsTooManyBatchesException(this.count)
-      : super(
-          'Analytics cannot load all selected batches at once. Please narrow '
-          'the selection by choosing a specific batch, exam type, or batch status.',
-        );
+    : super(
+        'Analytics cannot load all selected batches at once. Please narrow '
+        'the selection by choosing a specific batch, exam type, or batch status.',
+      );
 
   /// How many batches matched the filters.
   final int count;
@@ -50,7 +55,10 @@ enum AnalyticsBatchStatus { all, current, archived }
 /// archive status is then UNKNOWN (never guessed as "nothing archived"), so
 /// only [AnalyticsBatchStatus.all] may be used.
 class AnalyticsCatalog {
-  const AnalyticsCatalog({required this.batches, required this.archivedBatchIds});
+  const AnalyticsCatalog({
+    required this.batches,
+    required this.archivedBatchIds,
+  });
 
   final List<LocalBatch> batches;
   final Set<String>? archivedBatchIds;
@@ -146,7 +154,9 @@ class TatOverallStats {
       avg = totals.fold<int>(0, (a, b) => a + b) / n;
       lo = totals.first;
       hi = totals.last;
-      med = n.isOdd ? totals[n ~/ 2].toDouble() : (totals[n ~/ 2 - 1] + totals[n ~/ 2]) / 2;
+      med = n.isOdd
+          ? totals[n ~/ 2].toDouble()
+          : (totals[n ~/ 2 - 1] + totals[n ~/ 2]) / 2;
 
       // Every total is 0..160 here, so tatPercentage is never null, and the
       // list stays sorted because the percentage is monotonic in the total.
@@ -155,7 +165,9 @@ class TatOverallStats {
       loPct = pcts.first;
       hiPct = pcts.last;
       final pn = pcts.length;
-      medPct = pn.isOdd ? pcts[pn ~/ 2] : (pcts[pn ~/ 2 - 1] + pcts[pn ~/ 2]) / 2;
+      medPct = pn.isOdd
+          ? pcts[pn ~/ 2]
+          : (pcts[pn ~/ 2 - 1] + pcts[pn ~/ 2]) / 2;
 
       for (final e in TatEligibility.values) {
         eligibility[e] = 0;
@@ -261,6 +273,83 @@ class IncompleteBatch {
   final int retrievedScans;
 }
 
+/// A resolved official result from the exact snapshot used by the aggregates.
+class AnalyticsExamineeResult {
+  const AnalyticsExamineeResult({
+    required this.scan,
+    required this.examinee,
+    required this.batchCode,
+  });
+  final LocalScan scan;
+  final ExamineeRecord examinee;
+  final String batchCode;
+  int get score => scan.result!.rawScore;
+}
+
+class AnalyticsTopScorer {
+  const AnalyticsTopScorer({required this.rank, required this.result});
+  final int rank;
+  final AnalyticsExamineeResult result;
+}
+
+/// Competition ranking of canonical examinees, using their highest eligible
+/// result in the selected scope. Cut off by rank, never by number of rows.
+List<AnalyticsTopScorer> rankAnalyticsExaminees(
+  Iterable<AnalyticsExamineeResult> eligible, {
+  int maxRank = 10,
+}) {
+  final best = <String, AnalyticsExamineeResult>{};
+  for (final candidate in eligible) {
+    final previous = best[candidate.examinee.id];
+    if (previous == null ||
+        candidate.score > previous.score ||
+        (candidate.score == previous.score &&
+            candidate.scan.id.compareTo(previous.scan.id) < 0)) {
+      best[candidate.examinee.id] = candidate;
+    }
+  }
+  final sorted = best.values.toList()
+    ..sort((a, b) {
+      final scoreOrder = b.score.compareTo(a.score);
+      if (scoreOrder != 0) return scoreOrder;
+      final nameOrder = a.examinee.displayName.compareTo(
+        b.examinee.displayName,
+      );
+      return nameOrder != 0
+          ? nameOrder
+          : a.examinee.id.compareTo(b.examinee.id);
+    });
+  final ranked = <AnalyticsTopScorer>[];
+  var rank = 0;
+  int? previousScore;
+  for (var i = 0; i < sorted.length; i++) {
+    final result = sorted[i];
+    if (result.score != previousScore) rank = i + 1;
+    if (rank > maxRank) break;
+    ranked.add(AnalyticsTopScorer(rank: rank, result: result));
+    previousScore = result.score;
+  }
+  return List.unmodifiable(ranked);
+}
+
+class AnalyticsDistributionGroup {
+  AnalyticsDistributionGroup(
+    this.label,
+    Iterable<AnalyticsExamineeResult> results,
+  ) : results = List.unmodifiable(results);
+  final String label;
+  final List<AnalyticsExamineeResult> results;
+
+  /// One display row per canonical identity, preserving all counted results.
+  Map<String, List<AnalyticsExamineeResult>> get byExaminee {
+    final grouped = <String, List<AnalyticsExamineeResult>>{};
+    for (final result in results) {
+      (grouped[result.examinee.id] ??= []).add(result);
+    }
+    return grouped;
+  }
+}
+
 /// The outcome of one Analytics load.
 class AnalyticsResult {
   const AnalyticsResult({
@@ -268,6 +357,7 @@ class AnalyticsResult {
     required this.selectedBatches,
     required this.analyzedBatches,
     required this.incompleteBatches,
+    this.distributionResults = const [],
     this.at,
     this.qtm,
     this.tatOverall,
@@ -283,6 +373,89 @@ class AnalyticsResult {
   /// The complete batches that feed the statistics.
   final List<LocalBatch> analyzedBatches;
   final List<IncompleteBatch> incompleteBatches;
+
+  final List<AnalyticsExamineeResult> distributionResults;
+
+  List<AnalyticsDistributionGroup> distributionGroups(String section) {
+    // Reuse the analytics helpers' own eligible scan IDs, including AT's
+    // complete-answer-key requirement, rather than defining a second filter.
+    final eligibleIds = examCode == 'AT'
+        ? at?.rankedScorers.map((s) => s.scanId).toSet() ?? <String>{}
+        : examCode == 'QTM'
+        ? qtm?.rankedScorers.map((s) => s.scanId).toSet() ?? <String>{}
+        : null;
+    final eligible = distributionResults
+        .where(
+          (r) => eligibleIds != null
+              ? eligibleIds.contains(r.scan.id)
+              : r.scan.result?.isGraded == true &&
+                    tatPercentage(r.score) != null,
+        )
+        .toList();
+    AnalyticsDistributionGroup group(
+      String label,
+      bool Function(int) matches,
+    ) => AnalyticsDistributionGroup(
+      label,
+      eligible.where((r) => matches(r.score)),
+    );
+    if (section == 'Score Distribution') {
+      return switch (examCode) {
+        'AT' => [
+          for (final band in AtScoreBand.values)
+            group(
+              '${band.categoryName} (${band.label})',
+              (score) => AtScoreBand.forRawScore(score) == band,
+            ),
+        ],
+        'QTM' => [
+          for (final band in QtmScoreBand.values)
+            group(
+              band.label,
+              (score) => QtmScoreBand.forRawScore(score) == band,
+            ),
+        ],
+        _ => [
+          for (final band in TatTotalBand.values)
+            group(band.label, (score) => TatTotalBand.forScore(score) == band),
+        ],
+      };
+    }
+    if (section == 'Category Distribution' && examCode == 'AT') {
+      return [
+        for (final category in AdmissionCategory.values)
+          group(
+            category.name.toUpperCase(),
+            (score) => admissionCategory(score) == category,
+          ),
+      ];
+    }
+    if (section == 'Eligibility Distribution' && examCode == 'QTM') {
+      return [
+        for (final eligibility in QtmEligibility.values)
+          group(switch (eligibility) {
+            QtmEligibility.allCoursesIncludingBscs =>
+              'Qualifies for all courses, including BSCS (18+)',
+            QtmEligibility.allCoursesExceptBscs =>
+              'Qualifies for all courses except BSCS (15–17)',
+            QtmEligibility.notEligible => 'Does not qualify (below 15)',
+          }, (score) => qtmEligibility(score) == eligibility),
+      ];
+    }
+    return [
+      for (final eligibility in TatEligibility.values)
+        group(
+          eligibility == TatEligibility.meetsRequirement
+              ? 'Meets requirement (48 or above)'
+              : 'Does not meet requirement (47 or below)',
+          (score) => tatEligibility(score) == eligibility,
+        ),
+    ];
+  }
+
+  List<AnalyticsTopScorer> get topScorers => rankAnalyticsExaminees(
+    distributionGroups('Score Distribution').expand((group) => group.results),
+  );
 
   final AtBatchAnalytics? at;
   final QtmBatchAnalytics? qtm;
@@ -343,7 +516,7 @@ class _BatchScans {
 /// never count an unlinked or dangling-`examinee_id` scan.
 class GuidanceWebAnalyticsService {
   GuidanceWebAnalyticsService({SyncClient? client})
-      : _client = client ?? _buildDefaultClient();
+    : _client = client ?? _buildDefaultClient();
 
   final SyncClient _client;
 
@@ -479,11 +652,13 @@ class GuidanceWebAnalyticsService {
         archivedExcludedCount += data.rows.length - active.length;
         activeRows.addAll(active);
       } else {
-        incomplete.add(IncompleteBatch(
-          batch: b,
-          expectedScans: data.expected,
-          retrievedScans: data.rows.length,
-        ));
+        incomplete.add(
+          IncompleteBatch(
+            batch: b,
+            expectedScans: data.expected,
+            retrievedScans: data.rows.length,
+          ),
+        );
       }
     }
 
@@ -519,9 +694,19 @@ class GuidanceWebAnalyticsService {
     // way; OCR/staff-tagged scan identity is never used as a fallback.
     // Skipped entirely when there is nothing active to resolve, so an
     // empty/fully-archived batch never makes an extra request.
-    final rows = activeRows.isEmpty
-        ? const <CloudScanRow>[]
+    final official = activeRows.isEmpty
+        ? (const <CloudScanRow>[], const <String, ExamineeRecord>{})
         : await _officialRowsOnly(activeRows);
+    final rows = official.$1;
+    final codes = {for (final b in complete) b.id: b.batchCode};
+    final distributionResults = List<AnalyticsExamineeResult>.unmodifiable([
+      for (final row in rows)
+        AnalyticsExamineeResult(
+          scan: mapCloudScan(row),
+          examinee: official.$2[row.examineeId]!,
+          batchCode: codes[row.batchId] ?? row.batchId,
+        ),
+    ]);
 
     switch (examCode) {
       case 'AT':
@@ -530,6 +715,7 @@ class GuidanceWebAnalyticsService {
           selectedBatches: selected,
           analyzedBatches: complete,
           incompleteBatches: incomplete,
+          distributionResults: distributionResults,
           at: AtBatchAnalytics.fromScans(rows.map((r) => mapCloudScan(r))),
         );
       case 'QTM':
@@ -538,6 +724,7 @@ class GuidanceWebAnalyticsService {
           selectedBatches: selected,
           analyzedBatches: complete,
           incompleteBatches: incomplete,
+          distributionResults: distributionResults,
           qtm: QtmBatchAnalytics.fromScans(rows.map((r) => mapCloudScan(r))),
         );
       default:
@@ -547,6 +734,7 @@ class GuidanceWebAnalyticsService {
           selectedBatches: selected,
           analyzedBatches: complete,
           incompleteBatches: incomplete,
+          distributionResults: distributionResults,
           tatOverall: tat.$1,
           tatDetail: tat.$2,
         );
@@ -568,7 +756,9 @@ class GuidanceWebAnalyticsService {
     onProgress?.call(loaded, selected.length);
     if (missing.isEmpty) return;
 
-    final countsRead = await _client.readScanCounts([for (final b in missing) b.id]);
+    final countsRead = await _client.readScanCounts([
+      for (final b in missing) b.id,
+    ]);
     if (!countsRead.isSuccess) {
       throw GuidanceWebAnalyticsException(_readMessage(countsRead.error));
     }
@@ -592,7 +782,8 @@ class GuidanceWebAnalyticsService {
     }
 
     await Future.wait([
-      for (var w = 0; w < math.min(maxConcurrency, missing.length); w++) worker(),
+      for (var w = 0; w < math.min(maxConcurrency, missing.length); w++)
+        worker(),
     ]);
   }
 
@@ -603,23 +794,33 @@ class GuidanceWebAnalyticsService {
   /// fresh `readCloudExaminees` read) rather than sharing a helper across
   /// the two services, which would be a larger refactor than this fix calls
   /// for. A dangling `examinee_id` is excluded exactly like a null one.
-  Future<List<CloudScanRow>> _officialRowsOnly(List<CloudScanRow> rows) async {
+  Future<(List<CloudScanRow>, Map<String, ExamineeRecord>)> _officialRowsOnly(
+    List<CloudScanRow> rows,
+  ) async {
     final examineeIdByScanId = <String, String>{
       for (final row in rows)
-        if (row.examineeId != null && row.examineeId!.isNotEmpty) row.id: row.examineeId!,
+        if (row.examineeId != null && row.examineeId!.isNotEmpty)
+          row.id: row.examineeId!,
     };
-    if (examineeIdByScanId.isEmpty) return const [];
+    if (examineeIdByScanId.isEmpty) {
+      return (const <CloudScanRow>[], const <String, ExamineeRecord>{});
+    }
 
     final examinees = await _client.readCloudExaminees();
     if (!examinees.isSuccess) {
       throw GuidanceWebAnalyticsException(_readMessage(examinees.error));
     }
-    final validExamineeIds = {for (final e in examinees.examinees) e.id};
+    final records = {
+      for (final e in examinees.examinees) e.id: examineeRecordFromCloudRow(e),
+    };
 
-    return [
-      for (final row in rows)
-        if (validExamineeIds.contains(examineeIdByScanId[row.id])) row,
-    ];
+    return (
+      [
+        for (final row in rows)
+          if (records.containsKey(examineeIdByScanId[row.id])) row,
+      ],
+      records,
+    );
   }
 
   /// TAT: overall statistics from stored `raw_score` (always), plus the
@@ -640,10 +841,15 @@ class GuidanceWebAnalyticsService {
     } else {
       info = TatAnswerKeyInfo(
         version: read.version,
-        updatedAt: read.updatedAt == null ? null : DateTime.tryParse(read.updatedAt!),
+        updatedAt: read.updatedAt == null
+            ? null
+            : DateTime.tryParse(read.updatedAt!),
         updatedByName: read.updatedByName,
       );
-      final key = AnswerKey(examCode: 'TAT', correctChoices: read.answers ?? const {});
+      final key = AnswerKey(
+        examCode: 'TAT',
+        correctChoices: read.answers ?? const {},
+      );
       if (isTatAnswerKeyComplete(key)) {
         usableKey = key;
         status = TatDetailStatus.available;
@@ -656,7 +862,8 @@ class GuidanceWebAnalyticsService {
     // breakdown, and the stored raw_score still drives the overall stats.
     final codes = {for (final b in batches) b.id: b.batchCode};
     final mapped = [
-      for (final r in rows) (row: r, scan: mapCloudScan(r, answerKey: usableKey)),
+      for (final r in rows)
+        (row: r, scan: mapCloudScan(r, answerKey: usableKey)),
     ];
     final overall = TatOverallStats.fromScans(mapped.map((m) => m.scan));
 
@@ -667,15 +874,18 @@ class GuidanceWebAnalyticsService {
     final drifts = <TatKeyDrift>[];
     for (final m in mapped) {
       final result = m.scan.result;
-      if (result == null || !result.isGraded || !result.hasTatBreakdown) continue;
+      if (result == null || !result.isGraded || !result.hasTatBreakdown)
+        continue;
       final recomputed = result.tatTotal!;
       if (recomputed != result.rawScore) {
-        drifts.add(TatKeyDrift(
-          scanId: m.scan.id,
-          batchCode: codes[m.row.batchId] ?? m.row.batchId,
-          recordedTotal: result.rawScore,
-          currentKeyTotal: recomputed,
-        ));
+        drifts.add(
+          TatKeyDrift(
+            scanId: m.scan.id,
+            batchCode: codes[m.row.batchId] ?? m.row.batchId,
+            recordedTotal: result.rawScore,
+            currentKeyTotal: recomputed,
+          ),
+        );
       }
     }
 

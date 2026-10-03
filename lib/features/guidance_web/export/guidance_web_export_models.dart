@@ -65,6 +65,7 @@ class ExportExamineeSection {
     required this.categoryBands,
     required this.categoryLetter,
     this.certificate,
+    this.clusterNote,
   });
 
   final String examLabel;
@@ -78,8 +79,10 @@ class ExportExamineeSection {
   final String score;
   final String percentage;
 
-  /// Null for exams without cluster analysis (TAT): the section is omitted.
+  /// Null for exams without cluster analysis: the section is omitted.
   final List<ClusterRow>? clusterRows;
+
+  final String? clusterNote;
 
   /// D first, A last.
   final List<ExportCategoryBand> categoryBands;

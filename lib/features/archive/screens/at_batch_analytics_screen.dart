@@ -18,8 +18,7 @@ import '../../../models/local_batch.dart';
 /// and never reads `LocalBatch.averagePercentage` or
 /// `LocalScanResult.percentage`. It receives only the batch id and loads
 /// the [LocalBatch] itself via `batchRepository.getBatchById`. The
-/// official `rawScore / 72 * 100` percentage and the A / Unclassified /
-/// B / C / D bands live in `at_batch_analytics.dart` /
+/// official `rawScore / 72 * 100` percentage and the A / B / C / D bands live in `at_batch_analytics.dart` /
 /// `admission_category.dart` and are applied there, not here.
 class AtBatchAnalyticsScreen extends StatefulWidget {
   const AtBatchAnalyticsScreen({super.key, required this.batchId});
@@ -393,11 +392,10 @@ class _AtBatchAnalyticsScreenState extends State<AtBatchAnalyticsScreen> {
       );
     }
     final aCount = a.categoryCount(AdmissionCategory.a);
-    final uCount = a.unclassifiedCount;
     final bCount = a.categoryCount(AdmissionCategory.b);
     final cCount = a.categoryCount(AdmissionCategory.c);
     final dCount = a.categoryCount(AdmissionCategory.d);
-    final maxCount = [aCount, uCount, bCount, cCount, dCount]
+    final maxCount = [aCount, bCount, cCount, dCount]
         .fold<int>(0, (m, c) => c > m ? c : m);
     return _card(
       child: Column(
@@ -405,9 +403,6 @@ class _AtBatchAnalyticsScreenState extends State<AtBatchAnalyticsScreen> {
           _catRow('A', aCount, a.categoryRate(AdmissionCategory.a), maxCount,
               AppColors.catA,
               rowKey: const Key('atAnalytics.category.a')),
-          _catRow('Unclassified', uCount, a.unclassifiedRate, maxCount,
-              AppColors.catCutoff,
-              rowKey: const Key('atAnalytics.category.unclassified')),
           _catRow('B', bCount, a.categoryRate(AdmissionCategory.b), maxCount,
               AppColors.catB,
               rowKey: const Key('atAnalytics.category.b')),
@@ -696,7 +691,7 @@ class _AtBatchAnalyticsScreenState extends State<AtBatchAnalyticsScreen> {
   }
 
   /// The AT Analytics screen's own label for a category. Uses
-  /// **"Unclassified"** for the intentional 55–57 gap (`null`). This is
+  /// **"Unclassified"** only for an invalid score (`null`). This is
   /// deliberately separate from `ScanResultSummary`'s "Not classified"
   /// wording, which is left untouched.
   static String _categoryLabel(AdmissionCategory? c) => switch (c) {

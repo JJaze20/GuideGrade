@@ -236,6 +236,24 @@ void main() {
     service = GuidanceWebExportService(results: results, analytics: analytics);
   });
 
+  test(
+    'TAT examinee export includes five clusters and preserves 160-point score',
+    () async {
+      client.batches.add(_batch('t1', 'TAT'));
+      client.scansByBatch['t1'] = [_scan('t-scan', 't1', 'TAT', rawScore: 160)];
+      final doc = await service.buildDefaultExportDocument(
+        _batchLocal('t1', 'TAT'),
+      );
+      final examinee = doc.examinees.single;
+      expect(examinee.score, '160 / 160');
+      expect(examinee.clusterRows, hasLength(5));
+      expect(examinee.clusterRows!.map((r) => r.total), [15, 15, 40, 40, 20]);
+      expect(examinee.clusterRows!.every((r) => r.right == null), isTrue);
+      expect(examinee.clusterNote, contains('130 items'));
+      expect(examinee.clusterNote, contains('160 points'));
+    },
+  );
+
   test("buildDefaultExportDocument uses the Results service's official-linked scan set", () async {
     client.batches.add(_batch('b1', 'AT'));
     client.scansByBatch['b1'] = [

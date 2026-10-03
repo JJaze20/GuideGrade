@@ -4,7 +4,9 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
 import '../../../core/state/app_state.dart';
-import '../../../shared/utils/logout_helper.dart';
+import '../../home/screens/profile_screen.dart';
+import '../services/guidance_web_dashboard_service.dart';
+import 'guidance_web_dashboard_view.dart';
 import 'guidance_web_analytics_view.dart';
 import 'guidance_web_export_view.dart';
 import 'guidance_web_archive_view.dart';
@@ -36,7 +38,9 @@ import 'guidance_web_results_view.dart';
 /// ([GuidanceWebAnalyticsView]) are built; Export ([GuidanceWebExportView]) lists
 /// batches, with its `export` and `view` actions still to come.
 class GuidanceWebHomeScreen extends StatefulWidget {
-  const GuidanceWebHomeScreen({super.key});
+  const GuidanceWebHomeScreen({super.key, this.dashboardService});
+
+  final GuidanceWebDashboardService? dashboardService;
 
   @override
   State<GuidanceWebHomeScreen> createState() => _GuidanceWebHomeScreenState();
@@ -66,23 +70,44 @@ class _GuidanceWebHomeScreenState extends State<GuidanceWebHomeScreen> {
   Widget build(BuildContext context) {
     final user = AppStateScope.of(context).currentUser;
 
+    final compact = MediaQuery.sizeOf(context).width < 900;
+    Widget sidebar({bool inDrawer = false}) => _Sidebar(
+      selected: _selected,
+      onSelect: (destination) {
+        setState(() => _selected = destination);
+        if (inDrawer) Navigator.of(context).pop();
+      },
+      userDisplayName: user?.displayName,
+      userEmail: user?.email,
+    );
     return Scaffold(
       backgroundColor: AppColors.lightBg,
+      drawer: compact
+          ? Drawer(child: SafeArea(child: sidebar(inDrawer: true)))
+          : null,
+      appBar: compact
+          ? AppBar(
+              backgroundColor: Colors.white,
+              foregroundColor: AppColors.textDark,
+              title: Text(
+                _selected.label,
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            )
+          : null,
       body: SafeArea(
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _Sidebar(
-              selected: _selected,
-              onSelect: (d) => setState(() => _selected = d),
-              userDisplayName: user?.displayName,
-              userEmail: user?.email,
-            ),
+            if (!compact) sidebar(),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  _Header(title: _selected.label),
+                  if (!compact) _Header(title: _selected.label),
                   Expanded(child: _buildBody()),
                 ],
               ),
@@ -96,7 +121,7 @@ class _GuidanceWebHomeScreenState extends State<GuidanceWebHomeScreen> {
   Widget _buildBody() {
     switch (_selected) {
       case _GuidanceWebDestination.dashboard:
-        return const _DashboardBody();
+        return GuidanceWebDashboardView(service: widget.dashboardService);
       case _GuidanceWebDestination.results:
         return const GuidanceWebResultsView();
       case _GuidanceWebDestination.examineeRecords:
@@ -139,17 +164,35 @@ class _Sidebar extends StatelessWidget {
               children: [
                 Row(
                   children: [
-                    Image.asset('assets/images/guidegrade logo1 trimmed.png', height: 30),
+                    Image.asset(
+                      'assets/images/guidegrade logo1 trimmed.png',
+                      height: 30,
+                    ),
                     const SizedBox(width: 8),
-                    Text('Guide', style: AppTextStyles.logo(size: 20, color: AppColors.warmRedOrange)),
-                    Text('Grade', style: AppTextStyles.logo(size: 20, color: AppColors.primaryGreen)),
+                    Text(
+                      'Guide',
+                      style: AppTextStyles.logo(
+                        size: 20,
+                        color: AppColors.warmRedOrange,
+                      ),
+                    ),
+                    Text(
+                      'Grade',
+                      style: AppTextStyles.logo(
+                        size: 20,
+                        color: AppColors.primaryGreen,
+                      ),
+                    ),
                   ],
                 ),
                 const SizedBox(height: 2),
                 Text(
                   'GUIDANCE COUNCIL',
-                  style: AppTextStyles.body(size: 9.5, weight: FontWeight.w800, color: AppColors.textGray)
-                      .copyWith(letterSpacing: 1.0),
+                  style: AppTextStyles.body(
+                    size: 12,
+                    weight: FontWeight.w800,
+                    color: AppColors.textGray,
+                  ).copyWith(letterSpacing: 1.0),
                 ),
               ],
             ),
@@ -159,11 +202,13 @@ class _Sidebar extends StatelessWidget {
             child: ListView(
               padding: const EdgeInsets.symmetric(vertical: 12),
               children: _GuidanceWebDestination.values
-                  .map((d) => _SidebarItem(
-                        destination: d,
-                        isSelected: d == selected,
-                        onTap: () => onSelect(d),
-                      ))
+                  .map(
+                    (d) => _SidebarItem(
+                      destination: d,
+                      isSelected: d == selected,
+                      onTap: () => onSelect(d),
+                    ),
+                  )
                   .toList(),
             ),
           ),
@@ -175,7 +220,7 @@ class _Sidebar extends StatelessWidget {
               children: [
                 Text(
                   userDisplayName ?? 'Account',
-                  style: AppTextStyles.body(size: 11, weight: FontWeight.w700),
+                  style: AppTextStyles.body(size: 14, weight: FontWeight.w700),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -183,7 +228,10 @@ class _Sidebar extends StatelessWidget {
                   const SizedBox(height: 2),
                   Text(
                     userEmail!,
-                    style: AppTextStyles.body(size: 9.5, color: AppColors.textGray),
+                    style: AppTextStyles.body(
+                      size: 12,
+                      color: AppColors.textGray,
+                    ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -192,13 +240,20 @@ class _Sidebar extends StatelessWidget {
                 SizedBox(
                   width: double.infinity,
                   child: OutlinedButton.icon(
-                    onPressed: () => confirmLogout(context),
-                    icon: const FaIcon(FontAwesomeIcons.rightFromBracket, size: 12),
-                    label: const Text('Logout', style: TextStyle(fontSize: 11)),
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const ProfileScreen(),
+                      ),
+                    ),
+                    icon: const FaIcon(FontAwesomeIcons.user, size: 12),
+                    label: const Text(
+                      'Profile',
+                      style: TextStyle(fontSize: 14),
+                    ),
                     style: OutlinedButton.styleFrom(
                       foregroundColor: AppColors.textDark,
                       side: const BorderSide(color: AppColors.cardBorder),
-                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
                     ),
                   ),
                 ),
@@ -216,7 +271,11 @@ class _SidebarItem extends StatelessWidget {
   final bool isSelected;
   final VoidCallback onTap;
 
-  const _SidebarItem({required this.destination, required this.isSelected, required this.onTap});
+  const _SidebarItem({
+    required this.destination,
+    required this.isSelected,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -240,7 +299,7 @@ class _SidebarItem extends StatelessWidget {
             Text(
               destination.label,
               style: AppTextStyles.body(
-                size: 11.5,
+                size: 14,
                 weight: isSelected ? FontWeight.w700 : FontWeight.w600,
                 color: isSelected ? AppColors.primaryGreen : AppColors.textDark,
               ),
@@ -265,34 +324,7 @@ class _Header extends StatelessWidget {
         color: Colors.white,
         border: Border(bottom: BorderSide(color: AppColors.cardBorder)),
       ),
-      child: Text(title, style: AppTextStyles.heading(size: 16)),
-    );
-  }
-}
-
-class _DashboardBody extends StatelessWidget {
-  const _DashboardBody();
-
-  @override
-  Widget build(BuildContext context) {
-    final user = AppStateScope.of(context).currentUser;
-    return Padding(
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Welcome${user?.displayName != null ? ', ${user!.displayName}' : ''}.',
-            style: AppTextStyles.heading(size: 15),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            'This is the Guidance Council Web Console. Use the sidebar to open '
-            'Results, Analytics or Export.',
-            style: AppTextStyles.body(size: 11, color: AppColors.textGray),
-          ),
-        ],
-      ),
+      child: Text(title, style: AppTextStyles.heading(size: 22)),
     );
   }
 }

@@ -3,13 +3,13 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 import '../../../core/analytics/at_batch_analytics.dart';
 import '../../../core/analytics/qtm_batch_analytics.dart';
-import '../../../core/analytics/tat_batch_analytics.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
+import '../../../core/constants/app_tokens.dart';
+import '../../../shared/widgets/surface_card.dart';
+import '../../../shared/widgets/state_views.dart';
 import '../../../core/constants/exam_catalog.dart';
-import '../../../core/omr/admission_category.dart';
 import '../../../core/omr/qtm_result.dart';
-import '../../../core/omr/tat_result.dart';
 import '../../../models/local_batch.dart';
 import '../services/guidance_web_analytics_service.dart';
 import 'guidance_web_examinee_analytics_view.dart';
@@ -22,23 +22,28 @@ import 'guidance_web_examinee_analytics_view.dart';
 /// identified by `batch_archives` markers only. See
 /// [GuidanceWebAnalyticsService] for the retrieval and Answer Key rules.
 class GuidanceWebBatchAnalyticsView extends StatefulWidget {
-  const GuidanceWebBatchAnalyticsView({super.key, GuidanceWebAnalyticsService? service})
-      : _service = service;
+  const GuidanceWebBatchAnalyticsView({
+    super.key,
+    GuidanceWebAnalyticsService? service,
+  }) : _service = service;
 
   final GuidanceWebAnalyticsService? _service;
 
   @override
-  State<GuidanceWebBatchAnalyticsView> createState() => _GuidanceWebBatchAnalyticsViewState();
+  State<GuidanceWebBatchAnalyticsView> createState() =>
+      _GuidanceWebBatchAnalyticsViewState();
 }
 
 /// (code, "Title (CODE)") pairs in the canonical catalog's own order
 /// (AT, QTM, TAT) -- reads exam_catalog.dart's examTypeDisplayLabel
 /// instead of a separately hand-maintained copy.
 final List<(String, String)> _examTypes = [
-  for (final entry in examCatalog) (entry.examCode, examTypeDisplayLabel(entry.examCode)),
+  for (final entry in examCatalog)
+    (entry.examCode, examTypeDisplayLabel(entry.examCode)),
 ];
 
-class _GuidanceWebBatchAnalyticsViewState extends State<GuidanceWebBatchAnalyticsView> {
+class _GuidanceWebBatchAnalyticsViewState
+    extends State<GuidanceWebBatchAnalyticsView> {
   late final GuidanceWebAnalyticsService _service =
       widget._service ?? GuidanceWebAnalyticsService();
 
@@ -152,14 +157,17 @@ class _GuidanceWebBatchAnalyticsViewState extends State<GuidanceWebBatchAnalytic
   List<LocalBatch> get _batchOptions {
     final catalog = _catalog;
     if (catalog == null) return const [];
-    if (_status != AnalyticsBatchStatus.all && !catalog.archiveFilterAvailable) return const [];
+    if (_status != AnalyticsBatchStatus.all && !catalog.archiveFilterAvailable)
+      return const [];
     return catalog.batchesFor(examCode: _examCode, status: _status);
   }
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.all(24),
+      padding: EdgeInsets.all(
+        AppSpace.gutterFor(MediaQuery.sizeOf(context).width),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -173,21 +181,13 @@ class _GuidanceWebBatchAnalyticsViewState extends State<GuidanceWebBatchAnalytic
 
   // --- filters -----------------------------------------------------------
 
-  Widget _card({required Widget child}) => Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: AppColors.cardBorder),
-        ),
-        child: child,
-      );
+  Widget _card({required Widget child}) => SurfaceCard(child: child);
 
   InputDecoration _decoration(String label) => InputDecoration(
-        labelText: label,
-        isDense: true,
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-      );
+    labelText: label,
+    isDense: true,
+    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+  );
 
   Widget _buildFilters() {
     final catalog = _catalog;
@@ -196,105 +196,133 @@ class _GuidanceWebBatchAnalyticsViewState extends State<GuidanceWebBatchAnalytic
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: DropdownButtonFormField<String>(
-                  key: const Key('examTypeFilter'),
-                  value: _examCode,
-                  isExpanded: true,
-                  decoration: _decoration('Exam Type'),
-                  items: [
-                    for (final (code, label) in _examTypes)
-                      DropdownMenuItem(value: code, child: Text(label)),
-                  ],
-                  onChanged: catalog == null
-                      ? null
-                      : (v) {
-                          if (v == null || v == _examCode) return;
-                          setState(() {
-                            _examCode = v;
-                            _batch = null;
-                          });
-                          _run();
-                        },
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: DropdownButtonFormField<AnalyticsBatchStatus>(
-                  key: const Key('batchStatusFilter'),
-                  value: _status,
-                  isExpanded: true,
-                  decoration: _decoration('Batch Status'),
-                  items: [
-                    const DropdownMenuItem(value: AnalyticsBatchStatus.all, child: Text('All')),
-                    DropdownMenuItem(
-                      value: AnalyticsBatchStatus.current,
-                      enabled: archiveOk,
-                      child: Text('Current', style: archiveOk ? null : const TextStyle(color: Colors.grey)),
+          LayoutBuilder(
+            builder: (context, box) {
+              final narrow = box.maxWidth < 700;
+              final fieldWidth = narrow
+                  ? box.maxWidth
+                  : (box.maxWidth - 80) / 4;
+              return Wrap(
+                spacing: 16,
+                runSpacing: 12,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  SizedBox(
+                    width: fieldWidth,
+                    child: DropdownButtonFormField<String>(
+                      key: const Key('examTypeFilter'),
+                      value: _examCode,
+                      isExpanded: true,
+                      decoration: _decoration('Exam Type'),
+                      items: [
+                        for (final (code, label) in _examTypes)
+                          DropdownMenuItem(value: code, child: Text(label)),
+                      ],
+                      onChanged: catalog == null
+                          ? null
+                          : (v) {
+                              if (v == null || v == _examCode) return;
+                              setState(() {
+                                _examCode = v;
+                                _batch = null;
+                              });
+                              _run();
+                            },
                     ),
-                    DropdownMenuItem(
-                      value: AnalyticsBatchStatus.archived,
-                      enabled: archiveOk,
-                      child: Text('Archived', style: archiveOk ? null : const TextStyle(color: Colors.grey)),
-                    ),
-                  ],
-                  onChanged: catalog == null
-                      ? null
-                      : (v) {
-                          if (v == null || v == _status) return;
-                          setState(() {
-                            _status = v;
-                            _batch = null;
-                          });
-                          _run();
-                        },
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                flex: 2,
-                child: DropdownButtonFormField<LocalBatch?>(
-                  key: const Key('batchFilter'),
-                  value: _batch,
-                  isExpanded: true,
-                  decoration: _decoration('Batch'),
-                  items: [
-                    const DropdownMenuItem<LocalBatch?>(value: null, child: Text('All Batches')),
-                    for (final b in _batchOptions)
-                      DropdownMenuItem<LocalBatch?>(
-                        value: b,
-                        child: Text(
-                          '${b.batchCode} — ${b.examTitle.isNotEmpty ? b.examTitle : b.examCode}',
-                          overflow: TextOverflow.ellipsis,
+                  ),
+                  SizedBox(
+                    width: fieldWidth,
+                    child: DropdownButtonFormField<AnalyticsBatchStatus>(
+                      key: const Key('batchStatusFilter'),
+                      value: _status,
+                      isExpanded: true,
+                      decoration: _decoration('Batch Status'),
+                      items: [
+                        const DropdownMenuItem(
+                          value: AnalyticsBatchStatus.all,
+                          child: Text('All'),
                         ),
-                      ),
-                  ],
-                  onChanged: catalog == null
-                      ? null
-                      : (v) {
-                          setState(() => _batch = v);
-                          _run();
-                        },
-                ),
-              ),
-              const SizedBox(width: 12),
-              IconButton(
-                key: const Key('analyticsRefresh'),
-                tooltip: 'Refresh',
-                onPressed: _loadingCatalog || _running ? null : _refresh,
-                icon: const Icon(Icons.refresh),
-              ),
-            ],
+                        DropdownMenuItem(
+                          value: AnalyticsBatchStatus.current,
+                          enabled: archiveOk,
+                          child: Text(
+                            'Current',
+                            style: archiveOk
+                                ? null
+                                : const TextStyle(color: Colors.grey),
+                          ),
+                        ),
+                        DropdownMenuItem(
+                          value: AnalyticsBatchStatus.archived,
+                          enabled: archiveOk,
+                          child: Text(
+                            'Archived',
+                            style: archiveOk
+                                ? null
+                                : const TextStyle(color: Colors.grey),
+                          ),
+                        ),
+                      ],
+                      onChanged: catalog == null
+                          ? null
+                          : (v) {
+                              if (v == null || v == _status) return;
+                              setState(() {
+                                _status = v;
+                                _batch = null;
+                              });
+                              _run();
+                            },
+                    ),
+                  ),
+                  SizedBox(
+                    width: narrow ? fieldWidth : fieldWidth * 2,
+                    child: DropdownButtonFormField<LocalBatch?>(
+                      key: const Key('batchFilter'),
+                      value: _batch,
+                      isExpanded: true,
+                      decoration: _decoration('Batch'),
+                      items: [
+                        const DropdownMenuItem<LocalBatch?>(
+                          value: null,
+                          child: Text('All Batches'),
+                        ),
+                        for (final b in _batchOptions)
+                          DropdownMenuItem<LocalBatch?>(
+                            value: b,
+                            child: Text(
+                              '${b.batchCode} — ${b.examTitle.isNotEmpty ? b.examTitle : b.examCode}',
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                      ],
+                      onChanged: catalog == null
+                          ? null
+                          : (v) {
+                              setState(() => _batch = v);
+                              _run();
+                            },
+                    ),
+                  ),
+                  IconButton(
+                    key: const Key('analyticsRefresh'),
+                    tooltip: 'Refresh',
+                    onPressed: _loadingCatalog || _running ? null : _refresh,
+                    icon: const Icon(Icons.refresh),
+                  ),
+                ],
+              );
+            },
           ),
           if (catalog != null && !archiveOk) ...[
             const SizedBox(height: 10),
             Text(
               'Archive filtering is temporarily unavailable, so only "All" can be used right now.',
               key: const Key('archiveUnavailableNotice'),
-              style: AppTextStyles.body(size: 10.5, color: AppColors.warmRedOrange),
+              style: AppTextStyles.body(
+                size: 12,
+                color: AppColors.warmRedOrange,
+              ),
             ),
           ],
         ],
@@ -305,24 +333,43 @@ class _GuidanceWebBatchAnalyticsViewState extends State<GuidanceWebBatchAnalytic
   // --- body ----------------------------------------------------------------
 
   Widget _buildBody() {
-    if (_loadingCatalog) return _message(FontAwesomeIcons.spinner, 'Loading Analytics...');
+    if (_loadingCatalog)
+      return _message(FontAwesomeIcons.spinner, 'Loading Analytics...');
     if (_catalogError != null) {
-      return _message(FontAwesomeIcons.triangleExclamation, _catalogError!, isError: true);
+      return _message(
+        FontAwesomeIcons.triangleExclamation,
+        _catalogError!,
+        isError: true,
+      );
     }
     if (_running) {
-      return _message(FontAwesomeIcons.spinner, _progress ?? 'Loading Analytics...');
+      return _message(
+        FontAwesomeIcons.spinner,
+        _progress ?? 'Loading Analytics...',
+      );
     }
     if (_narrowMessage != null) {
-      return _message(FontAwesomeIcons.filter, _narrowMessage!, key: const Key('narrowMessage'));
+      return _message(
+        FontAwesomeIcons.filter,
+        _narrowMessage!,
+        key: const Key('narrowMessage'),
+      );
     }
     if (_runError != null) {
-      return _message(FontAwesomeIcons.triangleExclamation, _runError!, isError: true);
+      return _message(
+        FontAwesomeIcons.triangleExclamation,
+        _runError!,
+        isError: true,
+      );
     }
     final result = _result;
     if (result == null) return const SizedBox.shrink();
 
     if (result.selectedBatches.isEmpty) {
-      return _message(FontAwesomeIcons.boxOpen, 'No batches match the selected filters.');
+      return _message(
+        FontAwesomeIcons.boxOpen,
+        'No batches match the selected filters.',
+      );
     }
     return SingleChildScrollView(
       child: Column(
@@ -351,7 +398,7 @@ class _GuidanceWebBatchAnalyticsViewState extends State<GuidanceWebBatchAnalytic
             Text(
               'Analyzing ${result.analyzedBatches.length} batch'
               '${result.analyzedBatches.length == 1 ? '' : 'es'}',
-              style: AppTextStyles.body(size: 11, color: AppColors.textGray),
+              style: AppTextStyles.body(size: 13, color: AppColors.textGray),
             ),
             const SizedBox(height: 10),
             ..._sectionsFor(result),
@@ -375,7 +422,7 @@ class _GuidanceWebBatchAnalyticsViewState extends State<GuidanceWebBatchAnalytic
         children: [
           Text(
             '⚠ Some batches could not be fully retrieved and are excluded from these statistics.',
-            style: AppTextStyles.body(size: 11.5, weight: FontWeight.w700),
+            style: AppTextStyles.body(size: 13, weight: FontWeight.w700),
           ),
           const SizedBox(height: 6),
           for (final b in result.incompleteBatches)
@@ -390,14 +437,111 @@ class _GuidanceWebBatchAnalyticsViewState extends State<GuidanceWebBatchAnalytic
   }
 
   List<Widget> _sectionsFor(AnalyticsResult r) {
-    switch (r.examCode) {
-      case 'AT':
-        return _atSections(r.at!);
-      case 'QTM':
-        return _qtmSections(r.qtm!);
-      default:
-        return _tatSections(r.tatOverall!, r.tatDetail!);
-    }
+    final distributions = switch (r.examCode) {
+      'AT' => _atSections(r.at!),
+      'QTM' => _qtmSections(r.qtm!),
+      _ => _tatSections(r.tatOverall!),
+    };
+    return [...distributions, const SizedBox(height: 16), _topScorers(r)];
+  }
+
+  Widget _topScorers(AnalyticsResult result) {
+    final scorers = result.topScorers;
+    final exam = result.examCode == 'AT' ? 'Admission Test' : result.examCode;
+    return _card(
+      child: Column(
+        key: const Key('analytics.topScorers'),
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('Top Scorers — $exam', style: AppTextStyles.heading(size: 15)),
+          const SizedBox(height: 8),
+          const Text(
+            'Competition ranks 1–10, including all ties. Each examinee appears once with their highest eligible score in the selected batches.',
+            style: TextStyle(fontSize: 13, color: AppColors.textGray),
+          ),
+          const SizedBox(height: 16),
+          if (scorers.isEmpty)
+            const Text('No scored examinees available.')
+          else ...[
+            const Row(
+              children: [
+                SizedBox(
+                  width: 68,
+                  child: Text(
+                    'Rank',
+                    style: TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ),
+                Expanded(
+                  child: Text(
+                    'Examinee',
+                    style: TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ),
+                SizedBox(
+                  width: 48,
+                  child: Text(
+                    'Score',
+                    textAlign: TextAlign.right,
+                    style: TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ],
+            ),
+            const Divider(height: 24),
+            for (final scorer in scorers)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Row(
+                  key: ValueKey('topScorer.${scorer.result.examinee.id}'),
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SizedBox(
+                      width: 68,
+                      child: Text(
+                        'Top ${scorer.rank}',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.primaryGreen,
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            scorer.result.examinee.displayName,
+                            style: const TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            scorer.result.examinee.officialStudentId ??
+                                scorer.result.examinee.temporaryExamineeId,
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: AppColors.textGray,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    SizedBox(
+                      width: 40,
+                      child: Text(
+                        '${scorer.result.score}',
+                        textAlign: TextAlign.right,
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ],
+      ),
+    );
   }
 
   // --- AT ------------------------------------------------------------------
@@ -416,15 +560,9 @@ class _GuidanceWebBatchAnalyticsViewState extends State<GuidanceWebBatchAnalytic
         excluded: a.excludedGradedCount,
       ),
       const SizedBox(height: 16),
-      _distribution(
-        'Score Distribution',
-        [for (final e in a.scoreDistribution.entries) ('${e.key.categoryName} (${e.key.label})', e.value)],
-      ),
+      _distribution('Score Distribution'),
       const SizedBox(height: 16),
-      _distribution('Category Distribution', [
-        for (final c in AdmissionCategory.values) (c.name.toUpperCase(), a.categoryDistribution[c] ?? 0),
-        ('Unclassified (55–57)', a.unclassifiedCount),
-      ]),
+      _distribution('Category Distribution'),
     ];
   }
 
@@ -442,34 +580,34 @@ class _GuidanceWebBatchAnalyticsViewState extends State<GuidanceWebBatchAnalytic
         total: q.totalExaminees,
         graded: q.gradedExaminees,
         ungraded: q.ungradedExaminees,
-        average: _combine(q.averageRawScore, q.averagePercentage == null ? null : '${q.averagePercentage!.toStringAsFixed(1)}%'),
-        highest: _combine(q.highestRawScore?.toDouble(), pctOf(q.highestRawScore)),
+        average: _combine(
+          q.averageRawScore,
+          q.averagePercentage == null
+              ? null
+              : '${q.averagePercentage!.toStringAsFixed(1)}%',
+        ),
+        highest: _combine(
+          q.highestRawScore?.toDouble(),
+          pctOf(q.highestRawScore),
+        ),
         lowest: _combine(q.lowestRawScore?.toDouble(), pctOf(q.lowestRawScore)),
-        median: _combine(q.medianRawScore, q.medianRawScore == null ? null : '${(q.medianRawScore! * 100 / 60).toStringAsFixed(1)}%'),
+        median: _combine(
+          q.medianRawScore,
+          q.medianRawScore == null
+              ? null
+              : '${(q.medianRawScore! * 100 / 60).toStringAsFixed(1)}%',
+        ),
       ),
       const SizedBox(height: 16),
-      _distribution(
-        'Score Distribution',
-        [for (final e in q.scoreDistribution.entries) (e.key.label, e.value)],
-      ),
+      _distribution('Score Distribution'),
       const SizedBox(height: 16),
-      _distribution('Eligibility Distribution', [
-        for (final e in QtmEligibility.values)
-          (
-            switch (e) {
-              QtmEligibility.allCoursesIncludingBscs => 'Qualifies for all courses, including BSCS (18+)',
-              QtmEligibility.allCoursesExceptBscs => 'Qualifies for all courses except BSCS (15–17)',
-              QtmEligibility.notEligible => 'Does not qualify (below 15)',
-            },
-            q.eligibilityDistribution[e] ?? 0,
-          ),
-      ]),
+      _distribution('Eligibility Distribution'),
     ];
   }
 
   // --- TAT -----------------------------------------------------------------
 
-  List<Widget> _tatSections(TatOverallStats o, TatDetail d) {
+  List<Widget> _tatSections(TatOverallStats o) {
     String? pct(double? p) => p == null ? null : '${p.toStringAsFixed(1)}%';
     return [
       _overall(
@@ -484,158 +622,11 @@ class _GuidanceWebBatchAnalyticsViewState extends State<GuidanceWebBatchAnalytic
         excluded: o.excludedGradedCount,
       ),
       const SizedBox(height: 16),
-      _distribution(
-        'Score Distribution',
-        [for (final e in o.totalScoreDistribution.entries) (e.key.label, e.value)],
-      ),
+      _distribution('Score Distribution'),
       const SizedBox(height: 16),
-      _distribution('Eligibility Distribution', [
-        for (final e in TatEligibility.values)
-          (
-            switch (e) {
-              TatEligibility.meetsRequirement => 'Meets requirement (48 or above)',
-              TatEligibility.doesNotMeetRequirement => 'Does not meet requirement (47 or below)',
-            },
-            o.eligibilityDistribution[e] ?? 0,
-          ),
-      ]),
-      const SizedBox(height: 16),
-      _tatDetail(d),
+      _distribution('Eligibility Distribution'),
     ];
   }
-
-  Widget _tatDetail(TatDetail d) {
-    final children = <Widget>[
-      Text('Detailed TAT Analysis', style: AppTextStyles.heading(size: 13)),
-      const SizedBox(height: 10),
-    ];
-
-    final info = d.keyInfo;
-    if (info != null) {
-      children.addAll([
-        Text('TAT Answer Key', style: AppTextStyles.body(size: 11, weight: FontWeight.w700)),
-        const SizedBox(height: 4),
-        Text('Version: ${info.version ?? '—'}', key: const Key('keyVersion'), style: AppTextStyles.body(size: 11)),
-        Text('Updated: ${_date(info.updatedAt)}', key: const Key('keyUpdated'), style: AppTextStyles.body(size: 11)),
-        Text('Updated by: ${(info.updatedByName == null || info.updatedByName!.isEmpty) ? '—' : info.updatedByName}',
-            key: const Key('keyUpdatedBy'), style: AppTextStyles.body(size: 11)),
-        const SizedBox(height: 12),
-      ]);
-    }
-
-    switch (d.status) {
-      case TatDetailStatus.keyMissing:
-        children.add(_unavailable('⚠ Unavailable — Answer Key is not available.'));
-      case TatDetailStatus.keyIncomplete:
-        children.add(_unavailable('⚠ Unavailable — Answer Key appears incomplete.'));
-      case TatDetailStatus.keyUnavailable:
-        children.add(_unavailable('⚠ Unavailable — the Answer Key could not be loaded.'));
-      case TatDetailStatus.available:
-        final a = d.analytics!;
-        if (d.drifts.isNotEmpty) children..add(_driftWarning(d.drifts))..add(const SizedBox(height: 12));
-        children.add(Text(
-          'Per-test breakdown uses the current Answer Key (${a.analyzableExaminees} scans).',
-          style: AppTextStyles.body(size: 10.5, color: AppColors.textGray),
-        ));
-        children.add(const SizedBox(height: 8));
-        for (final (label, s, dist) in [
-          ('Test 1', a.test1, a.test1Distribution),
-          ('Test 2', a.test2, a.test2Distribution),
-          ('Test 3', a.test3, a.test3Distribution),
-        ]) {
-          children.add(_testSummary(label, s, dist));
-        }
-        children.add(const SizedBox(height: 8));
-        children.add(Text(
-          'Strongest test: ${_testName(a.strongestTestByPercent)}     '
-          'Weakest test: ${_testName(a.weakestTestByPercent)}',
-          key: const Key('strongestWeakest'),
-          style: AppTextStyles.body(size: 11.5, weight: FontWeight.w700),
-        ));
-    }
-
-    return _card(
-      child: Column(
-        key: const Key('tatDetailSection'),
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: children,
-      ),
-    );
-  }
-
-  Widget _unavailable(String text) => Container(
-        key: const Key('tatDetailUnavailable'),
-        width: double.infinity,
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: const Color(0xFFFEF3C7),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Text(text, style: AppTextStyles.body(size: 11.5, weight: FontWeight.w600)),
-      );
-
-  Widget _driftWarning(List<TatKeyDrift> drifts) {
-    return Container(
-      key: const Key('tatDriftWarning'),
-      width: double.infinity,
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFEF3C7),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: const Color(0xFFF59E0B)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            '⚠ Current Answer Key recalculation differs from the recorded score '
-            '(${drifts.length} scan${drifts.length == 1 ? '' : 's'}). '
-            'The recorded score remains authoritative.',
-            style: AppTextStyles.body(size: 11.5, weight: FontWeight.w700),
-          ),
-          const SizedBox(height: 6),
-          for (final d in drifts.take(5))
-            Text(
-              '${d.batchCode} · scan ${d.scanId} — Recorded total: ${d.recordedTotal} · '
-              'Current-key total: ${d.currentKeyTotal}',
-              style: AppTextStyles.body(size: 10.5),
-            ),
-          if (drifts.length > 5)
-            Text('…and ${drifts.length - 5} more', style: AppTextStyles.body(size: 10.5, color: AppColors.textGray)),
-        ],
-      ),
-    );
-  }
-
-  Widget _testSummary(String label, TatTestSummary s, Map<TatTestQuartile, int> dist) {
-    String f(num? n) => n == null ? '—' : (n is int ? '$n' : n.toStringAsFixed(1));
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            '$label (max ${s.maxPossible}): average ${f(s.average)} · highest ${f(s.highest)} · '
-            'lowest ${f(s.lowest)} · median ${f(s.median)}'
-            '${s.averagePercentOfMax == null ? '' : ' · ${s.averagePercentOfMax!.toStringAsFixed(1)}% of max'}',
-            style: AppTextStyles.body(size: 11),
-          ),
-          if (dist.isNotEmpty)
-            Text(
-              [for (final e in dist.entries) '${e.key.label}: ${e.value}'].join('   '),
-              style: AppTextStyles.body(size: 10.5, color: AppColors.textGray),
-            ),
-        ],
-      ),
-    );
-  }
-
-  String _testName(TatTestKey? k) => switch (k) {
-        TatTestKey.test1 => 'Test 1',
-        TatTestKey.test2 => 'Test 2',
-        TatTestKey.test3 => 'Test 3',
-        null => '—',
-      };
 
   // --- shared pieces ---------------------------------------------------------
 
@@ -651,21 +642,31 @@ class _GuidanceWebBatchAnalyticsViewState extends State<GuidanceWebBatchAnalytic
     int excluded = 0,
   }) {
     Widget tile(String label, String value) => SizedBox(
-          width: 190,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(label, style: AppTextStyles.body(size: 10, weight: FontWeight.w700, color: AppColors.textGray)),
-              const SizedBox(height: 4),
-              Text(value, style: AppTextStyles.body(size: 13, weight: FontWeight.w700)),
-            ],
+      width: 190,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: AppTextStyles.body(
+              size: 12,
+              weight: FontWeight.w700,
+              color: AppColors.textGray,
+            ),
           ),
-        );
+          const SizedBox(height: 4),
+          Text(
+            value,
+            style: AppTextStyles.body(size: 13, weight: FontWeight.w700),
+          ),
+        ],
+      ),
+    );
     return _card(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(title, style: AppTextStyles.heading(size: 13)),
+          Text(title, style: AppTextStyles.heading(size: 15)),
           const SizedBox(height: 12),
           Wrap(
             spacing: 24,
@@ -684,7 +685,7 @@ class _GuidanceWebBatchAnalyticsViewState extends State<GuidanceWebBatchAnalytic
             const SizedBox(height: 10),
             Text(
               '$excluded graded scan${excluded == 1 ? '' : 's'} excluded from the score statistics (score outside the valid range).',
-              style: AppTextStyles.body(size: 10.5, color: AppColors.textGray),
+              style: AppTextStyles.body(size: 12, color: AppColors.textGray),
             ),
           ],
         ],
@@ -692,34 +693,172 @@ class _GuidanceWebBatchAnalyticsViewState extends State<GuidanceWebBatchAnalytic
     );
   }
 
-  Widget _distribution(String title, List<(String, int)> rows) {
-    final max = rows.fold<int>(0, (m, r) => r.$2 > m ? r.$2 : m);
+  void _showDistribution(AnalyticsDistributionGroup group) {
+    final exam = examTypeDisplayLabel(_result!.examCode);
+    final examinees = group.byExaminee.values.toList()
+      ..sort(
+        (a, b) => a.first.examinee.displayName.compareTo(
+          b.first.examinee.displayName,
+        ),
+      );
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Examinees — ${group.label}'),
+        content: SizedBox(
+          width: 680,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.sizeOf(context).height * .6,
+            ),
+            child: group.results.isEmpty
+                ? const Padding(
+                    padding: EdgeInsets.all(16),
+                    child: Text('No examinees found in this range.'),
+                  )
+                : Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${group.results.length} matching result${group.results.length == 1 ? '' : 's'} · ${examinees.length} examinee${examinees.length == 1 ? '' : 's'}',
+                      ),
+                      const SizedBox(height: 8),
+                      const Text(
+                        'Each examinee appears once. Multiple matching results are listed together.',
+                      ),
+                      const SizedBox(height: 12),
+                      Flexible(
+                        child: ListView.separated(
+                          shrinkWrap: true,
+                          itemCount: examinees.length,
+                          separatorBuilder: (_, _) => const Divider(height: 24),
+                          itemBuilder: (context, index) {
+                            final matches = examinees[index];
+                            final person = matches.first.examinee;
+                            return Column(
+                              key: ValueKey(
+                                'distribution.examinee.${person.id}',
+                              ),
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  person.displayName,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  'ID: ${person.officialStudentId ?? person.temporaryExamineeId}',
+                                ),
+                                Text('Exam: $exam'),
+                                for (final match in matches)
+                                  Text(
+                                    'Score: ${match.score} · Batch: ${match.batchCode}',
+                                  ),
+                              ],
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _distribution(String title) {
+    final groups = _result!.distributionGroups(title);
+    // Every row's count and action share the same resolved result membership.
+    final max = groups.fold<int>(
+      0,
+      (m, g) => g.results.length > m ? g.results.length : m,
+    );
     return _card(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(title, style: AppTextStyles.heading(size: 13)),
-          const SizedBox(height: 10),
-          for (final (label, count) in rows)
+          Text(title, style: AppTextStyles.heading(size: 15)),
+          const SizedBox(height: 12),
+          for (final group in groups)
             Padding(
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              child: Row(
-                children: [
-                  SizedBox(width: 300, child: Text(label, style: AppTextStyles.body(size: 11))),
-                  Expanded(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final compact = constraints.maxWidth < 560;
+                  final label = Text(
+                    group.label,
+                    style: AppTextStyles.body(size: 13),
+                  );
+                  final bar = ClipRRect(
+                    borderRadius: BorderRadius.circular(6),
                     child: LinearProgressIndicator(
-                      value: max == 0 ? 0 : count / max,
-                      minHeight: 8,
+                      value: max == 0 ? 0 : group.results.length / max,
+                      minHeight: 14,
                       backgroundColor: AppColors.lightBg,
                       color: AppColors.primaryGreen,
                     ),
-                  ),
-                  const SizedBox(width: 12),
-                  SizedBox(
-                    width: 48,
-                    child: Text('$count', textAlign: TextAlign.right, style: AppTextStyles.body(size: 11, weight: FontWeight.w700)),
-                  ),
-                ],
+                  );
+                  final action = Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SizedBox(
+                        width: 36,
+                        child: Text(
+                          '${group.results.length}',
+                          textAlign: TextAlign.right,
+                          style: AppTextStyles.body(
+                            size: 13,
+                            weight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      IconButton.filledTonal(
+                        key: ValueKey(
+                          'distribution.search.$title.${group.label}',
+                        ),
+                        tooltip: 'View examinees — ${group.label}',
+                        onPressed: () => _showDistribution(group),
+                        icon: const Icon(Icons.search, size: 20),
+                      ),
+                    ],
+                  );
+                  if (compact) {
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        label,
+                        const SizedBox(height: 6),
+                        Row(
+                          children: [
+                            Expanded(child: bar),
+                            const SizedBox(width: 12),
+                            action,
+                          ],
+                        ),
+                      ],
+                    );
+                  }
+                  return Row(
+                    children: [
+                      SizedBox(width: constraints.maxWidth * .28, child: label),
+                      const SizedBox(width: 16),
+                      Expanded(child: bar),
+                      const SizedBox(width: 12),
+                      action,
+                    ],
+                  );
+                },
               ),
             ),
         ],
@@ -732,24 +871,30 @@ class _GuidanceWebBatchAnalyticsViewState extends State<GuidanceWebBatchAnalytic
 
   String _combine(double? score, String? pct) {
     if (score == null) return '—';
-    final s = score == score.roundToDouble() ? score.toStringAsFixed(0) : score.toStringAsFixed(1);
+    final s = score == score.roundToDouble()
+        ? score.toStringAsFixed(0)
+        : score.toStringAsFixed(1);
     return pct == null ? s : '$s ($pct)';
   }
 
-  String _int(int n) => n.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => ',');
+  String _int(int n) => n.toString().replaceAllMapped(
+    RegExp(r'\B(?=(\d{3})+(?!\d))'),
+    (_) => ',',
+  );
 
-  static const _months = [
-    'January', 'February', 'March', 'April', 'May', 'June', 'July', 'August',
-    'September', 'October', 'November', 'December',
-  ];
-
-  String _date(DateTime? d) {
-    if (d == null) return '—';
-    final l = d.toLocal();
-    return '${_months[l.month - 1]} ${l.day}, ${l.year}';
-  }
-
-  Widget _message(FaIconData icon, String message, {bool isError = false, double? height, Key? key}) {
+  Widget _message(
+    FaIconData icon,
+    String message, {
+    bool isError = false,
+    double? height,
+    Key? key,
+  }) {
+    if (isError)
+      return ErrorState(
+        message: message,
+        onRetry: _catalogError != null ? _loadCatalog : _run,
+      );
+    if (icon == FontAwesomeIcons.spinner) return LoadingState(message: message);
     final color = isError ? AppColors.warmRedOrange : AppColors.textGray;
     final content = Column(
       mainAxisAlignment: MainAxisAlignment.center,
@@ -758,19 +903,31 @@ class _GuidanceWebBatchAnalyticsViewState extends State<GuidanceWebBatchAnalytic
         const SizedBox(height: 14),
         ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 420),
-          child: Text(message, key: key, textAlign: TextAlign.center, style: AppTextStyles.body(size: 11.5, color: color)),
+          child: Text(
+            message,
+            key: key,
+            textAlign: TextAlign.center,
+            style: AppTextStyles.body(size: 13, color: color),
+          ),
         ),
       ],
     );
-    return height == null ? Center(child: content) : SizedBox(height: height, child: Center(child: content));
+    return height == null
+        ? Center(child: content)
+        : SizedBox(
+            height: height,
+            child: Center(child: content),
+          );
   }
 }
 
 /// Analytics page: a Batch Analytics tab (the original page, unchanged) and
 /// an Examinee Analytics tab for per-examinee cluster analysis.
 class GuidanceWebAnalyticsView extends StatefulWidget {
-  const GuidanceWebAnalyticsView({super.key, GuidanceWebAnalyticsService? service})
-    : _service = service;
+  const GuidanceWebAnalyticsView({
+    super.key,
+    GuidanceWebAnalyticsService? service,
+  }) : _service = service;
 
   final GuidanceWebAnalyticsService? _service;
 
@@ -787,7 +944,8 @@ class _GuidanceWebAnalyticsViewState extends State<GuidanceWebAnalyticsView> {
       onTap: onTap,
       borderRadius: BorderRadius.circular(20),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        constraints: const BoxConstraints(minHeight: 44),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         decoration: BoxDecoration(
           color: selected ? AppColors.emerald100 : Colors.transparent,
           borderRadius: BorderRadius.circular(20),
@@ -810,15 +968,21 @@ class _GuidanceWebAnalyticsViewState extends State<GuidanceWebAnalyticsView> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
-          child: Row(
+          padding: EdgeInsets.fromLTRB(
+            AppSpace.gutterFor(MediaQuery.sizeOf(context).width),
+            16,
+            AppSpace.gutterFor(MediaQuery.sizeOf(context).width),
+            0,
+          ),
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 8,
             children: [
               _tab(
                 'Batch Analytics',
                 !_examineeTab,
                 () => setState(() => _examineeTab = false),
               ),
-              const SizedBox(width: 8),
               _tab(
                 'Examinee Analytics',
                 _examineeTab,
@@ -829,8 +993,10 @@ class _GuidanceWebAnalyticsViewState extends State<GuidanceWebAnalyticsView> {
         ),
         Expanded(
           child: _examineeTab
-              ? const Padding(
-                  padding: EdgeInsets.all(24),
+              ? Padding(
+                  padding: EdgeInsets.all(
+                    AppSpace.gutterFor(MediaQuery.sizeOf(context).width),
+                  ),
                   child: GuidanceWebExamineeAnalyticsView(),
                 )
               : GuidanceWebBatchAnalyticsView(service: widget._service),
