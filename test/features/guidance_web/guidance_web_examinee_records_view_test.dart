@@ -7,6 +7,8 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:guidegrade/core/sync/scan_delete_client.dart';
+import 'package:guidegrade/core/sync/scan_restore_client.dart';
+import 'package:guidegrade/core/sync/supabase_sync_client.dart' show SyncIdentity;
 import 'package:guidegrade/core/sync/sync_client.dart';
 import 'package:guidegrade/core/sync/sync_job.dart';
 import 'package:guidegrade/core/sync/sync_outcome.dart';
@@ -14,7 +16,7 @@ import 'package:guidegrade/features/guidance_web/screens/guidance_web_examinee_r
 import 'package:guidegrade/features/guidance_web/services/guidance_web_examinee_records_service.dart';
 import 'package:guidegrade/features/guidance_web/services/guidance_web_results_service.dart';
 
-class _FakeSyncClient implements SyncClient, ScanDeleteClient {
+class _FakeSyncClient implements SyncClient, ScanDeleteClient, ScanRestoreClient {
   /// When set, [deleteUnlinkedScan] returns it verbatim.
   SyncOutcome? deleteUnlinkedScanResult;
   final List<Map<String, String>> deleteUnlinkedScanCalls = [];
@@ -37,6 +39,111 @@ class _FakeSyncClient implements SyncClient, ScanDeleteClient {
     );
     return const SyncOutcome.success();
   }
+
+  /// When set, [softDeleteUnlinkedScan] returns it verbatim.
+  SyncOutcome? softDeleteUnlinkedScanResult;
+  final List<Map<String, String?>> softDeleteUnlinkedScanCalls = [];
+
+  @override
+  Future<SyncOutcome> softDeleteUnlinkedScan({
+    required String batchId,
+    required String scanId,
+    required String deletedByUid,
+    String? deletedByName,
+    required String deletionReason,
+  }) async {
+    calls.add('softDeleteUnlinkedScan:$batchId/$scanId');
+    softDeleteUnlinkedScanCalls.add({
+      'batchId': batchId,
+      'scanId': scanId,
+      'deletedByUid': deletedByUid,
+      'deletedByName': deletedByName,
+      'deletionReason': deletionReason,
+    });
+    final override = softDeleteUnlinkedScanResult;
+    if (override != null) return override;
+    final target = unlinkedScansToReturn.scans
+        .where((s) => s.batchId == batchId && s.id == scanId)
+        .firstOrNull;
+    unlinkedScansToReturn = CloudScansRead.found(
+      unlinkedScansToReturn.scans
+          .where((s) => !(s.batchId == batchId && s.id == scanId))
+          .toList(),
+    );
+    if (target != null) {
+      // Simulates the RPC's own cross-cutting effect: the scan now shows up
+      // in list_retained_soft_deleted_scans_for_guidance, exactly as the
+      // next listRetainedSoftDeletedScans call would reflect it.
+      retainedScansToReturn = [
+        ...retainedScansToReturn,
+        CloudRetainedDeletedScanRow(
+          batchId: target.batchId,
+          scanId: target.id,
+          examCode: target.examCode,
+          deletedAt: DateTime.utc(2026, 3, 1),
+          retentionUntil: DateTime.utc(2026, 3, 31),
+          deletionReason: deletionReason,
+          deletedByName: deletedByName,
+        ),
+      ];
+    }
+    return const SyncOutcome.success();
+  }
+
+  /// When set, [listRetainedSoftDeletedScans] returns it verbatim.
+  CloudRetainedDeletedScansRead? retainedScansResult;
+  List<CloudRetainedDeletedScanRow> retainedScansToReturn = const [];
+
+  @override
+  Future<CloudRetainedDeletedScansRead> listRetainedSoftDeletedScans() async {
+    calls.add('listRetainedSoftDeletedScans');
+    return retainedScansResult ?? CloudRetainedDeletedScansRead.found(retainedScansToReturn);
+  }
+
+  /// When set, [createScanRestoreRequest] returns it verbatim.
+  SyncOutcome? createScanRestoreRequestResult;
+  final List<Map<String, String?>> createScanRestoreRequestCalls = [];
+
+  @override
+  Future<SyncOutcome> createScanRestoreRequest({
+    required String batchId,
+    required String scanId,
+    required String reason,
+    required String requestedByUid,
+    String? requestedByName,
+  }) async {
+    calls.add('createScanRestoreRequest:$batchId/$scanId');
+    createScanRestoreRequestCalls.add({
+      'batchId': batchId,
+      'scanId': scanId,
+      'reason': reason,
+      'requestedByUid': requestedByUid,
+      'requestedByName': requestedByName,
+    });
+    final override = createScanRestoreRequestResult;
+    if (override != null) return override;
+    // Simulates the RPC's own effect: the scan's row now shows an active
+    // PENDING request, exactly as the next listRetainedSoftDeletedScans
+    // call would reflect it.
+    retainedScansToReturn = [
+      for (final s in retainedScansToReturn)
+        if (s.batchId == batchId && s.scanId == scanId)
+          CloudRetainedDeletedScanRow(
+            batchId: s.batchId,
+            scanId: s.scanId,
+            examCode: s.examCode,
+            deletedAt: s.deletedAt,
+            retentionUntil: s.retentionUntil,
+            deletionReason: s.deletionReason,
+            deletedByName: s.deletedByName,
+            activeRestoreRequestStatus: 'PENDING',
+          )
+        else
+          s,
+    ];
+    return const SyncOutcome.success();
+  }
+
   CloudExamineesRead examineesToReturn = CloudExamineesRead.found(const []);
   CloudBatchesRead batchesToReturn = CloudBatchesRead.found(const []);
   CloudScansRead unlinkedScansToReturn = CloudScansRead.found(const []);
@@ -300,6 +407,38 @@ CloudScanRow _scanRow({
       attemptStatus: attemptStatus,
     );
 
+CloudRetainedDeletedScanRow _retainedScanRow({
+  String batchId = 'b1',
+  required String scanId,
+  String examCode = 'TAT',
+  String? activeRestoreRequestStatus,
+}) =>
+    CloudRetainedDeletedScanRow(
+      batchId: batchId,
+      scanId: scanId,
+      examCode: examCode,
+      deletedAt: DateTime.utc(2026, 3, 1),
+      retentionUntil: DateTime.utc(2026, 3, 31),
+      deletionReason: 'Duplicate capture',
+      deletedByName: 'Council Member',
+      activeRestoreRequestStatus: activeRestoreRequestStatus,
+    );
+
+/// Test-only [SyncIdentity] so [GuidanceWebExamineeRecordsService
+/// .softDeleteUnlinkedScan] never reaches `FirebaseAuth.instance` (which
+/// has no app initialized in a widget test) -- same shape as the
+/// `_Identity` fakes already used in the `SupabaseSyncClient` HTTP-level
+/// tests.
+class _Identity implements SyncIdentity {
+  _Identity({this.uid = 'firebase-uid-1', this.displayName = 'Council Member'});
+  @override
+  final String? uid;
+  @override
+  final String? displayName;
+  @override
+  Future<bool> refreshToken() async => false;
+}
+
 void main() {
   late _FakeSyncClient client;
 
@@ -316,7 +455,7 @@ void main() {
       MaterialApp(
         home: Scaffold(
           body: GuidanceWebExamineeRecordsView(
-            service: GuidanceWebExamineeRecordsService(client: client),
+            service: GuidanceWebExamineeRecordsService(client: client, identity: _Identity()),
             resultsService: GuidanceWebResultsService(client: client),
           ),
         ),
@@ -1382,7 +1521,7 @@ void main() {
     });
   });
 
-  group('4. Delete Unlinked Scan', () {
+  group('4. Delete Unlinked Scan (soft-delete, 30-day retention)', () {
     Future<void> openUnlinked(WidgetTester tester, {String attemptStatus = 'active'}) async {
       client.batchesToReturn = CloudBatchesRead.found([_batchRow(id: 'b1', examCode: 'TAT')]);
       client.unlinkedScansToReturn = CloudScansRead.found([
@@ -1391,6 +1530,17 @@ void main() {
       ]);
       await pumpView(tester);
       await tester.tap(find.textContaining('Unlinked Scans'));
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> openDeleteDialog(WidgetTester tester) async {
+      await tester.tap(find.widgetWithText(TextButton, 'Delete'));
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> enterReasonAndSubmit(WidgetTester tester, String reason) async {
+      await tester.enterText(find.byKey(const Key('softDeleteReasonField')), reason);
+      await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
       await tester.pumpAndSettle();
     }
 
@@ -1403,106 +1553,102 @@ void main() {
       expect(find.widgetWithText(TextButton, 'Confirm and Create Examinee'), findsOneWidget);
     });
 
-    testWidgets('2. tapping Delete opens a confirmation dialog naming the permanent deletion',
+    testWidgets('2. tapping Delete opens a reason-required dialog explaining the 30-day retention',
         (tester) async {
       await openUnlinked(tester);
-      await tester.tap(find.widgetWithText(TextButton, 'Delete'));
-      await tester.pumpAndSettle();
+      await openDeleteDialog(tester);
 
       expect(find.text('Delete This Scan?'), findsOneWidget);
-      expect(find.textContaining('permanently'), findsOneWidget);
+      expect(find.textContaining('retained for 30 days'), findsOneWidget);
+      expect(find.byKey(const Key('softDeleteReasonField')), findsOneWidget);
       expect(find.widgetWithText(TextButton, 'Cancel'), findsOneWidget);
       expect(find.widgetWithText(FilledButton, 'Delete'), findsOneWidget);
       // Nothing is deleted just by opening the dialog.
-      expect(client.deleteUnlinkedScanCalls, isEmpty);
+      expect(client.softDeleteUnlinkedScanCalls, isEmpty);
+    });
+
+    testWidgets('an empty reason cannot be submitted', (tester) async {
+      await openUnlinked(tester);
+      await openDeleteDialog(tester);
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('A reason is required'), findsOneWidget);
+      expect(find.text('Delete This Scan?'), findsOneWidget); // dialog still open
+      expect(client.softDeleteUnlinkedScanCalls, isEmpty);
     });
 
     testWidgets('3. Cancel closes the dialog without deleting anything', (tester) async {
       await openUnlinked(tester);
-      await tester.tap(find.widgetWithText(TextButton, 'Delete'));
-      await tester.pumpAndSettle();
+      await openDeleteDialog(tester);
 
       await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
       await tester.pumpAndSettle();
 
       expect(find.text('Delete This Scan?'), findsNothing);
-      expect(client.deleteUnlinkedScanCalls, isEmpty);
+      expect(client.softDeleteUnlinkedScanCalls, isEmpty);
       expect(find.text('Dela Cruz, Juan'), findsOneWidget);
     });
 
-    testWidgets('4/7. Confirm calls deleteUnlinkedScan with the exact batch/scan id (the DB enforces '
-        'examinee_id IS NULL, never assumed from the UI)', (tester) async {
+    testWidgets('4/7. a valid reason calls softDeleteUnlinkedScan with the exact batch/scan id and '
+        'the entered reason', (tester) async {
       await openUnlinked(tester);
-      await tester.tap(find.widgetWithText(TextButton, 'Delete'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
-      await tester.pumpAndSettle();
+      await openDeleteDialog(tester);
+      await enterReasonAndSubmit(tester, 'Duplicate capture');
 
-      expect(client.deleteUnlinkedScanCalls, [
-        {'batchId': 'b1', 'scanId': 's1'},
-      ]);
+      expect(client.softDeleteUnlinkedScanCalls, hasLength(1));
+      final call = client.softDeleteUnlinkedScanCalls.single;
+      expect(call['batchId'], 'b1');
+      expect(call['scanId'], 's1');
+      expect(call['deletionReason'], 'Duplicate capture');
     });
 
-    testWidgets('8. never falls back to the broad mobile deleteScan path', (tester) async {
+    testWidgets('8. never falls back to the broad mobile deleteScan path, and never uses the old '
+        'permanent deleteUnlinkedScan RPC', (tester) async {
       await openUnlinked(tester);
-      await tester.tap(find.widgetWithText(TextButton, 'Delete'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
-      await tester.pumpAndSettle();
+      await openDeleteDialog(tester);
+      await enterReasonAndSubmit(tester, 'Duplicate capture');
 
       expect(client.calls, isNot(contains(startsWith('deleteScan:'))));
+      expect(client.calls, isNot(contains(startsWith('deleteUnlinkedScan:'))));
     });
 
-    testWidgets('5. a successful deletion removes the row from the Unlinked Scans list', (tester) async {
+    testWidgets('5. a successful soft-delete removes the row from the Unlinked Scans list',
+        (tester) async {
       await openUnlinked(tester);
       expect(find.text('Dela Cruz, Juan'), findsOneWidget);
 
-      await tester.tap(find.widgetWithText(TextButton, 'Delete'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
-      await tester.pumpAndSettle();
+      await openDeleteDialog(tester);
+      await enterReasonAndSubmit(tester, 'Duplicate capture');
 
       expect(find.text('Dela Cruz, Juan'), findsNothing);
-      expect(find.text('Scan deleted.'), findsOneWidget);
     });
 
-    testWidgets('6. a deletion failure shows an error and leaves the row in place', (tester) async {
+    testWidgets('the success message says soft-deleted/recoverable within 30 days, never that it '
+        'was permanently deleted', (tester) async {
       await openUnlinked(tester);
-      client.deleteUnlinkedScanResult = const SyncOutcome.conflict('scan_not_unlinked');
+      await openDeleteDialog(tester);
+      await enterReasonAndSubmit(tester, 'Duplicate capture');
 
-      await tester.tap(find.widgetWithText(TextButton, 'Delete'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
-      await tester.pumpAndSettle();
-
-      expect(find.text('Dela Cruz, Juan'), findsOneWidget);
-      expect(
-        find.text('This scan is no longer unlinked or no longer exists. '
-            'Refresh the Unlinked Scans list and try again.'),
-        findsOneWidget,
-      );
-    });
-
-    testWidgets(
-        'a row-deleted-but-storage-incomplete result removes the row and shows the accurate '
-        'warning, never a plain "try again" message', (tester) async {
-      await openUnlinked(tester);
-      client.deleteUnlinkedScanResult =
-          const SyncOutcome.permanent(scanDeletedStorageIncompleteCode);
-
-      await tester.tap(find.widgetWithText(TextButton, 'Delete'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
-      await tester.pumpAndSettle();
-
-      // The row is gone (the database row really was deleted)...
-      expect(find.text('Dela Cruz, Juan'), findsNothing);
-      // ...but the message is the accurate warning, never the plain success
-      // text and never a "try again" implying nothing happened.
+      expect(find.textContaining('soft-deleted'), findsOneWidget);
+      expect(find.textContaining('30 days'), findsOneWidget);
       expect(find.text('Scan deleted.'), findsNothing);
-      expect(find.textContaining('Please try again'), findsNothing);
-      expect(find.textContaining('will no longer appear in Unlinked Scans'), findsOneWidget);
-      expect(find.textContaining('Storage'), findsOneWidget);
+    });
+
+    testWidgets('6. a soft-delete failure keeps the row visible and shows the dialog error',
+        (tester) async {
+      await openUnlinked(tester);
+      client.softDeleteUnlinkedScanResult = const SyncOutcome.permanent('42501');
+
+      await openDeleteDialog(tester);
+      await enterReasonAndSubmit(tester, 'Duplicate capture');
+
+      // The dialog surfaces its own friendly error and stays open -- the
+      // row underneath is untouched because the service call never
+      // reported success.
+      expect(find.textContaining('linked, archived, or already deleted'), findsOneWidget);
+      expect(find.text('Dela Cruz, Juan'), findsOneWidget);
     });
 
     testWidgets('9. an archived historical attempt has no Delete action, and cannot be deleted',
@@ -1510,7 +1656,192 @@ void main() {
       await openUnlinked(tester, attemptStatus: 'archived');
 
       expect(find.widgetWithText(TextButton, 'Delete'), findsNothing);
-      expect(client.deleteUnlinkedScanCalls, isEmpty);
+      expect(client.softDeleteUnlinkedScanCalls, isEmpty);
+    });
+
+    testWidgets(
+      '10. a successful soft-delete also reloads the Soft-Deleted Scans tab, so the deleted '
+      'scan appears there immediately -- never fabricated locally, always re-read from the '
+      'database',
+      (tester) async {
+        await openUnlinked(tester);
+        await openDeleteDialog(tester);
+        await enterReasonAndSubmit(tester, 'Duplicate capture');
+
+        // Gone from the active Unlinked Scans list.
+        expect(find.text('Dela Cruz, Juan'), findsNothing);
+
+        // listRetainedSoftDeletedScans was called twice: once for initState's
+        // own initial load, and once more as the post-delete reload -- proving
+        // this is a genuine re-read, not a one-time load that happens to
+        // already contain the row.
+        expect(
+          client.calls.where((c) => c == 'listRetainedSoftDeletedScans'),
+          hasLength(2),
+        );
+
+        // The Soft-Deleted Scans tab now shows this scan, sourced entirely
+        // from the (fake) database's own listRetainedSoftDeletedScans result.
+        await tester.tap(find.textContaining('Soft-Deleted Scans'));
+        await tester.pumpAndSettle();
+        expect(find.text('s1'), findsOneWidget);
+        expect(find.textContaining('Duplicate capture'), findsOneWidget);
+      },
+    );
+  });
+
+  group('5. Soft-Deleted Scans tab', () {
+    Future<void> openSoftDeleted(WidgetTester tester) async {
+      await pumpView(tester);
+      await tester.tap(find.textContaining('Soft-Deleted Scans'));
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> openRestoreDialog(WidgetTester tester) async {
+      await tester.tap(find.widgetWithText(TextButton, 'Request Restore'));
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> enterReasonAndSubmit(WidgetTester tester, String reason) async {
+      await tester.enterText(find.byKey(const Key('restoreReasonField')), reason);
+      await tester.tap(find.widgetWithText(FilledButton, 'Submit Request'));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('1. a third Soft-Deleted Scans tab exists alongside Examinees and Unlinked Scans',
+        (tester) async {
+      await pumpView(tester);
+      expect(find.textContaining('Examinees'), findsWidgets);
+      expect(find.textContaining('Unlinked Scans'), findsWidgets);
+      expect(find.textContaining('Soft-Deleted Scans'), findsOneWidget);
+    });
+
+    testWidgets('2. retained scans returned by the service are displayed', (tester) async {
+      client.retainedScansToReturn = [
+        _retainedScanRow(scanId: 's1', examCode: 'TAT'),
+      ];
+      await openSoftDeleted(tester);
+
+      expect(find.text('s1'), findsOneWidget);
+      expect(find.text('TAT'), findsOneWidget);
+      expect(find.text('Duplicate capture'), findsOneWidget);
+      expect(find.text('Council Member'), findsOneWidget);
+    });
+
+    testWidgets('empty state explains there is nothing currently needing restoration',
+        (tester) async {
+      await openSoftDeleted(tester);
+      expect(find.textContaining('No retained soft-deleted scans'), findsOneWidget);
+    });
+
+    testWidgets('3. a scan with an active PENDING request does not show Request Restore',
+        (tester) async {
+      client.retainedScansToReturn = [
+        _retainedScanRow(scanId: 's1', activeRestoreRequestStatus: 'PENDING'),
+      ];
+      await openSoftDeleted(tester);
+
+      expect(find.widgetWithText(TextButton, 'Request Restore'), findsNothing);
+      expect(find.textContaining('Restore Requested'), findsOneWidget);
+    });
+
+    testWidgets('3. a scan with an active APPROVED request does not show Request Restore',
+        (tester) async {
+      client.retainedScansToReturn = [
+        _retainedScanRow(scanId: 's1', activeRestoreRequestStatus: 'APPROVED'),
+      ];
+      await openSoftDeleted(tester);
+
+      expect(find.widgetWithText(TextButton, 'Request Restore'), findsNothing);
+      expect(find.textContaining('Restore Approved'), findsOneWidget);
+    });
+
+    testWidgets('4. Request Restore opens a reason-required dialog', (tester) async {
+      client.retainedScansToReturn = [_retainedScanRow(scanId: 's1')];
+      await openSoftDeleted(tester);
+      await openRestoreDialog(tester);
+
+      expect(find.text('Request Scan Restoration'), findsOneWidget);
+      expect(find.textContaining('30-day retention window'), findsOneWidget);
+      expect(find.byKey(const Key('restoreReasonField')), findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'Cancel'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Submit Request'), findsOneWidget);
+      // Nothing is submitted just by opening the dialog.
+      expect(client.createScanRestoreRequestCalls, isEmpty);
+    });
+
+    testWidgets('5. a blank/whitespace reason cannot be submitted', (tester) async {
+      client.retainedScansToReturn = [_retainedScanRow(scanId: 's1')];
+      await openSoftDeleted(tester);
+      await openRestoreDialog(tester);
+
+      await tester.enterText(find.byKey(const Key('restoreReasonField')), '   ');
+      await tester.tap(find.widgetWithText(FilledButton, 'Submit Request'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('A reason is required'), findsOneWidget);
+      expect(find.text('Request Scan Restoration'), findsOneWidget); // dialog still open
+      expect(client.createScanRestoreRequestCalls, isEmpty);
+    });
+
+    testWidgets('6. a valid reason calls the restore-request service with the exact batch/scan id',
+        (tester) async {
+      client.retainedScansToReturn = [_retainedScanRow(scanId: 's1')];
+      await openSoftDeleted(tester);
+      await openRestoreDialog(tester);
+      await enterReasonAndSubmit(tester, 'Need this scan back for review');
+
+      expect(client.createScanRestoreRequestCalls, hasLength(1));
+      final call = client.createScanRestoreRequestCalls.single;
+      expect(call['batchId'], 'b1');
+      expect(call['scanId'], 's1');
+      expect(call['reason'], 'Need this scan back for review');
+    });
+
+    testWidgets('7. a successful request closes the dialog, refreshes the list, and the row now '
+        'shows PENDING with no Request Restore action', (tester) async {
+      client.retainedScansToReturn = [_retainedScanRow(scanId: 's1')];
+      await openSoftDeleted(tester);
+      await openRestoreDialog(tester);
+      await enterReasonAndSubmit(tester, 'Need this scan back for review');
+
+      expect(find.text('Request Scan Restoration'), findsNothing); // dialog closed
+      expect(find.widgetWithText(TextButton, 'Request Restore'), findsNothing);
+      expect(find.textContaining('Restore Requested'), findsOneWidget);
+      expect(find.textContaining('Restoration request submitted'), findsOneWidget);
+      // Never claims the scan was already restored.
+      expect(find.textContaining('restored'), findsNothing);
+    });
+
+    testWidgets('8. a request failure keeps the dialog open and the row still shows Request Restore',
+        (tester) async {
+      client.retainedScansToReturn = [_retainedScanRow(scanId: 's1')];
+      client.createScanRestoreRequestResult = const SyncOutcome.permanent('42501');
+      await openSoftDeleted(tester);
+      await openRestoreDialog(tester);
+      await enterReasonAndSubmit(tester, 'Need this scan back for review');
+
+      expect(find.text('Request Scan Restoration'), findsOneWidget); // dialog still open
+      expect(find.textContaining('retention window may have expired'), findsOneWidget);
+      // The list is never re-fetched after a failed request -- only a
+      // successful one triggers a refresh.
+      expect(
+        client.calls.where((c) => c == 'listRetainedSoftDeletedScans'),
+        hasLength(1),
+      );
+    });
+
+    testWidgets('9. no decoded answer, score, result, or image data is ever displayed',
+        (tester) async {
+      client.retainedScansToReturn = [_retainedScanRow(scanId: 's1')];
+      await openSoftDeleted(tester);
+
+      expect(find.byType(Image), findsNothing);
+      expect(find.textContaining('Score'), findsNothing);
+      expect(find.textContaining('score'), findsNothing);
+      expect(find.widgetWithText(TextButton, 'View Image'), findsNothing);
+      expect(client.calls, isNot(contains(startsWith('downloadScanImage'))));
+      expect(client.calls, isNot(contains(startsWith('downloadNameCropImage'))));
     });
   });
 }

@@ -7,6 +7,7 @@ import '../../../core/sync/supabase_sync_client.dart';
 import '../../../core/sync/sync_client.dart';
 import '../../../core/sync/retake_client.dart';
 import '../../../core/sync/scan_delete_client.dart';
+import '../../../core/sync/scan_restore_client.dart';
 import '../../../core/sync/sync_outcome.dart';
 import '../../../core/sync/sync_queue.dart' show SyncState;
 import '../../../models/exam_retake_request.dart';
@@ -63,17 +64,36 @@ class GuidanceWebExamineeRecordsService {
   /// also implement [RetakeClient].
   /// [scanDeleteClient] is only for tests, same reasoning as [retakeClient]
   /// -- see [_scanDeleteClient]'s doc comment.
+  /// [scanRestoreClient] is only for tests, same reasoning as [retakeClient]
+  /// / [scanDeleteClient] -- see [_scanRestoreClient]'s doc comment.
+  /// [identity] is only for tests, same reasoning as [retakeClient] /
+  /// [scanDeleteClient] -- see [_identity]'s own doc comment.
   GuidanceWebExamineeRecordsService({
     SyncClient? client,
     RetakeClient? retakeClient,
     ScanDeleteClient? scanDeleteClient,
+    ScanRestoreClient? scanRestoreClient,
+    SyncIdentity? identity,
   })  : _client = client ?? _buildDefaultClient(),
         _explicitRetakeClient = retakeClient,
-        _explicitScanDeleteClient = scanDeleteClient;
+        _explicitScanDeleteClient = scanDeleteClient,
+        _explicitScanRestoreClient = scanRestoreClient,
+        _explicitIdentity = identity;
 
   final SyncClient _client;
   final RetakeClient? _explicitRetakeClient;
   final ScanDeleteClient? _explicitScanDeleteClient;
+  final ScanRestoreClient? _explicitScanRestoreClient;
+  final SyncIdentity? _explicitIdentity;
+
+  /// Same lazy-resolution reasoning as [_retakeClient]/[_scanDeleteClient]:
+  /// a caller that supplies [_explicitIdentity] (every existing test) never
+  /// pays for (or crashes on) building [_WebSyncIdentity], which reads
+  /// `FirebaseAuth.instance` -- unavailable in a plain `flutter test` unit
+  /// test with no Firebase app initialized. Production code never supplies
+  /// it, so [softDeleteUnlinkedScan] keeps reading the real signed-in
+  /// Firebase user exactly as before.
+  late final SyncIdentity _identity = _explicitIdentity ?? _WebSyncIdentity();
 
   /// Resolved lazily (never at construction) so a caller that supplies
   /// neither [retakeClient] nor a [client] implementing [RetakeClient] --
@@ -90,6 +110,15 @@ class GuidanceWebExamineeRecordsService {
   /// building a real [SupabaseSyncClient] just to satisfy this field.
   late final ScanDeleteClient _scanDeleteClient = _explicitScanDeleteClient ??
       (_client is ScanDeleteClient ? _client as ScanDeleteClient : _buildDefaultClient());
+
+  /// Same lazy-resolution reasoning as [_retakeClient]/[_scanDeleteClient]:
+  /// a caller that supplies neither [scanRestoreClient] nor a [client]
+  /// implementing [ScanRestoreClient] -- every existing caller and test,
+  /// which never touches [loadRetainedSoftDeletedScans]/
+  /// [requestScanRestoration] -- never pays for (or crashes on) building a
+  /// real [SupabaseSyncClient] just to satisfy this field.
+  late final ScanRestoreClient _scanRestoreClient = _explicitScanRestoreClient ??
+      (_client is ScanRestoreClient ? _client as ScanRestoreClient : _buildDefaultClient());
 
   /// See `GuidanceWebResultsService._buildDefaultClient`'s doc comment —
   /// identical reasoning: [LocalBatchRepository]/[LocalStorageService] are
@@ -397,6 +426,162 @@ class GuidanceWebExamineeRecordsService {
     }
     throw GuidanceWebExamineeRecordsException(
       'Could not delete this scan. Please try again.',
+    );
+  }
+
+  /// "Delete" with 30-day retention (Unlinked Scans tab only): soft-deletes
+  /// one unlinked scan via the `soft_delete_unlinked_scan` RPC instead of
+  /// [deleteUnlinkedScan]'s permanent row/Storage removal. Every business
+  /// rule (unlinked, not archived, not already soft-deleted, caller
+  /// identity, non-blank reason) is enforced by the RPC itself -- this
+  /// method only translates its outcome into a friendly message, the same
+  /// way [deleteUnlinkedScan] does for the hard-delete RPC. Never deletes
+  /// Storage.
+  ///
+  /// The actor is read from the same Firebase-authenticated session every
+  /// other write in this service already uses -- never a user-entered or
+  /// otherwise client-supplied uid. The RPC independently re-verifies this
+  /// uid against the authenticated JWT `sub`, so this value being wrong
+  /// (or forged) could never let a caller impersonate someone else; the
+  /// server remains the authority.
+  Future<void> softDeleteUnlinkedScan({
+    required String batchId,
+    required String scanId,
+    required String deletionReason,
+  }) async {
+    final uid = _identity.uid;
+    if (uid == null || uid.isEmpty) {
+      throw GuidanceWebExamineeRecordsException(
+        'You must be signed in to delete this scan. Please sign in again.',
+      );
+    }
+    final displayName = _identity.displayName;
+
+    final outcome = await _scanDeleteClient.softDeleteUnlinkedScan(
+      batchId: batchId,
+      scanId: scanId,
+      deletedByUid: uid,
+      deletedByName: displayName,
+      deletionReason: deletionReason,
+    );
+    if (outcome.isSuccess) return;
+    if (outcome.isPermanent && outcome.code == 'P0002') {
+      throw GuidanceWebExamineeRecordsException(
+        'This scan no longer exists. Refresh the Unlinked Scans list and try again.',
+      );
+    }
+    if (outcome.isPermanent && outcome.code == '42501') {
+      throw GuidanceWebExamineeRecordsException(
+        'This scan can no longer be deleted this way -- it may already be linked, '
+        'archived, or already deleted. Refresh the Unlinked Scans list and try again.',
+      );
+    }
+    if (outcome.isPermanent && outcome.code == '22023') {
+      throw GuidanceWebExamineeRecordsException(
+        'A reason is required to delete this scan.',
+      );
+    }
+    if (outcome.isTransient) {
+      throw GuidanceWebExamineeRecordsException(
+        'Could not reach Supabase. Check your connection and try again.',
+      );
+    }
+    throw GuidanceWebExamineeRecordsException(
+      'Could not delete this scan. Please try again.',
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Soft-Deleted Scans tab -- Guidance Council read of retained (not-yet-
+  // expired) soft-deleted scans, plus requesting their restoration. Neither
+  // method here ever reaches a System-Admin-only RPC (review/restore remain
+  // a later, separate phase); both go through [ScanRestoreClient], which
+  // only ever calls Guidance-Council-gated RPCs.
+  // ---------------------------------------------------------------------------
+
+  /// Every retained soft-deleted unlinked scan visible to the current
+  /// session, via `list_retained_soft_deleted_scans_for_guidance`. A scan
+  /// whose retention window has since expired, or that has since been
+  /// restored, simply stops appearing here on the next call -- this method
+  /// never filters or recomputes that itself.
+  Future<List<CloudRetainedDeletedScanRow>> loadRetainedSoftDeletedScans() async {
+    final read = await _scanRestoreClient.listRetainedSoftDeletedScans();
+    if (!read.isSuccess) {
+      throw GuidanceWebExamineeRecordsException(_messageFor(read.error));
+    }
+    return read.scans;
+  }
+
+  /// Submits a PENDING restoration request for one retained soft-deleted
+  /// scan via `create_scan_restore_request` -- the SAME existing RPC from
+  /// 0009_create_unlinked_scan_soft_delete.sql already used nowhere else in
+  /// this app until now. [reason] is required; the database alone decides
+  /// every other eligibility rule (still within retention, no existing
+  /// active request, still unlinked, actually soft-deleted).
+  ///
+  /// The actor is read from the same Firebase-authenticated session every
+  /// other write in this service already uses -- never a user-entered or
+  /// otherwise client-supplied uid. The RPC independently re-verifies this
+  /// uid against the authenticated JWT `sub`, so this value being wrong
+  /// (or forged) could never let a caller impersonate someone else; the
+  /// server remains the authority.
+  Future<void> requestScanRestoration({
+    required String batchId,
+    required String scanId,
+    required String reason,
+  }) async {
+    final trimmed = reason.trim();
+    if (trimmed.isEmpty) {
+      throw GuidanceWebExamineeRecordsException(
+        'A reason is required to request restoration of this scan.',
+      );
+    }
+
+    final uid = _identity.uid;
+    if (uid == null || uid.isEmpty) {
+      throw GuidanceWebExamineeRecordsException(
+        'You must be signed in to request a scan restoration. Please sign in again.',
+      );
+    }
+    final displayName = _identity.displayName;
+
+    final outcome = await _scanRestoreClient.createScanRestoreRequest(
+      batchId: batchId,
+      scanId: scanId,
+      reason: trimmed,
+      requestedByUid: uid,
+      requestedByName: displayName,
+    );
+    if (outcome.isSuccess) return;
+    if (outcome.isPermanent && outcome.code == 'P0002') {
+      throw GuidanceWebExamineeRecordsException(
+        'This scan no longer exists. Refresh the Soft-Deleted Scans list and try again.',
+      );
+    }
+    if (outcome.isPermanent && outcome.code == '23505') {
+      throw GuidanceWebExamineeRecordsException(
+        'A restoration request has already been submitted for this scan.',
+      );
+    }
+    if (outcome.isPermanent && outcome.code == '42501') {
+      throw GuidanceWebExamineeRecordsException(
+        'This scan can no longer be restored -- it may no longer be soft-deleted, '
+        'may already be linked, or its 30-day retention window may have expired. '
+        'Refresh the list and try again.',
+      );
+    }
+    if (outcome.isPermanent && outcome.code == '22023') {
+      throw GuidanceWebExamineeRecordsException(
+        'A reason is required to request restoration of this scan.',
+      );
+    }
+    if (outcome.isTransient) {
+      throw GuidanceWebExamineeRecordsException(
+        'Could not reach Supabase. Check your connection and try again.',
+      );
+    }
+    throw GuidanceWebExamineeRecordsException(
+      'Could not submit this restoration request. Please try again.',
     );
   }
 

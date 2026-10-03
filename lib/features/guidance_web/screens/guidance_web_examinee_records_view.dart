@@ -6,6 +6,7 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
+import '../../../core/sync/scan_restore_client.dart';
 import '../../../models/examinee_record.dart';
 import '../../../models/local_batch.dart';
 import '../services/guidance_web_examinee_records_service.dart';
@@ -17,7 +18,7 @@ const List<String> _statusFilterOptions = ['All', 'Active', 'Archived'];
 /// Exam-type filter of the Unlinked Scans tab (`All` or a batch's exam code).
 const List<String> _examTypeFilterOptions = ['All', 'QTM', 'TAT', 'AT'];
 
-enum _RecordsTab { examinees, unlinkedScans }
+enum _RecordsTab { examinees, unlinkedScans, softDeletedScans }
 
 /// The Guidance Council Web Console's Examinee Records page.
 ///
@@ -95,6 +96,14 @@ class _GuidanceWebExamineeRecordsViewState
   /// double-tap firing two deletes for the same row while one is in flight.
   String? _deletingScanId;
 
+  bool _loadingRetained = true;
+  List<CloudRetainedDeletedScanRow> _retainedScans = [];
+  String? _retainedError;
+
+  /// The scan id currently showing a Request Restore dialog, or null --
+  /// same guard reasoning as [_deletingScanId].
+  String? _requestingRestoreScanId;
+
   /// The examinee currently open in the Detail view, or null while a tab's
   /// own list is showing.
   ExamineeRecord? _viewingExaminee;
@@ -105,6 +114,7 @@ class _GuidanceWebExamineeRecordsViewState
     _searchController.addListener(() => setState(() {}));
     _loadExaminees();
     _loadUnlinkedScans();
+    _loadRetainedScans();
   }
 
   @override
@@ -165,6 +175,36 @@ class _GuidanceWebExamineeRecordsViewState
       setState(() {
         _unlinkedError = 'Could not load unlinked scans. Please try again.';
         _loadingUnlinked = false;
+      });
+    }
+  }
+
+  /// Every retained (not-yet-expired) soft-deleted scan, for the
+  /// "Soft-Deleted Scans" tab. Re-run after a successful restore request, so
+  /// that scan's row immediately reflects its new `PENDING` status.
+  Future<void> _loadRetainedScans() async {
+    setState(() {
+      _loadingRetained = true;
+      _retainedError = null;
+    });
+    try {
+      final scans = await _service.loadRetainedSoftDeletedScans();
+      if (!mounted) return;
+      setState(() {
+        _retainedScans = scans;
+        _loadingRetained = false;
+      });
+    } on GuidanceWebExamineeRecordsException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _retainedError = e.message;
+        _loadingRetained = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _retainedError = 'Could not load soft-deleted scans. Please try again.';
+        _loadingRetained = false;
       });
     }
   }
@@ -257,11 +297,19 @@ class _GuidanceWebExamineeRecordsViewState
     );
   }
 
-  /// "Delete" -- permanently removes [item]'s scan (and its images) from
-  /// the Unlinked Scans queue. Refuses an archived historical attempt up
-  /// front (mirrors [GuidanceWebExamineeDetailView]'s "Remove Link" guard,
-  /// same reasoning: deleting one would permanently destroy a retake's
-  /// audit trail), before even opening the confirmation dialog.
+  /// "Delete" -- soft-deletes [item]'s scan with 30-day retention (via
+  /// [_SoftDeleteScanDialog], which collects the required reason and calls
+  /// [GuidanceWebExamineeRecordsService.softDeleteUnlinkedScan] itself --
+  /// this method only opens that dialog and, on success, updates the local
+  /// list and shows a confirmation; it performs no database call directly).
+  /// Refuses an archived historical attempt up front (mirrors
+  /// [GuidanceWebExamineeDetailView]'s "Remove Link" guard, same reasoning:
+  /// deleting one would destroy a retake's audit trail), before even
+  /// opening the dialog. `_deletingScanId` is set for the whole dialog
+  /// lifetime (same convention as `_openArchiveAttemptDialog`'s own
+  /// `_archivingRequestId`), not just the network call, so a second tap
+  /// cannot open a second dialog for the same scan while one is already
+  /// open.
   Future<void> _deleteUnlinkedScan(ExamineeHistoryItem item) async {
     if (_deletingScanId != null) return;
     if (item.isArchivedAttempt) {
@@ -272,61 +320,39 @@ class _GuidanceWebExamineeRecordsViewState
       );
       return;
     }
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Delete This Scan?'),
-        content: const Text(
-          'This scan and its associated images (original photo, rectified '
-          'photo, and any handwritten name crops) will be permanently '
-          'deleted. This cannot be undone.',
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: FilledButton.styleFrom(backgroundColor: AppColors.warmRedOrange),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true || !mounted) return;
 
     setState(() => _deletingScanId = item.scan.id);
-    try {
-      await _service.deleteUnlinkedScan(batchId: item.batch.id, scanId: item.scan.id);
-      if (!mounted) return;
-      setState(() {
-        _unlinkedScans = [
-          for (final s in _unlinkedScans) if (s.scan.id != item.scan.id) s,
-        ];
-        _deletingScanId = null;
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Scan deleted.')),
-      );
-    } on GuidanceWebExamineeRecordsException catch (e) {
-      if (!mounted) return;
-      setState(() {
-        // scanWasDeleted: the database row is already permanently gone
-        // (only Storage cleanup failed) -- the row must leave this list
-        // even though this is the exception branch, not the success one.
-        if (e.scanWasDeleted) {
-          _unlinkedScans = [
-            for (final s in _unlinkedScans) if (s.scan.id != item.scan.id) s,
-          ];
-        }
-        _deletingScanId = null;
-      });
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
-    } catch (_) {
-      if (!mounted) return;
-      setState(() => _deletingScanId = null);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not delete this scan. Please try again.')),
-      );
-    }
+    final deleted = await showDialog<bool>(
+      context: context,
+      builder: (_) => _SoftDeleteScanDialog(
+        service: _service,
+        batchId: item.batch.id,
+        scanId: item.scan.id,
+      ),
+    );
+    if (!mounted) return;
+    setState(() => _deletingScanId = null);
+    if (deleted != true) return;
+
+    setState(() {
+      _unlinkedScans = [
+        for (final s in _unlinkedScans) if (s.scan.id != item.scan.id) s,
+      ];
+    });
+    // Re-read the Soft-Deleted Scans tab from the database (same convention
+    // as _requestRestore's own post-success reload) so it immediately shows
+    // this scan -- never fabricated locally, always the database's own
+    // list_retained_soft_deleted_scans_for_guidance result.
+    await _loadRetainedScans();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Scan soft-deleted. It will be retained for 30 days and can be '
+          'restored upon request before then.',
+        ),
+      ),
+    );
   }
 
   Future<void> _previewImage(ExamineeHistoryItem item) async {
@@ -336,6 +362,43 @@ class _GuidanceWebExamineeRecordsViewState
         service: _resultsService,
         batch: item.batch,
         scan: item.scan,
+      ),
+    );
+  }
+
+  /// "Request Restore" (Soft-Deleted Scans tab only): opens
+  /// [_RequestRestoreDialog], which collects the required reason and calls
+  /// [GuidanceWebExamineeRecordsService.requestScanRestoration] itself --
+  /// this method only opens that dialog and, on success, re-loads the
+  /// retained scan list (so [row]'s status immediately shows `PENDING`) and
+  /// shows a confirmation. `_requestingRestoreScanId` is set for the whole
+  /// dialog lifetime, same convention as [_deletingScanId], so a second tap
+  /// cannot open a second dialog for the same scan while one is already
+  /// open.
+  Future<void> _requestRestore(CloudRetainedDeletedScanRow row) async {
+    if (_requestingRestoreScanId != null) return;
+
+    setState(() => _requestingRestoreScanId = row.scanId);
+    final requested = await showDialog<bool>(
+      context: context,
+      builder: (_) => _RequestRestoreDialog(
+        service: _service,
+        batchId: row.batchId,
+        scanId: row.scanId,
+      ),
+    );
+    if (!mounted) return;
+    setState(() => _requestingRestoreScanId = null);
+    if (requested != true) return;
+
+    await _loadRetainedScans();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Restoration request submitted. This scan now shows a pending '
+          'request awaiting System Admin review.',
+        ),
       ),
     );
   }
@@ -367,9 +430,11 @@ class _GuidanceWebExamineeRecordsViewState
                 _buildTabSwitcher(),
                 const SizedBox(height: 16),
                 Expanded(
-                  child: _tab == _RecordsTab.examinees
-                      ? _buildExamineesTab()
-                      : _buildUnlinkedScansTab(),
+                  child: switch (_tab) {
+                    _RecordsTab.examinees => _buildExamineesTab(),
+                    _RecordsTab.unlinkedScans => _buildUnlinkedScansTab(),
+                    _RecordsTab.softDeletedScans => _buildSoftDeletedScansTab(),
+                  },
                 ),
               ],
             ),
@@ -384,6 +449,11 @@ class _GuidanceWebExamineeRecordsViewState
         _tabButton(
           _RecordsTab.unlinkedScans,
           'Unlinked Scans${_unlinkedScans.isEmpty ? '' : ' (${_unlinkedScans.length})'}',
+        ),
+        const SizedBox(width: 8),
+        _tabButton(
+          _RecordsTab.softDeletedScans,
+          'Soft-Deleted Scans${_retainedScans.isEmpty ? '' : ' (${_retainedScans.length})'}',
         ),
       ],
     );
@@ -938,6 +1008,165 @@ class _GuidanceWebExamineeRecordsViewState
       ),
     );
   }
+
+  // -------------------------------------------------------------------
+  // Soft-Deleted Scans tab -- retained (not-yet-expired) soft-deleted
+  // unlinked scans, via `list_retained_soft_deleted_scans_for_guidance`.
+  // Deliberately shows NO decoded answers, scores, result fields, or image
+  // data of any kind -- the RPC itself never returns any of that (see
+  // 0011_list_retained_soft_deleted_scans_for_guidance.sql), so there is
+  // nothing here to withhold.
+  // -------------------------------------------------------------------
+
+  Widget _buildSoftDeletedScansTab() {
+    if (_loadingRetained) return _buildMessage(FontAwesomeIcons.spinner, 'Loading soft-deleted scans...');
+    if (_retainedError != null) {
+      return _buildMessage(FontAwesomeIcons.triangleExclamation, _retainedError!, isError: true);
+    }
+    if (_retainedScans.isEmpty) {
+      return _buildMessage(
+        FontAwesomeIcons.circleCheck,
+        'No retained soft-deleted scans — nothing here currently needs restoration.',
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildRetainedControls(),
+        const SizedBox(height: 16),
+        Expanded(
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppColors.cardBorder),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _buildRetainedTableHeader(),
+                const Divider(height: 1, color: AppColors.cardBorder),
+                Expanded(
+                  child: ListView.separated(
+                    itemCount: _retainedScans.length,
+                    separatorBuilder: (_, _) => const Divider(height: 1, color: AppColors.cardBorder),
+                    itemBuilder: (context, index) => _buildRetainedRow(_retainedScans[index]),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildRetainedControls() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.cardBorder),
+      ),
+      child: Row(
+        children: [
+          Text(
+            'Showing ${_retainedScans.length} retained soft-deleted scan'
+            '${_retainedScans.length == 1 ? '' : 's'}',
+            key: const Key('retainedShowingCount'),
+            style: AppTextStyles.body(size: 10.5, color: AppColors.textGray),
+          ),
+          const Spacer(),
+          TextButton.icon(
+            key: const Key('retainedRefreshButton'),
+            onPressed: _loadRetainedScans,
+            icon: const Icon(Icons.refresh, size: 16),
+            label: Text('Refresh', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w700)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRetainedTableHeader() {
+    final style = AppTextStyles.body(size: 9.5, weight: FontWeight.w800, color: AppColors.textGray);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: Row(
+        children: [
+          Expanded(flex: 2, child: Text('BATCH', style: style)),
+          Expanded(flex: 1, child: Text('EXAM', style: style)),
+          Expanded(flex: 2, child: Text('SCAN ID', style: style)),
+          Expanded(flex: 2, child: Text('DELETED', style: style)),
+          Expanded(flex: 2, child: Text('EXPIRES', style: style)),
+          Expanded(flex: 3, child: Text('REASON', style: style)),
+          Expanded(flex: 2, child: Text('DELETED BY', style: style)),
+          const SizedBox(width: 170),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRetainedRow(CloudRetainedDeletedScanRow row) {
+    final status = row.activeRestoreRequestStatus;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(flex: 2, child: Text(row.batchId, style: AppTextStyles.body(size: 11))),
+          Expanded(flex: 1, child: Text(row.examCode, style: AppTextStyles.body(size: 11))),
+          Expanded(flex: 2, child: Text(row.scanId, style: AppTextStyles.body(size: 11))),
+          Expanded(flex: 2, child: Text(_formatDateTime(row.deletedAt), style: AppTextStyles.body(size: 11))),
+          Expanded(flex: 2, child: Text(_formatDateTime(row.retentionUntil), style: AppTextStyles.body(size: 11))),
+          Expanded(
+            flex: 3,
+            child: Text(
+              row.deletionReason ?? '—',
+              style: AppTextStyles.body(size: 11),
+              overflow: TextOverflow.ellipsis,
+              maxLines: 2,
+            ),
+          ),
+          Expanded(
+            flex: 2,
+            child: Text(row.deletedByName ?? '—', style: AppTextStyles.body(size: 11)),
+          ),
+          SizedBox(
+            width: 170,
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: status != null
+                  ? _restoreRequestStatusChip(status)
+                  : TextButton(
+                      style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 6)),
+                      onPressed: _requestingRestoreScanId != null ? null : () => _requestRestore(row),
+                      child: Text(
+                        'Request Restore',
+                        style: AppTextStyles.body(size: 10.5, weight: FontWeight.w700, color: AppColors.primaryGreen),
+                      ),
+                    ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _restoreRequestStatusChip(String status) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: AppColors.emerald100,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Text(
+        status == 'APPROVED' ? 'Restore Approved' : 'Restore Requested',
+        style: AppTextStyles.body(size: 9.5, weight: FontWeight.w700, color: const Color(0xFF065F46)),
+      ),
+    );
+  }
 }
 
 const List<String> _months = [
@@ -945,6 +1174,17 @@ const List<String> _months = [
 ];
 
 String _formatDate(DateTime d) => '${_months[d.month - 1]} ${d.day}, ${d.year}';
+
+/// Same as [_formatDate], plus a local HH:MM -- used for the Soft-Deleted
+/// Scans tab's lifecycle timestamps (`deleted_at`/`retention_until`), where
+/// the time of day matters for a 30-day countdown in a way a captured date
+/// alone does not.
+String _formatDateTime(DateTime d) {
+  final local = d.toLocal();
+  final hh = local.hour.toString().padLeft(2, '0');
+  final mm = local.minute.toString().padLeft(2, '0');
+  return '${_formatDate(local)}, $hh:$mm';
+}
 
 /// Workflow 1 — "Create Examinee Record from this Scan." Pre-filled from
 /// [item].scan's own confirmed tag (never a blank form); the name fields
@@ -1057,6 +1297,231 @@ class _CreateExamineeFromScanDialogState extends State<_CreateExamineeFromScanDi
         FilledButton(
           onPressed: _saving ? null : _save,
           child: Text(_saving ? 'Creating...' : 'Create Examinee Record'),
+        ),
+      ],
+    );
+  }
+}
+
+/// "Delete" with 30-day retention (Unlinked Scans tab only): collects a
+/// required reason and calls
+/// [GuidanceWebExamineeRecordsService.softDeleteUnlinkedScan] itself --
+/// same save-with-loading-state shape as [_CreateExamineeFromScanDialog]
+/// above, plus the `Form`/`GlobalKey<FormState>`/required-validator pattern
+/// already used by the Archive Attempt and Request Retake reason dialogs
+/// elsewhere in this feature (`guidance_web_examinee_detail_view.dart`).
+/// Pops `true` only once the RPC call has actually succeeded -- the caller
+/// never has to guess whether the scan was really soft-deleted.
+class _SoftDeleteScanDialog extends StatefulWidget {
+  const _SoftDeleteScanDialog({
+    required this.service,
+    required this.batchId,
+    required this.scanId,
+  });
+
+  final GuidanceWebExamineeRecordsService service;
+  final String batchId;
+  final String scanId;
+
+  @override
+  State<_SoftDeleteScanDialog> createState() => _SoftDeleteScanDialogState();
+}
+
+class _SoftDeleteScanDialogState extends State<_SoftDeleteScanDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _reasonController = TextEditingController();
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _reasonController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await widget.service.softDeleteUnlinkedScan(
+        batchId: widget.batchId,
+        scanId: widget.scanId,
+        deletionReason: _reasonController.text.trim(),
+      );
+      if (!mounted) return;
+      Navigator.pop(context, true);
+    } on GuidanceWebExamineeRecordsException catch (e) {
+      setState(() {
+        _error = e.message;
+        _saving = false;
+      });
+    } catch (_) {
+      setState(() {
+        _error = 'Could not delete this scan. Please try again.';
+        _saving = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Delete This Scan?'),
+      content: SizedBox(
+        width: 420,
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'This scan will be temporarily removed from the active '
+                'Unlinked Scans list. It will be retained for 30 days '
+                'before permanent cleanup.',
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                key: const Key('softDeleteReasonField'),
+                controller: _reasonController,
+                enabled: !_saving,
+                minLines: 2,
+                maxLines: 4,
+                decoration: const InputDecoration(labelText: 'Reason for deletion'),
+                validator: (v) => (v == null || v.trim().isEmpty) ? 'A reason is required' : null,
+              ),
+              if (_error != null) ...[
+                const SizedBox(height: 10),
+                Text(_error!, style: AppTextStyles.body(size: 11, color: AppColors.warmRedOrange)),
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _saving ? null : _submit,
+          style: FilledButton.styleFrom(backgroundColor: AppColors.warmRedOrange),
+          child: Text(_saving ? 'Deleting...' : 'Delete'),
+        ),
+      ],
+    );
+  }
+}
+
+/// "Request Restore" (Soft-Deleted Scans tab only): collects a required
+/// reason and calls
+/// [GuidanceWebExamineeRecordsService.requestScanRestoration] itself -- same
+/// `Form`/`GlobalKey<FormState>`/required-validator/saving-state shape as
+/// [_SoftDeleteScanDialog] above. Pops `true` only once the RPC call has
+/// actually succeeded -- the caller never has to guess whether a request was
+/// really queued. This only SUBMITS a restoration request; it never claims
+/// the scan was restored (restoration itself is a separate, later, System
+/// Admin-only review step, not performed by this dialog or this app phase).
+class _RequestRestoreDialog extends StatefulWidget {
+  const _RequestRestoreDialog({
+    required this.service,
+    required this.batchId,
+    required this.scanId,
+  });
+
+  final GuidanceWebExamineeRecordsService service;
+  final String batchId;
+  final String scanId;
+
+  @override
+  State<_RequestRestoreDialog> createState() => _RequestRestoreDialogState();
+}
+
+class _RequestRestoreDialogState extends State<_RequestRestoreDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _reasonController = TextEditingController();
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _reasonController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await widget.service.requestScanRestoration(
+        batchId: widget.batchId,
+        scanId: widget.scanId,
+        reason: _reasonController.text.trim(),
+      );
+      if (!mounted) return;
+      Navigator.pop(context, true);
+    } on GuidanceWebExamineeRecordsException catch (e) {
+      setState(() {
+        _error = e.message;
+        _saving = false;
+      });
+    } catch (_) {
+      setState(() {
+        _error = 'Could not submit this restoration request. Please try again.';
+        _saving = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Request Scan Restoration'),
+      content: SizedBox(
+        width: 420,
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'This will send a restoration request for this soft-deleted scan. '
+                'The scan can only be restored while it is still within its '
+                '30-day retention window.',
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                key: const Key('restoreReasonField'),
+                controller: _reasonController,
+                enabled: !_saving,
+                minLines: 2,
+                maxLines: 4,
+                decoration: const InputDecoration(labelText: 'Reason for restoration'),
+                validator: (v) => (v == null || v.trim().isEmpty) ? 'A reason is required' : null,
+              ),
+              if (_error != null) ...[
+                const SizedBox(height: 10),
+                Text(_error!, style: AppTextStyles.body(size: 11, color: AppColors.warmRedOrange)),
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _saving ? null : _submit,
+          child: Text(_saving ? 'Submitting...' : 'Submit Request'),
         ),
       ],
     );
