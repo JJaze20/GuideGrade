@@ -30,6 +30,7 @@ import '../../features/admin/screens/user_management_screen.dart';
 import '../../features/admin/screens/create_user_screen.dart';
 import '../../features/admin/screens/edit_user_screen.dart';
 import '../../features/admin/screens/system_logs_screen.dart';
+import '../../features/admin/screens/restore_management_screen.dart';
 import '../../features/guidance_web/screens/guidance_web_home_screen.dart';
 import '../constants/exam_catalog.dart';
 import '../../models/local_batch.dart';
@@ -67,6 +68,7 @@ class AppRoutes {
   static const String createUser = '/create-user';
   static const String editUser = '/edit-user';
   static const String systemLogs = '/system-logs';
+  static const String restoreManagement = '/restore-management';
   static const String guidanceWebHome = '/guidance-web-home';
 
   /// Routes reachable without being signed in at all.
@@ -82,6 +84,7 @@ class AppRoutes {
     createUser,
     editUser,
     systemLogs,
+    restoreManagement,
   };
 
   /// Routes that require the `guidance_council` role — Staff Home and the
@@ -269,6 +272,8 @@ class AppRoutes {
         return _fade(EditUserScreen(user: settings.arguments as UserModel?));
       case systemLogs:
         return _fade(const SystemLogsScreen());
+      case restoreManagement:
+        return _fade(const RestoreManagementScreen());
       case guidanceWebHome:
         return _fade(const GuidanceWebHomeScreen());
       default:

@@ -7,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../models/local_batch.dart';
 import '../services/local_batch_repository.dart';
 import '../services/local_storage_service.dart';
+import 'admin_scan_restore_client.dart';
 import 'retake_client.dart';
 import 'scan_cloud_extensions.dart';
 import 'scan_delete_client.dart';
@@ -104,7 +105,8 @@ class AnswerKeyDecision {
 /// It performs no retries or backoff of its own beyond a single
 /// token-refresh retry on an auth error; scheduling is the sync manager's
 /// job.
-class SupabaseSyncClient implements SyncClient, RetakeClient, ScanDeleteClient {
+class SupabaseSyncClient
+    implements SyncClient, RetakeClient, ScanDeleteClient, AdminScanRestoreClient {
   SupabaseSyncClient({
     required this.batches,
     required this.localStorage,
@@ -1935,6 +1937,188 @@ class SupabaseSyncClient implements SyncClient, RetakeClient, ScanDeleteClient {
         'p_deleted_by_uid': deletedByUid,
         'p_deleted_by_name': deletedByName,
         'p_deletion_reason': deletionReason,
+      });
+      return const SyncOutcome.success();
+    });
+  }
+
+  /// Parses a timestamp field that the System Admin restore-management RPCs
+  /// (`list_soft_deleted_unlinked_scans_for_admin`,
+  /// `list_scan_restore_requests_for_admin`) guarantee is NOT NULL --
+  /// unlike [_dateOrNull] (used throughout this file for genuinely
+  /// nullable/optional timestamps), this NEVER substitutes a fabricated
+  /// value such as `DateTime.now()` for a null, missing, empty, or
+  /// unparseable value. A response that fails this check is almost
+  /// certainly malformed in a way a System Admin reviewing a scan for
+  /// restoration must not be shown as if it were real data -- so this
+  /// throws instead, which the surrounding `try`/`catch` in
+  /// [listDeletedScansForAdmin]/[listRestoreRequestsForAdmin] converts into
+  /// a sanitized failed read (`classifyUnexpectedError`), never a crash and
+  /// never a silently-invented date.
+  static DateTime _requireAdminDate(Object? raw, String fieldName) {
+    final parsed = _dateOrNull(raw);
+    if (parsed == null) {
+      throw FormatException(
+        'Admin restore-management response is missing a valid "$fieldName" timestamp',
+      );
+    }
+    return parsed;
+  }
+
+  /// Parses one raw `list_soft_deleted_unlinked_scans_for_admin` row into a
+  /// [CloudAdminSoftDeletedScanRow].
+  static CloudAdminSoftDeletedScanRow parseCloudAdminSoftDeletedScanRow(
+    Map<String, dynamic> row,
+  ) =>
+      CloudAdminSoftDeletedScanRow(
+        batchId: row['batch_id'] as String,
+        scanId: row['scan_id'] as String,
+        examCode: row['exam_code'] as String,
+        deletedAt: _requireAdminDate(row['deleted_at'], 'deleted_at'),
+        retentionUntil: _requireAdminDate(row['retention_until'], 'retention_until'),
+        deletionReason: row['deletion_reason'] as String?,
+        deletedByName: row['deleted_by_name'] as String?,
+      );
+
+  /// See [AdminScanRestoreClient.listDeletedScansForAdmin]. Calls the
+  /// `list_soft_deleted_unlinked_scans_for_admin` RPC exactly as declared in
+  /// 0009_create_unlinked_scan_soft_delete.sql -- no parameters,
+  /// System-Admin-only (enforced by the RPC itself). Never calls the
+  /// Guidance-Council-only `list_retained_soft_deleted_scans_for_guidance`
+  /// (0011) -- a separate function, never referenced here.
+  @override
+  Future<CloudAdminSoftDeletedScansRead> listDeletedScansForAdmin() async {
+    var refreshed = false;
+    while (true) {
+      try {
+        final result = await _client.rpc('list_soft_deleted_unlinked_scans_for_admin');
+        final rows = (result as List).map((r) => Map<String, dynamic>.from(r as Map));
+        return CloudAdminSoftDeletedScansRead.found(
+          rows.map(parseCloudAdminSoftDeletedScanRow).toList(),
+        );
+      } on PostgrestException catch (e) {
+        final code = _sanitizeCode(e.code);
+        if ((code == '401' || code == 'PGRST301') && !refreshed) {
+          refreshed = true;
+          if (await _safeRefresh()) continue;
+        }
+        return CloudAdminSoftDeletedScansRead.failed(classifyPostgrestCode(code));
+      } on TimeoutException {
+        return const CloudAdminSoftDeletedScansRead.failed(SyncOutcome.transient('network'));
+      } on SocketException {
+        return const CloudAdminSoftDeletedScansRead.failed(SyncOutcome.transient('network'));
+      } catch (e) {
+        _logUnclassified(e);
+        return CloudAdminSoftDeletedScansRead.failed(classifyUnexpectedError(e));
+      }
+    }
+  }
+
+  /// Parses one raw `list_scan_restore_requests_for_admin` row into a
+  /// [CloudAdminRestoreRequestRow].
+  static CloudAdminRestoreRequestRow parseCloudAdminRestoreRequestRow(
+    Map<String, dynamic> row,
+  ) =>
+      CloudAdminRestoreRequestRow(
+        requestId: row['request_id'] as String,
+        batchId: row['batch_id'] as String,
+        scanId: row['scan_id'] as String,
+        examCode: row['exam_code'] as String,
+        status: row['status'] as String,
+        reason: row['reason'] as String,
+        requestedByName: row['requested_by_name'] as String?,
+        requestedAt: _requireAdminDate(row['requested_at'], 'requested_at'),
+        reviewedByName: row['reviewed_by_name'] as String?,
+        reviewedAt: _dateOrNull(row['reviewed_at']),
+        reviewNote: row['review_note'] as String?,
+      );
+
+  /// See [AdminScanRestoreClient.listRestoreRequestsForAdmin]. Calls the
+  /// `list_scan_restore_requests_for_admin` RPC exactly as declared in
+  /// 0009_create_unlinked_scan_soft_delete.sql -- no parameters,
+  /// System-Admin-only (enforced by the RPC itself). Never queries
+  /// `scan_restore_requests` directly -- direct table access to it remains
+  /// revoked for every role (0009), unchanged by this method.
+  @override
+  Future<CloudAdminRestoreRequestsRead> listRestoreRequestsForAdmin() async {
+    var refreshed = false;
+    while (true) {
+      try {
+        final result = await _client.rpc('list_scan_restore_requests_for_admin');
+        final rows = (result as List).map((r) => Map<String, dynamic>.from(r as Map));
+        return CloudAdminRestoreRequestsRead.found(
+          rows.map(parseCloudAdminRestoreRequestRow).toList(),
+        );
+      } on PostgrestException catch (e) {
+        final code = _sanitizeCode(e.code);
+        if ((code == '401' || code == 'PGRST301') && !refreshed) {
+          refreshed = true;
+          if (await _safeRefresh()) continue;
+        }
+        return CloudAdminRestoreRequestsRead.failed(classifyPostgrestCode(code));
+      } on TimeoutException {
+        return const CloudAdminRestoreRequestsRead.failed(SyncOutcome.transient('network'));
+      } on SocketException {
+        return const CloudAdminRestoreRequestsRead.failed(SyncOutcome.transient('network'));
+      } catch (e) {
+        _logUnclassified(e);
+        return CloudAdminRestoreRequestsRead.failed(classifyUnexpectedError(e));
+      }
+    }
+  }
+
+  /// See [AdminScanRestoreClient.reviewRestoreRequest]. Calls the EXISTING
+  /// `review_scan_restore_request` RPC from
+  /// 0009_create_unlinked_scan_soft_delete.sql with its five `p_`-prefixed
+  /// parameters -- every precondition (System Admin caller,
+  /// `p_reviewer_uid` matching the authenticated JWT `sub`, the request
+  /// existing/still-PENDING, `p_action` being APPROVE/REJECT) is enforced by
+  /// the RPC itself, never duplicated here. The RPC's own return row
+  /// (request_id, status) is not needed by this method's signature and is
+  /// not parsed -- the caller re-reads [listRestoreRequestsForAdmin]
+  /// afterward, the same "re-read the truth from the database" convention
+  /// [RetakeClient]'s write methods already use. This is explicitly NOT
+  /// restoration -- see [restoreApprovedScan].
+  @override
+  Future<SyncOutcome> reviewRestoreRequest({
+    required String requestId,
+    required bool approve,
+    required String reviewerUid,
+    String? reviewerName,
+    String? reviewNote,
+  }) {
+    return _guardPostgrest(() async {
+      await _client.rpc('review_scan_restore_request', params: {
+        'p_request_id': requestId,
+        'p_action': approve ? 'APPROVE' : 'REJECT',
+        'p_reviewer_uid': reviewerUid,
+        'p_reviewer_name': reviewerName,
+        'p_review_note': reviewNote,
+      });
+      return const SyncOutcome.success();
+    });
+  }
+
+  /// See [AdminScanRestoreClient.restoreApprovedScan]. Calls the EXISTING
+  /// `restore_soft_deleted_scan` RPC from
+  /// 0009_create_unlinked_scan_soft_delete.sql with its three
+  /// `p_`-prefixed parameters -- every precondition (System Admin caller,
+  /// `p_reviewer_uid` matching the authenticated JWT `sub`, the request
+  /// existing/still-APPROVED, the scan still within its retention window)
+  /// is enforced by the RPC itself, never duplicated here. Never touches
+  /// Storage -- the RPC itself only clears `scans`' soft-delete columns and
+  /// flips the request to RESTORED.
+  @override
+  Future<SyncOutcome> restoreApprovedScan({
+    required String requestId,
+    required String reviewerUid,
+    String? reviewerName,
+  }) {
+    return _guardPostgrest(() async {
+      await _client.rpc('restore_soft_deleted_scan', params: {
+        'p_request_id': requestId,
+        'p_reviewer_uid': reviewerUid,
+        'p_reviewer_name': reviewerName,
       });
       return const SyncOutcome.success();
     });
