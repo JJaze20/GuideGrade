@@ -58,4 +58,21 @@ abstract class ScanDeleteClient {
     required String batchId,
     required String scanId,
   });
+
+  /// The 30-day-retention alternative to [deleteUnlinkedScan]: calls the
+  /// `soft_delete_unlinked_scan` SECURITY DEFINER RPC, which re-enforces
+  /// every precondition itself (caller is Guidance Council, [deletedByUid]
+  /// matches the authenticated JWT `sub`, the scan exists/is unlinked/is
+  /// not an archived attempt/is not already soft-deleted, a non-blank
+  /// [deletionReason]) -- none of that is duplicated here. Sets
+  /// `retention_until = now() + 30 days` and writes the `scan_soft_deleted`
+  /// audit event, both inside the RPC. Never deletes the row, never
+  /// touches Storage.
+  Future<SyncOutcome> softDeleteUnlinkedScan({
+    required String batchId,
+    required String scanId,
+    required String deletedByUid,
+    String? deletedByName,
+    required String deletionReason,
+  });
 }

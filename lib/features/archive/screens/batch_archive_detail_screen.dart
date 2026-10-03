@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
@@ -11,9 +13,11 @@ import '../../../core/routes/app_routes.dart';
 import '../../../core/services/batch_repository.dart';
 import '../../../core/state/app_state.dart';
 import '../../../core/sync/cloud_restore_service.dart';
+import '../../../core/sync/mobile_examinee_resolver.dart';
 import '../../../core/sync/sync_failure_hint.dart';
 import '../../../core/sync/sync_job.dart';
 import '../../../core/sync/sync_manager.dart';
+import '../../../models/examinee_record.dart';
 import '../../../models/local_batch.dart';
 import '../../../shared/widgets/examinee_dialog.dart';
 import '../../../shared/widgets/name_crop_strip.dart';
@@ -41,6 +45,14 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
   bool _deleting = false;
   LocalBatch? _batch;
 
+  /// Canonical Examinee identity for every LINKED scan in this batch
+  /// (`scanId -> ExamineeRecord`), resolved live from `public.examinees` --
+  /// see [resolveLinkedExaminees]. Empty until that resolution completes
+  /// (or forever, if it never succeeds -- offline, RLS, or no cloud data
+  /// plane configured this run); the screen must always remain fully
+  /// usable from [_batch] alone regardless of this map's state.
+  Map<String, ExamineeRecord> _linkedExaminees = const {};
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -58,13 +70,34 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
   /// turn a large batch into a multi-second stall before this screen could
   /// show anything.
   Future<void> _load() async {
-    final repo = AppStateScope.of(context).batchRepository;
-    final batch = await repo.getBatchById(widget.batchId);
+    final appState = AppStateScope.of(context);
+    final batch = await appState.batchRepository.getBatchById(widget.batchId);
     if (!mounted) return;
     setState(() {
       _batch = batch;
       _loading = false;
     });
+    // Best-effort, non-blocking: the local batch above is already enough to
+    // show every scan with its own OCR/tagged name, so canonical identity
+    // never gates the screen's first paint -- see
+    // _resolveCanonicalExaminees's own doc comment for why this can fail
+    // silently (offline, RLS, no cloud data plane this run) with no effect
+    // on usability.
+    unawaited(_resolveCanonicalExaminees(appState));
+  }
+
+  /// Live, read-time-only overlay of canonical Examinee identity for this
+  /// batch's linked scans -- never persisted, never blocks or errors the
+  /// screen. Re-run on every [_load] (including after a rescan/tag edit/
+  /// scan-viewer return), so a relink/unlink/canonical-name-edit made on
+  /// Web is reflected the next time this screen's data is reloaded, never
+  /// held onto as a stale cached value.
+  Future<void> _resolveCanonicalExaminees(AppState appState) async {
+    final client = appState.syncManager?.client;
+    if (client == null) return; // no cloud data plane configured this run.
+    final resolved = await resolveLinkedExaminees(client, widget.batchId);
+    if (!mounted) return;
+    setState(() => _linkedExaminees = resolved);
   }
 
   @override
@@ -276,10 +309,13 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
     );
   }
 
-  /// Same "tagged name, else Sheet N" convention used throughout this
-  /// screen's per-scan labels (see `_buildScanCard`) — used for the
-  /// possible-duplicate banner, which references two scans by position.
+  /// Same "canonical name, else tagged name, else Sheet N" convention used
+  /// throughout this screen's per-scan labels (see `_buildScanCard`) — used
+  /// for the possible-duplicate banner, which references two scans by
+  /// position.
   String _scanLabel(LocalBatch batch, LocalScan scan) {
+    final linked = _linkedExaminees[scan.id];
+    if (linked != null) return linked.displayName;
     final examinee = scan.examinee;
     if (examinee != null && !examinee.isEmpty) return examinee.displayName;
     return 'Sheet ${batch.scans.indexOf(scan) + 1}';
@@ -553,42 +589,56 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
     await _load();
   }
 
-  /// Deletes one scanned sheet after a confirmation that names it. Only that
-  /// sheet (and its stored images) goes; the header counts, average, review
-  /// banner and the batch's Archived status are all derived from what's left.
+  /// Deletes one scanned sheet after collecting a required reason (see
+  /// [_SoftDeleteSheetDialog]). Only that sheet goes from THIS DEVICE
+  /// immediately; the cloud copy is queued for a Requirement #4 30-day soft
+  /// delete (see [SyncManager]'s `deleteScan` dispatch), never an immediate
+  /// permanent cloud deletion. The header counts, average, review banner and
+  /// the batch's Archived status are all derived from what's left locally.
   /// A failure keeps the sheet on screen and says so — success is only shown
-  /// once the repository has actually removed it.
+  /// once the repository has actually removed the local copy.
   Future<void> _deleteSheet(LocalBatch batch, LocalScan scan, int index) async {
     final label = _scanLabel(batch, scan);
-    final confirmed = await showDialog<bool>(
+    final sheetLabel = 'Sheet ${index + 1}${label == 'Sheet ${index + 1}' ? '' : ' — $label'}';
+    final reason = await showDialog<String>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Delete This Sheet?'),
-        content: Text(
-          'Sheet ${index + 1}${label == 'Sheet ${index + 1}' ? '' : ' — $label'} will be permanently '
-          'deleted from ${batch.batchCode}, together with its photo, answers and score. '
-          'The rest of the batch is not affected. This can\'t be undone.',
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            style: TextButton.styleFrom(foregroundColor: const Color(0xFF991B1B)),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
+      builder: (context) => _SoftDeleteSheetDialog(sheetLabel: sheetLabel),
     );
-    if (confirmed != true || !mounted) return;
+    if (reason == null || !mounted) return;
+
+    // The currently signed-in Firebase identity -- never a user-entered
+    // value. Same established project pattern as AppState's own identity
+    // resolution (uid + displayName, try/catch-guarded so a plain
+    // `flutter test` harness with no Firebase app initialized never crashes
+    // here), including its exact display-name fallback chain.
+    var deletedByUid = '';
+    String? firebaseName;
+    try {
+      final firebaseUser = FirebaseAuth.instance.currentUser;
+      deletedByUid = firebaseUser?.uid ?? '';
+      firebaseName = firebaseUser?.displayName;
+    } catch (_) {
+      // Firebase not initialised (a test harness): no signed-in uid.
+    }
+    final appState = AppStateScope.of(context);
+    final deletedByName = firebaseName ?? appState.currentUser?.displayName ?? 'Unknown';
 
     final messenger = ScaffoldMessenger.of(context);
-    final repo = AppStateScope.of(context).batchRepository;
+    final repo = appState.batchRepository;
     setState(() => _deleting = true);
     try {
-      final updated = await repo.deleteScan(batchId: batch.id, scanId: scan.id);
+      final updated = await repo.deleteScan(
+        batchId: batch.id,
+        scanId: scan.id,
+        deletedByUid: deletedByUid,
+        deletedByName: deletedByName,
+        reason: reason,
+      );
       if (!mounted) return;
       setState(() => _batch = updated);
-      messenger.showSnackBar(SnackBar(content: Text('Sheet ${index + 1} deleted.')));
+      messenger.showSnackBar(
+        SnackBar(content: Text('Sheet ${index + 1} removed from this device.')),
+      );
     } catch (_) {
       if (!mounted) return;
       messenger.showSnackBar(
@@ -607,11 +657,24 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
     final examinee = scan.examinee;
     final tagged = examinee != null && !examinee.isEmpty;
 
+    // Requirement: Mobile canonical Examinee identity. When this scan's
+    // `examinee_id` resolves to a real `examinees` row (see
+    // _resolveCanonicalExaminees/resolveLinkedExaminees), its canonical
+    // name and existing user-facing Examinee ID take over the card's title
+    // -- never the scan's own OCR/tagged name, same rule Web Results
+    // already applies. An unlinked scan (no entry here) is completely
+    // unaffected and keeps showing its own tag exactly as before; the tag
+    // itself (and the Tag/Edit student button below) is never replaced or
+    // hidden by a canonical link -- the two identities stay independent.
+    final linked = _linkedExaminees[scan.id];
+
     final blankCount = scored.items.where((i) => i.isBlank).length;
     final ambiguousCount = scored.items.where((i) => i.isAmbiguous).length;
     final hasName = tagged && (examinee.firstName.trim().isNotEmpty || examinee.lastName.trim().isNotEmpty);
     final hasNumber = tagged && examinee.examineeNumber.trim().isNotEmpty;
-    final cardTitle = hasName ? examinee.displayName : 'Unnamed examinee';
+    final cardTitle = linked != null
+        ? linked.displayName
+        : (hasName ? examinee.displayName : 'Unnamed examinee');
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -642,6 +705,19 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
+                if (linked != null) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    // Same label Guidance Council's own Web UI already
+                    // uses for this exact column (see
+                    // guidance_web_examinee_detail_view.dart) -- never a
+                    // new/invented label, and never examinees.id or
+                    // scans.examinee_id (the internal uuids), only the
+                    // existing human-readable temporary_examinee_id.
+                    'Temporary Examinee ID: ${linked.temporaryExamineeId}',
+                    style: AppTextStyles.body(size: 9, color: AppColors.textGray, weight: FontWeight.w600),
+                  ),
+                ],
                 if (scan.needsReview) ...[
                   const SizedBox(height: 4),
                   NeedsReviewChip(count: scan.unresolvedFlaggedItems.length),
@@ -811,6 +887,89 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
     final m = d.minute.toString().padLeft(2, '0');
     final ap = d.hour < 12 ? 'AM' : 'PM';
     return '${_months[d.month - 1]} ${d.day}, ${d.year} · $h:$m $ap';
+  }
+}
+
+/// "Delete This Sheet?" -- collects the reason Requirement #4's
+/// `soft_delete_unlinked_scan` RPC requires. Deliberately a small,
+/// mobile-local widget using the same `Form`/`GlobalKey<FormState>`/
+/// `TextFormField`/non-blank-validator pattern the Guidance Web Console's
+/// own reason dialogs already use -- NOT a shared/imported component (the
+/// Web Console's own dialog is private to its own library and is
+/// Web-specific besides). This dialog only COLLECTS the reason; it performs
+/// no database call itself and makes no claim about whether the scan is
+/// linked or restorable -- [BatchArchiveDetailScreen._deleteSheet] is the
+/// one place that actually calls the repository, and the server-side RPC
+/// remains the sole authority on eligibility.
+class _SoftDeleteSheetDialog extends StatefulWidget {
+  const _SoftDeleteSheetDialog({required this.sheetLabel});
+
+  final String sheetLabel;
+
+  @override
+  State<_SoftDeleteSheetDialog> createState() => _SoftDeleteSheetDialogState();
+}
+
+class _SoftDeleteSheetDialogState extends State<_SoftDeleteSheetDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _reasonController = TextEditingController();
+
+  @override
+  void dispose() {
+    _reasonController.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    if (!_formKey.currentState!.validate()) return;
+    Navigator.of(context).pop(_reasonController.text.trim());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Delete This Sheet?'),
+      content: SizedBox(
+        width: 420,
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '${widget.sheetLabel} will be removed from this device now. '
+                'In the cloud, it is retained for 30 days and may be '
+                'restored by Guidance Council through the existing '
+                'Requirement #4 review workflow -- it is not permanently '
+                'deleted right away.',
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                key: const Key('mobileSoftDeleteReasonField'),
+                controller: _reasonController,
+                minLines: 2,
+                maxLines: 4,
+                decoration: const InputDecoration(labelText: 'Reason for deletion'),
+                validator: (v) =>
+                    (v == null || v.trim().isEmpty) ? 'A reason is required' : null,
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        TextButton(
+          onPressed: _submit,
+          style: TextButton.styleFrom(foregroundColor: const Color(0xFF991B1B)),
+          child: const Text('Delete'),
+        ),
+      ],
+    );
   }
 }
 
