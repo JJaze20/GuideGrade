@@ -113,7 +113,7 @@ void main(List<String> args) {
     ..writeln('  interiorFiducials: const [$interior],')
     ..writeln('  lastNameFieldRect: const ${rect('Last Name')},')
     ..writeln('  firstNameFieldRect: const ${rect('First Name')},')
-    ..writeln('  middleNameFieldRect: const ${rect('M.I.')},')
+    ..writeln('  middleNameFieldRect: const ${rect('Middle Name')},')
     ..writeln('  lastNameBoxCount: 0,')
     ..writeln('  firstNameBoxCount: 0,')
     ..writeln('  middleNameBoxCount: 0,')

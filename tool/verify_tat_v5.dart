@@ -95,7 +95,7 @@ void main() {
   for (final (name, r) in [
     ('Last Name', t.lastNameFieldRect),
     ('First Name', t.firstNameFieldRect),
-    ('M.I.', t.middleNameFieldRect),
+    ('Middle Name', t.middleNameFieldRect),
   ]) {
     final f = fields[name]!;
     check(
