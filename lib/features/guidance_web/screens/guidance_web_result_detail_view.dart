@@ -1290,12 +1290,19 @@ class _GuidanceWebResultDetailViewState
         )
         .$2;
     final isQtm = widget.batch.examCode == 'QTM';
-    // The category radar remains AT/QTM; TAT has its own cluster table above.
-    final allRows = computeClusterRows(
-      widget.batch.examCode,
-      _scored.items,
-      averages: _clusterAverages,
-    );
+    final isTat = widget.batch.examCode == 'TAT';
+    final allRows = isTat
+        ? tatClusterRows(_scored.items, averages: _clusterAverages)
+        : computeClusterRows(
+            widget.batch.examCode,
+            _scored.items,
+            averages: _clusterAverages,
+          );
+    // TAT cluster names are long; "Test 1: Core Learning Theories, ..." becomes
+    // "T1: Core Learning Theories" on the radar axes.
+    String axisLabel(String label) => isTat
+        ? label.replaceFirst('Test ', 'T').split(',').first.split(' & ').first
+        : label;
     final rows = (allRows ?? const <ClusterRow>[])
         .where((r) => !r.def.isGroup)
         .toList();
@@ -1327,7 +1334,7 @@ class _GuidanceWebResultDetailViewState
               children: [
                 ClusterRadarChart(
                   key: const Key('clusterRadar'),
-                  axes: [for (final r in rows) r.def.label],
+                  axes: [for (final r in rows) axisLabel(r.def.label)],
                   series: [
                     ClusterRadarSeries(
                       label: 'Batch average',
