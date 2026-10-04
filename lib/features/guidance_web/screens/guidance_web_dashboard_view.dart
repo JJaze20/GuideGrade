@@ -3,6 +3,8 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_tokens.dart';
+import '../../../core/omr/qtm_category.dart';
+import '../../../core/omr/tat_category.dart';
 import '../../../shared/widgets/surface_card.dart';
 import '../services/guidance_web_dashboard_service.dart';
 
@@ -276,6 +278,36 @@ class _ChartCard extends StatelessWidget {
 class _BarPainter extends CustomPainter {
   _BarPainter(this.data);
   final DashboardDistribution data;
+
+  // Category colors, as on the result analytics (A, B, C, D).
+  static const _categoryColors = [
+    Color(0xFFEF4444),
+    Color(0xFFFFB000),
+    Color(0xFF4A7AF5),
+    Color(0xFF10B981),
+  ];
+
+  /// Category colour for bar [i]: by letter for the Admission Test, otherwise
+  /// by the category the score range's midpoint falls in (the unclassified
+  /// gap counts as A).
+  Color _barColor(int i) {
+    final label = data.labels[i];
+    if (data.title == 'Admission Test') {
+      final index = 'ABCD'.indexOf(label);
+      return index < 0 ? AppColors.primaryGreen : _categoryColors[index];
+    }
+    final match = RegExp(r'(\d+)–(\d+)').firstMatch(label);
+    if (match == null) return AppColors.primaryGreen;
+    final mid =
+        (int.parse(match.group(1)!) + int.parse(match.group(2)!)) ~/ 2;
+    final index = switch (data.title) {
+      'QTM' => qtmCategory(mid)?.index ?? 0,
+      'TAT' => tatCategory(mid)?.index ?? 0,
+      _ => -1,
+    };
+    return index < 0 ? AppColors.primaryGreen : _categoryColors[index];
+  }
+
   void _text(
     Canvas canvas,
     String text,
@@ -340,7 +372,7 @@ class _BarPainter extends CustomPainter {
       );
       canvas.drawRRect(
         RRect.fromRectAndRadius(bar, const Radius.circular(5)),
-        Paint()..color = AppColors.primaryGreen,
+        Paint()..color = _barColor(i),
       );
       _text(
         canvas,

@@ -517,41 +517,49 @@ class _GuidanceWebExportBatchViewState
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Wrap(
-            spacing: 16,
-            runSpacing: 8,
-            crossAxisAlignment: WrapCrossAlignment.center,
+          Row(
             children: [
               TextButton.icon(
                 onPressed: widget.onBack,
                 icon: const Icon(Icons.arrow_back, size: 16),
                 label: const Text('Back to List'),
               ),
-              if (!_loading && _scans.isNotEmpty) ...[
-                IncludeCertificatesSwitch(
-                  value: _includeCertificates,
-                  onChanged: (v) => setState(() => _includeCertificates = v),
-                ),
-              ],
               if (!_loading && _scans.isNotEmpty)
-                Padding(
-                  // Aligns the checkbox with the row checkboxes below.
-                  padding: const EdgeInsets.only(right: 16),
-                  child: Row(
+                Expanded(
+                  child: Wrap(
+                    alignment: WrapAlignment.end,
+                    spacing: 16,
+                    runSpacing: 8,
+                    crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
-                      Text(
-                        'Check all',
-                        style: AppTextStyles.body(
-                          size: 13,
-                          weight: FontWeight.w700,
-                          color: AppColors.textGray,
-                        ),
+                      IncludeCertificatesSwitch(
+                        value: _includeCertificates,
+                        onChanged: (v) =>
+                            setState(() => _includeCertificates = v),
                       ),
-                      _selectionCheckbox(
-                        key: const Key('checkAllDot'),
-                        on: _allChecked,
-                        tooltip: _allChecked ? 'Uncheck all' : 'Check all',
-                        onTap: _toggleAll,
+                      Padding(
+                        // Aligns the checkbox with the row checkboxes below.
+                        padding: const EdgeInsets.only(right: 16),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              'Check all',
+                              style: AppTextStyles.body(
+                                size: 13,
+                                weight: FontWeight.w700,
+                                color: AppColors.textGray,
+                              ),
+                            ),
+                            _selectionCheckbox(
+                              key: const Key('checkAllDot'),
+                              on: _allChecked,
+                              tooltip:
+                                  _allChecked ? 'Uncheck all' : 'Check all',
+                              onTap: _toggleAll,
+                            ),
+                          ],
+                        ),
                       ),
                     ],
                   ),
@@ -606,40 +614,41 @@ class _GuidanceWebExportBatchViewState
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       decoration: _cardDecoration,
-      child: LayoutBuilder(
-        builder: (context, box) => Wrap(
-          spacing: 12,
-          runSpacing: 8,
-          crossAxisAlignment: WrapCrossAlignment.center,
-          children: [
-            SizedBox(
-              width: box.maxWidth < 600 ? box.maxWidth : box.maxWidth - 260,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.only(top: 14),
               child: Text(
                 _batchTitle,
                 overflow: TextOverflow.ellipsis,
                 style: AppTextStyles.body(size: 13, weight: FontWeight.w600),
               ),
             ),
-            Text(
+          ),
+          const SizedBox(width: 12),
+          Padding(
+            padding: const EdgeInsets.only(top: 14),
+            child: Text(
               'Batch summary',
               style: AppTextStyles.body(size: 13, color: AppColors.textGray),
             ),
-            const SizedBox(width: 12),
-            _viewButton(
-              () =>
-                  _openPreview(const _Preview(includeSummary: true, scans: [])),
-              key: const Key('summaryView'),
-            ),
-            _selectionCheckbox(
-              key: const Key('summaryDot'),
-              on: _includeSummary,
-              tooltip: _includeSummary
-                  ? 'Included in export'
-                  : 'Not included in export',
-              onTap: () => setState(() => _includeSummary = !_includeSummary),
-            ),
-          ],
-        ),
+          ),
+          const SizedBox(width: 12),
+          _viewButton(
+            () => _openPreview(const _Preview(includeSummary: true, scans: [])),
+            key: const Key('summaryView'),
+          ),
+          _selectionCheckbox(
+            key: const Key('summaryDot'),
+            on: _includeSummary,
+            tooltip: _includeSummary
+                ? 'Included in export'
+                : 'Not included in export',
+            onTap: () => setState(() => _includeSummary = !_includeSummary),
+          ),
+        ],
       ),
     );
   }
@@ -915,6 +924,7 @@ class _GuidanceWebExportBatchViewState
     final count = _exportableSelectedCount;
     final summary = _includeSummary ? 'batch summary + ' : '';
     return Wrap(
+      alignment: WrapAlignment.end,
       spacing: 12,
       runSpacing: 8,
       crossAxisAlignment: WrapCrossAlignment.center,
