@@ -12,6 +12,7 @@ import 'retake_client.dart';
 import 'scan_cloud_extensions.dart';
 import 'scan_delete_client.dart';
 import 'scan_restore_client.dart';
+import 'batch_deletion_guard.dart';
 import 'sync_client.dart';
 import 'sync_job.dart';
 import 'sync_outcome.dart';
@@ -1954,6 +1955,8 @@ class SupabaseSyncClient
   /// objects are success.
   @override
   Future<SyncOutcome> deleteScan(String batchId, String scanId) async {
+    final allowed = await checkBatchDeletionAllowed(this, batchId);
+    if (!allowed.isSuccess) return allowed;
     final rowOutcome = await _guardPostgrest(() async {
       await _client
           .from('scans')
@@ -2001,6 +2004,8 @@ class SupabaseSyncClient
     required String batchId,
     required String scanId,
   }) async {
+    final allowed = await checkBatchDeletionAllowed(this, batchId);
+    if (!allowed.isSuccess) return allowed;
     final rowOutcome = await _guardPostgrest(() async {
       final deleted = await _client
           .from('scans')
@@ -2057,7 +2062,9 @@ class SupabaseSyncClient
     required String deletedByUid,
     String? deletedByName,
     required String deletionReason,
-  }) {
+  }) async {
+    final allowed = await checkBatchDeletionAllowed(this, batchId);
+    if (!allowed.isSuccess) return allowed;
     return _guardPostgrest(() async {
       await _client.rpc(
         'soft_delete_unlinked_scan',
@@ -2399,7 +2406,9 @@ class SupabaseSyncClient
   /// written by the DB trigger — this never touches `scans` or
   /// `guidance_activity`.
   @override
-  Future<SyncOutcome> deleteBatch(String batchId) {
+  Future<SyncOutcome> deleteBatch(String batchId) async {
+    final allowed = await checkBatchDeletionAllowed(this, batchId);
+    if (!allowed.isSuccess) return allowed;
     return _guardPostgrest(() async {
       await _client.from('batches').delete().eq('id', batchId);
       syncState.forgetBatch(batchId);
@@ -2416,7 +2425,9 @@ class SupabaseSyncClient
   /// is success; a mid-way transport failure is transient and a retry
   /// removes whatever is left.
   @override
-  Future<SyncOutcome> deleteStoragePrefix(String batchId) {
+  Future<SyncOutcome> deleteStoragePrefix(String batchId) async {
+    final allowed = await checkBatchDeletionAllowed(this, batchId);
+    if (!allowed.isSuccess) return allowed;
     return _guardStorage(StorageOp.delete, () async {
       final keys = await _listAllKeys(batchStoragePrefix(batchId));
       for (var i = 0; i < keys.length; i += _removeChunkSize) {

@@ -5,6 +5,7 @@ import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
 import '../../../core/routes/app_routes.dart';
 import '../../../core/state/app_state.dart';
+import '../../../core/sync/completed_batch_status_refresh.dart';
 import '../../../models/local_batch.dart';
 import '../../../shared/widgets/form_field_decoration.dart';
 import '../widgets/batch_list_item.dart';
@@ -23,7 +24,7 @@ class _BatchManagementScreenState extends State<BatchManagementScreen> {
 
   List<LocalBatch> _allBatches = [];
   List<LocalBatch> _filteredBatches = [];
-  String _selectedStatusFilter = 'All'; // All, Draft, Active, Completed, Archived
+  String _selectedStatusFilter = 'All'; // All, Active (unfinished), Completed
   bool _isLoading = true;
 
   bool _didInit = false;
@@ -50,9 +51,22 @@ class _BatchManagementScreenState extends State<BatchManagementScreen> {
 
   Future<void> _loadBatches() async {
     setState(() => _isLoading = true);
-    
+
     try {
-      final batches = await AppStateScope.of(context).batchRepository.getBatches();
+      final state = AppStateScope.of(context);
+      final manager = state.syncManager;
+      if (manager != null) {
+        try {
+          await refreshCompletedBatchStatuses(
+            state.batchRepository,
+            manager.client,
+          );
+        } catch (_) {
+          // Keep local batches available when the cloud cannot be reached.
+        }
+      }
+      final batches = await state.batchRepository.getBatches();
+      if (!mounted) return;
       setState(() {
         _allBatches = batches;
         _applyFilters();
@@ -70,21 +84,22 @@ class _BatchManagementScreenState extends State<BatchManagementScreen> {
 
   void _applyFilters() {
     final searchTerm = _searchController.text.toLowerCase();
-    
+
     setState(() {
       _filteredBatches = _allBatches.where((batch) {
         // Apply status filter
-        if (_selectedStatusFilter != 'All' && batch.status != _selectedStatusFilter) {
+        if ((_selectedStatusFilter == 'Completed' && !batch.isCompleted) ||
+            (_selectedStatusFilter == 'Active' && batch.isCompleted)) {
           return false;
         }
-        
+
         // Apply search filter
         if (searchTerm.isNotEmpty) {
           return batch.description.toLowerCase().contains(searchTerm) ||
-                 batch.batchCode.toLowerCase().contains(searchTerm) ||
-                 batch.examTitle.toLowerCase().contains(searchTerm);
+              batch.batchCode.toLowerCase().contains(searchTerm) ||
+              batch.examTitle.toLowerCase().contains(searchTerm);
         }
-        
+
         return true;
       }).toList();
     });
@@ -98,10 +113,9 @@ class _BatchManagementScreenState extends State<BatchManagementScreen> {
   }
 
   void _navigateToEditBatch(LocalBatch batch) async {
-    final result = await Navigator.of(context).pushNamed(
-      AppRoutes.editBatch,
-      arguments: batch,
-    );
+    final result = await Navigator.of(
+      context,
+    ).pushNamed(AppRoutes.editBatch, arguments: batch);
     if (result == true) {
       _loadBatches(); // Refresh if batch was edited
     }
@@ -125,7 +139,9 @@ class _BatchManagementScreenState extends State<BatchManagementScreen> {
           ),
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(true),
-            style: TextButton.styleFrom(foregroundColor: const Color(0xFF991B1B)),
+            style: TextButton.styleFrom(
+              foregroundColor: const Color(0xFF991B1B),
+            ),
             child: const Text('Delete'),
           ),
         ],
@@ -143,9 +159,9 @@ class _BatchManagementScreenState extends State<BatchManagementScreen> {
       _loadBatches();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error deleting batch: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error deleting batch: $e')));
     }
   }
 
@@ -173,8 +189,8 @@ class _BatchManagementScreenState extends State<BatchManagementScreen> {
               child: _isLoading
                   ? const Center(child: CircularProgressIndicator())
                   : _filteredBatches.isEmpty
-                      ? _buildEmptyState()
-                      : _buildBatchList(),
+                  ? _buildEmptyState()
+                  : _buildBatchList(),
             ),
           ],
         ),
@@ -183,7 +199,10 @@ class _BatchManagementScreenState extends State<BatchManagementScreen> {
         onPressed: _navigateToCreateBatch,
         backgroundColor: AppColors.primaryGreen,
         icon: const FaIcon(FontAwesomeIcons.folderPlus, size: 16),
-        label: Text('Create Batch', style: AppTextStyles.body(size: 11, color: Colors.white)),
+        label: Text(
+          'Create Batch',
+          style: AppTextStyles.body(size: 11, color: Colors.white),
+        ),
       ),
     );
   }
@@ -198,7 +217,10 @@ class _BatchManagementScreenState extends State<BatchManagementScreen> {
             controller: _searchController,
             decoration: FormFieldStyle.outlined(
               hint: 'Search by description, batch code, or exam...',
-              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 12,
+              ),
               prefixIcon: const Icon(Icons.search, size: 20),
               suffixIcon: _searchController.text.isNotEmpty
                   ? IconButton(
@@ -217,13 +239,9 @@ class _BatchManagementScreenState extends State<BatchManagementScreen> {
               children: [
                 _buildFilterChip('All'),
                 const SizedBox(width: 8),
-                _buildFilterChip('Draft'),
-                const SizedBox(width: 8),
                 _buildFilterChip('Active'),
                 const SizedBox(width: 8),
                 _buildFilterChip('Completed'),
-                const SizedBox(width: 8),
-                _buildFilterChip('Archived'),
               ],
             ),
           ),
@@ -234,7 +252,7 @@ class _BatchManagementScreenState extends State<BatchManagementScreen> {
 
   Widget _buildFilterChip(String status) {
     final isSelected = _selectedStatusFilter == status;
-    
+
     return FilterChip(
       label: Text(status, style: AppTextStyles.body(size: 10.5)),
       selected: isSelected,
@@ -264,7 +282,11 @@ class _BatchManagementScreenState extends State<BatchManagementScreen> {
             padding: const EdgeInsets.only(bottom: 10, left: 2),
             child: Text(
               '${_filteredBatches.length} batch${_filteredBatches.length == 1 ? '' : 'es'}',
-              style: AppTextStyles.body(size: 10, weight: FontWeight.w700, color: AppColors.textGray),
+              style: AppTextStyles.body(
+                size: 10,
+                weight: FontWeight.w700,
+                color: AppColors.textGray,
+              ),
             ),
           );
         }
@@ -286,7 +308,11 @@ class _BatchManagementScreenState extends State<BatchManagementScreen> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const FaIcon(FontAwesomeIcons.folderOpen, size: 48, color: AppColors.textGray),
+          const FaIcon(
+            FontAwesomeIcons.folderOpen,
+            size: 48,
+            color: AppColors.textGray,
+          ),
           const SizedBox(height: 16),
           Text(
             'No batches found',

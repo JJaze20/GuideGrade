@@ -43,7 +43,7 @@ import 'batch_repository.dart';
 /// batch or replaces that image -- there's no separate migration step.
 class LocalBatchRepository implements BatchRepository {
   LocalBatchRepository({this.rootOverride, BatchCryptoService? crypto})
-      : _crypto = crypto ?? BatchCryptoService();
+    : _crypto = crypto ?? BatchCryptoService();
 
   /// Test seam: when set, batches are stored under here instead of the
   /// platform documents directory.
@@ -89,7 +89,9 @@ class LocalBatchRepository implements BatchRepository {
     );
     final floor = previous?.updatedAt ?? batch.updatedAt;
     return batch.copyWith(
-      status: BatchLifecycle.statusAfterSave(problems),
+      status: previous?.isCompleted == true
+          ? 'Completed'
+          : BatchLifecycle.statusAfterSave(problems),
       updatedAt: BatchLifecycle.nextRevision(floor, DateTime.now()),
     );
   }
@@ -103,7 +105,8 @@ class LocalBatchRepository implements BatchRepository {
     return dir;
   }
 
-  Directory _batchDir(Directory root, String id) => Directory('${root.path}/$id');
+  Directory _batchDir(Directory root, String id) =>
+      Directory('${root.path}/$id');
 
   /// Reads [batchDir]'s manifest, preferring the encrypted `batch.enc` and
   /// falling back to a legacy plaintext `batch.json` if that's all this
@@ -116,7 +119,9 @@ class LocalBatchRepository implements BatchRepository {
     try {
       if (encFile.existsSync()) {
         final decrypted = await _crypto.decrypt(await encFile.readAsBytes());
-        return LocalBatch.fromJson(jsonDecode(utf8.decode(decrypted)) as Map<String, dynamic>);
+        return LocalBatch.fromJson(
+          jsonDecode(utf8.decode(decrypted)) as Map<String, dynamic>,
+        );
       }
       final legacyFile = File('${batchDir.path}/$_legacyManifestName');
       if (legacyFile.existsSync()) {
@@ -126,7 +131,9 @@ class LocalBatchRepository implements BatchRepository {
       return null;
     } catch (e) {
       // ignore: avoid_print
-      print('LocalBatchRepository: skipping unreadable batch at ${batchDir.path}: $e');
+      print(
+        'LocalBatchRepository: skipping unreadable batch at ${batchDir.path}: $e',
+      );
       return null;
     }
   }
@@ -141,7 +148,9 @@ class LocalBatchRepository implements BatchRepository {
     final dir = _batchDir(root, batch.id);
     if (!dir.existsSync()) dir.createSync(recursive: true);
 
-    final jsonBytes = Uint8List.fromList(utf8.encode(jsonEncode(batch.toJson())));
+    final jsonBytes = Uint8List.fromList(
+      utf8.encode(jsonEncode(batch.toJson())),
+    );
     final encrypted = await _crypto.encrypt(jsonBytes);
     // Written beside the manifest and moved into place, so a crash or a
     // full disk mid-write leaves the previous manifest intact instead of a
@@ -229,11 +238,28 @@ class LocalBatchRepository implements BatchRepository {
   }
 
   @override
-  Future<LocalBatch> updateBatch(LocalBatch batch) => _serialized(batch.id, () async {
+  Future<LocalBatch> updateBatch(LocalBatch batch) =>
+      _serialized(batch.id, () async {
         final root = await _root();
         final existing = await _readManifest(_batchDir(root, batch.id));
         if (existing == null) {
           throw StateError('Batch ${batch.id} does not exist.');
+        }
+        if (existing.isCompleted &&
+            (batch.description != existing.description ||
+                batch.expectedCount != existing.expectedCount)) {
+          throw StateError(
+            'Completed batches cannot change description or expected sheets.',
+          );
+        }
+        if (existing.isCompleted &&
+            batch.scans.isNotEmpty &&
+            existing.scans.any(
+              (scan) => !batch.scans.any((kept) => kept.id == scan.id),
+            )) {
+          throw StateError(
+            'Scans in a completed batch cannot be removed by editing.',
+          );
         }
         // Never let an edit drop scans that were captured concurrently: keep
         // whatever is on disk unless the caller explicitly passed a scan list.
@@ -255,28 +281,28 @@ class LocalBatchRepository implements BatchRepository {
   Future<bool> confirmBatchArchived(
     String batchId,
     DateTime confirmedUpdatedAt,
-  ) =>
-      _serialized(batchId, () async {
-        final root = await _root();
-        final batch = await _readManifest(_batchDir(root, batchId));
-        if (batch == null) return false;
-        if (batch.isArchived) return false; // already recorded
-        // Compare-and-set on the revision the cloud actually acknowledged:
-        // if anything was saved since, the confirmation is for an OLDER
-        // revision and must not archive the newer, unsynced one.
-        if (batch.updatedAt != confirmedUpdatedAt) return false;
-        final problems = BatchLifecycle.problems(
-          batchCode: batch.batchCode,
-          examCode: batch.examCode,
-          expectedCount: batch.expectedCount,
-        );
-        if (problems.isNotEmpty) return false; // an incomplete batch is Draft
-        // Deliberately NOT bumping updatedAt: this is a derived marker of an
-        // already-saved revision, not a new edit — bumping it would make the
-        // revision the cloud just confirmed look unsynced again.
-        await _writeManifest(batch.copyWith(status: BatchLifecycle.archived));
-        return true;
-      });
+  ) => _serialized(batchId, () async {
+    final root = await _root();
+    final batch = await _readManifest(_batchDir(root, batchId));
+    if (batch == null) return false;
+    if (batch.isArchived || batch.isCompleted)
+      return false; // already recorded or business-complete
+    // Compare-and-set on the revision the cloud actually acknowledged:
+    // if anything was saved since, the confirmation is for an OLDER
+    // revision and must not archive the newer, unsynced one.
+    if (batch.updatedAt != confirmedUpdatedAt) return false;
+    final problems = BatchLifecycle.problems(
+      batchCode: batch.batchCode,
+      examCode: batch.examCode,
+      expectedCount: batch.expectedCount,
+    );
+    if (problems.isNotEmpty) return false; // an incomplete batch is Draft
+    // Deliberately NOT bumping updatedAt: this is a derived marker of an
+    // already-saved revision, not a new edit — bumping it would make the
+    // revision the cloud just confirmed look unsynced again.
+    await _writeManifest(batch.copyWith(status: BatchLifecycle.archived));
+    return true;
+  });
 
   @override
   Future<LocalBatch> updateScanCorrections({
@@ -284,55 +310,62 @@ class LocalBatchRepository implements BatchRepository {
     required String scanId,
     required List<AnswerCorrection> corrections,
     LocalScanResult? result,
-  }) =>
-      _serialized(batchId, () async {
-        final root = await _root();
-        final batch = await _readManifest(_batchDir(root, batchId));
-        if (batch == null) {
-          throw StateError('Batch $batchId does not exist.');
-        }
-        final index = batch.scans.indexWhere((s) => s.id == scanId);
-        if (index == -1) {
-          throw StateError('Scan $scanId does not exist in batch $batchId.');
-        }
-        final scan = batch.scans[index];
-        final knownIds = {for (final c in scan.corrections) c.id};
-        for (final c in corrections) {
-          if (knownIds.contains(c.id)) continue;
-          // A new entry must be about THIS capture. If the sheet was
-          // rescanned while the editor was open, refuse rather than record a
-          // correction against a photo the counselor never looked at.
-          if (c.captureRevision != scan.captureRevision) {
-            throw StateError(
-              'This sheet was rescanned after the editor opened. Reopen the scan and review it again.',
-            );
-          }
-          if (c.scanId != scanId) {
-            throw StateError('Correction ${c.id} belongs to a different scan.');
-          }
-        }
-        // History is append-only: a write may add entries but never drop or
-        // rewrite one that is already stored.
-        final merged = CorrectionRules.merge(scan.corrections, corrections);
-        final sameHistory = merged.length == scan.corrections.length;
-        final sameResult = result == null ||
-            jsonEncode(result.toJson()) == jsonEncode(scan.result?.toJson());
-        if (sameHistory && sameResult) {
-          return batch; // a repeated request: nothing to record, no new revision
-        }
-        final scans = [...batch.scans];
-        scans[index] = scan.copyWith(corrections: merged, result: result);
-        final updated = _finalize(batch.copyWith(scans: scans), batch);
-        await _writeManifest(updated);
-        return updated;
-      });
+  }) => _serialized(batchId, () async {
+    final root = await _root();
+    final batch = await _readManifest(_batchDir(root, batchId));
+    if (batch == null) {
+      throw StateError('Batch $batchId does not exist.');
+    }
+    if (batch.isCompleted) {
+      throw StateError('Completed batch scans are read-only.');
+    }
+    final index = batch.scans.indexWhere((s) => s.id == scanId);
+    if (index == -1) {
+      throw StateError('Scan $scanId does not exist in batch $batchId.');
+    }
+    final scan = batch.scans[index];
+    final knownIds = {for (final c in scan.corrections) c.id};
+    for (final c in corrections) {
+      if (knownIds.contains(c.id)) continue;
+      // A new entry must be about THIS capture. If the sheet was
+      // rescanned while the editor was open, refuse rather than record a
+      // correction against a photo the counselor never looked at.
+      if (c.captureRevision != scan.captureRevision) {
+        throw StateError(
+          'This sheet was rescanned after the editor opened. Reopen the scan and review it again.',
+        );
+      }
+      if (c.scanId != scanId) {
+        throw StateError('Correction ${c.id} belongs to a different scan.');
+      }
+    }
+    // History is append-only: a write may add entries but never drop or
+    // rewrite one that is already stored.
+    final merged = CorrectionRules.merge(scan.corrections, corrections);
+    final sameHistory = merged.length == scan.corrections.length;
+    final sameResult =
+        result == null ||
+        jsonEncode(result.toJson()) == jsonEncode(scan.result?.toJson());
+    if (sameHistory && sameResult) {
+      return batch; // a repeated request: nothing to record, no new revision
+    }
+    final scans = [...batch.scans];
+    scans[index] = scan.copyWith(corrections: merged, result: result);
+    final updated = _finalize(batch.copyWith(scans: scans), batch);
+    await _writeManifest(updated);
+    return updated;
+  });
 
   @override
-  Future<void> deleteBatch(String id) async {
+  Future<void> deleteBatch(String id) => _serialized(id, () async {
     final root = await _root();
     final dir = _batchDir(root, id);
+    final batch = await _readManifest(dir);
+    if (batch?.isCompleted == true) {
+      throw StateError('Completed batches cannot be deleted.');
+    }
     if (dir.existsSync()) dir.deleteSync(recursive: true);
-  }
+  });
 
   @override
   Future<LocalBatch> addScan({
@@ -356,6 +389,9 @@ class LocalBatchRepository implements BatchRepository {
     // must never consume a slot. This is the real cap; any check elsewhere
     // (AppState.scanLimitBlockMessage, a disabled button) is only a
     // friendlier warning layered on top of it.
+    if (batch.isCompleted) {
+      throw StateError('Completed batches cannot accept additional sheets.');
+    }
     if (batch.isFull) {
       throw BatchScanLimitExceededException(batch.expectedCount);
     }
@@ -370,22 +406,39 @@ class LocalBatchRepository implements BatchRepository {
     // format -- see BatchCryptoService's doc comment for what this
     // protects against.
     final relPath = '$_imagesDirName/$scanId.enc';
-    final encryptedSource = await _crypto.encrypt(await sourceImage.readAsBytes());
-    await File('$batchDirPath/$relPath').writeAsBytes(encryptedSource, flush: true);
+    final encryptedSource = await _crypto.encrypt(
+      await sourceImage.readAsBytes(),
+    );
+    await File(
+      '$batchDirPath/$relPath',
+    ).writeAsBytes(encryptedSource, flush: true);
 
     String? rectifiedRelPath;
     if (rectifiedImage != null && rectifiedImage.existsSync()) {
       rectifiedRelPath = '$_imagesDirName/${scanId}_rectified.enc';
-      final encryptedRectified = await _crypto.encrypt(await rectifiedImage.readAsBytes());
-      await File('$batchDirPath/$rectifiedRelPath').writeAsBytes(encryptedRectified, flush: true);
+      final encryptedRectified = await _crypto.encrypt(
+        await rectifiedImage.readAsBytes(),
+      );
+      await File(
+        '$batchDirPath/$rectifiedRelPath',
+      ).writeAsBytes(encryptedRectified, flush: true);
     }
 
-    final nameCropLastRelPath =
-        await _writeNameCropIfPresent(batchDirPath, '${scanId}_name_last.enc', nameCropLastImage);
-    final nameCropFirstRelPath =
-        await _writeNameCropIfPresent(batchDirPath, '${scanId}_name_first.enc', nameCropFirstImage);
-    final nameCropMiddleRelPath =
-        await _writeNameCropIfPresent(batchDirPath, '${scanId}_name_mi.enc', nameCropMiddleImage);
+    final nameCropLastRelPath = await _writeNameCropIfPresent(
+      batchDirPath,
+      '${scanId}_name_last.enc',
+      nameCropLastImage,
+    );
+    final nameCropFirstRelPath = await _writeNameCropIfPresent(
+      batchDirPath,
+      '${scanId}_name_first.enc',
+      nameCropFirstImage,
+    );
+    final nameCropMiddleRelPath = await _writeNameCropIfPresent(
+      batchDirPath,
+      '${scanId}_name_mi.enc',
+      nameCropMiddleImage,
+    );
 
     final scan = LocalScan(
       id: scanId,
@@ -403,7 +456,10 @@ class LocalBatchRepository implements BatchRepository {
     // Status is derived on every save (see BatchLifecycle): scanning no
     // longer "promotes" a Draft, because a complete batch is already Active
     // and an incomplete one stays Draft until its required fields are fixed.
-    final updated = _finalize(batch.copyWith(scans: [...batch.scans, scan]), batch);
+    final updated = _finalize(
+      batch.copyWith(scans: [...batch.scans, scan]),
+      batch,
+    );
     await _writeManifest(updated);
     return updated;
   });
@@ -427,13 +483,18 @@ class LocalBatchRepository implements BatchRepository {
     if (batch == null) {
       throw StateError('Batch $batchId does not exist.');
     }
+    if (batch.isCompleted) {
+      throw StateError('Completed batch scans are read-only.');
+    }
     final existingIndex = batch.scans.indexWhere((s) => s.id == scanId);
     if (existingIndex == -1) {
-      if (expectedOriginal != null) throw RescanOriginalChangedException(deleted: true);
+      if (expectedOriginal != null)
+        throw RescanOriginalChangedException(deleted: true);
       throw StateError('Scan $scanId does not exist in batch $batchId.');
     }
     final existing = batch.scans[existingIndex];
-    if (expectedOriginal != null && !existing.sameStoredStateAs(expectedOriginal)) {
+    if (expectedOriginal != null &&
+        !existing.sameStoredStateAs(expectedOriginal)) {
       throw RescanOriginalChangedException(deleted: false);
     }
     final batchDirPath = _batchDir(root, batchId).path;
@@ -446,13 +507,23 @@ class LocalBatchRepository implements BatchRepository {
     // files, but the committed manifest still points to a complete capture.
     // Randomness also avoids reusing an orphan's path after a restart/retry.
     final random = Random.secure();
-    final version = List.generate(16, (_) => random.nextInt(256)
-        .toRadixString(16).padLeft(2, '0')).join();
+    final version = List.generate(
+      16,
+      (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0'),
+    ).join();
     final prefix = '${scanId}_r${existing.captureRevision + 1}_$version';
     final staged = <File>[];
-    Future<String?> stage(String fileName, File? image, {bool required = false}) async {
+    Future<String?> stage(
+      String fileName,
+      File? image, {
+      bool required = false,
+    }) async {
       if (image == null || !image.existsSync()) {
-        if (required) throw FileSystemException('Replacement photo is missing', image?.path);
+        if (required)
+          throw FileSystemException(
+            'Replacement photo is missing',
+            image?.path,
+          );
         return null;
       }
       final rel = '$_imagesDirName/$fileName';
@@ -475,11 +546,27 @@ class LocalBatchRepository implements BatchRepository {
     final LocalBatch updated;
     final LocalScan updatedScan;
     try {
-      final newImageRel = (await stage('$prefix.enc', sourceImage, required: true))!;
-      final rectifiedRelPath = await stage('${prefix}_rectified.enc', rectifiedImage);
-      final nameCropLastRelPath = await stage('${prefix}_name_last.enc', nameCropLastImage);
-      final nameCropFirstRelPath = await stage('${prefix}_name_first.enc', nameCropFirstImage);
-      final nameCropMiddleRelPath = await stage('${prefix}_name_mi.enc', nameCropMiddleImage);
+      final newImageRel = (await stage(
+        '$prefix.enc',
+        sourceImage,
+        required: true,
+      ))!;
+      final rectifiedRelPath = await stage(
+        '${prefix}_rectified.enc',
+        rectifiedImage,
+      );
+      final nameCropLastRelPath = await stage(
+        '${prefix}_name_last.enc',
+        nameCropLastImage,
+      );
+      final nameCropFirstRelPath = await stage(
+        '${prefix}_name_first.enc',
+        nameCropFirstImage,
+      );
+      final nameCropMiddleRelPath = await stage(
+        '${prefix}_name_mi.enc',
+        nameCropMiddleImage,
+      );
 
       updatedScan = LocalScan(
         id: existing.id,
@@ -491,7 +578,9 @@ class LocalBatchRepository implements BatchRepository {
         rescannedAt: DateTime.now(),
         decoded: decoded,
         result: result,
-        examinee: examinee ?? existing.examinee, // default: same physical sheet -- keep its tag
+        examinee:
+            examinee ??
+            existing.examinee, // default: same physical sheet -- keep its tag
         nameCropLastFileName: nameCropLastRelPath,
         nameCropFirstFileName: nameCropFirstRelPath,
         nameCropMiddleFileName: nameCropMiddleRelPath,
@@ -529,7 +618,8 @@ class LocalBatchRepository implements BatchRepository {
       existing.nameCropFirstFileName,
       existing.nameCropMiddleFileName,
     ]) {
-      if (old != null && !newRefs.contains(old)) _deleteIfExists(File('$batchDirPath/$old'));
+      if (old != null && !newRefs.contains(old))
+        _deleteIfExists(File('$batchDirPath/$old'));
     }
     return updated;
   });
@@ -564,42 +654,44 @@ class LocalBatchRepository implements BatchRepository {
     String? deletedByUid,
     String? deletedByName,
     String? reason,
-  }) =>
-      _serialized(batchId, () async {
-        final root = await _root();
-        final batch = await _readManifest(_batchDir(root, batchId));
-        if (batch == null) {
-          throw StateError('Batch $batchId does not exist.');
-        }
-        final index = batch.scans.indexWhere((s) => s.id == scanId);
-        if (index == -1) {
-          throw StateError('Scan $scanId does not exist in batch $batchId.');
-        }
-        final removed = batch.scans[index];
-        final scans = [...batch.scans]..removeAt(index);
-        var updated = _finalize(batch.copyWith(scans: scans), batch);
-        // Removing a sheet corrects the record; it doesn't reopen it. A save
-        // normally drops Archived until the cloud re-confirms the new
-        // revision (see _finalize), but here the batch stays Archived.
-        if (batch.isArchived && updated.status != BatchLifecycle.draft) {
-          updated = updated.copyWith(status: BatchLifecycle.archived);
-        }
-        // Manifest first: if this write fails nothing has been deleted and the
-        // batch is exactly as it was. Files go after — a failure there only
-        // leaves an unreferenced encrypted file behind, never a broken scan.
-        await _writeManifest(updated);
-        final batchDirPath = _batchDir(root, batchId).path;
-        for (final name in [
-          removed.imageFileName,
-          removed.rectifiedImageFileName,
-          removed.nameCropLastFileName,
-          removed.nameCropFirstFileName,
-          removed.nameCropMiddleFileName,
-        ]) {
-          if (name != null) _deleteIfExists(File('$batchDirPath/$name'));
-        }
-        return updated;
-      });
+  }) => _serialized(batchId, () async {
+    final root = await _root();
+    final batch = await _readManifest(_batchDir(root, batchId));
+    if (batch == null) {
+      throw StateError('Batch $batchId does not exist.');
+    }
+    if (batch.isCompleted) {
+      throw StateError('Scans in a completed batch cannot be deleted.');
+    }
+    final index = batch.scans.indexWhere((s) => s.id == scanId);
+    if (index == -1) {
+      throw StateError('Scan $scanId does not exist in batch $batchId.');
+    }
+    final removed = batch.scans[index];
+    final scans = [...batch.scans]..removeAt(index);
+    var updated = _finalize(batch.copyWith(scans: scans), batch);
+    // Removing a sheet corrects the record; it doesn't reopen it. A save
+    // normally drops Archived until the cloud re-confirms the new
+    // revision (see _finalize), but here the batch stays Archived.
+    if (batch.isArchived && updated.status != BatchLifecycle.draft) {
+      updated = updated.copyWith(status: BatchLifecycle.archived);
+    }
+    // Manifest first: if this write fails nothing has been deleted and the
+    // batch is exactly as it was. Files go after — a failure there only
+    // leaves an unreferenced encrypted file behind, never a broken scan.
+    await _writeManifest(updated);
+    final batchDirPath = _batchDir(root, batchId).path;
+    for (final name in [
+      removed.imageFileName,
+      removed.rectifiedImageFileName,
+      removed.nameCropLastFileName,
+      removed.nameCropFirstFileName,
+      removed.nameCropMiddleFileName,
+    ]) {
+      if (name != null) _deleteIfExists(File('$batchDirPath/$name'));
+    }
+    return updated;
+  });
 
   @override
   Future<LocalBatch> setScanExaminee({
@@ -612,11 +704,16 @@ class LocalBatchRepository implements BatchRepository {
     if (batch == null) {
       throw StateError('Batch $batchId does not exist.');
     }
+    if (batch.isCompleted) {
+      throw StateError('Completed batch scans are read-only.');
+    }
     final clear = examinee == null || examinee.isEmpty;
     final scans = batch.scans
-        .map((s) => s.id == scanId
-            ? s.copyWith(examinee: examinee, clearExaminee: clear)
-            : s)
+        .map(
+          (s) => s.id == scanId
+              ? s.copyWith(examinee: examinee, clearExaminee: clear)
+              : s,
+        )
         .toList();
     final updated = _finalize(batch.copyWith(scans: scans), batch);
     await _writeManifest(updated);
@@ -635,8 +732,10 @@ class LocalBatchRepository implements BatchRepository {
   }
 
   @override
-  Future<Uint8List?> resolveScanRectifiedImage(String batchId, LocalScan scan) =>
-      _resolveOptionalImage(batchId, scan.rectifiedImageFileName);
+  Future<Uint8List?> resolveScanRectifiedImage(
+    String batchId,
+    LocalScan scan,
+  ) => _resolveOptionalImage(batchId, scan.rectifiedImageFileName);
 
   @override
   Future<Uint8List?> resolveScanNameCropLast(String batchId, LocalScan scan) =>
@@ -647,8 +746,10 @@ class LocalBatchRepository implements BatchRepository {
       _resolveOptionalImage(batchId, scan.nameCropFirstFileName);
 
   @override
-  Future<Uint8List?> resolveScanNameCropMiddle(String batchId, LocalScan scan) =>
-      _resolveOptionalImage(batchId, scan.nameCropMiddleFileName);
+  Future<Uint8List?> resolveScanNameCropMiddle(
+    String batchId,
+    LocalScan scan,
+  ) => _resolveOptionalImage(batchId, scan.nameCropMiddleFileName);
 
   /// Shared read path for every optional per-scan image (rectified overlay
   /// copy, name crops): null [name] (never stored) and a missing file
@@ -672,47 +773,58 @@ class LocalBatchRepository implements BatchRepository {
   // ---------------------------------------------------------------------------
 
   @override
-  Future<LocalBatch> upsertBatchFromCloud(LocalBatch batch) async {
-    final root = await _root();
-    final existing = await _readManifest(_batchDir(root, batch.id));
-    if (existing == null) {
-      // New to this device: write it as given, with no scans yet -- scans
-      // are reconciled one at a time via upsertScanFromCloud.
-      final fresh = LocalBatch(
-        id: batch.id,
-        batchCode: batch.batchCode,
-        examCode: batch.examCode,
-        examTitle: batch.examTitle,
-        description: batch.description,
-        expectedCount: batch.expectedCount,
-        status: batch.status,
-        createdByUid: batch.createdByUid,
-        createdByName: batch.createdByName,
-        createdAt: batch.createdAt,
-        updatedAt: batch.updatedAt,
-        scans: const [],
-      );
-      await _writeManifest(fresh);
-      return fresh;
-    }
-    if (!batch.updatedAt.isAfter(existing.updatedAt)) {
-      // Local is at least as new -- leave it exactly as it is (ties favor
-      // the existing local copy).
-      return existing;
-    }
-    // Cloud is strictly newer: merge only the mutable metadata fields.
-    // Audit fields and scans are never touched by this merge.
-    final merged = existing.copyWith(
-      batchCode: batch.batchCode,
-      examTitle: batch.examTitle,
-      description: batch.description,
-      expectedCount: batch.expectedCount,
-      status: batch.status,
-      updatedAt: batch.updatedAt,
-    );
-    await _writeManifest(merged);
-    return merged;
-  }
+  Future<LocalBatch> upsertBatchFromCloud(LocalBatch batch) =>
+      _serialized(batch.id, () async {
+        final root = await _root();
+        final existing = await _readManifest(_batchDir(root, batch.id));
+        if (existing == null) {
+          // New to this device: write it as given, with no scans yet -- scans
+          // are reconciled one at a time via upsertScanFromCloud.
+          final fresh = LocalBatch(
+            id: batch.id,
+            batchCode: batch.batchCode,
+            examCode: batch.examCode,
+            examTitle: batch.examTitle,
+            description: batch.description,
+            expectedCount: batch.expectedCount,
+            status: batch.status,
+            createdByUid: batch.createdByUid,
+            createdByName: batch.createdByName,
+            createdAt: batch.createdAt,
+            updatedAt: batch.updatedAt,
+            scans: const [],
+          );
+          await _writeManifest(fresh);
+          return fresh;
+        }
+        // Business completion is authoritative even if Web archiving does not
+        // advance updated_at. Keep all device scans, files and metadata intact.
+        if (batch.isCompleted &&
+            !existing.isCompleted &&
+            !batch.updatedAt.isAfter(existing.updatedAt)) {
+          final completed = existing.copyWith(status: 'Completed');
+          await _writeManifest(completed);
+          return completed;
+        }
+        if (existing.isCompleted && !batch.isCompleted) return existing;
+        if (!batch.updatedAt.isAfter(existing.updatedAt)) {
+          // Local is at least as new -- leave it exactly as it is (ties favor
+          // the existing local copy).
+          return existing;
+        }
+        // Cloud is strictly newer: merge only the mutable metadata fields.
+        // Audit fields and scans are never touched by this merge.
+        final merged = existing.copyWith(
+          batchCode: batch.batchCode,
+          examTitle: batch.examTitle,
+          description: batch.description,
+          expectedCount: batch.expectedCount,
+          status: batch.status,
+          updatedAt: batch.updatedAt,
+        );
+        await _writeManifest(merged);
+        return merged;
+      });
 
   @override
   Future<LocalBatch> upsertScanFromCloud({
@@ -740,16 +852,14 @@ class LocalBatchRepository implements BatchRepository {
     required String batchId,
     required String scanId,
     required Uint8List bytes,
-  }) =>
-      _writeRestoredImage(batchId, '$scanId.enc', bytes);
+  }) => _writeRestoredImage(batchId, '$scanId.enc', bytes);
 
   @override
   Future<void> writeRestoredScanRectifiedImage({
     required String batchId,
     required String scanId,
     required Uint8List bytes,
-  }) =>
-      _writeRestoredImage(batchId, '${scanId}_rectified.enc', bytes);
+  }) => _writeRestoredImage(batchId, '${scanId}_rectified.enc', bytes);
 
   /// Shared write path for both cloud-restored image variants: encrypt via
   /// the same [_crypto] every captured photo already goes through, then
@@ -766,8 +876,9 @@ class LocalBatchRepository implements BatchRepository {
     final imagesDir = Directory('$batchDirPath/$_imagesDirName');
     if (!imagesDir.existsSync()) imagesDir.createSync(recursive: true);
     final encrypted = await _crypto.encrypt(bytes);
-    await File('$batchDirPath/$_imagesDirName/$fileName')
-        .writeAsBytes(encrypted, flush: true);
+    await File(
+      '$batchDirPath/$_imagesDirName/$fileName',
+    ).writeAsBytes(encrypted, flush: true);
   }
 
   void _deleteIfExists(File file) {
@@ -787,12 +898,15 @@ class LocalBatchRepository implements BatchRepository {
   /// returning the relative path to store on the [LocalScan]; returns null
   /// (nothing written) when [image] is null or missing, e.g. cropping
   /// failed for this sheet -- never blocks the scan itself from saving.
-  Future<String?> _writeNameCropIfPresent(String batchDirPath, String fileName, File? image) async {
+  Future<String?> _writeNameCropIfPresent(
+    String batchDirPath,
+    String fileName,
+    File? image,
+  ) async {
     if (image == null || !image.existsSync()) return null;
     final relPath = '$_imagesDirName/$fileName';
     final encrypted = await _crypto.encrypt(await image.readAsBytes());
     await File('$batchDirPath/$relPath').writeAsBytes(encrypted, flush: true);
     return relPath;
   }
-
 }

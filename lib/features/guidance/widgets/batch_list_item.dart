@@ -36,7 +36,9 @@ class BatchListItem extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      batch.description.isNotEmpty ? batch.description : 'Batch ${batch.batchCode}',
+                      batch.description.isNotEmpty
+                          ? batch.description
+                          : 'Batch ${batch.batchCode}',
                       style: AppTextStyles.subtitle(),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -47,11 +49,19 @@ class BatchListItem extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: AppSpace.sm),
-              BatchStatusBadge(status: batch.status),
+              BatchStatusBadge(
+                status: batch.isCompleted ? 'Completed' : 'Active',
+              ),
               IconButton(
-                onPressed: onDelete,
-                icon: const Icon(Icons.delete_outline_rounded, size: 20, color: AppColors.dangerFg),
-                tooltip: 'Delete batch',
+                onPressed: batch.isCompleted ? null : onDelete,
+                icon: const Icon(
+                  Icons.delete_outline_rounded,
+                  size: 20,
+                  color: AppColors.dangerFg,
+                ),
+                tooltip: batch.isCompleted
+                    ? 'Completed batches cannot be deleted'
+                    : 'Delete batch',
                 visualDensity: VisualDensity.compact,
                 constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
               ),
@@ -67,9 +77,12 @@ class BatchListItem extends StatelessWidget {
                 label: '${batch.scanCount}/${batch.expectedCount} sheets',
                 tone: batch.isFull ? StatusTone.info : StatusTone.neutral,
               ),
-              if (batch.isFull) const StatusBadge(label: 'FULL', tone: StatusTone.info),
-              if (batch.resultsAvailable) const StatusBadge(label: 'Results ✓', tone: StatusTone.success),
-              if (batch.needsReview) NeedsReviewChip(count: batch.needsReviewCount),
+              if (batch.isFull)
+                const StatusBadge(label: 'FULL', tone: StatusTone.info),
+              if (batch.resultsAvailable)
+                const StatusBadge(label: 'Results ✓', tone: StatusTone.success),
+              if (batch.needsReview)
+                NeedsReviewChip(count: batch.needsReviewCount),
             ],
           ),
         ],

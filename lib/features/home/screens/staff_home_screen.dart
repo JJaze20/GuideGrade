@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import '../../../core/sync/completed_batch_status_refresh.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 import '../../../core/constants/app_colors.dart';
@@ -26,6 +28,8 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
   bool _didInit = false;
   bool _loading = true;
   List<LocalBatch> _batches = [];
+  Timer? _completionTimer;
+  bool _refreshingCompletion = false;
 
   @override
   void didChangeDependencies() {
@@ -33,16 +37,49 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
     if (_didInit) return;
     _didInit = true;
     _load();
+    _completionTimer = Timer.periodic(
+      const Duration(seconds: 30),
+      (_) => _refreshCompletion(),
+    );
+  }
+
+  @override
+  void dispose() {
+    _completionTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _refreshCompletion() async {
+    if (_refreshingCompletion || !mounted) return;
+    final state = AppStateScope.of(context);
+    final manager = state.syncManager;
+    if (manager == null) return;
+    _refreshingCompletion = true;
+    try {
+      await refreshCompletedBatchStatuses(
+        state.batchRepository,
+        manager.client,
+      );
+      final batches = await state.batchRepository.getBatches();
+      if (mounted) setState(() => _batches = batches);
+    } catch (_) {
+      // Offline or temporarily unavailable: keep the last known local data.
+    } finally {
+      _refreshingCompletion = false;
+    }
   }
 
   Future<void> _load() async {
     setState(() => _loading = true);
-    final batches = await AppStateScope.of(context).batchRepository.getBatches();
+    final batches = await AppStateScope.of(
+      context,
+    ).batchRepository.getBatches();
     if (!mounted) return;
     setState(() {
       _batches = batches;
       _loading = false;
     });
+    unawaited(_refreshCompletion());
   }
 
   void _openBatch(LocalBatch batch) {
@@ -68,7 +105,9 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
     // profile sees their real name here too, not the generic placeholder.
     final user = AppStateScope.of(context).currentUser;
     final displayName = user?.displayName.trim();
-    final name = (displayName != null && displayName.isNotEmpty) ? displayName : 'NDMU Staff Officer';
+    final name = (displayName != null && displayName.isNotEmpty)
+        ? displayName
+        : 'NDMU Staff Officer';
     final role = switch (user?.role) {
       'system_admin' => 'System Administrator',
       'guidance_council' => 'Guidance Council',
@@ -88,8 +127,15 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
             width: 30,
             height: 30,
             alignment: Alignment.center,
-            decoration: const BoxDecoration(color: Color(0xFF1B5E20), shape: BoxShape.circle),
-            child: const FaIcon(FontAwesomeIcons.userTie, size: 12, color: Colors.white),
+            decoration: const BoxDecoration(
+              color: Color(0xFF1B5E20),
+              shape: BoxShape.circle,
+            ),
+            child: const FaIcon(
+              FontAwesomeIcons.userTie,
+              size: 12,
+              color: Colors.white,
+            ),
           ),
         ),
       ),
@@ -117,26 +163,33 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text('Welcome',
-                                  style: AppTextStyles.body(
-                                    size: 14,
-                                    weight: FontWeight.w700,
-                                    color: AppColors.primaryGreen,
-                                  )),
+                              Text(
+                                'Welcome',
+                                style: AppTextStyles.body(
+                                  size: 14,
+                                  weight: FontWeight.w700,
+                                  color: AppColors.primaryGreen,
+                                ),
+                              ),
                               const SizedBox(height: 4),
-                              Text(name, style: AppTextStyles.heading(size: 18)),
+                              Text(
+                                name,
+                                style: AppTextStyles.heading(size: 18),
+                              ),
                             ],
                           ),
                         ),
                         const SizedBox(width: 16),
                         Flexible(
                           flex: 2,
-                          child: Text(role,
-                              textAlign: TextAlign.right,
-                              style: AppTextStyles.body(
-                                size: 13,
-                                color: AppColors.textGray,
-                              )),
+                          child: Text(
+                            role,
+                            textAlign: TextAlign.right,
+                            style: AppTextStyles.body(
+                              size: 13,
+                              color: AppColors.textGray,
+                            ),
+                          ),
                         ),
                       ],
                     ),
@@ -144,29 +197,43 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
                   const SizedBox(height: 8),
                   Text(
                     'Prepare exams, manage batches, and review your results.',
-                    style: AppTextStyles.body(size: 15, color: AppColors.textGray),
+                    style: AppTextStyles.body(
+                      size: 15,
+                      color: AppColors.textGray,
+                    ),
                   ),
                   const SizedBox(height: 24),
                   _workspaceAction(
                     title: 'Exam Management',
-                    description: 'Preview questionnaires and print answer sheets',
+                    description:
+                        'Preview questionnaires and print answer sheets',
                     icon: Icons.description_outlined,
-                    onTap: () => Navigator.of(context).pushNamed(AppRoutes.examManagement),
+                    onTap: () => Navigator.of(
+                      context,
+                    ).pushNamed(AppRoutes.examManagement),
                   ),
                   const SizedBox(height: 12),
                   _workspaceAction(
                     title: 'Batch Management',
-                    description: 'Organize examinees and prepare batches for scanning',
+                    description:
+                        'Organize examinees and prepare batches for scanning',
                     icon: Icons.folder_outlined,
-                    onTap: () => Navigator.of(context)
-                        .pushNamed(AppRoutes.batchManagement).then((_) => _load()),
+                    onTap: () => Navigator.of(
+                      context,
+                    ).pushNamed(AppRoutes.batchManagement).then((_) => _load()),
                   ),
                   const SizedBox(height: 32),
-                  Text('Batches & results', style: AppTextStyles.heading(size: 21)),
+                  Text(
+                    'Batches & results',
+                    style: AppTextStyles.heading(size: 21),
+                  ),
                   const SizedBox(height: 6),
                   Text(
                     'Open a batch to continue scanning or view its saved results.',
-                    style: AppTextStyles.body(size: 14, color: AppColors.textGray),
+                    style: AppTextStyles.body(
+                      size: 14,
+                      color: AppColors.textGray,
+                    ),
                   ),
                   const SizedBox(height: 16),
                   if (_loading)
@@ -222,8 +289,13 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
                   children: [
                     Text(title, style: AppTextStyles.heading(size: 18)),
                     const SizedBox(height: 4),
-                    Text(description,
-                        style: AppTextStyles.body(size: 14, color: AppColors.textGray)),
+                    Text(
+                      description,
+                      style: AppTextStyles.body(
+                        size: 14,
+                        color: AppColors.textGray,
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -246,9 +318,16 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
       ),
       child: Column(
         children: [
-          const FaIcon(FontAwesomeIcons.folderOpen, size: 28, color: AppColors.textGray),
+          const FaIcon(
+            FontAwesomeIcons.folderOpen,
+            size: 28,
+            color: AppColors.textGray,
+          ),
           const SizedBox(height: 8),
-          Text('No batches yet', style: AppTextStyles.body(size: 17, weight: FontWeight.w700)),
+          Text(
+            'No batches yet',
+            style: AppTextStyles.body(size: 17, weight: FontWeight.w700),
+          ),
           const SizedBox(height: 4),
           Text(
             'Create a batch in Batch Management, then scan it.',
@@ -271,7 +350,9 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
         decoration: BoxDecoration(
           color: done ? Colors.white : const Color(0xFFFFFBEB),
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: done ? AppColors.cardBorder : const Color(0xFFFCD34D)),
+          border: Border.all(
+            color: done ? AppColors.cardBorder : const Color(0xFFFCD34D),
+          ),
         ),
         child: Row(
           children: [
@@ -281,33 +362,52 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
                 children: [
                   Text(
                     '${batch.examTitle.toUpperCase()} · ${batch.examCode}',
-                    style: AppTextStyles.body(size: 12, weight: FontWeight.w700, color: AppColors.primaryGreen)
-                        .copyWith(letterSpacing: 0.6),
+                    style: AppTextStyles.body(
+                      size: 12,
+                      weight: FontWeight.w700,
+                      color: AppColors.primaryGreen,
+                    ).copyWith(letterSpacing: 0.6),
                   ),
                   const SizedBox(height: 2),
                   Row(
                     children: [
                       Flexible(
                         child: Text(
-                          batch.description.isNotEmpty ? batch.description : batch.batchCode,
-                          style: AppTextStyles.body(size: 16, weight: FontWeight.w700),
+                          batch.description.isNotEmpty
+                              ? batch.description
+                              : batch.batchCode,
+                          style: AppTextStyles.body(
+                            size: 16,
+                            weight: FontWeight.w700,
+                          ),
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
                       const SizedBox(width: 6),
                       if (done)
-                        const FaIcon(FontAwesomeIcons.circleCheck, size: 12, color: AppColors.primaryGreen)
+                        const FaIcon(
+                          FontAwesomeIcons.circleCheck,
+                          size: 12,
+                          color: AppColors.primaryGreen,
+                        )
                       else
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 5,
+                            vertical: 1,
+                          ),
                           decoration: BoxDecoration(
                             color: const Color(0xFFFEF3C7),
                             borderRadius: BorderRadius.circular(4),
                           ),
                           child: Text(
                             batch.status.toUpperCase(),
-                            style: const TextStyle(fontSize: 11, color: Color(0xFF92400E), fontWeight: FontWeight.w700),
+                            style: const TextStyle(
+                              fontSize: 11,
+                              color: Color(0xFF92400E),
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
                         ),
                     ],
@@ -316,7 +416,10 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
                   Text(
                     '${batch.scanCount}/${batch.expectedCount} sheets'
                     '${batch.resultsAvailable ? ' · results ready' : ''}',
-                    style: AppTextStyles.body(size: 13, color: AppColors.textGray),
+                    style: AppTextStyles.body(
+                      size: 13,
+                      color: AppColors.textGray,
+                    ),
                   ),
                   if (batch.needsReview) ...[
                     const SizedBox(height: 6),
@@ -325,7 +428,11 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
                 ],
               ),
             ),
-            const FaIcon(FontAwesomeIcons.chevronRight, size: 12, color: Color(0xFFCBD5E1)),
+            const FaIcon(
+              FontAwesomeIcons.chevronRight,
+              size: 12,
+              color: Color(0xFFCBD5E1),
+            ),
           ],
         ),
       ),
