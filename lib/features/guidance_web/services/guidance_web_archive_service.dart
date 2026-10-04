@@ -23,15 +23,11 @@ class GuidanceWebArchiveException implements Exception {
 
 /// Supabase access for the Guidance Council Web Archive.
 ///
-/// "Archived" here means ONLY that a `batch_archives` marker row exists for
-/// the batch. This service never writes `batches` (so the mobile app's
-/// `batches.status`/`updated_at` are never touched), never touches scans,
-/// images, answers or examinee links, and has no restore/unarchive method —
-/// an archived batch simply stays archived and remains fully viewable
-/// through the existing Results views.
+/// Full, graded, linked Active batches are completed before marker insertion.
+/// No scans, images, answers or examinee links are changed.
 class GuidanceWebArchiveService {
   GuidanceWebArchiveService({SyncClient? client})
-      : _client = client ?? _buildDefaultClient();
+    : _client = client ?? _buildDefaultClient();
 
   final SyncClient _client;
 
@@ -45,11 +41,7 @@ class GuidanceWebArchiveService {
     );
   }
 
-  /// Archives [batch]. Re-verifies against the database first: the batch
-  /// must still exist, must be `Completed` (read only — the status is never
-  /// changed), and must not already be archived. Only then is the marker
-  /// inserted. The database enforces the same rules (Completed-only insert
-  /// policy, primary key on `batch_id`), so a race is still safe.
+  /// Re-verifies eligibility before completion and archive insertion.
   Future<void> archiveBatch(LocalBatch batch, {String? reason}) async {
     final batchesRead = await _client.readCloudBatches();
     if (!batchesRead.isSuccess) {
@@ -61,7 +53,9 @@ class GuidanceWebArchiveService {
         'This batch no longer exists, so it cannot be archived.',
       );
     }
-    if (current.first.status != 'Completed') {
+    if (current.first.status != 'Completed' &&
+        (current.first.status != 'Active' ||
+            _client is! BatchCompletionClient)) {
       throw GuidanceWebArchiveException(
         'Only completed batches can be archived. '
         'This batch is currently ${current.first.status}.',
@@ -76,7 +70,39 @@ class GuidanceWebArchiveService {
       throw GuidanceWebArchiveException('This batch is already archived.');
     }
 
-    final outcome = await _client.archiveBatch(batchId: batch.id, reason: reason);
+    final scans = await _verifiedProcessedScans(batch.id);
+    if (current.first.status == 'Active') {
+      final full =
+          current.first.expectedCount > 0 &&
+          scans.length >= current.first.expectedCount;
+      if (!full ||
+          scans.any(
+            (s) =>
+                s.isArchivedAttempt ||
+                s.examCode != current.first.examCode ||
+                s.resultStatus != 'Graded' ||
+                s.rawScore == null,
+          )) {
+        throw GuidanceWebArchiveException(
+          'Fill this batch to its expected count and grade every active scan before archiving.',
+        );
+      }
+      final completed = await (_client as BatchCompletionClient)
+          .completeBatchForArchive(current.first);
+      if (!completed.isSuccess) {
+        throw GuidanceWebArchiveException(
+          'The batch could not be completed. It may have changed or your connection was interrupted. Refresh and try again.',
+        );
+      }
+      // Completion is a separate request. Recheck links just before insertion;
+      // this reduces, but cannot eliminate, the concurrent-change window.
+      await _verifiedProcessedScans(batch.id);
+    }
+
+    final outcome = await _client.archiveBatch(
+      batchId: batch.id,
+      reason: reason,
+    );
     if (outcome.isSuccess) return;
     if (outcome.isPermanent && outcome.code == '23505') {
       throw GuidanceWebArchiveException('This batch is already archived.');
@@ -92,7 +118,48 @@ class GuidanceWebArchiveService {
         'Could not reach Supabase. Check your connection and try again.',
       );
     }
-    throw GuidanceWebArchiveException('Could not archive this batch. Please try again.');
+    throw GuidanceWebArchiveException(
+      'Could not archive this batch. Please try again.',
+    );
+  }
+
+  /// Uses the existing non-soft-deleted scan population and canonical join.
+  /// Count reconciliation prevents a truncated scan read from granting access.
+  Future<List<CloudScanRow>> _verifiedProcessedScans(String batchId) async {
+    final scansRead = await _client.readCloudScans(batchId);
+    final countsRead = await _client.readScanCounts([batchId]);
+    final peopleRead = await _client.readCloudExaminees();
+    if (!scansRead.isSuccess ||
+        !countsRead.isSuccess ||
+        !peopleRead.isSuccess) {
+      throw GuidanceWebArchiveException(
+        'Could not verify this batch. Check your connection and try again.',
+      );
+    }
+    final scans = scansRead.scans;
+    if (countsRead.counts[batchId] != scans.length ||
+        scans.map((s) => s.id).toSet().length != scans.length ||
+        scans.any((s) => s.batchId != batchId)) {
+      throw GuidanceWebArchiveException(
+        'Could not verify all scanned sheets in this batch. Refresh and try again.',
+      );
+    }
+    final unlinked = scans
+        .where((s) => s.examineeId == null || s.examineeId!.isEmpty)
+        .length;
+    if (unlinked > 0) {
+      throw GuidanceWebArchiveException(
+        'This batch cannot be archived yet. $unlinked scanned '
+        '${unlinked == 1 ? 'sheet is' : 'sheets are'} not linked to an Examinee.',
+      );
+    }
+    final people = peopleRead.examinees.map((e) => e.id).toSet();
+    if (scans.any((s) => !people.contains(s.examineeId))) {
+      throw GuidanceWebArchiveException(
+        'This batch cannot be archived yet. One or more Examinee links could not be verified.',
+      );
+    }
+    return scans;
   }
 
   /// Every archived batch with its marker and scan count, newest archive

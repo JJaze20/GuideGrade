@@ -8,6 +8,7 @@ import '../../../core/constants/app_text_styles.dart';
 import '../../../core/constants/exam_catalog.dart';
 import '../../../core/omr/admission_category.dart';
 import '../../../core/omr/cluster_analysis.dart';
+import '../../../core/omr/tat_cluster_analysis.dart';
 import '../../../core/omr/exam_score.dart';
 import '../../../core/omr/omr_mesh_correction.dart';
 import '../../../core/omr/omr_scorer.dart';
@@ -397,7 +398,7 @@ class _GuidanceWebResultDetailViewState
   void initState() {
     super.initState();
     _loadAnswerKey();
-    _loadScanImage();
+    if (!widget.showClusterAnalysis) _loadScanImage();
   }
 
   Future<void> _loadAnswerKey() async {
@@ -408,15 +409,27 @@ class _GuidanceWebResultDetailViewState
     try {
       final key = await widget.service.loadAnswerKey(widget.batch.examCode);
       var averages = const <String, double>{};
-      if (widget.showClusterAnalysis &&
-          key != null &&
-          clusterDefsFor(widget.batch.examCode) != null) {
+      if (widget.showClusterAnalysis && key != null && _hasClusters) {
         try {
-          final scans = await widget.service.loadScansForBatch(widget.batch);
-          averages = computeClusterAverages(
-            widget.batch.examCode,
-            scans.map((s) => scoreOmrResult(s.decoded, key).items),
+          final List<LocalScan> scans;
+          if (widget.batch.examCode == 'TAT') {
+            final results = await widget.service.loadResultsForBatch(
+              widget.batch,
+            );
+            scans = results.scans
+                .where(
+                  (scan) => results.linkedExamineeByScanId.containsKey(scan.id),
+                )
+                .toList();
+          } else {
+            scans = await widget.service.loadScansForBatch(widget.batch);
+          }
+          final scoredScans = scans.map(
+            (s) => scoreOmrResult(s.decoded, key).items,
           );
+          averages = widget.batch.examCode == 'TAT'
+              ? tatClusterAverages(scoredScans)
+              : computeClusterAverages(widget.batch.examCode, scoredScans);
         } catch (_) {
           // Averages are supplementary; the table still shows the counts.
         }
@@ -587,6 +600,7 @@ class _GuidanceWebResultDetailViewState
     if (_error != null) {
       return _errorState();
     }
+    if (widget.showClusterAnalysis) return _buildAnalyticsCards();
     return SingleChildScrollView(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -598,7 +612,7 @@ class _GuidanceWebResultDetailViewState
           _buildScannedSheetCard(),
           const SizedBox(height: 16),
           if (widget.showClusterAnalysis) ...[
-            if (clusterDefsFor(widget.batch.examCode) != null) ...[
+            if (_hasClusters) ...[
               _buildClusterAnalysisCard(),
               const SizedBox(height: 16),
             ],
@@ -606,6 +620,162 @@ class _GuidanceWebResultDetailViewState
           ] else
             _buildAnswerDetailsCard(),
         ],
+      ),
+    );
+  }
+
+  /// Analytics keeps the stored headline visible and puts longer details
+  /// behind independently expandable cards. The Results view is unchanged.
+  Widget _buildAnalyticsCards() {
+    final identity = resolveWebExamineeIdentity(
+      scan: widget.scan,
+      linkedExaminee: widget.linkedExaminee,
+    );
+    final name = [identity.firstName, identity.middleName, identity.lastName]
+        .whereType<String>()
+        .map((part) => part.trim())
+        .where((part) => part.isNotEmpty)
+        .join(' ');
+    final result = widget.scan.result;
+    final letter = _examineeLetter();
+    final hasClusters = _hasClusters;
+    return SingleChildScrollView(
+      key: const Key('analyticsResultCards'),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final identityCard = _card('EXAMINEE', [
+                _analyticsFact('Name', _dash(name)),
+                _analyticsFact('Exam', _examTitle()),
+                _analyticsFact('Batch', widget.batch.batchCode),
+              ]);
+              final summaryCard = _card('RESULT SUMMARY', [
+                Wrap(
+                  spacing: 28,
+                  runSpacing: 12,
+                  children: [
+                    _analyticsFact(
+                      'Score',
+                      result == null
+                          ? '—'
+                          : '${result.rawScore} / ${_denominatorFor(result)}',
+                    ),
+                    _analyticsFact(
+                      'Percentage',
+                      result == null
+                          ? '—'
+                          : '${result.percentage.toStringAsFixed(2)}%',
+                    ),
+                    _analyticsFact('Status', result?.status ?? 'Ungraded'),
+                    _analyticsFact('Category', letter ?? '—'),
+                  ],
+                ),
+              ]);
+              if (constraints.maxWidth < 760) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    identityCard,
+                    const SizedBox(height: 12),
+                    summaryCard,
+                  ],
+                );
+              }
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(child: identityCard),
+                  const SizedBox(width: 16),
+                  Expanded(child: summaryCard),
+                ],
+              );
+            },
+          ),
+          const SizedBox(height: 16),
+          _analyticsExpansion(
+            id: 'identity',
+            title: 'Examinee details',
+            subtitle: 'Identification and scan date',
+            child: _buildExamineeCard(),
+          ),
+          if (hasClusters)
+            _analyticsExpansion(
+              id: 'clusters',
+              title: 'Cluster analysis',
+              initiallyExpanded: widget.batch.examCode == 'TAT',
+              subtitle: 'Correct answers and comparison with the batch',
+              child: _buildClusterAnalysisCard(),
+            ),
+          _analyticsExpansion(
+            id: 'category',
+            title: 'Category and interpretation',
+            subtitle: 'Classification details and supporting analysis',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _buildCategoryCard(),
+                if (result != null && widget.batch.examCode == 'TAT')
+                  _card('TEST BREAKDOWN', _tatBreakdownRows(result)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _analyticsFact(String label, String value) => Padding(
+    padding: const EdgeInsets.only(bottom: 8),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          label,
+          style: AppTextStyles.body(size: 12, color: AppColors.textGray),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          value,
+          style: AppTextStyles.body(size: 16, weight: FontWeight.w700),
+        ),
+      ],
+    ),
+  );
+
+  Widget _analyticsExpansion({
+    required String id,
+    required String title,
+    required String subtitle,
+    required Widget child,
+    bool initiallyExpanded = false,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Material(
+        color: Colors.white,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: const BorderSide(color: AppColors.cardBorder),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: ExpansionTile(
+          key: PageStorageKey('analytics-${widget.scan.id}-$id'),
+          initiallyExpanded: initiallyExpanded,
+          title: Text(
+            title,
+            style: AppTextStyles.body(size: 14, weight: FontWeight.w700),
+          ),
+          subtitle: Text(
+            subtitle,
+            style: AppTextStyles.body(size: 12, color: AppColors.textGray),
+          ),
+          tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+          childrenPadding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+          children: [child],
+        ),
       ),
     );
   }
@@ -673,6 +843,7 @@ class _GuidanceWebResultDetailViewState
       linkedExaminee: widget.linkedExaminee,
     );
     return _card('EXAMINEE INFORMATION', [
+      if (!identity.fromCanonicalExaminee) _unverifiedIdentityNotice(),
       _infoRow('Examinee ID', _dash(identity.examineeId)),
       _infoRow('First Name', _dash(identity.firstName)),
       _infoRow('Middle Name', _dash(identity.middleName)),
@@ -685,6 +856,37 @@ class _GuidanceWebResultDetailViewState
       _infoRow('Batch', widget.batch.batchCode),
       _infoRow('Scan Date', _fmtDateTime(widget.scan.capturedAt)),
     ]);
+  }
+
+  /// Shown whenever [WebExamineeIdentity.fromCanonicalExaminee] is false.
+  /// That covers TWO different scans ([resolveWebExamineeIdentity]'s own
+  /// doc comment): one that is genuinely unlinked/has a dangling
+  /// `examinee_id`, and one that IS linked but whose canonical record has
+  /// no usable name. The wording below is deliberately neutral about which
+  /// of the two this is -- it must stay true for a scan that really is
+  /// linked, so it never says "not linked" outright, only that whatever
+  /// name/ID appears below is not a verified one. Status indication only,
+  /// matching [GuidanceWebResultsView]'s own row-level badge -- this card
+  /// offers no linking action of its own.
+  Widget _unverifiedIdentityNotice() {
+    return Container(
+      key: const Key('unverifiedIdentityNotice'),
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF3F4F6),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppColors.cardBorder),
+      ),
+      child: Text(
+        'The name/ID shown below is not from a verified Examinee Record.',
+        style: AppTextStyles.body(
+          size: 10,
+          weight: FontWeight.w600,
+          color: AppColors.textGray,
+        ),
+      ),
+    );
   }
 
   String _examTitle() => widget.batch.examTitle.isNotEmpty
@@ -931,22 +1133,30 @@ class _GuidanceWebResultDetailViewState
     );
   }
 
-  // --- Cluster Analysis (Analytics mode, AT / QTM) --------------------------
+  // --- Cluster Analysis (Analytics mode, AT / QTM / TAT) --------------------------
+
+  bool get _hasClusters =>
+      widget.batch.examCode == 'TAT' ||
+      clusterDefsFor(widget.batch.examCode) != null;
 
   Widget _buildClusterAnalysisCard() {
-    final rows = computeClusterRows(
-      widget.batch.examCode,
-      _scored.items,
-      averages: _clusterAverages,
-    )!;
+    final rows = widget.batch.examCode == 'TAT'
+        ? tatClusterRows(_scored.items, averages: _clusterAverages)
+        : computeClusterRows(
+            widget.batch.examCode,
+            _scored.items,
+            averages: _clusterAverages,
+          )!;
     final headerStyle = AppTextStyles.body(
       size: 9.5,
       weight: FontWeight.w800,
       color: AppColors.textGray,
     );
     Widget cell(Widget child) => Expanded(child: Center(child: child));
-    Widget minus() =>
-        Text('–', style: AppTextStyles.body(size: 12, color: AppColors.textGray));
+    Widget minus() => Text(
+      '–',
+      style: AppTextStyles.body(size: 12, color: AppColors.textGray),
+    );
     Widget belowMark(ClusterRow r) => r.band == ClusterBand.below
         ? const Icon(Icons.check, size: 16, color: AppColors.warmRedOrange)
         : minus();
@@ -967,6 +1177,13 @@ class _GuidanceWebResultDetailViewState
       ),
     );
     return _card('CLUSTER ANALYSIS', [
+      if (widget.batch.examCode == 'TAT') ...[
+        Text(
+          tatClusterScoringNote,
+          style: AppTextStyles.body(size: 12, color: AppColors.textGray),
+        ),
+        const SizedBox(height: 12),
+      ],
       if (_answerKey == null) ...[
         _answerKeyNotice(),
         const SizedBox(height: 12),
@@ -1073,12 +1290,19 @@ class _GuidanceWebResultDetailViewState
         )
         .$2;
     final isQtm = widget.batch.examCode == 'QTM';
-    // TAT has no cluster analysis (yet): Category only, no radar or insights.
-    final allRows = computeClusterRows(
-      widget.batch.examCode,
-      _scored.items,
-      averages: _clusterAverages,
-    );
+    final isTat = widget.batch.examCode == 'TAT';
+    final allRows = isTat
+        ? tatClusterRows(_scored.items, averages: _clusterAverages)
+        : computeClusterRows(
+            widget.batch.examCode,
+            _scored.items,
+            averages: _clusterAverages,
+          );
+    // TAT cluster names are long; "Test 1: Core Learning Theories, ..." becomes
+    // "T1: Core Learning Theories" on the radar axes.
+    String axisLabel(String label) => isTat
+        ? label.replaceFirst('Test ', 'T').split(',').first.split(' & ').first
+        : label;
     final rows = (allRows ?? const <ClusterRow>[])
         .where((r) => !r.def.isGroup)
         .toList();
@@ -1105,41 +1329,44 @@ class _GuidanceWebResultDetailViewState
         crossAxisAlignment: WrapCrossAlignment.start,
         children: [
           if (allRows != null)
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              ClusterRadarChart(
-                key: const Key('clusterRadar'),
-                axes: [for (final r in rows) r.def.label],
-                series: [
-                  ClusterRadarSeries(
-                    label: 'Batch average',
-                    color: _catB,
-                    fractions: fractions((r) => r.average),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                ClusterRadarChart(
+                  key: const Key('clusterRadar'),
+                  axes: [for (final r in rows) axisLabel(r.def.label)],
+                  series: [
+                    ClusterRadarSeries(
+                      label: 'Batch average',
+                      color: _catB,
+                      fractions: fractions((r) => r.average),
+                    ),
+                    ClusterRadarSeries(
+                      label: 'This examinee',
+                      color: _catC,
+                      fractions: fractions((r) => r.right?.toDouble()),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _legendDot(_catC, 'This examinee'),
+                    const SizedBox(width: 16),
+                    _legendDot(_catB, 'Batch average'),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  "Each axis is the share of that cluster's items answered correctly.",
+                  style: AppTextStyles.body(
+                    size: 9.5,
+                    color: AppColors.textGray,
                   ),
-                  ClusterRadarSeries(
-                    label: 'This examinee',
-                    color: _catC,
-                    fractions: fractions((r) => r.right?.toDouble()),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  _legendDot(_catC, 'This examinee'),
-                  const SizedBox(width: 16),
-                  _legendDot(_catB, 'Batch average'),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Text(
-                "Each axis is the share of that cluster's items answered correctly.",
-                style: AppTextStyles.body(size: 9.5, color: AppColors.textGray),
-              ),
-            ],
-          ),
+                ),
+              ],
+            ),
           ConstrainedBox(
             constraints: const BoxConstraints(minWidth: 280, maxWidth: 380),
             child: Column(
@@ -1221,7 +1448,10 @@ class _GuidanceWebResultDetailViewState
                     ),
                     const SizedBox(width: 8),
                     Expanded(
-                      child: Text(i.text, style: AppTextStyles.body(size: 11.5)),
+                      child: Text(
+                        i.text,
+                        style: AppTextStyles.body(size: 11.5),
+                      ),
                     ),
                   ],
                 ),
@@ -1279,7 +1509,9 @@ class _GuidanceWebResultDetailViewState
                     width: 26,
                     child: Text(
                       '${b.$1}.',
-                      style: AppTextStyles.heading(size: 16).copyWith(color: b.$2),
+                      style: AppTextStyles.heading(
+                        size: 16,
+                      ).copyWith(color: b.$2),
                     ),
                   ),
                   if (b.$4 != null)

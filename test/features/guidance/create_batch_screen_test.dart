@@ -159,6 +159,7 @@ void main() {
   /// two existing regression tests below already rely on.
   Future<void> createBatch(WidgetTester tester, {required FirebaseAuth auth}) async {
     await pumpScreen(tester, auth: auth);
+    await tester.enterText(find.byType(TextFormField).first, 'BSIT - 1A');
     await tapCreate(tester);
   }
 
@@ -245,6 +246,7 @@ void main() {
       // Seeds an existing batch using the code currently shown -- this
       // exercises the real _createBatch() collision-retry path.
       repo.existingBatches = [existingBatchWith(originalCode)];
+      await tester.enterText(find.byType(TextFormField).first, 'BSIT - 1A');
 
       await tapCreate(tester);
 
@@ -267,11 +269,29 @@ void main() {
       // is declared earlier in build()'s children, so it is deterministically
       // first in a depth-first widget-tree walk.
       await tester.enterText(find.byType(TextField).first, 'BSIT - 1A');
-      await tester.enterText(find.byType(TextFormField), '45');
+      await tester.enterText(find.byType(TextFormField).last, '45');
       await tapCreate(tester);
 
       expect(repo.capturedDescription, 'BSIT - 1A');
       expect(repo.capturedExpectedCount, 45);
     });
+  });
+
+  for (final description in ['', '   ']) {
+    testWidgets('blank description ${description.length} blocks creation', (tester) async {
+      await pumpScreen(tester, auth: _FakeFirebaseAuth(_FakeUser(uid: 'uid-b')));
+      await tester.enterText(find.byType(TextFormField).first, description);
+      await tapCreate(tester);
+      expect(find.text('Please enter a description'), findsOneWidget);
+      expect(repo.capturedDescription, isNull);
+      expect(find.byType(CreateBatchScreen), findsOneWidget);
+    });
+  }
+
+  testWidgets('description is trimmed before creating the batch', (tester) async {
+    await pumpScreen(tester, auth: _FakeFirebaseAuth(_FakeUser(uid: 'uid-b')));
+    await tester.enterText(find.byType(TextFormField).first, '  BSIT - 1A  ');
+    await tapCreate(tester);
+    expect(repo.capturedDescription, 'BSIT - 1A');
   });
 }

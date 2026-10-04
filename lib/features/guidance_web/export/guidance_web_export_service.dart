@@ -11,12 +11,14 @@ import '../../../core/omr/qtm_category.dart';
 import '../../../core/omr/qtm_result.dart';
 import '../../../core/omr/tat_category.dart';
 import '../../../models/answer_key.dart';
+import '../../../models/examinee_record.dart';
 import '../../../models/local_batch.dart';
 import '../services/guidance_web_analytics_service.dart';
 import '../services/guidance_web_results_service.dart';
 import 'guidance_web_certificate.dart';
 import 'guidance_web_export_models.dart';
 import 'guidance_web_export_pdf.dart';
+import 'tat_export_clusters.dart';
 
 /// Category bands as printed, D first. Same score ranges the Analytics
 /// detail screen shows; QTM and TAT carry the template's percentage labels.
@@ -75,6 +77,19 @@ class GuidanceWebExportService {
   /// PDF bytes. [allScans] is every scan of [batch] -- the batch averages
   /// and the category distribution are computed over all of them, never
   /// only the selected ones.
+  ///
+  /// [linkedExamineeByScanId] supplies the OFFICIAL identity (Examinee ID/
+  /// name) for a scan -- the same map [GuidanceWebResultsService.
+  /// loadResultsForBatch] returns. This is the authoritative official-result
+  /// eligibility gate, enforced HERE regardless of what [selected] the
+  /// caller passed in: a scan in [selected] with no entry in
+  /// [linkedExamineeByScanId] (`examinee_id` was null, or didn't resolve to
+  /// a real `examinees` row -- a dangling link) produces NO examinee page at
+  /// all. There is no OCR/staff-tag fallback for an unresolved scan -- see
+  /// [_examineeSection]'s own doc comment -- so a stale or hand-built
+  /// selection that still includes an unlinked/dangling scan can never make
+  /// it into the output just by being passed in; the caller does not need
+  /// to pre-filter [selected] itself for this to hold.
   @visibleForTesting
   Future<ExportDocument> buildExportDocument({
     required LocalBatch batch,
@@ -82,6 +97,7 @@ class GuidanceWebExportService {
     required List<LocalScan> selected,
     required List<LocalScan> allScans,
     bool includeCertificates = false,
+    Map<String, ExamineeRecord> linkedExamineeByScanId = const {},
   }) async {
     AnswerKey? key;
     try {
@@ -90,18 +106,35 @@ class GuidanceWebExportService {
       key = null; // unrated clusters, "-" instead of numbers
     }
 
+    // Official-result eligibility: only a scan whose examinee_id resolved
+    // to a real examinees row produces an examinee page -- enforced here,
+    // not left to the caller, so this can't be bypassed by passing an
+    // unlinked/dangling scan in `selected`.
+    final eligible = [
+      for (final s in selected)
+        if (linkedExamineeByScanId.containsKey(s.id)) s,
+    ];
+
     final section = includeSummary
         ? await _batchSection(batch, allScans)
         : null;
     // Every examinee uses the same whole-batch baseline for this export.
-    final averages = selected.isNotEmpty && key != null && clusterDefsFor(batch.examCode) != null
-        ? computeClusterAverages(batch.examCode, [
-            for (final scan in allScans) scoreOmrResult(scan.decoded, key).items,
-          ])
-        : const <String, double>{};
+    final scoredBatch = eligible.isNotEmpty && key != null
+        ? [for (final scan in allScans) scoreOmrResult(scan.decoded, key).items]
+        : <List<ScoredItem>>[];
+    final averages = batch.examCode == 'TAT'
+        ? tatClusterAverages(scoredBatch)
+        : computeClusterAverages(batch.examCode, scoredBatch);
     final examinees = [
-      for (final s in selected)
-        _examineeSection(batch, s, averages, key, includeCertificates),
+      for (final s in eligible)
+        _examineeSection(
+          batch,
+          s,
+          averages,
+          key,
+          includeCertificates,
+          linkedExamineeByScanId[s.id]!,
+        ),
     ];
     return ExportDocument(batch: section, examinees: examinees);
   }
@@ -114,6 +147,7 @@ class GuidanceWebExportService {
     required List<LocalScan> selected,
     required List<LocalScan> allScans,
     bool includeCertificates = false,
+    Map<String, ExamineeRecord> linkedExamineeByScanId = const {},
   }) async {
     final document = await buildExportDocument(
       batch: batch,
@@ -121,40 +155,61 @@ class GuidanceWebExportService {
       selected: selected,
       allScans: allScans,
       includeCertificates: includeCertificates,
+      linkedExamineeByScanId: linkedExamineeByScanId,
     );
 
-    final left = (await rootBundle.load('assets/images/ndmu_logo.png'))
-        .buffer
-        .asUint8List();
-    final right =
-        (await rootBundle.load('assets/images/guidance_council_logo.png'))
-            .buffer
-            .asUint8List();
+    final left = (await rootBundle.load(
+      'assets/images/ndmu_logo.png',
+    )).buffer.asUint8List();
+    final right = (await rootBundle.load(
+      'assets/images/guidance_council_logo.png',
+    )).buffer.asUint8List();
     return buildExportPdf(document, leftLogo: left, rightLogo: right);
   }
 
-  /// The whole-batch [ExportDocument] used by [buildDefaultPdf]: every scan
-  /// [GuidanceWebResultsService.loadScansForBatch] returns for [batch]
-  /// (its own default exclusion of an archived retake attempt applies here
-  /// unchanged -- this never passes `includeArchivedAttempts: true`), used
-  /// as both the batch summary's scope and the per-examinee pages.
+  /// The whole-batch [ExportDocument] used by [buildDefaultPdf]: the
+  /// official-result set only -- a scan whose `examinee_id` resolves to a
+  /// real `examinees` row (its own default exclusion of an archived retake
+  /// attempt applies here unchanged -- this never passes
+  /// `includeArchivedAttempts: true`). Used as both the batch summary's
+  /// scope and the per-examinee pages, with the resolved official
+  /// [ExamineeRecord] for each one -- never the scan's own OCR/staff-tagged
+  /// [LocalScan.examinee] -- so an unlinked scan or a dangling `examinee_id`
+  /// never appears anywhere in this export.
+  ///
+  /// [GuidanceWebResultsService.loadResultsForBatch] itself now returns
+  /// EVERY scan in the batch (Results shows unlinked scans too), with
+  /// [WebBatchResults.linkedExamineeByScanId] as the one signal for which
+  /// are officially linked. [buildExportDocument] independently re-enforces
+  /// this same eligibility for the examinee pages it builds (so that
+  /// enforcement cannot be bypassed by any caller), but [allScans] here
+  /// still MUST be pre-filtered: [_batchSection]'s category-distribution
+  /// bars read straight from [allScans] with no filtering of their own, so
+  /// passing the full (unlinked-inclusive) scan list here would leak
+  /// unlinked scans back into that count even though the examinee pages
+  /// themselves stay correctly official-only.
   @visibleForTesting
   Future<ExportDocument> buildDefaultExportDocument(
     LocalBatch batch, {
     bool includeCertificates = false,
   }) async {
-    final scans = await _results.loadScansForBatch(batch);
+    final results = await _results.loadResultsForBatch(batch);
+    final officialScans = results.scans
+        .where((s) => results.linkedExamineeByScanId.containsKey(s.id))
+        .toList();
     return buildExportDocument(
       batch: batch,
       includeSummary: true,
-      selected: scans,
-      allScans: scans,
+      selected: officialScans,
+      allScans: officialScans,
       includeCertificates: includeCertificates,
+      linkedExamineeByScanId: results.linkedExamineeByScanId,
     );
   }
 
   /// The whole-batch export used by the list's `export`: the batch analytics
-  /// plus a page for every examinee (tagged or not) in the batch.
+  /// plus a page for every official result in the batch (see
+  /// [buildDefaultExportDocument]).
   Future<Uint8List> buildDefaultPdf(
     LocalBatch batch, {
     bool includeCertificates = false,
@@ -164,13 +219,12 @@ class GuidanceWebExportService {
       includeCertificates: includeCertificates,
     );
 
-    final left = (await rootBundle.load('assets/images/ndmu_logo.png'))
-        .buffer
-        .asUint8List();
-    final right =
-        (await rootBundle.load('assets/images/guidance_council_logo.png'))
-            .buffer
-            .asUint8List();
+    final left = (await rootBundle.load(
+      'assets/images/ndmu_logo.png',
+    )).buffer.asUint8List();
+    final right = (await rootBundle.load(
+      'assets/images/guidance_council_logo.png',
+    )).buffer.asUint8List();
     return buildExportPdf(document, leftLogo: left, rightLogo: right);
   }
 
@@ -221,7 +275,8 @@ class GuidanceWebExportService {
           stats: const [],
           scoreBars: const [],
           categoryBars: categoryBars,
-          unavailableNote: 'All examination attempts in this batch are '
+          unavailableNote:
+              'All examination attempts in this batch are '
               'archived. No active attempts are included in this export.',
         );
       }
@@ -255,7 +310,8 @@ class GuidanceWebExportService {
     return pct == null ? s : '$s ($pct)';
   }
 
-  static String? _pct(double? p) => p == null ? null : '${p.toStringAsFixed(1)}%';
+  static String? _pct(double? p) =>
+      p == null ? null : '${p.toStringAsFixed(1)}%';
 
   /// The same figures and formatting the Analytics screen shows.
   (List<(String, String)>, List<ExportBar>) _statsFrom(AnalyticsResult r) {
@@ -270,7 +326,10 @@ class GuidanceWebExportService {
             ('Average', _combine(a.averageRawScore, _pct(a.averagePercentage))),
             (
               'Highest',
-              _combine(a.highestRawScore?.toDouble(), _pct(a.highestPercentage)),
+              _combine(
+                a.highestRawScore?.toDouble(),
+                _pct(a.highestPercentage),
+              ),
             ),
             (
               'Lowest',
@@ -369,18 +428,36 @@ class GuidanceWebExportService {
   // --- examinee page ---------------------------------------------------------
 
   static const _months = [
-    'January', 'February', 'March', 'April', 'May', 'June', 'July', 'August',
-    'September', 'October', 'November', 'December',
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
   ];
 
   String _date(DateTime d) => '${_months[d.month - 1]} ${d.day}, ${d.year}';
 
+  /// [linked] is the resolved official [ExamineeRecord] for [scan] --
+  /// REQUIRED, never nullable. [buildExportDocument] only ever calls this
+  /// for a scan that already has a resolved entry in its own
+  /// `linkedExamineeByScanId`; a scan with no entry (null or dangling
+  /// `examinee_id`) is filtered out before reaching this method at all, so
+  /// there is no OCR/staff-tag fallback path here to accidentally take --
+  /// official Examinee ID/name/certificate name come from [linked] alone.
   ExportExamineeSection _examineeSection(
     LocalBatch batch,
     LocalScan scan,
     Map<String, double> averages,
     AnswerKey? key,
     bool includeCertificates,
+    ExamineeRecord linked,
   ) {
     final e = scan.examinee;
     final result = scan.result;
@@ -389,7 +466,12 @@ class GuidanceWebExportService {
         : (result?.totalItems ?? 0);
 
     List<ClusterRow>? clusterRows;
-    if (clusterDefsFor(batch.examCode) != null) {
+    if (batch.examCode == 'TAT') {
+      clusterRows = tatClusterRows(
+        scoreOmrResult(scan.decoded, key).items,
+        averages: averages,
+      );
+    } else if (clusterDefsFor(batch.examCode) != null) {
       clusterRows = computeClusterRows(
         batch.examCode,
         scoreOmrResult(scan.decoded, key).items,
@@ -402,15 +484,20 @@ class GuidanceWebExportService {
       scanCapturedAt: scan.capturedAt,
       batchCreatedAt: batch.createdAt,
     );
+    // Age has no established official-record input source yet (see
+    // ExamineeRecord's own class doc comment) -- kept from the OCR/staff tag.
+    // This is demographic data, not identity, and is unaffected by the
+    // official-identity rule: the examinee ID/name/certificate name below
+    // never do this.
     final age = e?.ageOn(examDate);
 
     return ExportExamineeSection(
       examLabel: examTypeDisplayLabel(batch.examCode),
       batchLabel: _batchLabel(batch),
-      examineeId: dash(e?.examineeNumber),
-      firstName: dash(e?.firstName),
-      middleName: dash(e?.middleName),
-      lastName: dash(e?.lastName),
+      examineeId: dash(linked.temporaryExamineeId),
+      firstName: dash(linked.firstName),
+      middleName: dash(linked.middleName),
+      lastName: dash(linked.lastName),
       age: age == null ? '-' : '$age',
       scanDate: _date(scan.capturedAt),
       score: result == null ? '-' : '${result.rawScore} / $denominator',
@@ -418,6 +505,7 @@ class GuidanceWebExportService {
           ? '-'
           : '${result.percentage.toStringAsFixed(2)}%',
       clusterRows: clusterRows,
+      clusterNote: batch.examCode == 'TAT' ? tatClusterScoringNote : null,
       categoryBands: exportCategoryBands(batch.examCode),
       categoryLetter: result == null
           ? null
@@ -428,7 +516,7 @@ class GuidanceWebExportService {
               examCode: batch.examCode,
               rawScore: result?.rawScore,
               status: result?.status,
-              name: e?.displayName,
+              name: linked.displayName,
             )
           : null,
     );

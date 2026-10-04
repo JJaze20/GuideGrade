@@ -14,12 +14,15 @@ import '../../../models/examinee_record.dart';
 import '../../../models/local_batch.dart';
 import 'guidance_web_examinee_records_service.dart' show examineeRecordFromCloudRow;
 
-/// One batch's scans plus the canonical examinee each linked scan belongs to.
-///
-/// [linkedExamineeByScanId] holds an entry only for a scan whose
-/// `scans.examinee_id` points at an `examinees` row (created by "Link to
-/// Existing Examinee" or "Confirm and Create Examinee"); an unlinked / legacy
-/// scan simply has no entry and keeps showing its own tag.
+/// One batch's results for display: EVERY scan in the batch (linked,
+/// unlinked, or pointing at a dangling `examinee_id`), plus the resolved
+/// canonical examinee for each scan that has one. [linkedExamineeByScanId]
+/// has an entry ONLY for a scan whose `examinee_id` resolves to a real
+/// `examinees` row (via "Link to Existing Examinee" or "Confirm and Create
+/// Examinee") -- a scan with a null or dangling `examinee_id` is still in
+/// [scans], but has no entry here, exactly like a never-linked scan. See
+/// [GuidanceWebResultsService.loadResultsForBatch]'s own doc comment for the
+/// exact resolution rule.
 class WebBatchResults {
   const WebBatchResults({
     required this.scans,
@@ -152,16 +155,35 @@ class GuidanceWebResultsService {
   }
 
 
-  /// [loadScansForBatch] plus each linked scan's canonical examinee, resolved
-  /// through the relationship the database actually stores: `scans.examinee_id`
-  /// -> `examinees.id`. Nothing is copied into the scans and nothing is
+  /// EVERY scan in [batch] -- linked, unlinked, or pointing at a dangling
+  /// `examinee_id` -- plus the resolved canonical [ExamineeRecord] for each
+  /// one that has one. Nothing is copied into the scans and nothing is
   /// written -- linking only ever sets `examinee_id`, so the applicant's name
   /// lives on the `examinees` row and must be read from there.
   ///
-  /// The `examinees` table is read only when at least one scan is linked, so
-  /// a batch with no linked scans makes no extra request. If that lookup
-  /// fails this throws (like a failed scan read) rather than silently showing
-  /// linked scans as "Unnamed" again.
+  /// Official-identity resolution (never a filter on [scans] itself): a scan
+  /// gets an entry in [WebBatchResults.linkedExamineeByScanId] ONLY when its
+  /// `examinee_id` resolves to an actual `examinees` row --
+  /// - `examinee_id IS NULL` (never linked) has no entry.
+  /// - `examinee_id` set but the row can't be found (deleted/RLS-hidden/
+  ///   stale -- a "dangling" link) has no entry either, the exact same way --
+  ///   OCR/staff-tagged [LocalScan.examinee] is never an official identity
+  ///   and is never used as a fallback here or written into this map.
+  /// Both cases are indistinguishable from each other in this map by design:
+  /// a Results caller only needs to know "is there a verified official
+  /// identity for this scan", not why one scan never had a link while
+  /// another one's link no longer resolves. The scan itself is returned
+  /// either way, untouched, so the Guidance Council can still see it exists
+  /// and needs processing -- see [GuidanceWebExamineeRecordsService.
+  /// loadUnlinkedScans] for the separate, independent query that queues it
+  /// for linking; this method only decides what identity to show alongside
+  /// it here.
+  ///
+  /// The `examinees` table is read only when at least one scan carries an
+  /// `examinee_id` at all, so a batch where every scan is unlinked makes no
+  /// extra request. If that lookup fails this throws (like a failed scan
+  /// read) rather than silently showing a linked scan as "Unnamed" or an
+  /// unlinked one as though it had resolved.
   ///
   /// Applicant Retake Management (additive): same
   /// [includeArchivedAttempts] default-exclusion as [loadScansForBatch] —
@@ -177,7 +199,6 @@ class GuidanceWebResultsService {
     final rows = includeArchivedAttempts
         ? read.scans
         : read.scans.where((s) => !s.isArchivedAttempt).toList();
-    final scans = rows.map(mapCloudScan).toList();
 
     final examineeIdByScanId = <String, String>{
       for (final row in rows)
@@ -185,21 +206,28 @@ class GuidanceWebResultsService {
           row.id: row.examineeId!,
     };
 
-    if (examineeIdByScanId.isEmpty) return WebBatchResults(scans: scans);
-
-    final examinees = await _client.readCloudExaminees();
-    if (!examinees.isSuccess) {
-      throw GuidanceWebResultsException(_messageFor(examinees.error));
-    }
-    final byId = {
-      for (final row in examinees.examinees) row.id: examineeRecordFromCloudRow(row),
-    };
-    return WebBatchResults(
-      scans: scans,
-      linkedExamineeByScanId: {
+    var linkedExamineeByScanId = const <String, ExamineeRecord>{};
+    if (examineeIdByScanId.isNotEmpty) {
+      final examinees = await _client.readCloudExaminees();
+      if (!examinees.isSuccess) {
+        throw GuidanceWebResultsException(_messageFor(examinees.error));
+      }
+      final byId = {
+        for (final row in examinees.examinees) row.id: examineeRecordFromCloudRow(row),
+      };
+      // Only an examinee_id that resolved to a real, findable examinee gets
+      // an entry -- a null examinee_id (never reached this map) or a
+      // dangling/unresolvable one (filtered out here) are both absent the
+      // same way (see this method's own doc comment).
+      linkedExamineeByScanId = {
         for (final entry in examineeIdByScanId.entries)
           if (byId[entry.value] != null) entry.key: byId[entry.value]!,
-      },
+      };
+    }
+
+    return WebBatchResults(
+      scans: rows.map(mapCloudScan).toList(),
+      linkedExamineeByScanId: linkedExamineeByScanId,
     );
   }
 

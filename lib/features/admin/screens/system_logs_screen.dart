@@ -4,9 +4,12 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
+import '../../../core/constants/app_tokens.dart';
 import '../../../core/services/firestore_service.dart';
 import '../../../core/services/logging_service.dart';
 import '../../../models/log_entry.dart';
+import '../../../shared/widgets/form_field_decoration.dart';
+import '../../../shared/widgets/state_views.dart';
 import '../widgets/log_list_item.dart';
 
 /// System Logs screen for the System Administrator -- a read-only audit
@@ -120,7 +123,7 @@ class _SystemLogsScreenState extends State<SystemLogsScreen> {
     showDialog<void>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: Text(log.action, style: AppTextStyles.heading(size: 13)),
+        title: Text(log.action, style: AppTextStyles.heading(size: 16)),
         content: SingleChildScrollView(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -146,17 +149,34 @@ class _SystemLogsScreenState extends State<SystemLogsScreen> {
 
   Widget _buildDetailRow(String label, String value) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.only(bottom: AppSpace.md),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: AppTextStyles.body(size: 9.5, weight: FontWeight.w700, color: AppColors.textGray)),
+          Text(label, style: AppTextStyles.label()),
           const SizedBox(height: 2),
-          Text(value, style: AppTextStyles.body(size: 11)),
+          Text(value, style: AppTextStyles.text()),
         ],
       ),
     );
   }
+
+  bool get _filtersActive =>
+      _searchController.text.isNotEmpty || _categoryFilter != 'All' || _severityFilter != 'All';
+
+  void _clearFilters() {
+    setState(() {
+      _searchController.clear();
+      _categoryFilter = 'All';
+      _severityFilter = 'All';
+    });
+  }
+
+  /// Keeps the toolbar and list readable on wide desktop windows.
+  Widget _centered(Widget child) => Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 960), child: child),
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -165,13 +185,16 @@ class _SystemLogsScreenState extends State<SystemLogsScreen> {
       appBar: AppBar(
         backgroundColor: Colors.white,
         foregroundColor: AppColors.textDark,
-        elevation: 0.5,
-        title: Text('System Logs', style: AppTextStyles.heading(size: 13)),
+        elevation: 0,
+        shape: const Border(bottom: BorderSide(color: AppColors.border)),
+        title: Text('System Logs', style: AppTextStyles.heading(size: 17)),
         actions: [
           IconButton(
+            tooltip: 'Refresh logs',
             icon: const FaIcon(FontAwesomeIcons.rotateRight, size: 18),
             onPressed: _loadInitial,
           ),
+          const SizedBox(width: 4),
         ],
       ),
       body: SafeArea(
@@ -180,7 +203,7 @@ class _SystemLogsScreenState extends State<SystemLogsScreen> {
             _buildSearchAndFilterBar(),
             Expanded(
               child: _isLoading
-                  ? const Center(child: CircularProgressIndicator())
+                  ? const LoadingState(message: 'Loading logs…')
                   : _hasError
                       ? _buildErrorState()
                       : _filteredLogs.isEmpty
@@ -195,81 +218,87 @@ class _SystemLogsScreenState extends State<SystemLogsScreen> {
 
   Widget _buildSearchAndFilterBar() {
     return Container(
-      padding: const EdgeInsets.all(16),
-      color: Colors.white,
-      child: Column(
-        children: [
-          TextField(
-            controller: _searchController,
-            decoration: InputDecoration(
-              hintText: 'Search by actor email or description...',
-              prefixIcon: const Icon(Icons.search, size: 20),
-              suffixIcon: _searchController.text.isNotEmpty
-                  ? IconButton(icon: const Icon(Icons.clear, size: 20), onPressed: _searchController.clear)
-                  : null,
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide(color: AppColors.cardBorder),
-              ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide(color: AppColors.cardBorder),
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide(color: AppColors.primaryGreen),
-              ),
-              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            ),
-          ),
-          const SizedBox(height: 12),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: [
-                Text('Category: ', style: AppTextStyles.body(size: 10, color: AppColors.textGray)),
-                const SizedBox(width: 4),
-                _buildFilterChip(_categoryFilter, 'All', (v) => setState(() => _categoryFilter = v)),
-                const SizedBox(width: 8),
-                _buildFilterChip(_categoryFilter, LogCategory.authentication, (v) => setState(() => _categoryFilter = v)),
-                const SizedBox(width: 8),
-                _buildFilterChip(_categoryFilter, LogCategory.userManagement, (v) => setState(() => _categoryFilter = v)),
-                const SizedBox(width: 8),
-                _buildFilterChip(_categoryFilter, LogCategory.authorization, (v) => setState(() => _categoryFilter = v)),
-              ],
-            ),
-          ),
-          const SizedBox(height: 8),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: [
-                Text('Severity: ', style: AppTextStyles.body(size: 10, color: AppColors.textGray)),
-                const SizedBox(width: 4),
-                _buildFilterChip(_severityFilter, 'All', (v) => setState(() => _severityFilter = v)),
-                const SizedBox(width: 8),
-                _buildFilterChip(_severityFilter, LogSeverity.info, (v) => setState(() => _severityFilter = v)),
-                const SizedBox(width: 8),
-                _buildFilterChip(_severityFilter, LogSeverity.warning, (v) => setState(() => _severityFilter = v)),
-              ],
-            ),
-          ),
-        ],
+      width: double.infinity,
+      decoration: const BoxDecoration(
+        color: AppColors.surface,
+        border: Border(bottom: BorderSide(color: AppColors.border)),
       ),
+      padding: const EdgeInsets.all(AppSpace.lg),
+      child: _centered(
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: _searchController,
+              decoration: FormFieldStyle.outlined(
+                hint: 'Search by actor email or description',
+                prefixIcon: const Icon(Icons.search, size: 20),
+                suffixIcon: _searchController.text.isNotEmpty
+                    ? IconButton(
+                        tooltip: 'Clear search',
+                        icon: const Icon(Icons.clear, size: 20),
+                        onPressed: _searchController.clear,
+                      )
+                    : null,
+              ),
+            ),
+            const SizedBox(height: AppSpace.md),
+            _filterGroup(
+              'Category',
+              _categoryFilter,
+              const [
+                'All',
+                LogCategory.authentication,
+                LogCategory.userManagement,
+                LogCategory.authorization,
+              ],
+              (v) => setState(() => _categoryFilter = v),
+            ),
+            const SizedBox(height: AppSpace.sm),
+            _filterGroup(
+              'Severity',
+              _severityFilter,
+              const ['All', LogSeverity.info, LogSeverity.warning],
+              (v) => setState(() => _severityFilter = v),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// A labelled group of filter chips that WRAPS on narrow screens instead of
+  /// forcing a sideways scroll.
+  Widget _filterGroup(
+    String label,
+    String current,
+    List<String> options,
+    void Function(String) onSelect,
+  ) {
+    return Wrap(
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: AppSpace.sm,
+      runSpacing: AppSpace.xs,
+      children: [
+        SizedBox(width: 72, child: Text(label, style: AppTextStyles.label())),
+        for (final option in options) _buildFilterChip(current, option, onSelect),
+      ],
     );
   }
 
   Widget _buildFilterChip(String currentValue, String label, void Function(String) onSelect) {
     final isSelected = currentValue == label;
     return FilterChip(
-      label: Text(label, style: AppTextStyles.body(size: 10.5)),
+      label: Text(label),
       selected: isSelected,
       onSelected: (_) => onSelect(label),
-      selectedColor: AppColors.primaryGreen.withOpacity(0.1),
-      checkmarkColor: AppColors.primaryGreen,
-      backgroundColor: AppColors.lightBg,
+      showCheckmark: false,
+      selectedColor: AppColors.successBg,
+      backgroundColor: AppColors.surface,
+      side: BorderSide(color: isSelected ? AppColors.successBorder : AppColors.borderStrong),
       labelStyle: AppTextStyles.body(
-        size: 10.5,
+        size: 12.5,
+        weight: isSelected ? FontWeight.w800 : FontWeight.w600,
         color: isSelected ? AppColors.primaryGreen : AppColors.textDark,
       ),
     );
@@ -277,53 +306,48 @@ class _SystemLogsScreenState extends State<SystemLogsScreen> {
 
   Widget _buildLogList() {
     final logs = _filteredLogs;
-    return ListView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: logs.length + (_hasMore ? 1 : 0),
-      itemBuilder: (context, index) {
-        if (index >= logs.length) {
-          return Padding(
-            padding: const EdgeInsets.only(top: 4, bottom: 16),
-            child: Center(
-              child: _isLoadingMore
-                  ? const CircularProgressIndicator()
-                  : OutlinedButton(
-                      onPressed: _loadMore,
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: AppColors.primaryGreen,
-                        side: const BorderSide(color: AppColors.primaryGreen),
+    return _centered(
+      ListView.builder(
+        padding: const EdgeInsets.all(AppSpace.lg),
+        itemCount: logs.length + (_hasMore ? 1 : 0),
+        itemBuilder: (context, index) {
+          if (index >= logs.length) {
+            return Padding(
+              padding: const EdgeInsets.only(top: AppSpace.xs, bottom: AppSpace.lg),
+              child: Center(
+                child: _isLoadingMore
+                    ? const CircularProgressIndicator()
+                    : OutlinedButton(
+                        onPressed: _loadMore,
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: AppColors.primaryGreen,
+                          side: const BorderSide(color: AppColors.primaryGreen),
+                        ),
+                        child: const Text('Load More'),
                       ),
-                      child: const Text('Load More'),
-                    ),
-            ),
+              ),
+            );
+          }
+          final log = logs[index];
+          return Padding(
+            padding: const EdgeInsets.only(bottom: AppSpace.md),
+            child: LogListItem(log: log, onTap: () => _showLogDetail(log)),
           );
-        }
-        final log = logs[index];
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 12),
-          child: LogListItem(log: log, onTap: () => _showLogDetail(log)),
-        );
-      },
+        },
+      ),
     );
   }
 
   Widget _buildEmptyState() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const FaIcon(FontAwesomeIcons.clipboardList, size: 48, color: AppColors.textGray),
-          const SizedBox(height: 16),
-          Text('No logs found', style: AppTextStyles.body(size: 12, weight: FontWeight.w600)),
-          const SizedBox(height: 8),
-          Text(
-            _searchController.text.isNotEmpty || _categoryFilter != 'All' || _severityFilter != 'All'
-                ? 'Try adjusting your search or filters'
-                : 'System activity will appear here as it happens',
-            style: AppTextStyles.body(size: 10, color: AppColors.textGray),
-          ),
-        ],
-      ),
+    return EmptyState(
+      icon: Icons.assignment_outlined,
+      title: 'No logs found',
+      message: _filtersActive
+          ? 'Try adjusting your search or filters'
+          : 'System activity will appear here as it happens',
+      action: _filtersActive
+          ? OutlinedButton(onPressed: _clearFilters, child: const Text('Clear filters'))
+          : null,
     );
   }
 
@@ -332,15 +356,6 @@ class _SystemLogsScreenState extends State<SystemLogsScreen> {
     final message = cause == null
         ? 'Could not load logs'
         : FirestoreService.messageFor(cause, fallback: 'Could not load logs');
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const FaIcon(FontAwesomeIcons.triangleExclamation, size: 40, color: AppColors.warmRedOrange),
-          const SizedBox(height: 12),
-          Text(message, style: AppTextStyles.body(size: 12, weight: FontWeight.w600)),
-        ],
-      ),
-    );
+    return ErrorState(message: message, onRetry: _loadInitial);
   }
 }

@@ -289,6 +289,56 @@ class FirestoreService {
     }
   }
 
+  /// Whether any user document currently has `guidancePosition == value` --
+  /// the check Position Management runs before allowing a delete, so an
+  /// existing account can never be left pointing at a position that no
+  /// longer exists. Deliberately includes BOTH active and inactive
+  /// accounts: an inactive account still holds real historical profile
+  /// data (see [deactivateUser]'s own "deactivate, never delete" pattern
+  /// for users themselves), so it must block deletion the same as an
+  /// active one -- there is no documented reason in this codebase to treat
+  /// an inactive account's stored position as safe to orphan. Mirrors the
+  /// existing [getUsersByRole] query shape; no position-assignment query
+  /// existed before this.
+  ///
+  /// Fails CLOSED on a read error (reports "assigned") rather than open --
+  /// a delete this method could not actually verify must never be allowed
+  /// to proceed, since doing so risks silently orphaning a user's profile.
+  Future<bool> isGuidancePositionAssigned(String value) async {
+    try {
+      final query = await _usersCollection.where('guidancePosition', isEqualTo: value).limit(1).get();
+      return query.docs.isNotEmpty;
+    } catch (e) {
+      print('Error checking guidance position assignment: $e');
+      return true;
+    }
+  }
+
+  /// Removes ONE position from `config/guidancePositions`'s `positions`
+  /// map -- only the single key at [value], via `FieldValue.delete()` on a
+  /// dot-path field. Firestore treats this as an UPDATE to the document
+  /// (never a document DELETE), so the existing `allow create, update: if
+  /// isSystemAdmin()` rule in `firestore.rules` already permits it; no
+  /// rules change was needed for this feature. The rest of the `positions`
+  /// map, and the document itself, are left untouched.
+  ///
+  /// Callers MUST already have verified via [isGuidancePositionAssigned]
+  /// (ideally re-checked immediately beforehand, to close the gap between
+  /// the check and this write) that no user currently holds this value --
+  /// this method performs no such check itself and will happily remove a
+  /// position that is still in use if a caller skips that guard.
+  Future<void> removeGuidancePosition(String value) async {
+    try {
+      await _configCollection.doc(_guidancePositionsDocId).update({
+        'positions.$value': FieldValue.delete(),
+      });
+      print('Guidance position removed: $value');
+    } catch (e) {
+      print('Error removing guidance position: $e');
+      rethrow;
+    }
+  }
+
   /// Deactivate user account (admin only)
   Future<void> deactivateUser(String userId) async {
     try {

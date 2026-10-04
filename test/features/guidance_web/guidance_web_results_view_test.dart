@@ -210,9 +210,39 @@ void main() {
   setUp(() {
     client = _FakeSyncClient();
     client.batchesToReturn = CloudBatchesRead.found([_batchRow()]);
+    // Linked by default (examineeId set + a matching examinee registered),
+    // so every test in this file that isn't specifically about linking
+    // still sees its rows in Results -- see the "linked examinees" group
+    // below for the tests that exercise the official-identity filter itself.
     client.scansByBatchId['b1'] = CloudScansRead.found([
-      _scanRow(id: 's1', firstName: 'Juan', lastName: 'Cruz', number: 'A-1'),
-      _scanRow(id: 's2', firstName: 'Maria', lastName: 'Santos', number: 'A-2'),
+      _scanRow(
+        id: 's1',
+        firstName: 'Juan',
+        lastName: 'Cruz',
+        number: 'A-1',
+        examineeId: 'e1',
+      ),
+      _scanRow(
+        id: 's2',
+        firstName: 'Maria',
+        lastName: 'Santos',
+        number: 'A-2',
+        examineeId: 'e2',
+      ),
+    ]);
+    client.examineesToReturn = CloudExamineesRead.found([
+      _examineeRow(
+        id: 'e1',
+        temporaryId: 'EX-000001',
+        first: 'Juan',
+        last: 'Cruz',
+      ),
+      _examineeRow(
+        id: 'e2',
+        temporaryId: 'EX-000002',
+        first: 'Maria',
+        last: 'Santos',
+      ),
     ]);
   });
 
@@ -240,6 +270,44 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('B-1 — Admission Test (Jan 1, 2026)').last);
     await tester.pumpAndSettle();
+  }
+
+  for (final width in [320.0, 390.0, 768.0, 1280.0]) {
+    testWidgets('Results controls and rows remain usable at $width', (
+      tester,
+    ) async {
+      await pumpResultsView(tester);
+      await selectTheOnlyBatch(tester);
+      tester.view.physicalSize = Size(width, 900);
+      if (width == 320) {
+        tester.platformDispatcher.textScaleFactorTestValue = 1.8;
+        addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+      }
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(
+        find.byKey(Key(width < 648 ? 'resultsCards' : 'resultsTable')),
+        findsOneWidget,
+      );
+      final view = find.widgetWithText(TextButton, 'View').first;
+      expect(tester.getSize(view).height, greaterThanOrEqualTo(44));
+      await tester.enterText(
+        find.byKey(const Key('resultsSearch')),
+        'no-matching-person',
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.text('No results match your search or filter.'),
+        findsOneWidget,
+      );
+      await tester.ensureVisible(find.text('Clear filters'));
+      await tester.pumpAndSettle();
+      expect(find.text('Clear filters').hitTestable(), findsOneWidget);
+      await tester.tap(find.text('Clear filters'));
+      await tester.pumpAndSettle();
+      expect(find.text('2 of 2 results'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
   }
 
   testWidgets(
@@ -420,7 +488,7 @@ void main() {
     );
 
     testWidgets(
-      'a batch with no description keeps the original single name line (no size change)',
+      'a batch with no description keeps a readable single name line',
       (tester) async {
         seedBatchWith('');
         await pumpResultsView(tester);
@@ -433,8 +501,8 @@ void main() {
             .style!;
         expect(
           name.fontSize,
-          11,
-          reason: 'unchanged from before the description was added',
+          13,
+          reason: 'batch names remain readable without a description',
         );
       },
     );
@@ -561,6 +629,7 @@ void main() {
           lastName: 'Cruz',
           number: 'A-1',
           rawScore: 30,
+          examineeId: 'e1',
         ),
         _scanRow(
           id: 's2',
@@ -568,6 +637,7 @@ void main() {
           lastName: 'Santos',
           number: 'A-2',
           rawScore: 80,
+          examineeId: 'e2',
         ),
         _scanRow(
           id: 's3',
@@ -575,6 +645,27 @@ void main() {
           lastName: 'Reyes',
           number: 'A-3',
           rawScore: 50,
+          examineeId: 'e3',
+        ),
+      ]);
+      client.examineesToReturn = CloudExamineesRead.found([
+        _examineeRow(
+          id: 'e1',
+          temporaryId: 'EX-000001',
+          first: 'Juan',
+          last: 'Cruz',
+        ),
+        _examineeRow(
+          id: 'e2',
+          temporaryId: 'EX-000002',
+          first: 'Maria',
+          last: 'Santos',
+        ),
+        _examineeRow(
+          id: 'e3',
+          temporaryId: 'EX-000003',
+          first: 'Pedro',
+          last: 'Reyes',
         ),
       ]);
       await pumpResultsView(tester);
@@ -648,6 +739,7 @@ void main() {
           lastName: 'Cruz',
           number: 'A-1',
           rawScore: 30,
+          examineeId: 'e1',
         ),
         _scanRow(
           id: 's2',
@@ -655,8 +747,10 @@ void main() {
           lastName: 'Santos',
           number: 'A-2',
           resultStatus: null,
+          examineeId: 'e2',
         ),
       ]);
+      // client.examineesToReturn keeps setUp()'s default e1/e2 registration.
       await pumpResultsView(tester);
       await selectTheOnlyBatch(tester);
 
@@ -714,8 +808,11 @@ void main() {
     }
 
     testWidgets(
-      'a scan linked to an existing examinee, and one created with Confirm and Create, '
-      'show the examinee\'s name instead of Unnamed; an unlinked scan keeps its tag',
+      '1. UNLINKED SCAN NOW SHOWN -- a scan linked to an existing examinee, '
+      'and one created with Confirm and Create, show the official examinee\'s '
+      'name; an unlinked scan (with its own OCR/staff tag and a score) now '
+      'appears too, with that tag shown as plain scan information and a '
+      '"not linked" badge -- never styled as though it were official',
       (tester) async {
         seedLinkedBatch();
         await pumpResultsView(tester);
@@ -726,34 +823,32 @@ void main() {
         expect(
           find.text('Cruz, Juan'),
           findsOneWidget,
-          reason: 'the unlinked scan is unchanged',
+          reason:
+              'the unlinked scan now appears, with its OCR/staff tag '
+              'shown as plain scan information, never an official identity',
         );
-        expect(find.text('Unnamed'), findsNothing);
+        // Exactly one row (the unlinked one) carries the "not linked" badge.
+        expect(find.byKey(const Key('notLinkedBadge')), findsOneWidget);
       },
     );
 
-    testWidgets(
-      'without the link (same scan data) the row is still Unnamed -- the name comes from the relationship',
-      (tester) async {
-        client.scansByBatchId['b1'] = CloudScansRead.found([
-          _scanRow(
-            id: 's1',
-            firstName: '',
-            lastName: '',
-            number: 'EX-1790006562335-3',
-          ),
-        ]);
-        await pumpResultsView(tester);
-        await selectTheOnlyBatch(tester);
+    testWidgets('an unlinked scan with no OCR/staff tag at all shows a plain '
+        'placeholder, never an invented name -- and no examinees request is '
+        'made since nothing in the batch is linked', (tester) async {
+      client.scansByBatchId['b1'] = CloudScansRead.found([
+        _scanRow(id: 's1', firstName: '', lastName: '', number: ''),
+      ]);
+      await pumpResultsView(tester);
+      await selectTheOnlyBatch(tester);
 
-        expect(find.text('Unnamed'), findsOneWidget);
-        expect(
-          client.examineeReads,
-          0,
-          reason: 'nothing linked -> no examinees request',
-        );
-      },
-    );
+      expect(find.text('No name on file'), findsOneWidget);
+      expect(find.byKey(const Key('notLinkedBadge')), findsOneWidget);
+      expect(
+        client.examineeReads,
+        0,
+        reason: 'nothing linked -> no examinees request',
+      );
+    });
 
     testWidgets(
       'search matches the linked examinee\'s name and Temporary Examinee ID',
@@ -795,7 +890,11 @@ void main() {
     );
 
     testWidgets(
-      'a linked examinee whose record has no usable name falls back to the scan\'s own tag',
+      '3. OFFICIAL IDENTITY USED -- a scan linked to a resolvable examinee '
+      'whose record has no usable name still appears (it IS officially '
+      'linked, so it gets no "not linked" badge) but shows a plain '
+      'placeholder, never falling back to the scan\'s own OCR/staff tag -- '
+      'that fallback only ever applies to a scan with NO link at all',
       (tester) async {
         client.scansByBatchId['b1'] = CloudScansRead.found([
           _scanRow(
@@ -812,7 +911,15 @@ void main() {
         await pumpResultsView(tester);
         await selectTheOnlyBatch(tester);
 
-        expect(find.text('Cruz, Juan'), findsOneWidget);
+        expect(find.text('Cruz, Juan'), findsNothing);
+        expect(find.text('No name on file'), findsOneWidget);
+        expect(
+          find.byKey(const Key('notLinkedBadge')),
+          findsNothing,
+          reason:
+              'the scan IS linked -- a blank official name is not the '
+              'same as being unlinked, and must not show the "not linked" badge',
+        );
       },
     );
 
@@ -832,83 +939,191 @@ void main() {
     );
   });
 
-  group('Applicant Retake Management -- archived attempts excluded by default', () {
-    testWidgets('an archived Attempt 1 does not appear in the Results table', (tester) async {
+  group(
+    'Applicant Retake Management -- archived attempts excluded by default',
+    () {
+      testWidgets(
+        'an archived Attempt 1 does not appear in the Results table',
+        (tester) async {
+          client.scansByBatchId['b1'] = CloudScansRead.found([
+            _scanRow(
+              id: 's-old',
+              firstName: 'Juan',
+              lastName: 'Cruz',
+              number: 'A-1',
+              attemptNo: 1,
+              attemptStatus: 'archived',
+            ),
+          ]);
+          await pumpResultsView(tester);
+          await selectTheOnlyBatch(tester);
+
+          expect(find.text('Cruz, Juan'), findsNothing);
+        },
+      );
+
+      testWidgets('an active Attempt 2 appears in the Results table', (
+        tester,
+      ) async {
+        client.scansByBatchId['b1'] = CloudScansRead.found([
+          _scanRow(
+            id: 's-old',
+            firstName: 'Juan',
+            lastName: 'Cruz',
+            number: 'A-1',
+            attemptNo: 1,
+            attemptStatus: 'archived',
+          ),
+          _scanRow(
+            id: 's-new',
+            firstName: 'Juan',
+            lastName: 'Cruz',
+            number: 'A-1',
+            attemptNo: 2,
+            attemptStatus: 'active',
+            examineeId: 'e1',
+          ),
+        ]);
+        // client.examineesToReturn keeps setUp()'s default e1 = Juan Cruz.
+        await pumpResultsView(tester);
+        await selectTheOnlyBatch(tester);
+
+        expect(find.text('Cruz, Juan'), findsOneWidget);
+      });
+
+      testWidgets(
+        'an ordinary active Attempt 1 (no retake) appears, exactly as before',
+        (tester) async {
+          client.scansByBatchId['b1'] = CloudScansRead.found([
+            _scanRow(
+              id: 's1',
+              firstName: 'Juan',
+              lastName: 'Cruz',
+              number: 'A-1',
+              examineeId: 'e1',
+            ), // default: attempt 1, active
+          ]);
+          // client.examineesToReturn keeps setUp()'s default e1 = Juan Cruz.
+          await pumpResultsView(tester);
+          await selectTheOnlyBatch(tester);
+
+          expect(find.text('Cruz, Juan'), findsOneWidget);
+        },
+      );
+
+      testWidgets('QTM behavior is unchanged', (tester) async {
+        client.batchesToReturn = CloudBatchesRead.found([
+          _batchRow(
+            id: 'q1',
+            batchCode: 'Q-1',
+            examCode: 'QTM',
+            examTitle: 'QTM',
+          ),
+        ]);
+        client.scansByBatchId['q1'] = CloudScansRead.found([
+          _scanRow(
+            id: 'sq1',
+            firstName: 'Ana',
+            lastName: 'Reyes',
+            number: 'Q-A1',
+            batchId: 'q1',
+            examCode: 'QTM',
+            examineeId: 'e_qtm',
+          ),
+        ]);
+        client.examineesToReturn = CloudExamineesRead.found([
+          _examineeRow(
+            id: 'e_qtm',
+            temporaryId: 'EX-Q1',
+            first: 'Ana',
+            last: 'Reyes',
+          ),
+        ]);
+        await pumpResultsView(tester);
+
+        await tester.tap(find.byKey(const Key('examTab_QTM')));
+        await tester.pumpAndSettle();
+        await tester.tap(
+          find.byType(DropdownButtonFormField<LocalBatch>).first,
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Q-1 — QTM (Jan 1, 2026)').last);
+        await tester.pumpAndSettle();
+
+        expect(find.text('Reyes, Ana'), findsOneWidget);
+      });
+    },
+  );
+
+  group('8. Archived Results -- the shared GuidanceWebResultsView/'
+      'GuidanceWebResultsService linked/unlinked identity resolution applies '
+      'identically for an archived batch', () {
+    Future<void> pumpArchivedBatch(WidgetTester tester) async {
+      tester.view.physicalSize = const Size(1400, 1600);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final batch = LocalBatch(
+        id: 'b1',
+        batchCode: 'B-1',
+        examCode: 'AT',
+        examTitle: 'Admission Test',
+        description: '',
+        expectedCount: 2,
+        status: 'Completed',
+        createdByUid: 'uid',
+        createdByName: 'Officer',
+        createdAt: DateTime.utc(2026, 1, 1),
+        updatedAt: DateTime.utc(2026, 1, 1),
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: GuidanceWebResultsView(
+              service: GuidanceWebResultsService(client: client),
+              archivedBatch: batch,
+              onBackToArchive: () {},
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('a linked scan is shown with its official identity, and an '
+        'unlinked scan is shown too with its OCR tag and a "not linked" '
+        'badge, exactly as in the normal (non-archived) Results view -- no '
+        'special-case archive behavior exists or is needed', (tester) async {
       client.scansByBatchId['b1'] = CloudScansRead.found([
         _scanRow(
-          id: 's-old',
-          firstName: 'Juan',
-          lastName: 'Cruz',
-          number: 'A-1',
-          attemptNo: 1,
-          attemptStatus: 'archived',
-        ),
-      ]);
-      await pumpResultsView(tester);
-      await selectTheOnlyBatch(tester);
-
-      expect(find.text('Cruz, Juan'), findsNothing);
-    });
-
-    testWidgets('an active Attempt 2 appears in the Results table', (tester) async {
-      client.scansByBatchId['b1'] = CloudScansRead.found([
-        _scanRow(
-          id: 's-old',
-          firstName: 'Juan',
-          lastName: 'Cruz',
-          number: 'A-1',
-          attemptNo: 1,
-          attemptStatus: 'archived',
+          id: 's_linked',
+          firstName: '',
+          lastName: '',
+          number: 'EX-1',
+          examineeId: 'e1',
         ),
         _scanRow(
-          id: 's-new',
-          firstName: 'Juan',
-          lastName: 'Cruz',
-          number: 'A-1',
-          attemptNo: 2,
-          attemptStatus: 'active',
-        ),
-      ]);
-      await pumpResultsView(tester);
-      await selectTheOnlyBatch(tester);
-
-      expect(find.text('Cruz, Juan'), findsOneWidget);
-    });
-
-    testWidgets('an ordinary active Attempt 1 (no retake) appears, exactly as before', (tester) async {
-      client.scansByBatchId['b1'] = CloudScansRead.found([
-        _scanRow(id: 's1', firstName: 'Juan', lastName: 'Cruz', number: 'A-1'), // default: attempt 1, active
-      ]);
-      await pumpResultsView(tester);
-      await selectTheOnlyBatch(tester);
-
-      expect(find.text('Cruz, Juan'), findsOneWidget);
-    });
-
-    testWidgets('QTM behavior is unchanged', (tester) async {
-      client.batchesToReturn = CloudBatchesRead.found([
-        _batchRow(id: 'q1', batchCode: 'Q-1', examCode: 'QTM', examTitle: 'QTM'),
-      ]);
-      client.scansByBatchId['q1'] = CloudScansRead.found([
-        _scanRow(
-          id: 'sq1',
+          id: 's_unlinked',
           firstName: 'Ana',
-          lastName: 'Reyes',
-          number: 'Q-A1',
-          batchId: 'q1',
-          examCode: 'QTM',
+          lastName: 'Lim',
+          number: 'OLD-7',
         ),
       ]);
-      await pumpResultsView(tester);
+      client.examineesToReturn = CloudExamineesRead.found([
+        _examineeRow(
+          id: 'e1',
+          temporaryId: 'EX-000004',
+          first: 'Merch',
+          last: 'Andulana',
+        ),
+      ]);
 
-      await tester.tap(find.byKey(const Key('examTab_QTM')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byType(DropdownButtonFormField<LocalBatch>).first);
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Q-1 — QTM (Jan 1, 2026)').last);
-      await tester.pumpAndSettle();
+      await pumpArchivedBatch(tester);
 
-      expect(find.text('Reyes, Ana'), findsOneWidget);
+      expect(find.text('Andulana, Merch'), findsOneWidget);
+      expect(find.text('Lim, Ana'), findsOneWidget);
+      expect(find.byKey(const Key('notLinkedBadge')), findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'View'), findsNWidgets(2));
     });
   });
 }

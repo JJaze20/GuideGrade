@@ -79,7 +79,13 @@ class _FakeFirestoreService implements FirestoreService {
 
   List<GuidancePosition> _positions;
   final addedLabels = <String>[];
+  final removedValues = <String>[];
   Object? addErrorToThrow;
+
+  /// Position values Position Management should report as "assigned to a
+  /// user" -- empty by default, so every position starts deletable unless a
+  /// test opts a value into this set.
+  final Set<String> assignedValues = {};
 
   @override
   Future<List<GuidancePosition>> loadGuidancePositions() async => _positions;
@@ -96,6 +102,15 @@ class _FakeFirestoreService implements FirestoreService {
     addedLabels.add(label);
     _positions = [..._positions, added];
     return added;
+  }
+
+  @override
+  Future<bool> isGuidancePositionAssigned(String value) async => assignedValues.contains(value);
+
+  @override
+  Future<void> removeGuidancePosition(String value) async {
+    removedValues.add(value);
+    _positions = [..._positions]..removeWhere((p) => p.value == value);
   }
 
   @override
@@ -294,18 +309,41 @@ void main() {
     expect(display.controller!.text, isEmpty);
   });
 
-  testWidgets('a System Admin can add a new position through the "+" action, and it becomes selectable',
+  testWidgets('the "+" action opens Position Management, listing the existing positions', (tester) async {
+    await openScreen(tester);
+
+    await tester.tap(find.byKey(const Key('createUser.addPosition')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Position Management'), findsOneWidget);
+    expect(find.text('Guidance Head'), findsOneWidget);
+    expect(find.text('Psychometrician'), findsOneWidget);
+    expect(find.text('Guidance Staff'), findsOneWidget);
+  });
+
+  testWidgets('a System Admin can add a new position from Position Management, and it becomes selectable',
       (tester) async {
     await openScreen(tester);
 
     await tester.tap(find.byKey(const Key('createUser.addPosition')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('positionManagement.add')));
     await tester.pumpAndSettle();
     await tester.enterText(find.byKey(const Key('addGuidancePosition.label')), 'Auditing');
     await tester.tap(find.byKey(const Key('addGuidancePosition.add')));
     await tester.pumpAndSettle();
 
     expect(firestoreService.addedLabels, ['Auditing']);
+    // Position Management stays open and its own list already reflects the
+    // addition, without closing/reopening.
+    expect(find.text('Auditing'), findsOneWidget);
 
+    await tester.tap(find.byKey(const Key('positionManagement.close')));
+    await tester.pumpAndSettle();
+
+    // The calling screen's own dropdown picks up the update too (the
+    // updated position list is received back after Position Management
+    // closes).
     await tester.tap(find.byKey(const Key('createUser.position')));
     await tester.pumpAndSettle();
     expect(find.text('Auditing'), findsWidgets);
@@ -317,10 +355,12 @@ void main() {
     expect(service.calls.single.guidancePosition, 'auditing');
   });
 
-  testWidgets('cancelling the "+" dialog adds nothing', (tester) async {
+  testWidgets('cancelling the add dialog from Position Management adds nothing', (tester) async {
     await openScreen(tester);
 
     await tester.tap(find.byKey(const Key('createUser.addPosition')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('positionManagement.add')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('addGuidancePosition.cancel')));
     await tester.pumpAndSettle();
@@ -332,6 +372,8 @@ void main() {
     await openScreen(tester);
 
     await tester.tap(find.byKey(const Key('createUser.addPosition')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('positionManagement.add')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('addGuidancePosition.add')));
     await tester.pumpAndSettle();
@@ -345,11 +387,68 @@ void main() {
 
     await tester.tap(find.byKey(const Key('createUser.addPosition')));
     await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('positionManagement.add')));
+    await tester.pumpAndSettle();
     await tester.enterText(find.byKey(const Key('addGuidancePosition.label')), 'Guidance Head');
     await tester.tap(find.byKey(const Key('addGuidancePosition.add')));
     await tester.pumpAndSettle();
 
     expect(find.text('A position with this name already exists'), findsOneWidget);
     expect(firestoreService.addedLabels, isEmpty);
+  });
+
+  testWidgets('deleting an unassigned position from Position Management works, after confirmation', (tester) async {
+    await openScreen(tester);
+
+    await tester.tap(find.byKey(const Key('createUser.addPosition')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('positionManagement.delete.guidance_staff')));
+    await tester.pumpAndSettle();
+
+    // Confirmation is required before deletion -- nothing removed yet.
+    expect(firestoreService.removedValues, isEmpty);
+    expect(find.text('Delete this position?'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('positionManagement.deleteConfirm.delete')));
+    await tester.pumpAndSettle();
+
+    expect(firestoreService.removedValues, ['guidance_staff']);
+    expect(find.text('Guidance Staff'), findsNothing);
+  });
+
+  testWidgets('cancelling the delete confirmation in Position Management deletes nothing', (tester) async {
+    await openScreen(tester);
+
+    await tester.tap(find.byKey(const Key('createUser.addPosition')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('positionManagement.delete.guidance_staff')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('positionManagement.deleteConfirm.cancel')));
+    await tester.pumpAndSettle();
+
+    expect(firestoreService.removedValues, isEmpty);
+    expect(find.text('Guidance Staff'), findsOneWidget);
+  });
+
+  testWidgets('deleting a position currently assigned to a user is blocked, with an explanation', (tester) async {
+    await openScreen(tester);
+    firestoreService.assignedValues.add('guidance_staff');
+
+    await tester.tap(find.byKey(const Key('createUser.addPosition')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('positionManagement.delete.guidance_staff')));
+    await tester.pumpAndSettle();
+
+    // Blocked before the confirmation dialog is ever shown.
+    expect(find.text('Delete this position?'), findsNothing);
+    expect(find.text('Cannot Delete This Position'), findsOneWidget);
+    expect(firestoreService.removedValues, isEmpty);
+
+    expect(find.byKey(const Key('positionManagement.blockedDialog')), findsOneWidget);
+    await tester.tap(find.widgetWithText(FilledButton, 'OK'));
+    await tester.pumpAndSettle();
+
+    // Guidance Staff is still present and still selectable.
+    expect(find.text('Guidance Staff'), findsOneWidget);
   });
 }

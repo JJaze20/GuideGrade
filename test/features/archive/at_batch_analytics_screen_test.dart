@@ -101,11 +101,11 @@ LocalBatch _batch({
       scans: scans,
     );
 
-/// Five analyzable scans hitting every bucket (A, Unclassified, B, C, D)
+/// Five analyzable scans across A, B, C, D
 /// plus one ungraded. Raws: 20, 56, 59, 62, 70.
 LocalBatch _validBatch({double legacyPercentage = 0}) => _batch(scans: [
       _graded(20, id: 'a', legacyPercentage: legacyPercentage), // A
-      _graded(56, id: 'u', legacyPercentage: legacyPercentage), // Unclassified
+      _graded(56, id: 'u', legacyPercentage: legacyPercentage), // B
       _graded(59, id: 'b', legacyPercentage: legacyPercentage), // B
       _graded(62, id: 'c', legacyPercentage: legacyPercentage), // C
       _graded(70, id: 'd', legacyPercentage: legacyPercentage), // D
@@ -314,22 +314,21 @@ void main() {
   });
 
   group('7–11. Category distribution rows + rates', () {
-    testWidgets('A / Unclassified / B / C / D rows with counts and rates',
+    testWidgets('A / B / C / D rows with counts and rates',
         (tester) async {
       await _pump(tester, batch: _validBatch()); // 5 analyzable, 1 in each
-      for (final name in ['a', 'unclassified', 'b', 'c', 'd']) {
+      for (final name in ['a', 'b', 'c', 'd']) {
         expect(find.byKey(Key('atAnalytics.category.$name')), findsOneWidget);
       }
       expect(_inKey(const Key('atAnalytics.category.a'), 'A'), findsOneWidget);
-      expect(_inKey(const Key('atAnalytics.category.unclassified'),
-          'Unclassified'), findsOneWidget);
+      expect(find.byKey(const Key('atAnalytics.category.unclassified')), findsNothing);
       expect(_inKey(const Key('atAnalytics.category.b'), 'B'), findsOneWidget);
       expect(_inKey(const Key('atAnalytics.category.c'), 'C'), findsOneWidget);
       expect(_inKey(const Key('atAnalytics.category.d'), 'D'), findsOneWidget);
-      // each bucket holds exactly one of the five analyzable scans
-      for (final name in ['a', 'unclassified', 'b', 'c', 'd']) {
-        expect(_inKey(Key('atAnalytics.category.$name'), '1'), findsOneWidget);
-        expect(_inKey(Key('atAnalytics.category.$name'), '20.0%'),
+      // B holds two scans; the other categories hold one each.
+      for (final name in ['a', 'b', 'c', 'd']) {
+        expect(_inKey(Key('atAnalytics.category.$name'), name == 'b' ? '2' : '1'), findsOneWidget);
+        expect(_inKey(Key('atAnalytics.category.$name'), name == 'b' ? '40.0%' : '20.0%'),
             findsOneWidget); // 1 / 5 = 20.0%
       }
     });
@@ -347,8 +346,8 @@ void main() {
     const cases = <int, String>{
       0: 'A',
       54: 'A',
-      55: 'Unclassified',
-      57: 'Unclassified',
+      55: 'B',
+      57: 'B',
       58: 'B',
       60: 'B',
       61: 'C',
@@ -415,7 +414,7 @@ void main() {
       expect(first, containsText('D'));
       final unclassified = _valueOf(const Key('atAnalytics.topScorer.u'));
       expect(unclassified, containsText('#4'));
-      expect(unclassified, containsText('Unclassified'));
+      expect(unclassified, containsText('B'));
       final last = _valueOf(const Key('atAnalytics.topScorer.a'));
       expect(last, containsText('#5'));
       expect(last, containsText('20 / 72'));
@@ -505,12 +504,12 @@ void main() {
     });
   });
 
-  group('Score distribution — five official category-aligned bands', () {
-    testWidgets('all five bands render; corrupt-free counts', (tester) async {
+  group('Score distribution — four category-aligned bands', () {
+    testWidgets('all four bands render; corrupt-free counts', (tester) async {
       await _pump(tester, batch: _validBatch());
-      for (final name in ['a', 'unclassified', 'b', 'c', 'd']) {
+      for (final name in ['a', 'b', 'c', 'd']) {
         expect(find.byKey(Key('atAnalytics.scoreBand.$name')), findsOneWidget);
-        expect(_inKey(Key('atAnalytics.scoreBand.$name'), '1'), findsOneWidget);
+        expect(_inKey(Key('atAnalytics.scoreBand.$name'), name == 'b' ? '2' : '1'), findsOneWidget);
       }
     });
 

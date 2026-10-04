@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import '../../models/answer_key.dart';
 import '../../models/local_batch.dart';
 import '../services/local_batch_repository.dart';
+import 'scan_delete_client.dart';
 import 'sync_client.dart';
 import 'sync_job.dart';
 import 'sync_outcome.dart';
@@ -433,7 +434,25 @@ class SyncManager extends ChangeNotifier {
       case SyncJobType.pushAnswerKey:
         return client.pushAnswerKey(job.entityId, meta: job.meta);
       case SyncJobType.deleteScan:
-        return client.deleteScan(job.batchId!, job.scanId!);
+        // Requirement #4: a 30-day soft delete via the existing, unmodified
+        // soft_delete_unlinked_scan RPC -- NEVER the old hard-delete
+        // client.deleteScan(...) (which this case no longer calls at all,
+        // and must never fall back to). The RPC itself is the sole
+        // authority on whether this scan is eligible (unlinked, not
+        // archived, not already soft-deleted); a linked scan is rejected
+        // server-side with 42501 and the cloud row is left completely
+        // untouched -- no client-side examinee_id lookup is performed here.
+        // job.meta['reason']/['deletedByUid'] are absent only for a job
+        // enqueued by an older app version before this metadata existed;
+        // the RPC's own 22023 ("reason is required") handles that case --
+        // no second recovery mechanism is added here.
+        return (client as ScanDeleteClient).softDeleteUnlinkedScan(
+          batchId: job.batchId!,
+          scanId: job.scanId!,
+          deletedByUid: job.meta['deletedByUid'] ?? '',
+          deletedByName: job.meta['deletedByName'],
+          deletionReason: job.meta['reason'] ?? '',
+        );
       case SyncJobType.deleteBatch:
         return client.deleteBatch(job.batchId!);
       case SyncJobType.deleteStoragePrefix:

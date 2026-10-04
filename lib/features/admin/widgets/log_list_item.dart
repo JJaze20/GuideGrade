@@ -2,7 +2,10 @@ import 'package:flutter/material.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
+import '../../../core/constants/app_tokens.dart';
 import '../../../models/log_entry.dart';
+import '../../../shared/widgets/status_badge.dart';
+import '../../../shared/widgets/surface_card.dart';
 
 /// Reusable widget for displaying a single log entry in the System Logs
 /// list. Read-only by construction -- there is no edit/delete affordance
@@ -20,90 +23,54 @@ class LogListItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: log.severity == LogSeverity.warning ? const Color(0xFFFCD34D) : AppColors.cardBorder,
-          ),
-        ),
+    final isWarning = log.severity == LogSeverity.warning;
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: AppRadius.lgAll,
+        // A warning gets a visible amber outline in addition to its badge.
+        border: isWarning ? Border.all(color: AppColors.warningBorder, width: 1.5) : null,
+      ),
+      child: SurfaceCard(
+        onTap: onTap,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Expanded(
                   child: Text(
                     log.description,
-                    style: AppTextStyles.body(size: 11.5, weight: FontWeight.w700),
+                    style: AppTextStyles.subtitle(),
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
-                const SizedBox(width: 12),
-                _buildSeverityChip(),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                _buildCategoryChip(),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    _formatTimestamp(log.timestamp),
-                    style: AppTextStyles.body(size: 9, color: AppColors.textGray),
-                    textAlign: TextAlign.right,
-                  ),
+                const SizedBox(width: AppSpace.md),
+                StatusBadge(
+                  label: log.severity,
+                  tone: isWarning ? StatusTone.warning : StatusTone.success,
                 ),
               ],
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: AppSpace.md),
+            Wrap(
+              spacing: AppSpace.sm,
+              runSpacing: AppSpace.xs,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                StatusBadge(label: log.category, tone: StatusTone.neutral),
+                Text(_formatTimestamp(log.timestamp), style: AppTextStyles.caption()),
+              ],
+            ),
+            const SizedBox(height: AppSpace.sm),
             Text(
               log.actorEmail,
-              style: AppTextStyles.body(size: 9, color: AppColors.textGray),
+              style: AppTextStyles.caption(),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
           ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildCategoryChip() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: AppColors.lightBg,
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Text(
-        log.category,
-        style: AppTextStyles.body(size: 8.5, weight: FontWeight.w700, color: AppColors.textGray),
-      ),
-    );
-  }
-
-  Widget _buildSeverityChip() {
-    final isWarning = log.severity == LogSeverity.warning;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(
-        color: isWarning ? const Color(0xFFFEF3C7) : AppColors.emerald100,
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Text(
-        log.severity,
-        style: AppTextStyles.body(
-          size: 9,
-          weight: FontWeight.w700,
-          color: isWarning ? const Color(0xFF92400E) : const Color(0xFF065F46),
         ),
       ),
     );

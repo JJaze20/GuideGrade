@@ -179,7 +179,9 @@ pw.Widget _bars(List<ExportBar> bars) {
                         child: pw.Container(height: 9, color: _track),
                       ),
                     if (max == 0)
-                      pw.Expanded(child: pw.Container(height: 9, color: _track)),
+                      pw.Expanded(
+                        child: pw.Container(height: 9, color: _track),
+                      ),
                   ],
                 ),
               ),
@@ -275,8 +277,10 @@ String _fmt(double v) =>
     v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(1);
 
 pw.Widget _clusterTable(List<ClusterRow> rows) {
-  pw.Widget head(String t, {pw.Alignment a = pw.Alignment.center}) =>
-      _cell(pw.Text(t, style: _s(8.5, bold: true, color: _muted)), align: a);
+  pw.Widget head(String t, {pw.Alignment a = pw.Alignment.center}) => _cell(
+    pw.Text(t, style: _s(8.5, bold: true, color: _muted)),
+    align: a,
+  );
   const red = PdfColor.fromInt(0xFFD32F2F);
   return pw.Table(
     columnWidths: const {
@@ -322,7 +326,9 @@ pw.Widget _clusterTable(List<ClusterRow> rows) {
               align: pw.Alignment.centerLeft,
             ),
             _cell(pw.Text('${r.total}', style: _s(9))),
-            _cell(pw.Text(r.right?.toString() ?? '-', style: _s(9, bold: true))),
+            _cell(
+              pw.Text(r.right?.toString() ?? '-', style: _s(9, bold: true)),
+            ),
             _cell(
               r.band == ClusterBand.below
                   ? _check(red)
@@ -426,7 +432,6 @@ pw.Widget _examineePage(
                   ('First Name', s.firstName),
                   ('Middle Name', s.middleName),
                   ('Last Name', s.lastName),
-                  ('Age', s.age),
                   ('Scan Date', s.scanDate),
                 ])
                   pw.Padding(
@@ -460,6 +465,10 @@ pw.Widget _examineePage(
         _h1('Cluster Analysis:'),
         pw.SizedBox(height: 8),
         _clusterTable(s.clusterRows!),
+        if (s.clusterNote != null) ...[
+          pw.SizedBox(height: 6),
+          pw.Text(_clean(s.clusterNote!), style: _s(8, color: _muted)),
+        ],
       ],
       _hr(),
       _h1('Category:'),
@@ -513,10 +522,7 @@ pw.Widget _certColumn(List<CertEntry> col) => pw.Column(
         // The template sets the course lists in Calibri Bold, which is
         // narrower than the built-in Helvetica Bold, hence the smaller size.
         padding: pw.EdgeInsets.only(top: e.isHeading ? 6 : 0, bottom: 1.5),
-        child: pw.Text(
-          _clean(e.text),
-          style: _s(11.5, bold: true),
-        ),
+        child: pw.Text(_clean(e.text), style: _s(11.5, bold: true)),
       ),
   ],
 );
@@ -566,7 +572,9 @@ pw.Widget _certificatePage(
             width: 340,
             height: 30,
             decoration: pw.BoxDecoration(
-              border: pw.Border(bottom: pw.BorderSide(color: color, width: 1.2)),
+              border: pw.Border(
+                bottom: pw.BorderSide(color: color, width: 1.2),
+              ),
             ),
           ),
         )
@@ -597,10 +605,7 @@ pw.Widget _certificatePage(
                   decoration: pw.TextDecoration.underline,
                 ),
               ),
-              pw.TextSpan(
-                text: ' of the following courses:',
-                style: _s(14),
-              ),
+              pw.TextSpan(text: ' of the following courses:', style: _s(14)),
             ],
           ),
         ),

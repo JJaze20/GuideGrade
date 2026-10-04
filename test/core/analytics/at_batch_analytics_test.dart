@@ -287,9 +287,9 @@ void main() {
     const cases = <int, AdmissionCategory?>{
       0: AdmissionCategory.a,
       54: AdmissionCategory.a,
-      55: null,
-      56: null,
-      57: null,
+      55: AdmissionCategory.b,
+      56: AdmissionCategory.b,
+      57: AdmissionCategory.b,
       58: AdmissionCategory.b,
       60: AdmissionCategory.b,
       61: AdmissionCategory.c,
@@ -306,7 +306,7 @@ void main() {
         if (expectedCategory == null) {
           expect(a.unclassifiedCount, 1);
           expect(a.categoryDistribution.values.fold<int>(0, (x, y) => x + y), 0);
-          expect(a.scoreDistribution[AtScoreBand.unclassified], 1);
+          expect(a.scoreDistribution[AtScoreBand.b], 1);
         } else {
           expect(a.unclassifiedCount, 0);
           expect(a.categoryCount(expectedCategory), 1);
@@ -324,15 +324,15 @@ void main() {
       expect(a.analyzableExaminees, 11);
       expect(a.categoryDistribution, {
         AdmissionCategory.a: 3, // 10, 20, 54
-        AdmissionCategory.b: 2, // 58, 60
+        AdmissionCategory.b: 4, // 55, 56, 58, 60
         AdmissionCategory.c: 2, // 62, 64
         AdmissionCategory.d: 2, // 66, 72
       });
-      expect(a.unclassifiedCount, 2); // 55, 56
+      expect(a.unclassifiedCount, 0);
     });
   });
 
-  group('14. 55–57 Unclassified count stays separate from A / B', () {
+  group('14. 55–57 scores count as B', () {
     test('[55, 56, 57, 40, 70]', () {
       final a = _analyse([
         _graded(55),
@@ -341,13 +341,13 @@ void main() {
         _graded(40),
         _graded(70),
       ]);
-      expect(a.unclassifiedCount, 3);
+      expect(a.unclassifiedCount, 0);
       expect(a.categoryCount(AdmissionCategory.a), 1); // 40
-      expect(a.categoryCount(AdmissionCategory.b), 0);
+      expect(a.categoryCount(AdmissionCategory.b), 3);
       expect(a.categoryCount(AdmissionCategory.d), 1); // 70
-      expect(a.scoreDistribution[AtScoreBand.unclassified], 3);
+      expect(a.scoreDistribution[AtScoreBand.b], 3);
       expect(a.scoreDistribution[AtScoreBand.a], 1);
-      expect(a.scoreDistribution[AtScoreBand.b], 0);
+      expect(a.scoreDistribution[AtScoreBand.b], 3);
     });
   });
 
@@ -358,8 +358,8 @@ void main() {
           _graded(raw),
       ]);
       expect(a.categoryRate(AdmissionCategory.a), closeTo(3 / 11 * 100, 1e-9));
-      expect(a.categoryRate(AdmissionCategory.b), closeTo(2 / 11 * 100, 1e-9));
-      expect(a.unclassifiedRate, closeTo(2 / 11 * 100, 1e-9));
+      expect(a.categoryRate(AdmissionCategory.b), closeTo(4 / 11 * 100, 1e-9));
+      expect(a.unclassifiedRate, 0);
     });
     test('null when no analyzable scans', () {
       final a = _analyse([_ungraded(), _partial(50)]);
@@ -369,14 +369,13 @@ void main() {
   });
 
   group('16. Score distribution — category-aligned bands', () {
-    test('one scan at each band edge -> 2 per band', () {
+    test('all boundaries count in four bands', () {
       final edges = [0, 54, 55, 57, 58, 60, 61, 64, 65, 72];
       final a = _analyse([for (final raw in edges) _graded(raw)]);
       expect(a.analyzableExaminees, 10);
       expect(a.scoreDistribution, {
         AtScoreBand.a: 2,
-        AtScoreBand.unclassified: 2,
-        AtScoreBand.b: 2,
+        AtScoreBand.b: 4,
         AtScoreBand.c: 2,
         AtScoreBand.d: 2,
       });
@@ -384,8 +383,8 @@ void main() {
     test('AtScoreBand.forRawScore edges and out-of-range', () {
       expect(AtScoreBand.forRawScore(0), AtScoreBand.a);
       expect(AtScoreBand.forRawScore(54), AtScoreBand.a);
-      expect(AtScoreBand.forRawScore(55), AtScoreBand.unclassified);
-      expect(AtScoreBand.forRawScore(57), AtScoreBand.unclassified);
+      expect(AtScoreBand.forRawScore(55), AtScoreBand.b);
+      expect(AtScoreBand.forRawScore(57), AtScoreBand.b);
       expect(AtScoreBand.forRawScore(58), AtScoreBand.b);
       expect(AtScoreBand.forRawScore(60), AtScoreBand.b);
       expect(AtScoreBand.forRawScore(61), AtScoreBand.c);
@@ -398,15 +397,14 @@ void main() {
     test('AtScoreBand metadata', () {
       expect(AtScoreBand.values, const [
         AtScoreBand.a,
-        AtScoreBand.unclassified,
         AtScoreBand.b,
         AtScoreBand.c,
         AtScoreBand.d,
       ]);
       expect(AtScoreBand.a.label, '0–54');
-      expect(AtScoreBand.unclassified.label, '55–57');
+      expect(AtScoreBand.b.label, '55–60');
       expect(AtScoreBand.d.label, '65–72');
-      expect(AtScoreBand.unclassified.categoryName, 'Unclassified');
+      expect(AtScoreBand.b.categoryName, 'B');
       expect(AtScoreBand.c.categoryName, 'C');
     });
   });

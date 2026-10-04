@@ -1,11 +1,17 @@
 import 'dart:async';
 import 'dart:typed_data';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
+import '../../../core/constants/app_tokens.dart';
+import '../../../shared/widgets/state_views.dart';
+import '../../../shared/widgets/status_badge.dart';
+import '../../../shared/widgets/surface_card.dart';
+import '../../../core/sync/scan_restore_client.dart';
 import '../../../models/examinee_record.dart';
 import '../../../models/local_batch.dart';
 import '../services/guidance_web_examinee_records_service.dart';
@@ -17,7 +23,7 @@ const List<String> _statusFilterOptions = ['All', 'Active', 'Archived'];
 /// Exam-type filter of the Unlinked Scans tab (`All` or a batch's exam code).
 const List<String> _examTypeFilterOptions = ['All', 'QTM', 'TAT', 'AT'];
 
-enum _RecordsTab { examinees, unlinkedScans }
+enum _RecordsTab { examinees, unlinkedScans, softDeletedScans }
 
 /// The Guidance Council Web Console's Examinee Records page.
 ///
@@ -46,8 +52,8 @@ class GuidanceWebExamineeRecordsView extends StatefulWidget {
     super.key,
     GuidanceWebExamineeRecordsService? service,
     GuidanceWebResultsService? resultsService,
-  })  : _service = service,
-        _resultsService = resultsService;
+  }) : _service = service,
+       _resultsService = resultsService;
 
   final GuidanceWebExamineeRecordsService? _service;
 
@@ -67,10 +73,12 @@ class _GuidanceWebExamineeRecordsViewState
       widget._service ?? GuidanceWebExamineeRecordsService();
   late final GuidanceWebResultsService _resultsService =
       widget._resultsService ?? GuidanceWebResultsService();
+
   /// Name-crop downloads for the Unlinked Scans rows, kept so a row scrolled
   /// out and back in is not downloaded again.
   late final _NameCropCache _nameCropCache = _NameCropCache(_resultsService);
   final TextEditingController _searchController = TextEditingController();
+  final ScrollController _tableScroll = ScrollController();
 
   _RecordsTab _tab = _RecordsTab.examinees;
 
@@ -95,6 +103,14 @@ class _GuidanceWebExamineeRecordsViewState
   /// double-tap firing two deletes for the same row while one is in flight.
   String? _deletingScanId;
 
+  bool _loadingRetained = true;
+  List<CloudRetainedDeletedScanRow> _retainedScans = [];
+  String? _retainedError;
+
+  /// The scan id currently showing a Request Restore dialog, or null --
+  /// same guard reasoning as [_deletingScanId].
+  String? _requestingRestoreScanId;
+
   /// The examinee currently open in the Detail view, or null while a tab's
   /// own list is showing.
   ExamineeRecord? _viewingExaminee;
@@ -105,11 +121,13 @@ class _GuidanceWebExamineeRecordsViewState
     _searchController.addListener(() => setState(() {}));
     _loadExaminees();
     _loadUnlinkedScans();
+    _loadRetainedScans();
   }
 
   @override
   void dispose() {
     _searchController.dispose();
+    _tableScroll.dispose();
     super.dispose();
   }
 
@@ -169,6 +187,36 @@ class _GuidanceWebExamineeRecordsViewState
     }
   }
 
+  /// Every retained (not-yet-expired) soft-deleted scan, for the
+  /// "Soft-Deleted Scans" tab. Re-run after a successful restore request, so
+  /// that scan's row immediately reflects its new `PENDING` status.
+  Future<void> _loadRetainedScans() async {
+    setState(() {
+      _loadingRetained = true;
+      _retainedError = null;
+    });
+    try {
+      final scans = await _service.loadRetainedSoftDeletedScans();
+      if (!mounted) return;
+      setState(() {
+        _retainedScans = scans;
+        _loadingRetained = false;
+      });
+    } on GuidanceWebExamineeRecordsException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _retainedError = e.message;
+        _loadingRetained = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _retainedError = 'Could not load soft-deleted scans. Please try again.';
+        _loadingRetained = false;
+      });
+    }
+  }
+
   List<ExamineeRecord> get _filteredExaminees {
     final term = _searchController.text.trim().toLowerCase();
     return _examinees.where((e) {
@@ -216,21 +264,25 @@ class _GuidanceWebExamineeRecordsViewState
       });
     } on GuidanceWebExamineeRecordsException catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.message)));
     }
   }
 
   Future<void> _createFromScan(ExamineeHistoryItem item) async {
     final created = await showDialog<ExamineeRecord>(
       context: context,
-      builder: (_) => _CreateExamineeFromScanDialog(service: _service, item: item),
+      builder: (_) =>
+          _CreateExamineeFromScanDialog(service: _service, item: item),
     );
     if (created == null || !mounted) return;
     setState(() {
       _examinees = [..._examinees, created]
         ..sort((a, b) => a.displayName.compareTo(b.displayName));
       _unlinkedScans = [
-        for (final s in _unlinkedScans) if (s.scan.id != item.scan.id) s,
+        for (final s in _unlinkedScans)
+          if (s.scan.id != item.scan.id) s,
       ];
       // "show the new Examinee Record" -- go straight to its detail page.
       _viewingExaminee = created;
@@ -249,84 +301,76 @@ class _GuidanceWebExamineeRecordsViewState
     if (linked != true || !mounted) return;
     setState(() {
       _unlinkedScans = [
-        for (final s in _unlinkedScans) if (s.scan.id != item.scan.id) s,
+        for (final s in _unlinkedScans)
+          if (s.scan.id != item.scan.id) s,
       ];
     });
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Scan attached to the selected Examinee Record.')),
+      const SnackBar(
+        content: Text('Scan attached to the selected Examinee Record.'),
+      ),
     );
   }
 
-  /// "Delete" -- permanently removes [item]'s scan (and its images) from
-  /// the Unlinked Scans queue. Refuses an archived historical attempt up
-  /// front (mirrors [GuidanceWebExamineeDetailView]'s "Remove Link" guard,
-  /// same reasoning: deleting one would permanently destroy a retake's
-  /// audit trail), before even opening the confirmation dialog.
+  /// "Delete" -- soft-deletes [item]'s scan with 30-day retention (via
+  /// [_SoftDeleteScanDialog], which collects the required reason and calls
+  /// [GuidanceWebExamineeRecordsService.softDeleteUnlinkedScan] itself --
+  /// this method only opens that dialog and, on success, updates the local
+  /// list and shows a confirmation; it performs no database call directly).
+  /// Refuses an archived historical attempt up front (mirrors
+  /// [GuidanceWebExamineeDetailView]'s "Remove Link" guard, same reasoning:
+  /// deleting one would destroy a retake's audit trail), before even
+  /// opening the dialog. `_deletingScanId` is set for the whole dialog
+  /// lifetime (same convention as `_openArchiveAttemptDialog`'s own
+  /// `_archivingRequestId`), not just the network call, so a second tap
+  /// cannot open a second dialog for the same scan while one is already
+  /// open.
   Future<void> _deleteUnlinkedScan(ExamineeHistoryItem item) async {
     if (_deletingScanId != null) return;
     if (item.isArchivedAttempt) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Archived historical attempts are protected and cannot be deleted.'),
+          content: Text(
+            'Archived historical attempts are protected and cannot be deleted.',
+          ),
         ),
       );
       return;
     }
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Delete This Scan?'),
-        content: const Text(
-          'This scan and its associated images (original photo, rectified '
-          'photo, and any handwritten name crops) will be permanently '
-          'deleted. This cannot be undone.',
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: FilledButton.styleFrom(backgroundColor: AppColors.warmRedOrange),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true || !mounted) return;
 
     setState(() => _deletingScanId = item.scan.id);
-    try {
-      await _service.deleteUnlinkedScan(batchId: item.batch.id, scanId: item.scan.id);
-      if (!mounted) return;
-      setState(() {
-        _unlinkedScans = [
-          for (final s in _unlinkedScans) if (s.scan.id != item.scan.id) s,
-        ];
-        _deletingScanId = null;
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Scan deleted.')),
-      );
-    } on GuidanceWebExamineeRecordsException catch (e) {
-      if (!mounted) return;
-      setState(() {
-        // scanWasDeleted: the database row is already permanently gone
-        // (only Storage cleanup failed) -- the row must leave this list
-        // even though this is the exception branch, not the success one.
-        if (e.scanWasDeleted) {
-          _unlinkedScans = [
-            for (final s in _unlinkedScans) if (s.scan.id != item.scan.id) s,
-          ];
-        }
-        _deletingScanId = null;
-      });
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
-    } catch (_) {
-      if (!mounted) return;
-      setState(() => _deletingScanId = null);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not delete this scan. Please try again.')),
-      );
-    }
+    final deleted = await showDialog<bool>(
+      context: context,
+      builder: (_) => _SoftDeleteScanDialog(
+        service: _service,
+        batchId: item.batch.id,
+        scanId: item.scan.id,
+      ),
+    );
+    if (!mounted) return;
+    setState(() => _deletingScanId = null);
+    if (deleted != true) return;
+
+    setState(() {
+      _unlinkedScans = [
+        for (final s in _unlinkedScans)
+          if (s.scan.id != item.scan.id) s,
+      ];
+    });
+    // Re-read the Soft-Deleted Scans tab from the database (same convention
+    // as _requestRestore's own post-success reload) so it immediately shows
+    // this scan -- never fabricated locally, always the database's own
+    // list_retained_soft_deleted_scans_for_guidance result.
+    await _loadRetainedScans();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Scan soft-deleted. It will be retained for 30 days and can be '
+          'restored upon request before then.',
+        ),
+      ),
+    );
   }
 
   Future<void> _previewImage(ExamineeHistoryItem item) async {
@@ -340,11 +384,50 @@ class _GuidanceWebExamineeRecordsViewState
     );
   }
 
+  /// "Request Restore" (Soft-Deleted Scans tab only): opens
+  /// [_RequestRestoreDialog], which collects the required reason and calls
+  /// [GuidanceWebExamineeRecordsService.requestScanRestoration] itself --
+  /// this method only opens that dialog and, on success, re-loads the
+  /// retained scan list (so [row]'s status immediately shows `PENDING`) and
+  /// shows a confirmation. `_requestingRestoreScanId` is set for the whole
+  /// dialog lifetime, same convention as [_deletingScanId], so a second tap
+  /// cannot open a second dialog for the same scan while one is already
+  /// open.
+  Future<void> _requestRestore(CloudRetainedDeletedScanRow row) async {
+    if (_requestingRestoreScanId != null) return;
+
+    setState(() => _requestingRestoreScanId = row.scanId);
+    final requested = await showDialog<bool>(
+      context: context,
+      builder: (_) => _RequestRestoreDialog(
+        service: _service,
+        batchId: row.batchId,
+        scanId: row.scanId,
+      ),
+    );
+    if (!mounted) return;
+    setState(() => _requestingRestoreScanId = null);
+    if (requested != true) return;
+
+    await _loadRetainedScans();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Restoration request submitted. This scan now shows a pending '
+          'request awaiting System Admin review.',
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final viewing = _viewingExaminee;
     return Padding(
-      padding: const EdgeInsets.all(24),
+      padding: EdgeInsets.all(
+        AppSpace.gutterFor(MediaQuery.sizeOf(context).width),
+      ),
       child: viewing != null
           ? GuidanceWebExamineeDetailView(
               examinee: viewing,
@@ -367,9 +450,11 @@ class _GuidanceWebExamineeRecordsViewState
                 _buildTabSwitcher(),
                 const SizedBox(height: 16),
                 Expanded(
-                  child: _tab == _RecordsTab.examinees
-                      ? _buildExamineesTab()
-                      : _buildUnlinkedScansTab(),
+                  child: switch (_tab) {
+                    _RecordsTab.examinees => _buildExamineesTab(),
+                    _RecordsTab.unlinkedScans => _buildUnlinkedScansTab(),
+                    _RecordsTab.softDeletedScans => _buildSoftDeletedScansTab(),
+                  },
                 ),
               ],
             ),
@@ -377,13 +462,18 @@ class _GuidanceWebExamineeRecordsViewState
   }
 
   Widget _buildTabSwitcher() {
-    return Row(
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
       children: [
         _tabButton(_RecordsTab.examinees, 'Examinees'),
-        const SizedBox(width: 8),
         _tabButton(
           _RecordsTab.unlinkedScans,
           'Unlinked Scans${_unlinkedScans.isEmpty ? '' : ' (${_unlinkedScans.length})'}',
+        ),
+        _tabButton(
+          _RecordsTab.softDeletedScans,
+          'Soft-Deleted Scans${_retainedScans.isEmpty ? '' : ' (${_retainedScans.length})'}',
         ),
       ],
     );
@@ -391,13 +481,22 @@ class _GuidanceWebExamineeRecordsViewState
 
   Widget _tabButton(_RecordsTab tab, String label) {
     final selected = _tab == tab;
-    return TextButton(
-      onPressed: () => setState(() => _tab = tab),
-      style: TextButton.styleFrom(
-        backgroundColor: selected ? AppColors.emerald100 : Colors.transparent,
-        foregroundColor: selected ? AppColors.primaryGreen : AppColors.textGray,
+    return Semantics(
+      selected: selected,
+      child: TextButton(
+        onPressed: () => setState(() => _tab = tab),
+        style: TextButton.styleFrom(
+          backgroundColor: selected ? AppColors.emerald100 : Colors.transparent,
+          foregroundColor: selected
+              ? AppColors.primaryGreen
+              : AppColors.textGray,
+          minimumSize: const Size(44, 44),
+        ),
+        child: Text(
+          label,
+          style: AppTextStyles.body(size: 13, weight: FontWeight.w700),
+        ),
       ),
-      child: Text(label, style: AppTextStyles.body(size: 11.5, weight: FontWeight.w700)),
     );
   }
 
@@ -417,20 +516,29 @@ class _GuidanceWebExamineeRecordsViewState
   }
 
   Widget _buildExamineesControls() {
-    return Container(
+    return SurfaceCard(
       padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.cardBorder),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(flex: 2, child: _buildSearchField()),
-          const SizedBox(width: 16),
-          Expanded(child: _buildStatusFilter()),
-        ],
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          if (constraints.maxWidth < 600) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _buildSearchField(),
+                const SizedBox(height: 12),
+                _buildStatusFilter(),
+              ],
+            );
+          }
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(flex: 2, child: _buildSearchField()),
+              const SizedBox(width: 16),
+              Expanded(child: _buildStatusFilter()),
+            ],
+          );
+        },
       ),
     );
   }
@@ -439,13 +547,24 @@ class _GuidanceWebExamineeRecordsViewState
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Search', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600)),
+        Text(
+          'Search',
+          style: AppTextStyles.body(size: 12, weight: FontWeight.w600),
+        ),
         const SizedBox(height: 6),
         TextField(
+          key: const Key('recordsSearch'),
           controller: _searchController,
-          decoration: _fieldDecoration(
-            hint: 'Search name or Temporary Examinee ID...',
-          ).copyWith(prefixIcon: const Icon(Icons.search, size: 18)),
+          decoration: _fieldDecoration(hint: 'Name or examinee ID').copyWith(
+            prefixIcon: const Icon(Icons.search, size: 18),
+            suffixIcon: _searchController.text.isEmpty
+                ? null
+                : IconButton(
+                    tooltip: 'Clear search',
+                    onPressed: _searchController.clear,
+                    icon: const Icon(Icons.close),
+                  ),
+          ),
         ),
       ],
     );
@@ -455,13 +574,22 @@ class _GuidanceWebExamineeRecordsViewState
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Status', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600)),
+        Text(
+          'Status',
+          style: AppTextStyles.body(size: 12, weight: FontWeight.w600),
+        ),
         const SizedBox(height: 6),
         DropdownButtonFormField<String>(
           initialValue: _statusFilter,
+          isExpanded: true,
           decoration: _fieldDecoration(),
           items: _statusFilterOptions
-              .map((s) => DropdownMenuItem(value: s, child: Text(s, style: AppTextStyles.body(size: 11))))
+              .map(
+                (s) => DropdownMenuItem(
+                  value: s,
+                  child: Text(s, style: AppTextStyles.body(size: 13)),
+                ),
+              )
               .toList(),
           onChanged: (v) => setState(() => _statusFilter = v ?? 'Active'),
         ),
@@ -490,66 +618,194 @@ class _GuidanceWebExamineeRecordsViewState
   }
 
   Widget _buildExamineesBody() {
-    if (_loadingExaminees) return _buildMessage(FontAwesomeIcons.spinner, 'Loading examinee records...');
+    if (_loadingExaminees) {
+      return const LoadingState(message: 'Loading examinee records...');
+    }
     if (_examineesError != null) {
-      return _buildMessage(FontAwesomeIcons.triangleExclamation, _examineesError!, isError: true);
+      return _buildMessage(
+        FontAwesomeIcons.triangleExclamation,
+        _examineesError!,
+        isError: true,
+      );
     }
     if (_examinees.isEmpty) {
-      return _buildMessage(FontAwesomeIcons.userGraduate, 'No examinee records found.');
+      return _buildMessage(
+        FontAwesomeIcons.userGraduate,
+        'No examinee records found.',
+      );
     }
     final filtered = _filteredExaminees;
     if (filtered.isEmpty) {
-      return _buildMessage(FontAwesomeIcons.magnifyingGlass, 'No examinees match your search or filter.');
+      return _buildMessage(
+        FontAwesomeIcons.magnifyingGlass,
+        'No examinees match your search or filter.',
+      );
     }
     return _buildExamineeTable(filtered);
   }
 
-  Widget _buildMessage(FaIconData icon, String message, {bool isError = false}) {
+  Widget _buildMessage(
+    FaIconData icon,
+    String message, {
+    bool isError = false,
+  }) {
+    if (isError) {
+      return ErrorState(
+        message: message,
+        onRetry: switch (_tab) {
+          _RecordsTab.examinees => _loadExaminees,
+          _RecordsTab.unlinkedScans => _loadUnlinkedScans,
+          _RecordsTab.softDeletedScans => _loadRetainedScans,
+        },
+      );
+    }
     return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          FaIcon(icon, size: 36, color: isError ? AppColors.warmRedOrange : AppColors.textGray),
-          const SizedBox(height: 14),
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 360),
-            child: Text(
-              message,
-              textAlign: TextAlign.center,
-              style: AppTextStyles.body(size: 11.5, color: isError ? AppColors.warmRedOrange : AppColors.textGray),
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            FaIcon(
+              icon,
+              size: 36,
+              color: isError ? AppColors.warmRedOrange : AppColors.textGray,
             ),
-          ),
-        ],
+            const SizedBox(height: 14),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 360),
+              child: Text(
+                message,
+                textAlign: TextAlign.center,
+                style: AppTextStyles.body(size: 13, color: AppColors.textGray),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
   Widget _buildExamineeTable(List<ExamineeRecord> examinees) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.cardBorder),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          _buildExamineeTableHeader(),
-          const Divider(height: 1, color: AppColors.cardBorder),
-          Expanded(
-            child: ListView.separated(
-              itemCount: examinees.length,
-              separatorBuilder: (_, _) => const Divider(height: 1, color: AppColors.cardBorder),
-              itemBuilder: (context, index) => _buildExamineeRow(examinees[index]),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < 600) {
+          return ListView.separated(
+            key: const Key('examineeCards'),
+            itemCount: examinees.length,
+            separatorBuilder: (_, _) => const SizedBox(height: 12),
+            itemBuilder: (_, index) {
+              final examinee = examinees[index];
+              return SurfaceCard(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      examinee.displayName,
+                      style: AppTextStyles.body(
+                        size: 14,
+                        weight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      examinee.temporaryExamineeId,
+                      style: AppTextStyles.caption(),
+                    ),
+                    const SizedBox(height: 12),
+                    _statusChip(examinee),
+                    const SizedBox(height: 8),
+                    _examineeActions(examinee),
+                  ],
+                ),
+              );
+            },
+          );
+        }
+        return _scrollableTable(
+          minWidth: 760,
+          child: SurfaceCard(
+            padding: EdgeInsets.zero,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _buildExamineeTableHeader(),
+                const Divider(height: 1, color: AppColors.cardBorder),
+                Expanded(
+                  child: ListView.separated(
+                    itemCount: examinees.length,
+                    separatorBuilder: (_, _) =>
+                        const Divider(height: 1, color: AppColors.cardBorder),
+                    itemBuilder: (context, index) =>
+                        _buildExamineeRow(examinees[index]),
+                  ),
+                ),
+              ],
             ),
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 
+  Widget _scrollableTable({required double minWidth, required Widget child}) =>
+      LayoutBuilder(
+        builder: (context, constraints) {
+          final scale = MediaQuery.textScalerOf(context).scale(13) / 13;
+          return Scrollbar(
+            controller: _tableScroll,
+            thumbVisibility: true,
+            child: SingleChildScrollView(
+              key: const Key('recordsTableScroll'),
+              controller: _tableScroll,
+              scrollDirection: Axis.horizontal,
+              child: SizedBox(
+                width: math.max(
+                  constraints.maxWidth,
+                  minWidth * scale.clamp(1, 2),
+                ),
+                child: child,
+              ),
+            ),
+          );
+        },
+      );
+
+  Widget _examineeActions(ExamineeRecord examinee) => Wrap(
+    spacing: 8,
+    children: [
+      TextButton(
+        style: TextButton.styleFrom(minimumSize: const Size(64, 44)),
+        onPressed: () => _toggleArchive(examinee),
+        child: Text(
+          examinee.isActive ? 'Archive' : 'Restore',
+          style: AppTextStyles.body(
+            size: 13,
+            weight: FontWeight.w600,
+            color: AppColors.textGray,
+          ),
+        ),
+      ),
+      TextButton(
+        style: TextButton.styleFrom(minimumSize: const Size(64, 44)),
+        onPressed: () => setState(() => _viewingExaminee = examinee),
+        child: Text(
+          'View',
+          style: AppTextStyles.body(
+            size: 13,
+            weight: FontWeight.w700,
+            color: AppColors.primaryGreen,
+          ),
+        ),
+      ),
+    ],
+  );
+
   Widget _buildExamineeTableHeader() {
-    final style = AppTextStyles.body(size: 9.5, weight: FontWeight.w800, color: AppColors.textGray);
+    final style = AppTextStyles.body(
+      size: 11.5,
+      weight: FontWeight.w800,
+      color: AppColors.textGray,
+    );
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Row(
@@ -572,36 +828,20 @@ class _GuidanceWebExamineeRecordsViewState
             flex: 3,
             child: Text(
               examinee.displayName,
-              style: AppTextStyles.body(size: 11, weight: FontWeight.w600),
+              style: AppTextStyles.body(size: 13, weight: FontWeight.w600),
+              maxLines: 2,
               overflow: TextOverflow.ellipsis,
             ),
           ),
-          Expanded(flex: 2, child: Text(examinee.temporaryExamineeId, style: AppTextStyles.body(size: 11))),
-          Expanded(flex: 1, child: _statusChip(examinee)),
-          SizedBox(
-            width: 175,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                TextButton(
-                  style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 8)),
-                  onPressed: () => _toggleArchive(examinee),
-                  child: Text(
-                    examinee.isActive ? 'Archive' : 'Restore',
-                    style: AppTextStyles.body(size: 10.5, weight: FontWeight.w700, color: AppColors.textGray),
-                  ),
-                ),
-                TextButton(
-                  style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 8)),
-                  onPressed: () => setState(() => _viewingExaminee = examinee),
-                  child: Text(
-                    'View',
-                    style: AppTextStyles.body(size: 10.5, weight: FontWeight.w700, color: AppColors.primaryGreen),
-                  ),
-                ),
-              ],
+          Expanded(
+            flex: 2,
+            child: Text(
+              examinee.temporaryExamineeId,
+              style: AppTextStyles.body(size: 13),
             ),
           ),
+          Expanded(flex: 1, child: _statusChip(examinee)),
+          SizedBox(width: 175, child: _examineeActions(examinee)),
         ],
       ),
     );
@@ -611,20 +851,9 @@ class _GuidanceWebExamineeRecordsViewState
     final isActive = examinee.isActive;
     return Align(
       alignment: Alignment.centerLeft,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-        decoration: BoxDecoration(
-          color: isActive ? AppColors.emerald100 : const Color(0xFFF3F4F6),
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Text(
-          isActive ? 'Active' : 'Archived',
-          style: AppTextStyles.body(
-            size: 9.5,
-            weight: FontWeight.w700,
-            color: isActive ? const Color(0xFF065F46) : AppColors.textGray,
-          ),
-        ),
+      child: StatusBadge(
+        label: isActive ? 'Active' : 'Archived',
+        tone: isActive ? StatusTone.success : StatusTone.neutral,
       ),
     );
   }
@@ -634,12 +863,21 @@ class _GuidanceWebExamineeRecordsViewState
   // -------------------------------------------------------------------
 
   Widget _buildUnlinkedScansTab() {
-    if (_loadingUnlinked) return _buildMessage(FontAwesomeIcons.spinner, 'Loading unlinked scans...');
+    if (_loadingUnlinked) {
+      return const LoadingState(message: 'Loading unlinked scans...');
+    }
     if (_unlinkedError != null) {
-      return _buildMessage(FontAwesomeIcons.triangleExclamation, _unlinkedError!, isError: true);
+      return _buildMessage(
+        FontAwesomeIcons.triangleExclamation,
+        _unlinkedError!,
+        isError: true,
+      );
     }
     if (_unlinkedScans.isEmpty) {
-      return _buildMessage(FontAwesomeIcons.circleCheck, 'No unlinked scans — every scan has an Examinee Record.');
+      return _buildMessage(
+        FontAwesomeIcons.circleCheck,
+        'No unlinked scans — every scan has an Examinee Record.',
+      );
     }
     final visible = _visibleUnlinkedScans;
     return Column(
@@ -655,25 +893,32 @@ class _GuidanceWebExamineeRecordsViewState
                       ? 'No unlinked $_unlinkedExamFilter scans.'
                       : 'No unlinked scans match the selected filters.',
                 )
-              : Container(
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: AppColors.cardBorder),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      _buildUnlinkedTableHeader(),
-                      const Divider(height: 1, color: AppColors.cardBorder),
-                      Expanded(
-                        child: ListView.separated(
-                          itemCount: visible.length,
-                          separatorBuilder: (_, _) => const Divider(height: 1, color: AppColors.cardBorder),
-                          itemBuilder: (context, index) => _buildUnlinkedRow(visible[index]),
+              : _scrollableTable(
+                  minWidth: 1200,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: AppColors.cardBorder),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _buildUnlinkedTableHeader(),
+                        const Divider(height: 1, color: AppColors.cardBorder),
+                        Expanded(
+                          child: ListView.separated(
+                            itemCount: visible.length,
+                            separatorBuilder: (_, _) => const Divider(
+                              height: 1,
+                              color: AppColors.cardBorder,
+                            ),
+                            itemBuilder: (context, index) =>
+                                _buildUnlinkedRow(visible[index]),
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
         ),
@@ -732,7 +977,9 @@ class _GuidanceWebExamineeRecordsViewState
           style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600),
         ),
         const SizedBox(height: 6),
-        Row(
+        Wrap(
+          spacing: 12,
+          runSpacing: 12,
           children: [
             _dateBoundField(
               fieldKey: const Key('unlinkedDateFrom'),
@@ -740,7 +987,6 @@ class _GuidanceWebExamineeRecordsViewState
               value: _unlinkedDateFrom,
               onPicked: (d) => _setUnlinkedDate(isFrom: true, picked: d),
             ),
-            const SizedBox(width: 12),
             _dateBoundField(
               fieldKey: const Key('unlinkedDateTo'),
               hint: 'to',
@@ -793,31 +1039,43 @@ class _GuidanceWebExamineeRecordsViewState
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: AppColors.cardBorder),
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
+      child: Wrap(
+        spacing: 16,
+        runSpacing: 12,
+        crossAxisAlignment: WrapCrossAlignment.end,
         children: [
           SizedBox(
             width: 240,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Exam Type', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600)),
+                Text(
+                  'Exam Type',
+                  style: AppTextStyles.body(
+                    size: 10.5,
+                    weight: FontWeight.w600,
+                  ),
+                ),
                 const SizedBox(height: 6),
                 DropdownButtonFormField<String>(
                   key: const Key('unlinkedExamTypeFilter'),
                   initialValue: _unlinkedExamFilter,
                   decoration: _fieldDecoration(),
                   items: _examTypeFilterOptions
-                      .map((t) => DropdownMenuItem(value: t, child: Text(t, style: AppTextStyles.body(size: 11))))
+                      .map(
+                        (t) => DropdownMenuItem(
+                          value: t,
+                          child: Text(t, style: AppTextStyles.body(size: 11)),
+                        ),
+                      )
                       .toList(),
-                  onChanged: (v) => setState(() => _unlinkedExamFilter = v ?? 'All'),
+                  onChanged: (v) =>
+                      setState(() => _unlinkedExamFilter = v ?? 'All'),
                 ),
               ],
             ),
           ),
-          const SizedBox(width: 16),
           _buildUnlinkedDateFilter(),
-          const Spacer(),
           Text(
             'Showing $shown of ${_unlinkedScans.length}',
             key: const Key('unlinkedShowingCount'),
@@ -834,7 +1092,7 @@ class _GuidanceWebExamineeRecordsViewState
   /// the rest of the row goes to the name crops. The buttons are wrapped in a
   /// scale-down FittedBox, so a narrower window shrinks them slightly instead
   /// of overflowing.
-  static const double _unlinkedActionsWidth = 460;
+  static const double _unlinkedActionsWidth = 240;
 
   /// The NAME CROP column (between OCR NAME and EXAM): its share of the row's
   /// flexible width, and the gap that separates it from the OCR name. Header
@@ -843,7 +1101,11 @@ class _GuidanceWebExamineeRecordsViewState
   static const double _nameCropGap = 8;
 
   Widget _buildUnlinkedTableHeader() {
-    final style = AppTextStyles.body(size: 9.5, weight: FontWeight.w800, color: AppColors.textGray);
+    final style = AppTextStyles.body(
+      size: 9.5,
+      weight: FontWeight.w800,
+      color: AppColors.textGray,
+    );
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Row(
@@ -878,7 +1140,9 @@ class _GuidanceWebExamineeRecordsViewState
               style: AppTextStyles.body(
                 size: 11,
                 weight: FontWeight.w600,
-                color: (name == null || name.isEmpty) ? AppColors.textGray : AppColors.textDark,
+                color: (name == null || name.isEmpty)
+                    ? AppColors.textGray
+                    : AppColors.textDark,
               ),
               overflow: TextOverflow.ellipsis,
             ),
@@ -898,53 +1162,343 @@ class _GuidanceWebExamineeRecordsViewState
               ),
             ),
           ),
-          Expanded(flex: 1, child: Text(item.examCode, style: AppTextStyles.body(size: 11))),
-          Expanded(flex: 2, child: Text(item.batch.batchCode, style: AppTextStyles.body(size: 11))),
-          Expanded(flex: 2, child: Text(_formatDate(item.scan.capturedAt), style: AppTextStyles.body(size: 11))),
+          Expanded(
+            flex: 1,
+            child: Text(item.examCode, style: AppTextStyles.body(size: 11)),
+          ),
+          Expanded(
+            flex: 2,
+            child: Text(
+              item.batch.batchCode,
+              style: AppTextStyles.body(size: 11),
+            ),
+          ),
+          Expanded(
+            flex: 2,
+            child: Text(
+              _formatDate(item.scan.capturedAt),
+              style: AppTextStyles.body(size: 11),
+            ),
+          ),
           SizedBox(
             width: _unlinkedActionsWidth,
-            child: FittedBox(
-              fit: BoxFit.scaleDown,
-              alignment: Alignment.centerRight,
-              child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextButton(
-                  style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 6)),
-                  onPressed: () => _previewImage(item),
-                  child: Text('View Image', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w700, color: AppColors.textGray)),
-                ),
-                TextButton(
-                  style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 6)),
-                  onPressed: () => _linkToExisting(item),
-                  child: Text('Link to Existing', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w700, color: AppColors.textGray)),
-                ),
-                TextButton(
-                  style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 6)),
-                  onPressed: () => _createFromScan(item),
-                  child: Text('Confirm and Create Examinee', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w700, color: AppColors.primaryGreen)),
-                ),
-                if (!item.isArchivedAttempt)
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+
+              child: Wrap(
+                alignment: WrapAlignment.end,
+                children: [
                   TextButton(
-                    style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 6)),
-                    onPressed: _deletingScanId != null ? null : () => _deleteUnlinkedScan(item),
-                    child: Text('Delete', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w700, color: AppColors.warmRedOrange)),
+                    style: TextButton.styleFrom(
+                      minimumSize: const Size(64, 44),
+                    ),
+                    onPressed: () => _previewImage(item),
+                    child: Text(
+                      'View Image',
+                      style: AppTextStyles.body(
+                        size: 13,
+                        weight: FontWeight.w700,
+                        color: AppColors.textGray,
+                      ),
+                    ),
                   ),
-              ],
-            ),
+                  TextButton(
+                    style: TextButton.styleFrom(
+                      minimumSize: const Size(64, 44),
+                    ),
+                    onPressed: () => _linkToExisting(item),
+                    child: Text(
+                      'Link to Existing',
+                      style: AppTextStyles.body(
+                        size: 13,
+                        weight: FontWeight.w700,
+                        color: AppColors.textGray,
+                      ),
+                    ),
+                  ),
+                  TextButton(
+                    style: TextButton.styleFrom(
+                      minimumSize: const Size(64, 44),
+                    ),
+                    onPressed: () => _createFromScan(item),
+                    child: Text(
+                      'Confirm and Create Examinee',
+                      style: AppTextStyles.body(
+                        size: 13,
+                        weight: FontWeight.w700,
+                        color: AppColors.primaryGreen,
+                      ),
+                    ),
+                  ),
+                  if (!item.isArchivedAttempt)
+                    TextButton(
+                      style: TextButton.styleFrom(
+                        minimumSize: const Size(64, 44),
+                      ),
+                      onPressed: _deletingScanId != null
+                          ? null
+                          : () => _deleteUnlinkedScan(item),
+                      child: Text(
+                        'Delete',
+                        style: AppTextStyles.body(
+                          size: 13,
+                          weight: FontWeight.w700,
+                          color: AppColors.warmRedOrange,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
             ),
           ),
         ],
       ),
     );
   }
+
+  // -------------------------------------------------------------------
+  // Soft-Deleted Scans tab -- retained (not-yet-expired) soft-deleted
+  // unlinked scans, via `list_retained_soft_deleted_scans_for_guidance`.
+  // Deliberately shows NO decoded answers, scores, result fields, or image
+  // data of any kind -- the RPC itself never returns any of that (see
+  // 0011_list_retained_soft_deleted_scans_for_guidance.sql), so there is
+  // nothing here to withhold.
+  // -------------------------------------------------------------------
+
+  Widget _buildSoftDeletedScansTab() {
+    if (_loadingRetained) {
+      return const LoadingState(message: 'Loading soft-deleted scans...');
+    }
+    if (_retainedError != null) {
+      return _buildMessage(
+        FontAwesomeIcons.triangleExclamation,
+        _retainedError!,
+        isError: true,
+      );
+    }
+    if (_retainedScans.isEmpty) {
+      return _buildMessage(
+        FontAwesomeIcons.circleCheck,
+        'No retained soft-deleted scans — nothing here currently needs restoration.',
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildRetainedControls(),
+        const SizedBox(height: 16),
+        Expanded(
+          child: _scrollableTable(
+            minWidth: 1050,
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppColors.cardBorder),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _buildRetainedTableHeader(),
+                  const Divider(height: 1, color: AppColors.cardBorder),
+                  Expanded(
+                    child: ListView.separated(
+                      itemCount: _retainedScans.length,
+                      separatorBuilder: (_, _) =>
+                          const Divider(height: 1, color: AppColors.cardBorder),
+                      itemBuilder: (context, index) =>
+                          _buildRetainedRow(_retainedScans[index]),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildRetainedControls() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.cardBorder),
+      ),
+      child: Wrap(
+        spacing: 16,
+        runSpacing: 8,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          Text(
+            'Showing ${_retainedScans.length} retained soft-deleted scan'
+            '${_retainedScans.length == 1 ? '' : 's'}',
+            key: const Key('retainedShowingCount'),
+            style: AppTextStyles.body(size: 10.5, color: AppColors.textGray),
+          ),
+          TextButton.icon(
+            key: const Key('retainedRefreshButton'),
+            onPressed: _loadRetainedScans,
+            icon: const Icon(Icons.refresh, size: 16),
+            label: Text(
+              'Refresh',
+              style: AppTextStyles.body(size: 10.5, weight: FontWeight.w700),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRetainedTableHeader() {
+    final style = AppTextStyles.body(
+      size: 9.5,
+      weight: FontWeight.w800,
+      color: AppColors.textGray,
+    );
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: Row(
+        children: [
+          Expanded(flex: 2, child: Text('BATCH', style: style)),
+          Expanded(flex: 1, child: Text('EXAM', style: style)),
+          Expanded(flex: 2, child: Text('SCAN ID', style: style)),
+          Expanded(flex: 2, child: Text('DELETED', style: style)),
+          Expanded(flex: 2, child: Text('EXPIRES', style: style)),
+          Expanded(flex: 3, child: Text('REASON', style: style)),
+          Expanded(flex: 2, child: Text('DELETED BY', style: style)),
+          const SizedBox(width: 170),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRetainedRow(CloudRetainedDeletedScanRow row) {
+    final status = row.activeRestoreRequestStatus;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            flex: 2,
+            child: Text(row.batchId, style: AppTextStyles.body(size: 11)),
+          ),
+          Expanded(
+            flex: 1,
+            child: Text(row.examCode, style: AppTextStyles.body(size: 11)),
+          ),
+          Expanded(
+            flex: 2,
+            child: Text(row.scanId, style: AppTextStyles.body(size: 11)),
+          ),
+          Expanded(
+            flex: 2,
+            child: Text(
+              _formatDateTime(row.deletedAt),
+              style: AppTextStyles.body(size: 11),
+            ),
+          ),
+          Expanded(
+            flex: 2,
+            child: Text(
+              _formatDateTime(row.retentionUntil),
+              style: AppTextStyles.body(size: 11),
+            ),
+          ),
+          Expanded(
+            flex: 3,
+            child: Text(
+              row.deletionReason ?? '—',
+              style: AppTextStyles.body(size: 11),
+              overflow: TextOverflow.ellipsis,
+              maxLines: 2,
+            ),
+          ),
+          Expanded(
+            flex: 2,
+            child: Text(
+              row.deletedByName ?? '—',
+              style: AppTextStyles.body(size: 11),
+            ),
+          ),
+          SizedBox(
+            width: 170,
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: status != null
+                  ? _restoreRequestStatusChip(status)
+                  : TextButton(
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 6),
+                      ),
+                      onPressed: _requestingRestoreScanId != null
+                          ? null
+                          : () => _requestRestore(row),
+                      child: Text(
+                        'Request Restore',
+                        style: AppTextStyles.body(
+                          size: 10.5,
+                          weight: FontWeight.w700,
+                          color: AppColors.primaryGreen,
+                        ),
+                      ),
+                    ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _restoreRequestStatusChip(String status) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: AppColors.emerald100,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Text(
+        status == 'APPROVED' ? 'Restore Approved' : 'Restore Requested',
+        style: AppTextStyles.body(
+          size: 9.5,
+          weight: FontWeight.w700,
+          color: const Color(0xFF065F46),
+        ),
+      ),
+    );
+  }
 }
 
 const List<String> _months = [
-  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
 ];
 
 String _formatDate(DateTime d) => '${_months[d.month - 1]} ${d.day}, ${d.year}';
+
+/// Same as [_formatDate], plus a local HH:MM -- used for the Soft-Deleted
+/// Scans tab's lifecycle timestamps (`deleted_at`/`retention_until`), where
+/// the time of day matters for a 30-day countdown in a way a captured date
+/// alone does not.
+String _formatDateTime(DateTime d) {
+  final local = d.toLocal();
+  final hh = local.hour.toString().padLeft(2, '0');
+  final mm = local.minute.toString().padLeft(2, '0');
+  return '${_formatDate(local)}, $hh:$mm';
+}
 
 /// Workflow 1 — "Create Examinee Record from this Scan." Pre-filled from
 /// [item].scan's own confirmed tag (never a blank form); the name fields
@@ -952,22 +1506,30 @@ String _formatDate(DateTime d) => '${_months[d.month - 1]} ${d.day}, ${d.year}';
 /// block creating the record — the Temporary Examinee ID exists
 /// independently of whether a name was ever captured.
 class _CreateExamineeFromScanDialog extends StatefulWidget {
-  const _CreateExamineeFromScanDialog({required this.service, required this.item});
+  const _CreateExamineeFromScanDialog({
+    required this.service,
+    required this.item,
+  });
 
   final GuidanceWebExamineeRecordsService service;
   final ExamineeHistoryItem item;
 
   @override
-  State<_CreateExamineeFromScanDialog> createState() => _CreateExamineeFromScanDialogState();
+  State<_CreateExamineeFromScanDialog> createState() =>
+      _CreateExamineeFromScanDialogState();
 }
 
-class _CreateExamineeFromScanDialogState extends State<_CreateExamineeFromScanDialog> {
-  late final TextEditingController _firstName =
-      TextEditingController(text: widget.item.scan.examinee?.firstName ?? '');
-  late final TextEditingController _middleName =
-      TextEditingController(text: widget.item.scan.examinee?.middleName ?? '');
-  late final TextEditingController _lastName =
-      TextEditingController(text: widget.item.scan.examinee?.lastName ?? '');
+class _CreateExamineeFromScanDialogState
+    extends State<_CreateExamineeFromScanDialog> {
+  late final TextEditingController _firstName = TextEditingController(
+    text: widget.item.scan.examinee?.firstName ?? '',
+  );
+  late final TextEditingController _middleName = TextEditingController(
+    text: widget.item.scan.examinee?.middleName ?? '',
+  );
+  late final TextEditingController _lastName = TextEditingController(
+    text: widget.item.scan.examinee?.lastName ?? '',
+  );
   bool _saving = false;
   String? _error;
 
@@ -989,7 +1551,9 @@ class _CreateExamineeFromScanDialogState extends State<_CreateExamineeFromScanDi
         batchId: widget.item.batch.id,
         scan: widget.item.scan,
         firstName: _firstName.text.trim(),
-        middleName: _middleName.text.trim().isEmpty ? null : _middleName.text.trim(),
+        middleName: _middleName.text.trim().isEmpty
+            ? null
+            : _middleName.text.trim(),
         lastName: _lastName.text.trim(),
       );
       if (!mounted) return;
@@ -1035,7 +1599,9 @@ class _CreateExamineeFromScanDialogState extends State<_CreateExamineeFromScanDi
             const SizedBox(height: 10),
             TextFormField(
               controller: _middleName,
-              decoration: const InputDecoration(labelText: 'Middle name (optional)'),
+              decoration: const InputDecoration(
+                labelText: 'Middle name (optional)',
+              ),
             ),
             const SizedBox(height: 10),
             TextFormField(
@@ -1044,7 +1610,13 @@ class _CreateExamineeFromScanDialogState extends State<_CreateExamineeFromScanDi
             ),
             if (_error != null) ...[
               const SizedBox(height: 10),
-              Text(_error!, style: AppTextStyles.body(size: 11, color: AppColors.warmRedOrange)),
+              Text(
+                _error!,
+                style: AppTextStyles.body(
+                  size: 11,
+                  color: AppColors.warmRedOrange,
+                ),
+              ),
             ],
           ],
         ),
@@ -1057,6 +1629,253 @@ class _CreateExamineeFromScanDialogState extends State<_CreateExamineeFromScanDi
         FilledButton(
           onPressed: _saving ? null : _save,
           child: Text(_saving ? 'Creating...' : 'Create Examinee Record'),
+        ),
+      ],
+    );
+  }
+}
+
+/// "Delete" with 30-day retention (Unlinked Scans tab only): collects a
+/// required reason and calls
+/// [GuidanceWebExamineeRecordsService.softDeleteUnlinkedScan] itself --
+/// same save-with-loading-state shape as [_CreateExamineeFromScanDialog]
+/// above, plus the `Form`/`GlobalKey<FormState>`/required-validator pattern
+/// already used by the Archive Attempt and Request Retake reason dialogs
+/// elsewhere in this feature (`guidance_web_examinee_detail_view.dart`).
+/// Pops `true` only once the RPC call has actually succeeded -- the caller
+/// never has to guess whether the scan was really soft-deleted.
+class _SoftDeleteScanDialog extends StatefulWidget {
+  const _SoftDeleteScanDialog({
+    required this.service,
+    required this.batchId,
+    required this.scanId,
+  });
+
+  final GuidanceWebExamineeRecordsService service;
+  final String batchId;
+  final String scanId;
+
+  @override
+  State<_SoftDeleteScanDialog> createState() => _SoftDeleteScanDialogState();
+}
+
+class _SoftDeleteScanDialogState extends State<_SoftDeleteScanDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _reasonController = TextEditingController();
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _reasonController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await widget.service.softDeleteUnlinkedScan(
+        batchId: widget.batchId,
+        scanId: widget.scanId,
+        deletionReason: _reasonController.text.trim(),
+      );
+      if (!mounted) return;
+      Navigator.pop(context, true);
+    } on GuidanceWebExamineeRecordsException catch (e) {
+      setState(() {
+        _error = e.message;
+        _saving = false;
+      });
+    } catch (_) {
+      setState(() {
+        _error = 'Could not delete this scan. Please try again.';
+        _saving = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Delete This Scan?'),
+      content: SizedBox(
+        width: 420,
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'This scan will be temporarily removed from the active '
+                'Unlinked Scans list. It will be retained for 30 days '
+                'before permanent cleanup.',
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                key: const Key('softDeleteReasonField'),
+                controller: _reasonController,
+                enabled: !_saving,
+                minLines: 2,
+                maxLines: 4,
+                decoration: const InputDecoration(
+                  labelText: 'Reason for deletion',
+                ),
+                validator: (v) => (v == null || v.trim().isEmpty)
+                    ? 'A reason is required'
+                    : null,
+              ),
+              if (_error != null) ...[
+                const SizedBox(height: 10),
+                Text(
+                  _error!,
+                  style: AppTextStyles.body(
+                    size: 11,
+                    color: AppColors.warmRedOrange,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _saving ? null : _submit,
+          style: FilledButton.styleFrom(
+            backgroundColor: AppColors.warmRedOrange,
+          ),
+          child: Text(_saving ? 'Deleting...' : 'Delete'),
+        ),
+      ],
+    );
+  }
+}
+
+/// "Request Restore" (Soft-Deleted Scans tab only): collects a required
+/// reason and calls
+/// [GuidanceWebExamineeRecordsService.requestScanRestoration] itself -- same
+/// `Form`/`GlobalKey<FormState>`/required-validator/saving-state shape as
+/// [_SoftDeleteScanDialog] above. Pops `true` only once the RPC call has
+/// actually succeeded -- the caller never has to guess whether a request was
+/// really queued. This only SUBMITS a restoration request; it never claims
+/// the scan was restored (restoration itself is a separate, later, System
+/// Admin-only review step, not performed by this dialog or this app phase).
+class _RequestRestoreDialog extends StatefulWidget {
+  const _RequestRestoreDialog({
+    required this.service,
+    required this.batchId,
+    required this.scanId,
+  });
+
+  final GuidanceWebExamineeRecordsService service;
+  final String batchId;
+  final String scanId;
+
+  @override
+  State<_RequestRestoreDialog> createState() => _RequestRestoreDialogState();
+}
+
+class _RequestRestoreDialogState extends State<_RequestRestoreDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _reasonController = TextEditingController();
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _reasonController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await widget.service.requestScanRestoration(
+        batchId: widget.batchId,
+        scanId: widget.scanId,
+        reason: _reasonController.text.trim(),
+      );
+      if (!mounted) return;
+      Navigator.pop(context, true);
+    } on GuidanceWebExamineeRecordsException catch (e) {
+      setState(() {
+        _error = e.message;
+        _saving = false;
+      });
+    } catch (_) {
+      setState(() {
+        _error = 'Could not submit this restoration request. Please try again.';
+        _saving = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Request Scan Restoration'),
+      content: SizedBox(
+        width: 420,
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'This will send a restoration request for this soft-deleted scan. '
+                'The scan can only be restored while it is still within its '
+                '30-day retention window.',
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                key: const Key('restoreReasonField'),
+                controller: _reasonController,
+                enabled: !_saving,
+                minLines: 2,
+                maxLines: 4,
+                decoration: const InputDecoration(
+                  labelText: 'Reason for restoration',
+                ),
+                validator: (v) => (v == null || v.trim().isEmpty)
+                    ? 'A reason is required'
+                    : null,
+              ),
+              if (_error != null) ...[
+                const SizedBox(height: 10),
+                Text(
+                  _error!,
+                  style: AppTextStyles.body(
+                    size: 11,
+                    color: AppColors.warmRedOrange,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _saving ? null : _submit,
+          child: Text(_saving ? 'Submitting...' : 'Submit Request'),
         ),
       ],
     );
@@ -1081,12 +1900,15 @@ class _LinkExistingExamineeDialog extends StatefulWidget {
   final List<ExamineeRecord> examinees;
 
   @override
-  State<_LinkExistingExamineeDialog> createState() => _LinkExistingExamineeDialogState();
+  State<_LinkExistingExamineeDialog> createState() =>
+      _LinkExistingExamineeDialogState();
 }
 
-class _LinkExistingExamineeDialogState extends State<_LinkExistingExamineeDialog> {
-  late final TextEditingController _search =
-      TextEditingController(text: widget.item.scan.examinee?.displayName ?? '');
+class _LinkExistingExamineeDialogState
+    extends State<_LinkExistingExamineeDialog> {
+  late final TextEditingController _search = TextEditingController(
+    text: widget.item.scan.examinee?.displayName ?? '',
+  );
   ExamineeRecord? _selected;
   bool _linking = false;
   String? _error;
@@ -1111,9 +1933,11 @@ class _LinkExistingExamineeDialogState extends State<_LinkExistingExamineeDialog
     final active = widget.examinees.where((e) => e.isActive);
     if (term.isEmpty) return active.toList();
     return active
-        .where((e) =>
-            e.displayName.toLowerCase().contains(term) ||
-            e.temporaryExamineeId.toLowerCase().contains(term))
+        .where(
+          (e) =>
+              e.displayName.toLowerCase().contains(term) ||
+              e.temporaryExamineeId.toLowerCase().contains(term),
+        )
         .toList();
   }
 
@@ -1127,8 +1951,14 @@ class _LinkExistingExamineeDialogState extends State<_LinkExistingExamineeDialog
           'to Examinee Record ${examinee.temporaryExamineeId} (${examinee.displayName})?',
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Confirm Attach')),
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Confirm Attach'),
+          ),
         ],
       ),
     );
@@ -1194,19 +2024,44 @@ class _LinkExistingExamineeDialogState extends State<_LinkExistingExamineeDialog
             Expanded(
               child: candidates.isEmpty
                   ? Center(
-                      child: Text('No matching Examinee Records.', style: AppTextStyles.body(size: 11, color: AppColors.textGray)),
+                      child: Text(
+                        'No matching Examinee Records.',
+                        style: AppTextStyles.body(
+                          size: 11,
+                          color: AppColors.textGray,
+                        ),
+                      ),
                     )
                   : ListView.separated(
                       itemCount: candidates.length,
-                      separatorBuilder: (_, _) => const Divider(height: 1, color: AppColors.cardBorder),
+                      separatorBuilder: (_, _) =>
+                          const Divider(height: 1, color: AppColors.cardBorder),
                       itemBuilder: (context, index) {
                         final e = candidates[index];
                         return ListTile(
                           dense: true,
-                          title: Text(e.displayName, style: AppTextStyles.body(size: 12, weight: FontWeight.w600)),
-                          subtitle: Text(e.temporaryExamineeId, style: AppTextStyles.body(size: 10.5, color: AppColors.textGray)),
+                          title: Text(
+                            e.displayName,
+                            style: AppTextStyles.body(
+                              size: 12,
+                              weight: FontWeight.w600,
+                            ),
+                          ),
+                          subtitle: Text(
+                            e.temporaryExamineeId,
+                            style: AppTextStyles.body(
+                              size: 10.5,
+                              color: AppColors.textGray,
+                            ),
+                          ),
                           trailing: (_linking && _selected?.id == e.id)
-                              ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
                               : null,
                           onTap: _linking ? null : () => _confirmAndLink(e),
                         );
@@ -1215,7 +2070,13 @@ class _LinkExistingExamineeDialogState extends State<_LinkExistingExamineeDialog
             ),
             if (_error != null) ...[
               const SizedBox(height: 8),
-              Text(_error!, style: AppTextStyles.body(size: 11, color: AppColors.warmRedOrange)),
+              Text(
+                _error!,
+                style: AppTextStyles.body(
+                  size: 11,
+                  color: AppColors.warmRedOrange,
+                ),
+              ),
             ],
           ],
         ),
@@ -1236,14 +2097,19 @@ class _LinkExistingExamineeDialogState extends State<_LinkExistingExamineeDialog
 /// have). Rectified image preferred, original as a fallback, matching
 /// [GuidanceWebResultDetailView]'s own convention.
 class _ScanImagePreviewDialog extends StatefulWidget {
-  const _ScanImagePreviewDialog({required this.service, required this.batch, required this.scan});
+  const _ScanImagePreviewDialog({
+    required this.service,
+    required this.batch,
+    required this.scan,
+  });
 
   final GuidanceWebResultsService service;
   final LocalBatch batch;
   final LocalScan scan;
 
   @override
-  State<_ScanImagePreviewDialog> createState() => _ScanImagePreviewDialogState();
+  State<_ScanImagePreviewDialog> createState() =>
+      _ScanImagePreviewDialogState();
 }
 
 class _ScanImagePreviewDialogState extends State<_ScanImagePreviewDialog> {
@@ -1261,9 +2127,17 @@ class _ScanImagePreviewDialogState extends State<_ScanImagePreviewDialog> {
     try {
       Uint8List? bytes;
       if (widget.scan.rectifiedImageFileName != null) {
-        bytes = await widget.service.loadScanImage(widget.batch.id, widget.scan.id, rectified: true);
+        bytes = await widget.service.loadScanImage(
+          widget.batch.id,
+          widget.scan.id,
+          rectified: true,
+        );
       }
-      bytes ??= await widget.service.loadScanImage(widget.batch.id, widget.scan.id, rectified: false);
+      bytes ??= await widget.service.loadScanImage(
+        widget.batch.id,
+        widget.scan.id,
+        rectified: false,
+      );
       if (!mounted) return;
       setState(() {
         _bytes = bytes;
@@ -1296,43 +2170,65 @@ class _ScanImagePreviewDialogState extends State<_ScanImagePreviewDialog> {
             children: [
               Align(
                 alignment: Alignment.topRight,
-                child: IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(context)),
+                child: IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: () => Navigator.pop(context),
+                ),
               ),
               Expanded(
                 child: Center(
                   child: _loading
                       ? const CircularProgressIndicator()
                       : _error != null
-                          ? Text(_error!, style: AppTextStyles.body(size: 11, color: AppColors.warmRedOrange))
-                          : _bytes == null
-                              ? Text('No image available.', style: AppTextStyles.body(size: 11, color: AppColors.textGray))
-                              : Column(
-                                  // Stretch so the click target is the whole
-                                  // preview box, even before the image decodes.
-                                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                                  children: [
-                                    Expanded(
-                                      child: MouseRegion(
-                                        cursor: SystemMouseCursors.zoomIn,
-                                        child: GestureDetector(
-                                          key: const Key('scanPreviewImage'),
-                                          behavior: HitTestBehavior.opaque,
-                                          onTap: () => showDialog<void>(
-                                            context: context,
-                                            builder: (_) => _ZoomableImageViewer(bytes: _bytes!),
-                                          ),
-                                          child: Image.memory(_bytes!, fit: BoxFit.contain),
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(height: 6),
-                                    Text(
-                                      'Click the image to zoom',
-                                      textAlign: TextAlign.center,
-                                      style: AppTextStyles.body(size: 10, color: AppColors.textGray),
-                                    ),
-                                  ],
+                      ? Text(
+                          _error!,
+                          style: AppTextStyles.body(
+                            size: 11,
+                            color: AppColors.warmRedOrange,
+                          ),
+                        )
+                      : _bytes == null
+                      ? Text(
+                          'No image available.',
+                          style: AppTextStyles.body(
+                            size: 11,
+                            color: AppColors.textGray,
+                          ),
+                        )
+                      : Column(
+                          // Stretch so the click target is the whole
+                          // preview box, even before the image decodes.
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Expanded(
+                              child: MouseRegion(
+                                cursor: SystemMouseCursors.zoomIn,
+                                child: GestureDetector(
+                                  key: const Key('scanPreviewImage'),
+                                  behavior: HitTestBehavior.opaque,
+                                  onTap: () => showDialog<void>(
+                                    context: context,
+                                    builder: (_) =>
+                                        _ZoomableImageViewer(bytes: _bytes!),
+                                  ),
+                                  child: Image.memory(
+                                    _bytes!,
+                                    fit: BoxFit.contain,
+                                  ),
                                 ),
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              'Click the image to zoom',
+                              textAlign: TextAlign.center,
+                              style: AppTextStyles.body(
+                                size: 10,
+                                color: AppColors.textGray,
+                              ),
+                            ),
+                          ],
+                        ),
                 ),
               ),
             ],
@@ -1431,7 +2327,9 @@ class _DatePopoverFieldState extends State<_DatePopoverField> {
               widget.text,
               style: AppTextStyles.body(
                 size: 11,
-                color: widget.isPlaceholder ? AppColors.textGray : AppColors.textDark,
+                color: widget.isPlaceholder
+                    ? AppColors.textGray
+                    : AppColors.textDark,
               ),
             ),
           ),
@@ -1454,7 +2352,10 @@ class _DatePopoverFieldState extends State<_DatePopoverField> {
       info.childPaintTransform,
       Offset.zero & info.childSize,
     );
-    final maxLeft = (info.overlaySize.width - popoverWidth).clamp(0.0, double.infinity);
+    final maxLeft = (info.overlaySize.width - popoverWidth).clamp(
+      0.0,
+      double.infinity,
+    );
     final left = field.left.clamp(0.0, maxLeft);
     var top = field.bottom + 6;
     if (top + popoverHeight > info.overlaySize.height) {

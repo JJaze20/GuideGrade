@@ -15,26 +15,26 @@ class CloudAnswerKeyRead {
     required this.answers,
     required this.updatedByName,
     required this.updatedAt,
-  })  : exists = true,
-        error = null;
+  }) : exists = true,
+       error = null;
 
   /// No row exists for this exam code (not an error).
   const CloudAnswerKeyRead.absent()
-      : exists = false,
-        version = null,
-        answers = null,
-        updatedByName = null,
-        updatedAt = null,
-        error = null;
+    : exists = false,
+      version = null,
+      answers = null,
+      updatedByName = null,
+      updatedAt = null,
+      error = null;
 
   /// The read failed; [error] is a sanitized [SyncOutcome]
   /// (transient / permanent) — never a raw exception.
   const CloudAnswerKeyRead.failed(this.error)
-      : exists = false,
-        version = null,
-        answers = null,
-        updatedByName = null,
-        updatedAt = null;
+    : exists = false,
+      version = null,
+      answers = null,
+      updatedByName = null,
+      updatedAt = null;
 
   /// True only for [CloudAnswerKeyRead.found].
   final bool exists;
@@ -218,9 +218,7 @@ class CloudImageRead {
 
   /// No object exists at that Storage path -- a normal "not restored yet"
   /// state, never an error.
-  const CloudImageRead.absent()
-      : bytes = null,
-        error = null;
+  const CloudImageRead.absent() : bytes = null, error = null;
 
   const CloudImageRead.failed(this.error) : bytes = null;
 
@@ -546,11 +544,13 @@ abstract class SyncClient {
   /// never touched). The actor uid/name come from the signed-in identity.
   /// A batch that already has a marker fails with a permanent `23505`; the
   /// database also rejects a batch that is not Completed.
-  Future<SyncOutcome> archiveBatch({
-    required String batchId,
-    String? reason,
-  });
+  Future<SyncOutcome> archiveBatch({required String batchId, String? reason});
 
   /// Scan count for each of [batchIds] (exact counts, read-only).
   Future<CloudScanCountsRead> readScanCounts(List<String> batchIds);
+}
+
+/// Optional Web completion capability, unused by mobile synchronization.
+abstract class BatchCompletionClient {
+  Future<SyncOutcome> completeBatchForArchive(CloudBatchRow expected);
 }

@@ -13,10 +13,7 @@
 // stale or wrong stored percentage can never reach these statistics even
 // though `LocalScanResult.percentage` is otherwise authoritative for AT.
 //
-// The A / B / C / D bands and the intentional 55–57 "Unclassified" gap
-// come from [admissionCategory] in lib/core/omr/admission_category.dart —
-// they are NOT re-derived here, and the 55–57 gap is never merged into a
-// neighbouring band.
+// Admission categories come from [admissionCategory]; B includes 55–60.
 //
 // Cluster Analysis (Verbal / Nonverbal and the four sub-clusters printed
 // on answer_sheets/AT.pdf page 2) is intentionally NOT implemented: the
@@ -46,13 +43,11 @@ double? _atPercentage(int rawScore) {
 ///
 /// Unlike an arbitrary statistical histogram, each band is exactly one
 /// official Admission outcome, so the distribution reads directly as "how
-/// many A / Unclassified / B / C / D". The `55–57` [unclassified] band is
-/// kept separate from [a] and [b] and is never merged. Style mirrors
+/// many A / B / C / D". Style mirrors
 /// `QtmScoreBand` / `TatTotalBand`.
 enum AtScoreBand {
   a(0, 54, 'A', '0–54'),
-  unclassified(55, 57, 'Unclassified', '55–57'),
-  b(58, 60, 'B', '58–60'),
+  b(55, 60, 'B', '55–60'),
   c(61, 64, 'C', '61–64'),
   d(65, 72, 'D', '65–72');
 
@@ -69,11 +64,10 @@ enum AtScoreBand {
   /// Inclusive upper bound of the band.
   final int maxRawScore;
 
-  /// The official outcome this band represents: `'A'`, `'Unclassified'`,
-  /// `'B'`, `'C'` or `'D'`.
+  /// The official outcome this band represents: `'A'`, `'B'`, `'C'` or `'D'`.
   final String categoryName;
 
-  /// Human-readable raw-score range, e.g. `'58–60'`.
+  /// Human-readable raw-score range, e.g. `'55–60'`.
   final String label;
 
   /// The band a raw score falls into, or `null` when the score is outside
@@ -118,8 +112,7 @@ class AtRankedScorer {
   /// `LocalScanResult.percentage`.
   final double? percentage;
 
-  /// Official Admission category via [admissionCategory] — `null` for the
-  /// intentional `55–57` gap (and for a corrupt out-of-range score).
+  /// Admission category via [admissionCategory], null for out-of-range scores.
   final AdmissionCategory? category;
 
   /// [ExamineeInfo.examineeNumber] when a non-blank tag exists, else `null`
@@ -223,14 +216,12 @@ class AtBatchAnalytics {
   // --- admission categories ---------------------------------------
 
   /// Count of analyzable scans per official [AdmissionCategory]
-  /// (`A`=0–54, `B`=58–60, `C`=61–64, `D`=65–72). Contains all four keys
+  /// (`A`=0–54, `B`=55–60, `C`=61–64, `D`=65–72). Contains all four keys
   /// (some possibly `0`) when there is >= 1 analyzable scan; an empty map
-  /// when there are none. The intentional `55–57` gap is **not** a key
-  /// here — see [unclassifiedCount].
+  /// when there are none.
   final Map<AdmissionCategory, int> categoryDistribution;
 
-  /// Count of analyzable scans in the intentional `55–57` gap — kept
-  /// wholly separate from [categoryDistribution]. `0` when there are none.
+  /// Compatibility count: valid Admission scores all have a category, so zero.
   final int unclassifiedCount;
 
   /// Count of analyzable scans in [category] (`0` when absent).
@@ -252,7 +243,7 @@ class AtBatchAnalytics {
   // --- score distribution --------------------------------------
 
   /// Count of analyzable scans per official category-aligned [AtScoreBand]
-  /// (`0–54` / `55–57` / `58–60` / `61–64` / `65–72`). Contains all five
+  /// (`0–54` / `55–60` / `61–64` / `65–72`). Contains all four
   /// keys (some possibly `0`) when there is >= 1 analyzable scan; an empty
   /// map when there are none.
   final Map<AtScoreBand, int> scoreDistribution;
@@ -311,7 +302,7 @@ class AtBatchAnalytics {
     double? highestPercentage;
     double? lowestPercentage;
     double? medianPercentage;
-    var unclassifiedCount = 0;
+    const unclassifiedCount = 0;
     final categoryDistribution = <AdmissionCategory, int>{};
     final scoreDistribution = <AtScoreBand, int>{};
 
@@ -355,9 +346,6 @@ class AtBatchAnalytics {
         if (category != null) {
           categoryDistribution[category] =
               categoryDistribution[category]! + 1;
-        } else if (rawScore >= AtScoreBand.unclassified.minRawScore &&
-            rawScore <= AtScoreBand.unclassified.maxRawScore) {
-          unclassifiedCount += 1;
         }
         final band = AtScoreBand.forRawScore(rawScore);
         if (band != null) {

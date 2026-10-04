@@ -8,8 +8,11 @@ import '../../../core/services/logging_service.dart';
 import '../../../core/state/app_state.dart';
 import '../../../models/guidance_position.dart';
 import '../../../models/user.dart';
+import '../../../shared/widgets/form_field_decoration.dart';
+import '../../../shared/widgets/form_layout.dart';
 import '../../../shared/widgets/primary_button.dart';
-import '../widgets/add_guidance_position_dialog.dart';
+import '../../../shared/widgets/status_badge.dart';
+import '../widgets/position_management_dialog.dart';
 
 /// Edit User screen for the System Administrator.
 ///
@@ -98,24 +101,20 @@ class _EditUserScreenState extends State<EditUserScreen> {
     await appState.loadGuidancePositions(_firestoreService);
   }
 
-  Future<void> _addPosition() async {
-    final label = await showAddGuidancePositionDialog(context);
-    if (label == null) return; // cancelled
-    if (!mounted) return;
+  /// Opens Position Management (list + add + delete) instead of going
+  /// straight to the add-only dialog. Whatever changed while it was open
+  /// is picked up by the one [AppState.loadGuidancePositions] refresh
+  /// below -- the same refresh this screen already did after the old
+  /// add-only dialog closed.
+  Future<void> _managePositions() async {
     final appState = AppStateScope.of(context);
-    try {
-      await _firestoreService.addGuidancePosition(label, appState.guidancePositions);
-      if (!mounted) return;
-      await appState.loadGuidancePositions(_firestoreService);
-    } on ArgumentError catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message.toString())));
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not add the position. Please try again.')),
-      );
-    }
+    await showPositionManagementDialog(
+      context,
+      firestoreService: _firestoreService,
+      initialPositions: appState.guidancePositions,
+    );
+    if (!mounted) return;
+    await appState.loadGuidancePositions(_firestoreService);
   }
 
   Future<void> _loadUser() async {
@@ -324,38 +323,37 @@ class _EditUserScreenState extends State<EditUserScreen> {
       appBar: AppBar(
         backgroundColor: Colors.white,
         foregroundColor: AppColors.textDark,
-        elevation: 0.5,
-        title: Text('Edit User', style: AppTextStyles.heading(size: 13)),
+        elevation: 0,
+        shape: const Border(bottom: BorderSide(color: AppColors.border)),
+        title: Text('Edit User', style: AppTextStyles.heading(size: 17)),
       ),
       body: SafeArea(
         child: Form(
           key: _formKey,
           child: ListView(
-            padding: const EdgeInsets.all(16),
+            padding: FormLayout.padding(context),
             children: [
               if (isSelf)
                 Container(
                   margin: const EdgeInsets.only(bottom: 16),
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFFEF3C7),
+                    color: AppColors.warningBg,
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: Text(
                     'This is your own account. Role changes and deactivation are disabled here to prevent losing access.',
-                    style: AppTextStyles.body(size: 10, color: const Color(0xFF92400E)),
+                    style: AppTextStyles.body(size: 12.5, color: AppColors.warningFg),
                   ),
                 ),
-              _buildSection('Account'),
-              const SizedBox(height: 16),
+              const FormSectionHeader('Account', first: true),
               _buildReadOnlyField('Email', _user!.email),
               const SizedBox(height: 12),
               _buildReadOnlyField('Role', _user!.role == 'system_admin' ? 'System Admin' : 'Guidance Council'),
               const SizedBox(height: 12),
               _buildStatusRow(),
               const SizedBox(height: 16),
-              _buildSection('Profile'),
-              const SizedBox(height: 16),
+              const FormSectionHeader('Profile'),
               if (_user!.isGuidanceCouncil) ...[
                 _buildTextField(
                   label: 'First Name',
@@ -408,15 +406,14 @@ class _EditUserScreenState extends State<EditUserScreen> {
                 onPressed: _isSendingReset ? null : _sendPasswordReset,
               ),
               const SizedBox(height: 24),
-              _buildSection('Danger Zone'),
-              const SizedBox(height: 12),
+              const FormSectionHeader('Danger Zone'),
               SizedBox(
                 width: double.infinity,
                 child: OutlinedButton(
                   onPressed: (_isSaving || isSelf) ? null : (_user!.isActive ? _deactivate : _activate),
                   style: OutlinedButton.styleFrom(
-                    foregroundColor: _user!.isActive ? AppColors.warmRedOrange : AppColors.primaryGreen,
-                    side: BorderSide(color: _user!.isActive ? AppColors.warmRedOrange : AppColors.primaryGreen),
+                    foregroundColor: _user!.isActive ? AppColors.dangerFg : AppColors.primaryGreen,
+                    side: BorderSide(color: _user!.isActive ? AppColors.dangerFg : AppColors.primaryGreen),
                     padding: const EdgeInsets.symmetric(vertical: 14),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                   ),
@@ -435,33 +432,18 @@ class _EditUserScreenState extends State<EditUserScreen> {
   }
 
   Widget _buildStatusRow() {
-    return Row(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Status:', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600)),
-        const SizedBox(width: 8),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          decoration: BoxDecoration(
-            color: _user!.isActive ? AppColors.emerald100 : const Color(0xFFFEE2E2),
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Text(
-            _user!.isActive ? 'Active' : 'Inactive',
-            style: AppTextStyles.body(
-              size: 10,
-              weight: FontWeight.w700,
-              color: _user!.isActive ? const Color(0xFF065F46) : const Color(0xFF991B1B),
-            ),
+        const FieldLabel('Status'),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: StatusBadge(
+            label: _user!.isActive ? 'Active' : 'Inactive',
+            tone: _user!.isActive ? StatusTone.success : StatusTone.neutral,
           ),
         ),
       ],
-    );
-  }
-
-  Widget _buildSection(String title) {
-    return Text(
-      title,
-      style: AppTextStyles.body(size: 11, weight: FontWeight.w700, color: AppColors.primaryGreen),
     );
   }
 
@@ -469,17 +451,16 @@ class _EditUserScreenState extends State<EditUserScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label, style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600)),
-        const SizedBox(height: 6),
+        FieldLabel(label),
         Container(
           width: double.infinity,
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
           decoration: BoxDecoration(
-            color: AppColors.lightBg,
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: AppColors.cardBorder),
+            color: FormFieldStyle.disabledFill,
+            borderRadius: BorderRadius.circular(FormFieldStyle.radius),
+            border: Border.all(color: FormFieldStyle.disabledBorder, width: FormFieldStyle.restingWidth),
           ),
-          child: Text(value, style: AppTextStyles.body(size: 11, color: AppColors.textGray)),
+          child: Text(value, style: AppTextStyles.body(size: 13, color: AppColors.textMuted)),
         ),
       ],
     );
@@ -496,32 +477,11 @@ class _EditUserScreenState extends State<EditUserScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            Text(label, style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600)),
-            if (required) Text(' *', style: AppTextStyles.body(size: 10.5, color: Colors.red)),
-          ],
-        ),
-        const SizedBox(height: 6),
+        FieldLabel(label, required: required),
         TextFormField(
           key: fieldKey,
           controller: controller,
-          decoration: InputDecoration(
-            hintText: hint,
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: AppColors.cardBorder),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: AppColors.cardBorder),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: AppColors.primaryGreen),
-            ),
-            contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          ),
+          decoration: FormFieldStyle.outlined(hint: hint),
           validator: validator ??
               (required
                   ? (value) {
@@ -553,46 +513,37 @@ class _EditUserScreenState extends State<EditUserScreen> {
       children: [
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Guidance Position', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600)),
+            const FieldLabel('Guidance Position'),
             InkWell(
               key: const Key('editUser.addPosition'),
-              onTap: _addPosition,
+              onTap: _managePositions,
+              borderRadius: BorderRadius.circular(8),
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(Icons.add_circle_outline, size: 14, color: AppColors.primaryGreen),
+                    const Icon(Icons.tune, size: 16, color: AppColors.primaryGreen),
                     const SizedBox(width: 4),
-                    Text('Add Position', style: AppTextStyles.body(size: 10.5, color: AppColors.primaryGreen, weight: FontWeight.w600)),
+                    Text(
+                      'Manage Positions',
+                      style: AppTextStyles.body(size: 12.5, color: AppColors.primaryGreen, weight: FontWeight.w700),
+                    ),
                   ],
                 ),
               ),
             ),
           ],
         ),
-        const SizedBox(height: 6),
         DropdownButtonFormField<String>(
           key: const Key('editUser.position'),
           initialValue: _guidancePosition,
-          decoration: InputDecoration(
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: AppColors.cardBorder),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: AppColors.cardBorder),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: AppColors.primaryGreen),
-            ),
-            contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          ),
+          isExpanded: true,
+          decoration: FormFieldStyle.outlined(),
           items: positions
-              .map((p) => DropdownMenuItem(value: p.value, child: Text(p.label, style: AppTextStyles.body(size: 11))))
+              .map((p) => DropdownMenuItem(value: p.value, child: Text(p.label, style: AppTextStyles.body(size: 13))))
               .toList(),
           onChanged: (value) => setState(() => _guidancePosition = value),
         ),

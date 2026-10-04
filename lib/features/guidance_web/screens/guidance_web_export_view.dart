@@ -6,6 +6,8 @@ import 'package:printing/printing.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
+import '../../../core/constants/app_tokens.dart';
+import '../../../shared/widgets/state_views.dart';
 import '../../../core/constants/exam_catalog.dart';
 import '../../../models/local_batch.dart';
 import '../export/guidance_web_export_service.dart';
@@ -17,7 +19,8 @@ import 'guidance_web_export_batch_view.dart';
 /// in the catalog's own order (AT, QTM, TAT) -- reads exam_catalog.dart's
 /// examTypeDisplayLabel instead of a separately hand-maintained copy.
 final List<(String, String)> _exportExamTypes = [
-  for (final entry in examCatalog) (entry.examCode, examTypeDisplayLabel(entry.examCode)),
+  for (final entry in examCatalog)
+    (entry.examCode, examTypeDisplayLabel(entry.examCode)),
 ];
 
 /// The Guidance Council Web Console's Export page — READ-ONLY listing of the
@@ -115,11 +118,16 @@ class _GuidanceWebExportViewState extends State<GuidanceWebExportView> {
         b,
         includeCertificates: _includeCertificates,
       );
-      await Printing.sharePdf(bytes: bytes, filename: '${b.batchCode}_export.pdf');
+      await Printing.sharePdf(
+        bytes: bytes,
+        filename: '${b.batchCode}_export.pdf',
+      );
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not create the PDF. Please try again.')),
+        const SnackBar(
+          content: Text('Could not create the PDF. Please try again.'),
+        ),
       );
     } finally {
       if (mounted) setState(() => _exportingBatchId = null);
@@ -173,7 +181,8 @@ class _GuidanceWebExportViewState extends State<GuidanceWebExportView> {
   List<LocalBatch> get _baseBatches {
     final catalog = _catalog;
     if (catalog == null) return const [];
-    if (_status != AnalyticsBatchStatus.all && !catalog.archiveFilterAvailable) {
+    if (_status != AnalyticsBatchStatus.all &&
+        !catalog.archiveFilterAvailable) {
       return const [];
     }
     return catalog.batchesFor(examCode: _examCode, status: _status);
@@ -181,6 +190,7 @@ class _GuidanceWebExportViewState extends State<GuidanceWebExportView> {
 
   bool _batchMatches(LocalBatch b, String term) =>
       b.batchCode.toLowerCase().contains(term) ||
+      b.description.toLowerCase().contains(term) ||
       b.examTitle.toLowerCase().contains(term);
 
   bool _nameMatches(LocalBatch b, String term) {
@@ -270,7 +280,9 @@ class _GuidanceWebExportViewState extends State<GuidanceWebExportView> {
       );
     }
     return Padding(
-      padding: const EdgeInsets.all(24),
+      padding: EdgeInsets.all(
+        AppSpace.gutterFor(MediaQuery.sizeOf(context).width),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -301,95 +313,105 @@ class _GuidanceWebExportViewState extends State<GuidanceWebExportView> {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: _cardDecoration,
-      child: Wrap(
-        spacing: 16,
-        runSpacing: 12,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        children: [
-          SizedBox(
-            width: 420,
-            child: TextField(
-              key: const Key('exportSearch'),
-              controller: _search,
-              decoration: InputDecoration(
-                hintText: 'Search batch, name or Temporary Examinee ID...',
-                isDense: true,
-                prefixIcon: const Icon(Icons.search, size: 18),
-                suffixIcon: _search.text.isNotEmpty
-                    ? IconButton(
-                        icon: const Icon(Icons.clear, size: 18),
-                        onPressed: _search.clear,
-                      )
-                    : null,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
+      child: LayoutBuilder(
+        builder: (context, box) => Wrap(
+          spacing: 16,
+          runSpacing: 12,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            SizedBox(
+              width: box.maxWidth < 600 ? box.maxWidth : 420,
+              child: TextField(
+                key: const Key('exportSearch'),
+                controller: _search,
+                decoration: InputDecoration(
+                  labelText: 'Search batches or examinees',
+                  hintText: 'Batch, name or examinee ID',
+                  isDense: true,
+                  prefixIcon: const Icon(Icons.search, size: 18),
+                  suffixIcon: _search.text.isNotEmpty
+                      ? IconButton(
+                          tooltip: 'Clear search',
+                          icon: const Icon(Icons.clear, size: 18),
+                          onPressed: _search.clear,
+                        )
+                      : null,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
                 ),
               ),
             ),
-          ),
-          SizedBox(
-            width: 260,
-            child: DropdownButtonFormField<String>(
-              key: const Key('exportExamType'),
-              initialValue: _examCode,
-              isExpanded: true,
-              decoration: _decoration('Exam Type'),
-              items: [
-                for (final (code, label) in _exportExamTypes)
-                  DropdownMenuItem(value: code, child: Text(label)),
-              ],
-              onChanged: (v) {
-                if (v != null && v != _examCode) _setScope(examCode: v);
-              },
+            SizedBox(
+              width: box.maxWidth < 600 ? box.maxWidth : 260,
+              child: DropdownButtonFormField<String>(
+                key: const Key('exportExamType'),
+                initialValue: _examCode,
+                isExpanded: true,
+                decoration: _decoration('Exam Type'),
+                items: [
+                  for (final (code, label) in _exportExamTypes)
+                    DropdownMenuItem(value: code, child: Text(label)),
+                ],
+                onChanged: (v) {
+                  if (v != null && v != _examCode) _setScope(examCode: v);
+                },
+              ),
             ),
-          ),
-          SizedBox(
-            width: 180,
-            child: DropdownButtonFormField<AnalyticsBatchStatus>(
-              key: const Key('exportBatchStatus'),
-              initialValue: _status,
-              isExpanded: true,
-              decoration: _decoration('Batch Status'),
-              items: [
-                const DropdownMenuItem(
-                  value: AnalyticsBatchStatus.all,
-                  child: Text('All'),
-                ),
-                DropdownMenuItem(
-                  value: AnalyticsBatchStatus.current,
-                  enabled: archiveOk,
-                  child: const Text('Current'),
-                ),
-                DropdownMenuItem(
-                  value: AnalyticsBatchStatus.archived,
-                  enabled: archiveOk,
-                  child: const Text('Archived'),
-                ),
-              ],
-              onChanged: (v) {
-                if (v != null && v != _status) _setScope(status: v);
-              },
+            SizedBox(
+              width: box.maxWidth < 600 ? box.maxWidth : 180,
+              child: DropdownButtonFormField<AnalyticsBatchStatus>(
+                key: const Key('exportBatchStatus'),
+                initialValue: _status,
+                isExpanded: true,
+                decoration: _decoration('Batch Status'),
+                items: [
+                  const DropdownMenuItem(
+                    value: AnalyticsBatchStatus.all,
+                    child: Text('All'),
+                  ),
+                  DropdownMenuItem(
+                    value: AnalyticsBatchStatus.current,
+                    enabled: archiveOk,
+                    child: const Text('Current'),
+                  ),
+                  DropdownMenuItem(
+                    value: AnalyticsBatchStatus.archived,
+                    enabled: archiveOk,
+                    child: const Text('Archived'),
+                  ),
+                ],
+                onChanged: (v) {
+                  if (v != null && v != _status) _setScope(status: v);
+                },
+              ),
             ),
-          ),
-          if (_searchingNames)
-            Text(
-              'Searching names...',
-              style: AppTextStyles.body(size: 11, color: AppColors.textGray),
-            ),
-        ],
+            if (_searchingNames)
+              Text(
+                'Searching names...',
+                style: AppTextStyles.body(size: 11, color: AppColors.textGray),
+              ),
+          ],
+        ),
       ),
     );
   }
 
-  Widget _message(String text, {bool isError = false}) => Center(
-    child: Text(
-      text,
-      style: AppTextStyles.body(
-        size: 11.5,
-        color: isError ? AppColors.warmRedOrange : AppColors.textGray,
+  Widget _message(String text, {bool isError = false}) {
+    if (isError) return ErrorState(message: text, onRetry: _loadCatalog);
+    if (text.startsWith('Loading') || text == 'Searching...')
+      return LoadingState(message: text);
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Text(
+          text,
+          textAlign: TextAlign.center,
+          style: AppTextStyles.body(size: 13, color: AppColors.textGray),
+        ),
       ),
-    ),
-  );
+    );
+  }
 
   Widget _buildList() {
     if (_loading) return _message('Loading batches...');
@@ -420,8 +442,18 @@ class _GuidanceWebExportViewState extends State<GuidanceWebExportView> {
   }
 
   static const _months = [
-    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
   ];
 
   String _fmtDate(DateTime d) => '${_months[d.month - 1]} ${d.day}, ${d.year}';
@@ -435,59 +467,93 @@ class _GuidanceWebExportViewState extends State<GuidanceWebExportView> {
         _viewing = b;
       }),
       child: Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      child: Row(
-        children: [
-          Flexible(
-            child: Text(
-              '${b.batchCode} — $title (${_fmtDate(b.createdAt)})',
-              overflow: TextOverflow.ellipsis,
-              style: AppTextStyles.body(size: 13),
-            ),
-          ),
-          if (containsSearch) ...[
-            const SizedBox(width: 16),
-            Text(
-              'Contains search',
-              key: const Key('containsSearchNote'),
-              style: AppTextStyles.body(
-                size: 11.5,
-                weight: FontWeight.w600,
-                color: AppColors.textGray,
-              ).copyWith(fontStyle: FontStyle.italic),
-            ),
-          ],
-          const Spacer(),
-          TextButton(
-            key: Key('exportButton_${b.id}'),
-            onPressed: _exportingBatchId == null ? () => _confirmQuickExport(b) : null,
-            child: Text(
-              _exportingBatchId == b.id ? 'exporting...' : 'export',
-              style: AppTextStyles.body(
-                size: 13,
-                weight: FontWeight.w800,
-                color: AppColors.primaryGreen,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        child: LayoutBuilder(
+          builder: (context, box) => Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              SizedBox(
+                width: box.maxWidth < 600 ? box.maxWidth : box.maxWidth - 216,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      '${b.batchCode} — $title (${_fmtDate(b.createdAt)})',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTextStyles.body(size: 13),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      b.description.trim().isEmpty
+                          ? 'No description'
+                          : b.description.trim(),
+                      style: AppTextStyles.body(
+                        size: 16,
+                        weight: FontWeight.w600,
+                      ),
+                    ),
+                    if (containsSearch) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        'Contains search',
+                        key: const Key('containsSearchNote'),
+                        style: AppTextStyles.body(
+                          size: 11.5,
+                          weight: FontWeight.w600,
+                          color: AppColors.textGray,
+                        ).copyWith(fontStyle: FontStyle.italic),
+                      ),
+                    ],
+                  ],
+                ),
               ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          TextButton(
-            key: Key('viewButton_${b.id}'),
-            onPressed: () => setState(() {
-              _startInPreview = false;
-              _viewing = b;
-            }),
-            child: Text(
-              'view',
-              style: AppTextStyles.body(
-                size: 13,
-                weight: FontWeight.w800,
-                color: AppColors.darkNavy,
+              // Identical action columns on every row, including while exporting.
+              SizedBox(
+                width: 112,
+                child: TextButton(
+                  key: Key('exportButton_${b.id}'),
+                  style: TextButton.styleFrom(minimumSize: const Size(64, 44)),
+                  onPressed: _exportingBatchId == null
+                      ? () => _confirmQuickExport(b)
+                      : null,
+                  child: Text(
+                    _exportingBatchId == b.id ? 'exporting...' : 'export',
+                    textAlign: TextAlign.center,
+                    style: AppTextStyles.body(
+                      size: 13,
+                      weight: FontWeight.w800,
+                      color: AppColors.primaryGreen,
+                    ),
+                  ),
+                ),
               ),
-            ),
+              SizedBox(
+                width: 72,
+                child: TextButton(
+                  key: Key('viewButton_${b.id}'),
+                  style: TextButton.styleFrom(minimumSize: const Size(64, 44)),
+                  onPressed: () => setState(() {
+                    _startInPreview = false;
+                    _viewing = b;
+                  }),
+                  child: Text(
+                    'view',
+                    textAlign: TextAlign.center,
+                    style: AppTextStyles.body(
+                      size: 13,
+                      weight: FontWeight.w800,
+                      color: AppColors.darkNavy,
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
-        ],
-      ),
+        ),
       ),
     );
   }

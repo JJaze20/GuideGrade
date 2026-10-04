@@ -1,6 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:guidegrade/core/sync/retake_client.dart';
 import 'package:guidegrade/core/sync/scan_delete_client.dart';
+import 'package:guidegrade/core/sync/scan_restore_client.dart';
+import 'package:guidegrade/core/sync/supabase_sync_client.dart' show SyncIdentity;
 import 'package:guidegrade/core/sync/sync_client.dart';
 import 'package:guidegrade/core/sync/sync_job.dart';
 import 'package:guidegrade/core/sync/sync_outcome.dart';
@@ -9,7 +11,7 @@ import 'package:guidegrade/models/examinee_record.dart';
 import 'package:guidegrade/models/local_batch.dart';
 import 'package:guidegrade/models/omr_scan_result.dart';
 
-class _FakeSyncClient implements SyncClient, RetakeClient, ScanDeleteClient {
+class _FakeSyncClient implements SyncClient, RetakeClient, ScanDeleteClient, ScanRestoreClient {
   /// When set, [deleteUnlinkedScan] returns it verbatim.
   SyncOutcome? deleteUnlinkedScanResult;
   final List<Map<String, String>> deleteUnlinkedScanCalls = [];
@@ -35,6 +37,64 @@ class _FakeSyncClient implements SyncClient, RetakeClient, ScanDeleteClient {
       unlinkedScansToReturn.scans.where((s) => s != match.first).toList(),
     );
     return const SyncOutcome.success();
+  }
+
+  /// When set, [softDeleteUnlinkedScan] returns it verbatim.
+  SyncOutcome? softDeleteUnlinkedScanResult;
+  final List<Map<String, String?>> softDeleteUnlinkedScanCalls = [];
+
+  @override
+  Future<SyncOutcome> softDeleteUnlinkedScan({
+    required String batchId,
+    required String scanId,
+    required String deletedByUid,
+    String? deletedByName,
+    required String deletionReason,
+  }) async {
+    calls.add('softDeleteUnlinkedScan:$batchId/$scanId');
+    softDeleteUnlinkedScanCalls.add({
+      'batchId': batchId,
+      'scanId': scanId,
+      'deletedByUid': deletedByUid,
+      'deletedByName': deletedByName,
+      'deletionReason': deletionReason,
+    });
+    return softDeleteUnlinkedScanResult ?? const SyncOutcome.success();
+  }
+
+  /// When set, [listRetainedSoftDeletedScans] returns it verbatim.
+  CloudRetainedDeletedScansRead? retainedScansResult;
+  List<CloudRetainedDeletedScanRow> retainedScansToReturn = const [];
+  int listRetainedSoftDeletedScansCalls = 0;
+
+  @override
+  Future<CloudRetainedDeletedScansRead> listRetainedSoftDeletedScans() async {
+    calls.add('listRetainedSoftDeletedScans');
+    listRetainedSoftDeletedScansCalls++;
+    return retainedScansResult ?? CloudRetainedDeletedScansRead.found(retainedScansToReturn);
+  }
+
+  /// When set, [createScanRestoreRequest] returns it verbatim.
+  SyncOutcome? createScanRestoreRequestResult;
+  final List<Map<String, String?>> createScanRestoreRequestCalls = [];
+
+  @override
+  Future<SyncOutcome> createScanRestoreRequest({
+    required String batchId,
+    required String scanId,
+    required String reason,
+    required String requestedByUid,
+    String? requestedByName,
+  }) async {
+    calls.add('createScanRestoreRequest:$batchId/$scanId');
+    createScanRestoreRequestCalls.add({
+      'batchId': batchId,
+      'scanId': scanId,
+      'reason': reason,
+      'requestedByUid': requestedByUid,
+      'requestedByName': requestedByName,
+    });
+    return createScanRestoreRequestResult ?? const SyncOutcome.success();
   }
 
   final Map<String, List<CloudRetakeRequestRow>> retakeRequestsByKey = {};
@@ -441,6 +501,38 @@ ExamineeRecord _examinee({
       updatedByUid: 'uid',
     );
 
+CloudRetainedDeletedScanRow _retainedScanRow({
+  String batchId = 'b1',
+  required String scanId,
+  String examCode = 'TAT',
+  String? activeRestoreRequestStatus,
+}) =>
+    CloudRetainedDeletedScanRow(
+      batchId: batchId,
+      scanId: scanId,
+      examCode: examCode,
+      deletedAt: DateTime.utc(2026, 3, 1),
+      retentionUntil: DateTime.utc(2026, 3, 31),
+      deletionReason: 'Duplicate capture',
+      deletedByName: 'Council Member',
+      activeRestoreRequestStatus: activeRestoreRequestStatus,
+    );
+
+/// Test-only [SyncIdentity] so [GuidanceWebExamineeRecordsService
+/// .softDeleteUnlinkedScan] never reaches `FirebaseAuth.instance` (which
+/// has no app initialized in a plain `flutter test` unit test) -- same
+/// shape as the `_Identity` fakes already used in the `SupabaseSyncClient`
+/// HTTP-level tests.
+class _Identity implements SyncIdentity {
+  _Identity({this.uid = 'firebase-uid-1', this.displayName = 'Council Member'});
+  @override
+  final String? uid;
+  @override
+  final String? displayName;
+  @override
+  Future<bool> refreshToken() async => false;
+}
+
 void main() {
   late _FakeSyncClient client;
   late GuidanceWebExamineeRecordsService service;
@@ -454,7 +546,7 @@ void main() {
       _examineeRow(id: 'e2', temporaryExamineeId: 'EX-2'),
       _examineeRow(id: 'e5', temporaryExamineeId: 'EX-000005'),
     ]);
-    service = GuidanceWebExamineeRecordsService(client: client);
+    service = GuidanceWebExamineeRecordsService(client: client, identity: _Identity());
   });
 
   group('loadExaminees', () {
@@ -1176,6 +1268,205 @@ void main() {
       }
       expect(error, isA<GuidanceWebExamineeRecordsException>());
       expect((error as GuidanceWebExamineeRecordsException).message, isNot(contains('42501')));
+    });
+  });
+
+  group('Soft-Delete Unlinked Scan (softDeleteUnlinkedScan)', () {
+    test('a successful soft-delete calls the RPC-backed client method and returns normally',
+        () async {
+      await service.softDeleteUnlinkedScan(
+        batchId: 'b1',
+        scanId: 's1',
+        deletionReason: 'Duplicate capture',
+      );
+      expect(client.softDeleteUnlinkedScanCalls, hasLength(1));
+      final call = client.softDeleteUnlinkedScanCalls.single;
+      expect(call['batchId'], 'b1');
+      expect(call['scanId'], 's1');
+      expect(call['deletionReason'], 'Duplicate capture');
+      // The signed-in actor's own identity -- never a user-entered value.
+      expect(call['deletedByUid'], 'firebase-uid-1');
+      expect(call['deletedByName'], 'Council Member');
+      // Never touches the hard-delete path.
+      expect(client.calls, isNot(contains(startsWith('deleteUnlinkedScan'))));
+    });
+
+    test('a missing/invalid reason (the RPC\'s own 22023) is reported as a specific, friendly message',
+        () async {
+      client.softDeleteUnlinkedScanResult = const SyncOutcome.permanent('22023');
+      await expectLater(
+        service.softDeleteUnlinkedScan(batchId: 'b1', scanId: 's1', deletionReason: ''),
+        throwsA(
+          isA<GuidanceWebExamineeRecordsException>()
+              .having((e) => e.message, 'message', contains('reason is required')),
+        ),
+      );
+    });
+
+    test('a business-rule rejection (42501 -- already linked, archived, or already soft-deleted) '
+        'is a sanitized, friendly message, never the raw code', () async {
+      client.softDeleteUnlinkedScanResult = const SyncOutcome.permanent('42501');
+      Object? error;
+      try {
+        await service.softDeleteUnlinkedScan(
+          batchId: 'b1',
+          scanId: 's1',
+          deletionReason: 'Duplicate capture',
+        );
+      } catch (e) {
+        error = e;
+      }
+      expect(error, isA<GuidanceWebExamineeRecordsException>());
+      final message = (error as GuidanceWebExamineeRecordsException).message;
+      expect(message, isNot(contains('42501')));
+      expect(message, isNotEmpty);
+    });
+  });
+
+  group('Soft-Deleted Scans (loadRetainedSoftDeletedScans / requestScanRestoration)', () {
+    test('a successful listing returns the client\'s rows unchanged', () async {
+      client.retainedScansToReturn = [_retainedScanRow(scanId: 's1')];
+      final scans = await service.loadRetainedSoftDeletedScans();
+      expect(client.listRetainedSoftDeletedScansCalls, 1);
+      expect(scans, hasLength(1));
+      expect(scans.single.scanId, 's1');
+    });
+
+    test('a listing failure is translated to a friendly GuidanceWebExamineeRecordsException',
+        () async {
+      client.retainedScansResult =
+          const CloudRetainedDeletedScansRead.failed(SyncOutcome.permanent('42501'));
+      await expectLater(
+        service.loadRetainedSoftDeletedScans(),
+        throwsA(isA<GuidanceWebExamineeRecordsException>()),
+      );
+    });
+
+    test('a successful restore request calls the RPC-backed client method with the signed-in '
+        'actor\'s identity and the entered reason', () async {
+      await service.requestScanRestoration(
+        batchId: 'b1',
+        scanId: 's1',
+        reason: 'Need this scan back for review',
+      );
+      expect(client.createScanRestoreRequestCalls, hasLength(1));
+      final call = client.createScanRestoreRequestCalls.single;
+      expect(call['batchId'], 'b1');
+      expect(call['scanId'], 's1');
+      expect(call['reason'], 'Need this scan back for review');
+      // The signed-in actor's own identity -- never a user-entered value.
+      expect(call['requestedByUid'], 'firebase-uid-1');
+      expect(call['requestedByName'], 'Council Member');
+    });
+
+    test('a blank reason never reaches the client, and throws before any RPC call', () async {
+      await expectLater(
+        service.requestScanRestoration(batchId: 'b1', scanId: 's1', reason: '   '),
+        throwsA(
+          isA<GuidanceWebExamineeRecordsException>().having(
+            (e) => e.message,
+            'message',
+            contains('reason is required'),
+          ),
+        ),
+      );
+      expect(client.createScanRestoreRequestCalls, isEmpty);
+    });
+
+    test('an expired/not-eligible rejection (42501) is a sanitized, friendly message, never the '
+        'raw code', () async {
+      client.createScanRestoreRequestResult = const SyncOutcome.permanent('42501');
+      Object? error;
+      try {
+        await service.requestScanRestoration(
+          batchId: 'b1',
+          scanId: 's1',
+          reason: 'Need this scan back',
+        );
+      } catch (e) {
+        error = e;
+      }
+      expect(error, isA<GuidanceWebExamineeRecordsException>());
+      final message = (error as GuidanceWebExamineeRecordsException).message;
+      expect(message, isNot(contains('42501')));
+      expect(message, contains('retention window'));
+    });
+
+    test('an active-request conflict (23505) is reported as a specific, friendly message',
+        () async {
+      client.createScanRestoreRequestResult = const SyncOutcome.permanent('23505');
+      await expectLater(
+        service.requestScanRestoration(
+          batchId: 'b1',
+          scanId: 's1',
+          reason: 'Need this scan back',
+        ),
+        throwsA(
+          isA<GuidanceWebExamineeRecordsException>().having(
+            (e) => e.message,
+            'message',
+            contains('already been submitted'),
+          ),
+        ),
+      );
+    });
+
+    test('a missing scan (P0002) is reported as a specific, friendly message', () async {
+      client.createScanRestoreRequestResult = const SyncOutcome.permanent('P0002');
+      await expectLater(
+        service.requestScanRestoration(
+          batchId: 'b1',
+          scanId: 's1',
+          reason: 'Need this scan back',
+        ),
+        throwsA(
+          isA<GuidanceWebExamineeRecordsException>().having(
+            (e) => e.message,
+            'message',
+            contains('no longer exists'),
+          ),
+        ),
+      );
+    });
+
+    test('a signed-out requester (no uid) never reaches the client', () async {
+      service = GuidanceWebExamineeRecordsService(
+        client: client,
+        identity: _Identity(uid: null),
+      );
+      await expectLater(
+        service.requestScanRestoration(
+          batchId: 'b1',
+          scanId: 's1',
+          reason: 'Need this scan back',
+        ),
+        throwsA(
+          isA<GuidanceWebExamineeRecordsException>().having(
+            (e) => e.message,
+            'message',
+            contains('signed in'),
+          ),
+        ),
+      );
+      expect(client.createScanRestoreRequestCalls, isEmpty);
+    });
+
+    test('a transient/network failure is reported as a retry-suggesting message', () async {
+      client.createScanRestoreRequestResult = const SyncOutcome.transient('network');
+      await expectLater(
+        service.requestScanRestoration(
+          batchId: 'b1',
+          scanId: 's1',
+          reason: 'Need this scan back',
+        ),
+        throwsA(
+          isA<GuidanceWebExamineeRecordsException>().having(
+            (e) => e.message,
+            'message',
+            contains('Could not reach Supabase'),
+          ),
+        ),
+      );
     });
   });
 

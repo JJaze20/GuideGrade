@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:guidegrade/core/omr/omr_scorer.dart';
 import 'package:guidegrade/core/omr/omr_templates.dart';
+import 'package:guidegrade/core/omr/tat_cluster_analysis.dart';
 import 'package:guidegrade/core/sync/sync_client.dart';
 import 'package:guidegrade/core/sync/sync_job.dart';
 import 'package:guidegrade/core/sync/sync_outcome.dart';
@@ -30,7 +31,8 @@ class _FakeSyncClient implements SyncClient {
   Never _no(String label) => throw StateError('must never call $label');
 
   @override
-  Future<CloudAnswerKeyRead> readAnswerKey(String examCode) async => answerKeyToReturn;
+  Future<CloudAnswerKeyRead> readAnswerKey(String examCode) async =>
+      answerKeyToReturn;
 
   @override
   Future<CloudImageRead> downloadScanImage({
@@ -52,29 +54,37 @@ class _FakeSyncClient implements SyncClient {
     return const CloudImageRead.absent();
   }
 
-
   @override
   Future<CloudBatchesRead> readCloudBatches() => _no('readCloudBatches');
   @override
-  Future<CloudScansRead> readCloudScans(String batchId) => _no('readCloudScans');
+  Future<CloudScansRead> readCloudScans(String batchId) =>
+      _no('readCloudScans');
   @override
   Future<SyncOutcome> pushBatch(String batchId) => _no('pushBatch');
   @override
-  Future<SyncOutcome> pushScan(String batchId, String scanId, {Map<String, String> meta = const {}}) =>
-      _no('pushScan');
+  Future<SyncOutcome> pushScan(
+    String batchId,
+    String scanId, {
+    Map<String, String> meta = const {},
+  }) => _no('pushScan');
   @override
   Future<SyncOutcome> uploadImage(SyncJob job) => _no('uploadImage');
   @override
-  Future<SyncOutcome> patchImageStatus(String batchId, String scanId) => _no('patchImageStatus');
+  Future<SyncOutcome> patchImageStatus(String batchId, String scanId) =>
+      _no('patchImageStatus');
   @override
-  Future<SyncOutcome> pushAnswerKey(String examCode, {Map<String, String> meta = const {}}) =>
-      _no('pushAnswerKey');
+  Future<SyncOutcome> pushAnswerKey(
+    String examCode, {
+    Map<String, String> meta = const {},
+  }) => _no('pushAnswerKey');
   @override
   Future<SyncOutcome> deleteBatch(String batchId) => _no('deleteBatch');
   @override
-  Future<SyncOutcome> deleteScan(String batchId, String scanId) => _no('deleteScan');
+  Future<SyncOutcome> deleteScan(String batchId, String scanId) =>
+      _no('deleteScan');
   @override
-  Future<SyncOutcome> deleteStoragePrefix(String batchId) => _no('deleteStoragePrefix');
+  Future<SyncOutcome> deleteStoragePrefix(String batchId) =>
+      _no('deleteStoragePrefix');
   @override
   Future<CloudExamineesRead> readCloudExaminees() => _no('readCloudExaminees');
   @override
@@ -84,42 +94,36 @@ class _FakeSyncClient implements SyncClient {
     required String firstName,
     String? middleName,
     required String lastName,
-  }) =>
-      _no('createExamineeFromScan');
+  }) => _no('createExamineeFromScan');
   @override
   Future<CloudExamineeWrite> updateCloudExaminee({
     required String id,
     required String firstName,
     String? middleName,
     required String lastName,
-  }) =>
-      _no('updateCloudExaminee');
+  }) => _no('updateCloudExaminee');
   @override
-  Future<CloudExamineeWrite> setExamineeArchived(String id, bool archived) => _no('setExamineeArchived');
+  Future<CloudExamineeWrite> setExamineeArchived(String id, bool archived) =>
+      _no('setExamineeArchived');
   @override
   Future<SyncOutcome> linkScanToExaminee({
     required String batchId,
     required String scanId,
     required String? examineeId,
-  }) =>
-      _no('linkScanToExaminee');
+  }) => _no('linkScanToExaminee');
   @override
   Future<SyncOutcome> unlinkScanFromExaminee({
     required String batchId,
     required String scanId,
     required String examineeId,
-  }) =>
-      _no('unlinkScanFromExaminee');
+  }) => _no('unlinkScanFromExaminee');
 
   @override
   Future<CloudBatchArchivesRead> readBatchArchives() async =>
       CloudBatchArchivesRead.found(const []);
 
   @override
-  Future<SyncOutcome> archiveBatch({
-    required String batchId,
-    String? reason,
-  }) =>
+  Future<SyncOutcome> archiveBatch({required String batchId, String? reason}) =>
       _no('archiveBatch');
 
   @override
@@ -133,19 +137,22 @@ class _FakeSyncClient implements SyncClient {
   Future<CloudScansRead> readUnlinkedScans() => _no('readUnlinkedScans');
 }
 
-LocalBatch _batch({String examCode = 'AT', String examTitle = 'Admission Test'}) => LocalBatch(
-      id: 'b1',
-      batchCode: 'B-1',
-      examCode: examCode,
-      examTitle: examTitle,
-      description: '',
-      expectedCount: 1,
-      status: 'Active',
-      createdByUid: 'uid',
-      createdByName: 'Officer',
-      createdAt: DateTime.utc(2026, 1, 1),
-      updatedAt: DateTime.utc(2026, 1, 1),
-    );
+LocalBatch _batch({
+  String examCode = 'AT',
+  String examTitle = 'Admission Test',
+}) => LocalBatch(
+  id: 'b1',
+  batchCode: 'B-1',
+  examCode: examCode,
+  examTitle: examTitle,
+  description: '',
+  expectedCount: 1,
+  status: 'Active',
+  createdByUid: 'uid',
+  createdByName: 'Officer',
+  createdAt: DateTime.utc(2026, 1, 1),
+  updatedAt: DateTime.utc(2026, 1, 1),
+);
 
 LocalScan _scan({
   String examCode = 'AT',
@@ -156,22 +163,21 @@ LocalScan _scan({
   Map<String, (double, double)>? meshInteriorMeasuredFrac,
   List<AnswerCorrection> corrections = const [],
   int captureRevision = 0,
-}) =>
-    LocalScan(
-      id: 's1',
-      imageFileName: 'images/s1.enc',
-      rectifiedImageFileName: rectifiedImageFileName,
-      capturedAt: DateTime.utc(2026, 1, 1, 15, 30),
-      decoded: OmrScanResult(
-        examCode: examCode,
-        items: items,
-        meshInteriorMeasuredFrac: meshInteriorMeasuredFrac,
-      ),
-      result: result,
-      examinee: examinee,
-      corrections: corrections,
-      captureRevision: captureRevision,
-    );
+}) => LocalScan(
+  id: 's1',
+  imageFileName: 'images/s1.enc',
+  rectifiedImageFileName: rectifiedImageFileName,
+  capturedAt: DateTime.utc(2026, 1, 1, 15, 30),
+  decoded: OmrScanResult(
+    examCode: examCode,
+    items: items,
+    meshInteriorMeasuredFrac: meshInteriorMeasuredFrac,
+  ),
+  result: result,
+  examinee: examinee,
+  corrections: corrections,
+  captureRevision: captureRevision,
+);
 
 /// One manual correction as `mapCloudScan` restores it from the cloud row's
 /// `decoded.manual.corrections` block.
@@ -182,36 +188,34 @@ AnswerCorrection _correction({
   required CorrectedAnswer corrected,
   int revision = 0,
   String id = 'c1',
-}) =>
-    AnswerCorrection(
-      id: id,
-      scanId: 's1',
-      sectionName: section,
-      itemNumber: item,
-      captureRevision: revision,
-      action: CorrectionAction.set,
-      original: original,
-      corrected: corrected,
-      editorUid: 'u1',
-      editorName: 'Officer',
-      correctedAt: DateTime.utc(2026, 1, 2),
-    );
+}) => AnswerCorrection(
+  id: id,
+  scanId: 's1',
+  sectionName: section,
+  itemNumber: item,
+  captureRevision: revision,
+  action: CorrectionAction.set,
+  original: original,
+  corrected: corrected,
+  editorUid: 'u1',
+  editorName: 'Officer',
+  correctedAt: DateTime.utc(2026, 1, 2),
+);
 
 LocalScanResult _storedResult({
   required int raw,
   int graded = 1,
   int total = 72,
-}) =>
-    LocalScanResult(
-      rawScore: raw,
-      totalGraded: graded,
-      totalItems: total,
-      percentage: 0,
-      status: 'Graded',
-      scannedAt: DateTime.utc(2026, 1, 1),
-      processedByUid: 'uid',
-      processedByName: 'Officer',
-    );
+}) => LocalScanResult(
+  rawScore: raw,
+  totalGraded: graded,
+  totalItems: total,
+  percentage: 0,
+  status: 'Graded',
+  scannedAt: DateTime.utc(2026, 1, 1),
+  processedByUid: 'uid',
+  processedByName: 'Officer',
+);
 
 /// A canonical examinees row as the Examinee Records page holds it.
 ExamineeRecord _canonical({
@@ -219,281 +223,509 @@ ExamineeRecord _canonical({
   String firstName = 'Merch',
   String? middleName = 'Valdez',
   String lastName = 'Andulana',
-}) =>
-    ExamineeRecord(
-      id: 'fa445fcc-a59e-4b58-86ae-0ddac56138ac',
-      temporaryExamineeId: temporaryId,
-      firstName: firstName,
-      middleName: middleName,
-      lastName: lastName,
-      status: 'active',
-      createdAt: DateTime.utc(2026, 1, 1),
-      createdByUid: 'uid',
-      updatedAt: DateTime.utc(2026, 1, 1),
-      updatedByUid: 'uid',
-    );
+}) => ExamineeRecord(
+  id: 'fa445fcc-a59e-4b58-86ae-0ddac56138ac',
+  temporaryExamineeId: temporaryId,
+  firstName: firstName,
+  middleName: middleName,
+  lastName: lastName,
+  status: 'active',
+  createdAt: DateTime.utc(2026, 1, 1),
+  createdByUid: 'uid',
+  updatedAt: DateTime.utc(2026, 1, 1),
+  updatedByUid: 'uid',
+);
 
 void main() {
   group('answerOutcomeFor (pure)', () {
-    test('9. a blank marked answer on a graded item is incorrect, never invented as correct', () {
-      const item = ScoredItem(sectionName: 'S', itemNumber: 1, markedChoice: null, isAmbiguous: false, correctChoice: 'A');
-      expect(answerOutcomeFor(item), AnswerOutcome.incorrect);
-    });
+    test(
+      '9. a blank marked answer on a graded item is incorrect, never invented as correct',
+      () {
+        const item = ScoredItem(
+          sectionName: 'S',
+          itemNumber: 1,
+          markedChoice: null,
+          isAmbiguous: false,
+          correctChoice: 'A',
+        );
+        expect(answerOutcomeFor(item), AnswerOutcome.incorrect);
+      },
+    );
 
-    test('10. an ambiguous mark is its own outcome, never mislabeled as a normal incorrect answer', () {
-      const item = ScoredItem(sectionName: 'S', itemNumber: 1, markedChoice: 'A', isAmbiguous: true, correctChoice: 'A');
-      expect(answerOutcomeFor(item), AnswerOutcome.ambiguous);
-    });
+    test(
+      '10. an ambiguous mark is its own outcome, never mislabeled as a normal incorrect answer',
+      () {
+        const item = ScoredItem(
+          sectionName: 'S',
+          itemNumber: 1,
+          markedChoice: 'A',
+          isAmbiguous: true,
+          correctChoice: 'A',
+        );
+        expect(answerOutcomeFor(item), AnswerOutcome.ambiguous);
+      },
+    );
 
     test('a matching, unambiguous mark is correct', () {
-      const item = ScoredItem(sectionName: 'S', itemNumber: 1, markedChoice: 'A', isAmbiguous: false, correctChoice: 'A');
+      const item = ScoredItem(
+        sectionName: 'S',
+        itemNumber: 1,
+        markedChoice: 'A',
+        isAmbiguous: false,
+        correctChoice: 'A',
+      );
       expect(answerOutcomeFor(item), AnswerOutcome.correct);
     });
 
     test('a non-matching, unambiguous mark is incorrect', () {
-      const item = ScoredItem(sectionName: 'S', itemNumber: 1, markedChoice: 'B', isAmbiguous: false, correctChoice: 'A');
+      const item = ScoredItem(
+        sectionName: 'S',
+        itemNumber: 1,
+        markedChoice: 'B',
+        isAmbiguous: false,
+        correctChoice: 'A',
+      );
       expect(answerOutcomeFor(item), AnswerOutcome.incorrect);
     });
 
-    test('no correct choice at all (missing/non-covering answer key) is "not graded", never "incorrect"', () {
-      const item = ScoredItem(sectionName: 'S', itemNumber: 1, markedChoice: 'A', isAmbiguous: false, correctChoice: null);
-      expect(answerOutcomeFor(item), AnswerOutcome.notGraded);
-    });
+    test(
+      'no correct choice at all (missing/non-covering answer key) is "not graded", never "incorrect"',
+      () {
+        const item = ScoredItem(
+          sectionName: 'S',
+          itemNumber: 1,
+          markedChoice: 'A',
+          isAmbiguous: false,
+          correctChoice: null,
+        );
+        expect(answerOutcomeFor(item), AnswerOutcome.notGraded);
+      },
+    );
   });
 
   group('groupScoredItemsBySection (pure)', () {
     test('4/5. AT/QTM-style single-section items stay in one group', () {
       const items = [
-        ScoredItem(sectionName: 'Answer Document', itemNumber: 1, markedChoice: 'A', isAmbiguous: false, correctChoice: 'A'),
-        ScoredItem(sectionName: 'Answer Document', itemNumber: 2, markedChoice: 'B', isAmbiguous: false, correctChoice: 'C'),
+        ScoredItem(
+          sectionName: 'Answer Document',
+          itemNumber: 1,
+          markedChoice: 'A',
+          isAmbiguous: false,
+          correctChoice: 'A',
+        ),
+        ScoredItem(
+          sectionName: 'Answer Document',
+          itemNumber: 2,
+          markedChoice: 'B',
+          isAmbiguous: false,
+          correctChoice: 'C',
+        ),
       ];
       final grouped = groupScoredItemsBySection(items);
       expect(grouped.keys.toList(), ['Answer Document']);
       expect(grouped['Answer Document'], hasLength(2));
     });
 
-    test('6. TAT-style multi-section items are grouped and ordered Test I, Test II, Test III', () {
-      const items = [
-        ScoredItem(sectionName: 'Test I', itemNumber: 1, markedChoice: 'A', isAmbiguous: false, correctChoice: 'A'),
-        ScoredItem(sectionName: 'Test II', itemNumber: 1, markedChoice: 'T', isAmbiguous: false, correctChoice: 'F'),
-        ScoredItem(sectionName: 'Test III', itemNumber: 1, markedChoice: null, isAmbiguous: false, correctChoice: 'T'),
-        ScoredItem(sectionName: 'Test I', itemNumber: 2, markedChoice: 'B', isAmbiguous: false, correctChoice: 'B'),
-      ];
-      final grouped = groupScoredItemsBySection(items);
-      expect(grouped.keys.toList(), ['Test I', 'Test II', 'Test III']);
-      expect(grouped['Test I'], hasLength(2));
-      expect(grouped['Test II'], hasLength(1));
-      expect(grouped['Test III'], hasLength(1));
-    });
+    test(
+      '6. TAT-style multi-section items are grouped and ordered Test I, Test II, Test III',
+      () {
+        const items = [
+          ScoredItem(
+            sectionName: 'Test I',
+            itemNumber: 1,
+            markedChoice: 'A',
+            isAmbiguous: false,
+            correctChoice: 'A',
+          ),
+          ScoredItem(
+            sectionName: 'Test II',
+            itemNumber: 1,
+            markedChoice: 'T',
+            isAmbiguous: false,
+            correctChoice: 'F',
+          ),
+          ScoredItem(
+            sectionName: 'Test III',
+            itemNumber: 1,
+            markedChoice: null,
+            isAmbiguous: false,
+            correctChoice: 'T',
+          ),
+          ScoredItem(
+            sectionName: 'Test I',
+            itemNumber: 2,
+            markedChoice: 'B',
+            isAmbiguous: false,
+            correctChoice: 'B',
+          ),
+        ];
+        final grouped = groupScoredItemsBySection(items);
+        expect(grouped.keys.toList(), ['Test I', 'Test II', 'Test III']);
+        expect(grouped['Test I'], hasLength(2));
+        expect(grouped['Test II'], hasLength(1));
+        expect(grouped['Test III'], hasLength(1));
+      },
+    );
   });
 
   group('planOverlayForItem (pure — mirrors mobile _GradedOverlayPainter)', () {
-    const bubbles = [
-      BubblePos('A', 0.10, 0.20),
-      BubblePos('B', 0.20, 0.20),
-    ];
+    const bubbles = [BubblePos('A', 0.10, 0.20), BubblePos('B', 0.20, 0.20)];
 
-    test('4. no correct choice at all (missing answer key) -> no plan, no overlay', () {
-      const item = ScoredItem(sectionName: 'S', itemNumber: 1, markedChoice: 'A', isAmbiguous: false, correctChoice: null);
-      expect(planOverlayForItem(item, bubbles), isNull);
-    });
+    test(
+      '4. no correct choice at all (missing answer key) -> no plan, no overlay',
+      () {
+        const item = ScoredItem(
+          sectionName: 'S',
+          itemNumber: 1,
+          markedChoice: 'A',
+          isAmbiguous: false,
+          correctChoice: null,
+        );
+        expect(planOverlayForItem(item, bubbles), isNull);
+      },
+    );
 
-    test('an item whose choices are not in the template -> no plan (null/empty bubbles)', () {
-      const item = ScoredItem(sectionName: 'S', itemNumber: 1, markedChoice: 'A', isAmbiguous: false, correctChoice: 'A');
-      expect(planOverlayForItem(item, null), isNull);
-      expect(planOverlayForItem(item, const []), isNull);
-    });
+    test(
+      'an item whose choices are not in the template -> no plan (null/empty bubbles)',
+      () {
+        const item = ScoredItem(
+          sectionName: 'S',
+          itemNumber: 1,
+          markedChoice: 'A',
+          isAmbiguous: false,
+          correctChoice: 'A',
+        );
+        expect(planOverlayForItem(item, null), isNull);
+        expect(planOverlayForItem(item, const []), isNull);
+      },
+    );
 
-    test('6. a correct mark gets a green marked-answer ring and a green badge', () {
-      const item = ScoredItem(sectionName: 'S', itemNumber: 1, markedChoice: 'A', isAmbiguous: false, correctChoice: 'A');
-      final plan = planOverlayForItem(item, bubbles)!;
-      expect(plan.markedBubble?.choice, 'A');
-      expect(plan.markedColor, WebOverlayColors.correct);
-      expect(plan.keyBubble, isNull); // already correct -- no key ring needed
-      expect(plan.badgeColor, WebOverlayColors.correct);
-      expect(plan.badgeIsCorrect, isTrue);
-    });
+    test(
+      '6. a correct mark gets a green marked-answer ring and a green badge',
+      () {
+        const item = ScoredItem(
+          sectionName: 'S',
+          itemNumber: 1,
+          markedChoice: 'A',
+          isAmbiguous: false,
+          correctChoice: 'A',
+        );
+        final plan = planOverlayForItem(item, bubbles)!;
+        expect(plan.markedBubble?.choice, 'A');
+        expect(plan.markedColor, WebOverlayColors.correct);
+        expect(plan.keyBubble, isNull); // already correct -- no key ring needed
+        expect(plan.badgeColor, WebOverlayColors.correct);
+        expect(plan.badgeIsCorrect, isTrue);
+      },
+    );
 
     test('7. a wrong mark gets a red marked-answer ring', () {
-      const item = ScoredItem(sectionName: 'S', itemNumber: 1, markedChoice: 'B', isAmbiguous: false, correctChoice: 'A');
+      const item = ScoredItem(
+        sectionName: 'S',
+        itemNumber: 1,
+        markedChoice: 'B',
+        isAmbiguous: false,
+        correctChoice: 'A',
+      );
       final plan = planOverlayForItem(item, bubbles)!;
       expect(plan.markedBubble?.choice, 'B');
       expect(plan.markedColor, WebOverlayColors.wrong);
     });
 
-    test('8. that same wrong mark ALSO gets a yellow key ring on the correct bubble', () {
-      const item = ScoredItem(sectionName: 'S', itemNumber: 1, markedChoice: 'B', isAmbiguous: false, correctChoice: 'A');
-      final plan = planOverlayForItem(item, bubbles)!;
-      expect(plan.keyBubble?.choice, 'A');
-    });
+    test(
+      '8. that same wrong mark ALSO gets a yellow key ring on the correct bubble',
+      () {
+        const item = ScoredItem(
+          sectionName: 'S',
+          itemNumber: 1,
+          markedChoice: 'B',
+          isAmbiguous: false,
+          correctChoice: 'A',
+        );
+        final plan = planOverlayForItem(item, bubbles)!;
+        expect(plan.keyBubble?.choice, 'A');
+      },
+    );
 
     test('9. an ambiguous mark gets a yellow badge', () {
-      const item = ScoredItem(sectionName: 'S', itemNumber: 1, markedChoice: 'A', isAmbiguous: true, correctChoice: 'A');
+      const item = ScoredItem(
+        sectionName: 'S',
+        itemNumber: 1,
+        markedChoice: 'A',
+        isAmbiguous: true,
+        correctChoice: 'A',
+      );
       final plan = planOverlayForItem(item, bubbles)!;
       expect(plan.badgeColor, WebOverlayColors.ambiguous);
-      expect(plan.badgeIsCorrect, isFalse); // isAmbiguous forces isCorrect false
+      expect(
+        plan.badgeIsCorrect,
+        isFalse,
+      ); // isAmbiguous forces isCorrect false
     });
 
-    test('10. that ambiguous mark is NOT drawn as a yellow ring merely for being ambiguous -- '
-        'its ring is red like any other wrong mark, and since the marked/correct bubble '
-        'coincide, no separate key ring is drawn either', () {
-      const item = ScoredItem(sectionName: 'S', itemNumber: 1, markedChoice: 'A', isAmbiguous: true, correctChoice: 'A');
-      final plan = planOverlayForItem(item, bubbles)!;
-      expect(plan.markedColor, WebOverlayColors.wrong);
-      expect(plan.markedColor, isNot(WebOverlayColors.ambiguous));
-      expect(plan.keyBubble, isNull);
-    });
+    test(
+      '10. that ambiguous mark is NOT drawn as a yellow ring merely for being ambiguous -- '
+      'its ring is red like any other wrong mark, and since the marked/correct bubble '
+      'coincide, no separate key ring is drawn either',
+      () {
+        const item = ScoredItem(
+          sectionName: 'S',
+          itemNumber: 1,
+          markedChoice: 'A',
+          isAmbiguous: true,
+          correctChoice: 'A',
+        );
+        final plan = planOverlayForItem(item, bubbles)!;
+        expect(plan.markedColor, WebOverlayColors.wrong);
+        expect(plan.markedColor, isNot(WebOverlayColors.ambiguous));
+        expect(plan.keyBubble, isNull);
+      },
+    );
 
-    test('11. a blank answer with a known correct choice gets only a yellow key ring, no marked ring', () {
-      const item = ScoredItem(sectionName: 'S', itemNumber: 1, markedChoice: null, isAmbiguous: false, correctChoice: 'A');
-      final plan = planOverlayForItem(item, bubbles)!;
-      expect(plan.markedBubble, isNull);
-      expect(plan.markedColor, isNull);
-      expect(plan.keyBubble?.choice, 'A');
-      expect(plan.badgeColor, WebOverlayColors.wrong); // blank, not ambiguous
-    });
+    test(
+      '11. a blank answer with a known correct choice gets only a yellow key ring, no marked ring',
+      () {
+        const item = ScoredItem(
+          sectionName: 'S',
+          itemNumber: 1,
+          markedChoice: null,
+          isAmbiguous: false,
+          correctChoice: 'A',
+        );
+        final plan = planOverlayForItem(item, bubbles)!;
+        expect(plan.markedBubble, isNull);
+        expect(plan.markedColor, isNull);
+        expect(plan.keyBubble?.choice, 'A');
+        expect(plan.badgeColor, WebOverlayColors.wrong); // blank, not ambiguous
+      },
+    );
   });
 
   group('correctedBubbleCenter (pure — mirrors mobile mesh-corrected centerOf)', () {
-    test('with no mesh data at all, the corrected center equals the plain pre-mesh fraction mapping', () {
-      final template = omrTemplates['AT']!;
-      const bubble = BubblePos('A', 0.10751, 0.20668); // AT item 1, choice A
-      const size = Size(800, 1000);
+    test(
+      'with no mesh data at all, the corrected center equals the plain pre-mesh fraction mapping',
+      () {
+        final template = omrTemplates['AT']!;
+        const bubble = BubblePos('A', 0.10751, 0.20668); // AT item 1, choice A
+        const size = Size(800, 1000);
 
-      final corrected = correctedBubbleCenter(
-        bubble: bubble,
-        template: template,
-        meshInteriorMeasuredFrac: null,
-        size: size,
-      );
+        final corrected = correctedBubbleCenter(
+          bubble: bubble,
+          template: template,
+          meshInteriorMeasuredFrac: null,
+          size: size,
+        );
 
-      expect(corrected.dx, closeTo(bubble.xFrac * size.width, 0.001));
-      expect(corrected.dy, closeTo(bubble.yFrac * size.height, 0.001));
-    });
+        expect(corrected.dx, closeTo(bubble.xFrac * size.width, 0.001));
+        expect(corrected.dy, closeTo(bubble.yFrac * size.height, 0.001));
+      },
+    );
 
-    test('a template with no interior fiducials at all (TAT) is never mesh-corrected, '
-        'even if measured fractions are (incorrectly) supplied', () {
-      final template = omrTemplates['TAT']!;
-      const bubble = BubblePos('A', 0.06838, 0.30392); // TAT Test I item 1, choice A
-      const size = Size(936, 612);
+    test(
+      'a template with no interior fiducials at all (TAT) is never mesh-corrected, '
+      'even if measured fractions are (incorrectly) supplied',
+      () {
+        final template = omrTemplates['TAT']!;
+        const bubble = BubblePos(
+          'A',
+          0.06838,
+          0.30392,
+        ); // TAT Test I item 1, choice A
+        const size = Size(936, 612);
 
-      final corrected = correctedBubbleCenter(
-        bubble: bubble,
-        template: template,
-        meshInteriorMeasuredFrac: const {'centerAboveAnswers': (0.9, 0.9)}, // nonsense, must be ignored
-        size: size,
-      );
+        final corrected = correctedBubbleCenter(
+          bubble: bubble,
+          template: template,
+          meshInteriorMeasuredFrac: const {
+            'centerAboveAnswers': (0.9, 0.9),
+          }, // nonsense, must be ignored
+          size: size,
+        );
 
-      expect(corrected.dx, closeTo(bubble.xFrac * size.width, 0.001));
-      expect(corrected.dy, closeTo(bubble.yFrac * size.height, 0.001));
-    });
+        expect(corrected.dx, closeTo(bubble.xFrac * size.width, 0.001));
+        expect(corrected.dy, closeTo(bubble.yFrac * size.height, 0.001));
+      },
+    );
 
-    test('a genuine, non-coherent measured deviation at the interior fiducials shifts the '
-        'corrected center away from the plain fraction mapping -- confirming the mesh is '
-        'actually wired in, not silently ignored', () {
-      final template = omrTemplates['AT']!;
-      const bubble = BubblePos('A', 0.10751, 0.20668); // AT item 1 -- inside a top-pentagon
-      // triangle that always includes centerAboveAnswers as a vertex.
-      const size = Size(595, 842); // ~1 logical px per PDF point, easy to reason about.
+    test(
+      'a genuine, non-coherent measured deviation at the interior fiducials shifts the '
+      'corrected center away from the plain fraction mapping -- confirming the mesh is '
+      'actually wired in, not silently ignored',
+      () {
+        final template = omrTemplates['AT']!;
+        const bubble = BubblePos(
+          'A',
+          0.10751,
+          0.20668,
+        ); // AT item 1 -- inside a top-pentagon
+        // triangle that always includes centerAboveAnswers as a vertex.
+        const size = Size(
+          595,
+          842,
+        ); // ~1 logical px per PDF point, easy to reason about.
 
-      // Displace the 3 vertical-centerline interior fiducials by different,
-      // non-coherent amounts/directions -- comfortably inside the trusted
-      // residual range, but nowhere near "planar" (would no-op) or a
-      // uniform "likely mismatched corner" shift (would also not apply).
-      final meshFrac = {
-        'centerAboveAnswers': (0.45357 + 10 / template.pageWidthPt, 0.22568),
-        'centerAtDivider': (0.45357, 0.59034 - 10 / template.pageHeightPt),
-        'centerBelowAnswers': (0.45357 + 8 / template.pageWidthPt, 0.94312 + 8 / template.pageHeightPt),
-      };
+        // Displace the 3 vertical-centerline interior fiducials by different,
+        // non-coherent amounts/directions -- comfortably inside the trusted
+        // residual range, but nowhere near "planar" (would no-op) or a
+        // uniform "likely mismatched corner" shift (would also not apply).
+        final meshFrac = {
+          'centerAboveAnswers': (0.45357 + 10 / template.pageWidthPt, 0.22568),
+          'centerAtDivider': (0.45357, 0.59034 - 10 / template.pageHeightPt),
+          'centerBelowAnswers': (
+            0.45357 + 8 / template.pageWidthPt,
+            0.94312 + 8 / template.pageHeightPt,
+          ),
+        };
 
-      final plain = Offset(bubble.xFrac * size.width, bubble.yFrac * size.height);
-      final corrected = correctedBubbleCenter(
-        bubble: bubble,
-        template: template,
-        meshInteriorMeasuredFrac: meshFrac,
-        size: size,
-      );
+        final plain = Offset(
+          bubble.xFrac * size.width,
+          bubble.yFrac * size.height,
+        );
+        final corrected = correctedBubbleCenter(
+          bubble: bubble,
+          template: template,
+          meshInteriorMeasuredFrac: meshFrac,
+          size: size,
+        );
 
-      expect((corrected - plain).distance, greaterThan(0.5));
-    });
+        expect((corrected - plain).distance, greaterThan(0.5));
+      },
+    );
   });
 
   group('resolveWebExamineeIdentity (pure)', () {
     // The scan as the mobile app pushed it: generated number, blank names.
     final autoTaggedScan = _scan(
-      examinee: const ExamineeInfo(firstName: '', lastName: '', examineeNumber: 'EX-1790006562335-3'),
+      examinee: const ExamineeInfo(
+        firstName: '',
+        lastName: '',
+        examineeNumber: 'EX-1790006562335-3',
+      ),
     );
 
-    test('1. linked scan + canonical names -> the canonical Examinee ID and names', () {
-      final id = resolveWebExamineeIdentity(scan: autoTaggedScan, linkedExaminee: _canonical());
-      expect(id.fromCanonicalExaminee, isTrue);
-      expect(id.examineeId, 'EX-000004');
-      expect(id.firstName, 'Merch');
-      expect(id.middleName, 'Valdez');
-      expect(id.lastName, 'Andulana');
-    });
+    test(
+      '1. linked scan + canonical names -> the canonical Examinee ID and names',
+      () {
+        final id = resolveWebExamineeIdentity(
+          scan: autoTaggedScan,
+          linkedExaminee: _canonical(),
+        );
+        expect(id.fromCanonicalExaminee, isTrue);
+        expect(id.examineeId, 'EX-000004');
+        expect(id.firstName, 'Merch');
+        expect(id.middleName, 'Valdez');
+        expect(id.lastName, 'Andulana');
+      },
+    );
 
-    test("2. linked scan + blank canonical names -> falls back to the scan's own tag", () {
-      final scan = _scan(
-        examinee: const ExamineeInfo(firstName: 'Juan', lastName: 'Cruz', examineeNumber: 'EX-9'),
-      );
-      final id = resolveWebExamineeIdentity(
-        scan: scan,
-        linkedExaminee: _canonical(firstName: '', middleName: null, lastName: ''),
-      );
-      expect(id.fromCanonicalExaminee, isFalse);
-      expect(id.examineeId, 'EX-9');
-      expect(id.firstName, 'Juan');
-      expect(id.lastName, 'Cruz');
-      expect(id.scanId, isNull, reason: 'nothing to keep separate when the scan is the only source');
-    });
+    test(
+      "2. linked scan + blank canonical names -> falls back to the scan's own tag",
+      () {
+        final scan = _scan(
+          examinee: const ExamineeInfo(
+            firstName: 'Juan',
+            lastName: 'Cruz',
+            examineeNumber: 'EX-9',
+          ),
+        );
+        final id = resolveWebExamineeIdentity(
+          scan: scan,
+          linkedExaminee: _canonical(
+            firstName: '',
+            middleName: null,
+            lastName: '',
+          ),
+        );
+        expect(id.fromCanonicalExaminee, isFalse);
+        expect(id.examineeId, 'EX-9');
+        expect(id.firstName, 'Juan');
+        expect(id.lastName, 'Cruz');
+        expect(
+          id.scanId,
+          isNull,
+          reason: 'nothing to keep separate when the scan is the only source',
+        );
+      },
+    );
 
-    test('3. unlinked / legacy scan (no linked examinee) -> the scan tag, unchanged', () {
-      final scan = _scan(
-        examinee: const ExamineeInfo(firstName: 'Ana', middleName: 'Reyes', lastName: 'Lim', examineeNumber: 'OLD-7'),
-      );
-      final id = resolveWebExamineeIdentity(scan: scan);
-      expect(id.fromCanonicalExaminee, isFalse);
-      expect(id.examineeId, 'OLD-7');
-      expect(id.firstName, 'Ana');
-      expect(id.middleName, 'Reyes');
-      expect(id.lastName, 'Lim');
-    });
+    test(
+      '3. unlinked / legacy scan (no linked examinee) -> the scan tag, unchanged',
+      () {
+        final scan = _scan(
+          examinee: const ExamineeInfo(
+            firstName: 'Ana',
+            middleName: 'Reyes',
+            lastName: 'Lim',
+            examineeNumber: 'OLD-7',
+          ),
+        );
+        final id = resolveWebExamineeIdentity(scan: scan);
+        expect(id.fromCanonicalExaminee, isFalse);
+        expect(id.examineeId, 'OLD-7');
+        expect(id.firstName, 'Ana');
+        expect(id.middleName, 'Reyes');
+        expect(id.lastName, 'Lim');
+      },
+    );
 
-    test('4. no usable canonical or scan identity -> every field null (the card shows its dash)', () {
-      final id = resolveWebExamineeIdentity(
-        scan: _scan(examinee: null),
-        linkedExaminee: _canonical(firstName: '  ', middleName: null, lastName: ''),
-      );
-      expect(id.fromCanonicalExaminee, isFalse);
-      expect(id.examineeId, isNull);
-      expect(id.firstName, isNull);
-      expect(id.middleName, isNull);
-      expect(id.lastName, isNull);
-    });
+    test(
+      '4. no usable canonical or scan identity -> every field null (the card shows its dash)',
+      () {
+        final id = resolveWebExamineeIdentity(
+          scan: _scan(examinee: null),
+          linkedExaminee: _canonical(
+            firstName: '  ',
+            middleName: null,
+            lastName: '',
+          ),
+        );
+        expect(id.fromCanonicalExaminee, isFalse);
+        expect(id.examineeId, isNull);
+        expect(id.firstName, isNull);
+        expect(id.middleName, isNull);
+        expect(id.lastName, isNull);
+      },
+    );
 
-    test("5. the scan's own number stays separate from the canonical Examinee ID", () {
-      final id = resolveWebExamineeIdentity(scan: autoTaggedScan, linkedExaminee: _canonical());
-      expect(id.examineeId, 'EX-000004');
-      expect(id.scanId, 'EX-1790006562335-3');
-      expect(id.examineeId, isNot(id.scanId));
-      // ...and the scan itself was not modified.
-      expect(autoTaggedScan.examinee!.examineeNumber, 'EX-1790006562335-3');
-      expect(autoTaggedScan.examinee!.firstName, '');
-    });
+    test(
+      "5. the scan's own number stays separate from the canonical Examinee ID",
+      () {
+        final id = resolveWebExamineeIdentity(
+          scan: autoTaggedScan,
+          linkedExaminee: _canonical(),
+        );
+        expect(id.examineeId, 'EX-000004');
+        expect(id.scanId, 'EX-1790006562335-3');
+        expect(id.examineeId, isNot(id.scanId));
+        // ...and the scan itself was not modified.
+        expect(autoTaggedScan.examinee!.examineeNumber, 'EX-1790006562335-3');
+        expect(autoTaggedScan.examinee!.firstName, '');
+      },
+    );
 
-    test('6. never mixes two sources: a canonical record with only a last name does not borrow the scan first name', () {
-      final scan = _scan(
-        examinee: const ExamineeInfo(firstName: 'Juan', lastName: 'Cruz', examineeNumber: 'EX-9'),
-      );
-      final id = resolveWebExamineeIdentity(
-        scan: scan,
-        linkedExaminee: _canonical(firstName: '', middleName: null, lastName: 'Andulana'),
-      );
-      expect(id.fromCanonicalExaminee, isTrue);
-      expect(id.lastName, 'Andulana');
-      expect(id.firstName, '', reason: "not the scan's 'Juan'");
-    });
+    test(
+      '6. never mixes two sources: a canonical record with only a last name does not borrow the scan first name',
+      () {
+        final scan = _scan(
+          examinee: const ExamineeInfo(
+            firstName: 'Juan',
+            lastName: 'Cruz',
+            examineeNumber: 'EX-9',
+          ),
+        );
+        final id = resolveWebExamineeIdentity(
+          scan: scan,
+          linkedExaminee: _canonical(
+            firstName: '',
+            middleName: null,
+            lastName: 'Andulana',
+          ),
+        );
+        expect(id.fromCanonicalExaminee, isTrue);
+        expect(id.lastName, 'Andulana');
+        expect(id.firstName, '', reason: "not the scan's 'Juan'");
+      },
+    );
   });
 
   group('GuidanceWebResultDetailView (widget)', () {
@@ -510,6 +742,7 @@ void main() {
       required LocalScan scan,
       required LocalBatch batch,
       ExamineeRecord? linkedExaminee,
+      bool analytics = false,
     }) async {
       await tester.pumpWidget(
         MaterialApp(
@@ -520,6 +753,7 @@ void main() {
               service: service,
               onBack: () {},
               linkedExaminee: linkedExaminee,
+              showClusterAnalysis: analytics,
             ),
           ),
         ),
@@ -527,105 +761,244 @@ void main() {
       await tester.pumpAndSettle();
     }
 
-    testWidgets('3. the stored headline score/percentage/status are shown verbatim, '
-        'never recalculated from the freshly-fetched (and here, disagreeing) answer key',
-        (tester) async {
-      client.answerKeyToReturn = CloudAnswerKeyRead.found(
-        version: 2,
-        answers: {'Answer Document|1': 'Z', 'Answer Document|2': 'Z'}, // disagrees with every marked answer
-        updatedByName: 'Officer',
-        updatedAt: '2026-01-01T00:00:00Z',
+    for (final width in [480.0, 1400.0]) {
+      testWidgets('TAT Analytics shows all five clusters at width $width', (
+        tester,
+      ) async {
+        tester.view.physicalSize = Size(width, 1200);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        final sections = omrTemplates['TAT']!.sections;
+        client.answerKeyToReturn = CloudAnswerKeyRead.found(
+          version: 1,
+          answers: {
+            for (final section in sections)
+              for (var n = 1; n <= section.itemCount; n++)
+                '${section.name}|$n': 'A',
+          },
+          updatedByName: 'Officer',
+          updatedAt: '2026-01-01T00:00:00Z',
+        );
+        await pump(
+          tester,
+          analytics: true,
+          batch: _batch(examCode: 'TAT', examTitle: 'Teaching Aptitude Test'),
+          scan: _scan(
+            examCode: 'TAT',
+            result: _storedResult(raw: 160, graded: 130, total: 130),
+            items: [
+              for (final section in sections)
+                for (var n = 1; n <= section.itemCount; n++)
+                  OmrItemResult(
+                    sectionName: section.name,
+                    itemNumber: n,
+                    markedChoice: 'A',
+                  ),
+            ],
+          ),
+        );
+        expect(find.text('160 / 160'), findsOneWidget);
+        expect(find.text('CLUSTER ANALYSIS'), findsOneWidget);
+        for (final def in tatClusterDefs) {
+          expect(find.byKey(Key('clusterRow_${def.$2.label}')), findsOneWidget);
+        }
+        expect(find.text(tatClusterScoringNote), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      });
+    }
+
+    testWidgets(
+      'analytics keeps essentials visible and expands details on demand',
+      (tester) async {
+        await pump(
+          tester,
+          scan: _scan(
+            examinee: const ExamineeInfo(
+              firstName: 'Juan',
+              lastName: 'Cruz',
+              examineeNumber: 'EX-1',
+            ),
+            result: _storedResult(raw: 58),
+          ),
+          batch: _batch(),
+          analytics: true,
+        );
+        expect(find.byKey(const Key('analyticsResultCards')), findsOneWidget);
+        expect(find.text('Juan Cruz'), findsOneWidget);
+        expect(find.text('58 / 72'), findsOneWidget);
+        expect(find.text('EX-1'), findsNothing);
+        expect(
+          find.text('No scanned image available for this sheet.'),
+          findsNothing,
+        );
+        await tester.tap(find.text('Examinee details'));
+        await tester.pumpAndSettle();
+        expect(find.text('EX-1'), findsOneWidget);
+        await tester.tap(find.text('Examinee details'));
+        await tester.pumpAndSettle();
+        expect(find.text('EX-1'), findsNothing);
+        expect(find.text('Scanned answer sheet'), findsNothing);
+        expect(find.text('SCANNED ANSWER SHEET'), findsNothing);
+        expect(client.imageCalls, isEmpty);
+        expect(tester.takeException(), isNull);
+      },
+    );
+
+    testWidgets('analytics stacks summary cards on a narrow viewport', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(480, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await pump(tester, scan: _scan(), batch: _batch(), analytics: true);
+      expect(find.text('Ungraded'), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.text('RESULT SUMMARY')).dy,
+        greaterThan(tester.getTopLeft(find.text('EXAMINEE')).dy),
       );
-      final scan = _scan(
-        examinee: const ExamineeInfo(firstName: 'Juan', lastName: 'Cruz', examineeNumber: 'EX-1'),
-        result: LocalScanResult(
-          rawScore: 60,
-          totalGraded: 72,
-          totalItems: 72,
-          percentage: 83.33,
-          status: 'Graded',
-          scannedAt: DateTime.utc(2026, 1, 1),
-          processedByUid: 'uid',
-          processedByName: 'Officer',
-        ),
-        items: const [
-          OmrItemResult(sectionName: 'Answer Document', itemNumber: 1, markedChoice: 'A'),
-          OmrItemResult(sectionName: 'Answer Document', itemNumber: 2, markedChoice: 'B'),
-        ],
-      );
-
-      await pump(tester, scan: scan, batch: _batch());
-
-      expect(find.text('60 / 72'), findsOneWidget);
-      expect(find.text('83.33%'), findsOneWidget);
-      expect(find.text('Graded'), findsOneWidget);
-      // The recomputed-against-current-key result (0 correct) is never shown.
-      expect(find.text('0 / 72'), findsNothing);
-    });
-
-    testWidgets('7. missing OCR name fields show a dash, never a fake placeholder', (tester) async {
-      client.answerKeyToReturn = CloudAnswerKeyRead.found(
-        version: 1,
-        answers: {'Answer Document|1': 'A'},
-        updatedByName: 'Officer',
-        updatedAt: '2026-01-01T00:00:00Z',
-      );
-      final scan = _scan(
-        examinee: const ExamineeInfo(firstName: '', middleName: '', lastName: 'Santos', examineeNumber: 'EX-2'),
-        result: LocalScanResult(
-          rawScore: 1,
-          totalGraded: 1,
-          totalItems: 1,
-          percentage: 100,
-          status: 'Graded',
-          scannedAt: DateTime.utc(2026, 1, 1),
-          processedByUid: 'uid',
-          processedByName: 'Officer',
-        ),
-        items: const [OmrItemResult(sectionName: 'Answer Document', itemNumber: 1, markedChoice: 'A')],
-      );
-
-      await pump(tester, scan: scan, batch: _batch());
-
-      expect(find.text('EX-2'), findsOneWidget);
-      expect(find.text('Santos'), findsOneWidget);
-      expect(find.text('UNKNOWN'), findsNothing);
-      expect(find.text('N/A'), findsNothing);
-      // First Name and Middle Name both blank -> two dashes from this card.
-      expect(find.text('—'), findsNWidgets(2));
-    });
-
-    testWidgets('8. scan.examinee == null does not crash and shows the result/answer data anyway',
-        (tester) async {
-      client.answerKeyToReturn = CloudAnswerKeyRead.found(
-        version: 1,
-        answers: {'Answer Document|1': 'A'},
-        updatedByName: 'Officer',
-        updatedAt: '2026-01-01T00:00:00Z',
-      );
-      final scan = _scan(
-        examinee: null,
-        result: LocalScanResult(
-          rawScore: 1,
-          totalGraded: 1,
-          totalItems: 1,
-          percentage: 100,
-          status: 'Graded',
-          scannedAt: DateTime.utc(2026, 1, 1),
-          processedByUid: 'uid',
-          processedByName: 'Officer',
-        ),
-        items: const [OmrItemResult(sectionName: 'Answer Document', itemNumber: 1, markedChoice: 'A')],
-      );
-
-      await pump(tester, scan: scan, batch: _batch());
-
       expect(tester.takeException(), isNull);
-      expect(find.text('Detailed Result'), findsOneWidget);
-      expect(find.text('100.00%'), findsOneWidget);
-      // Examinee ID / First / Middle / Last Name all blank -> four dashes.
-      expect(find.text('—'), findsNWidgets(4));
     });
+
+    testWidgets(
+      '3. the stored headline score/percentage/status are shown verbatim, '
+      'never recalculated from the freshly-fetched (and here, disagreeing) answer key',
+      (tester) async {
+        client.answerKeyToReturn = CloudAnswerKeyRead.found(
+          version: 2,
+          answers: {
+            'Answer Document|1': 'Z',
+            'Answer Document|2': 'Z',
+          }, // disagrees with every marked answer
+          updatedByName: 'Officer',
+          updatedAt: '2026-01-01T00:00:00Z',
+        );
+        final scan = _scan(
+          examinee: const ExamineeInfo(
+            firstName: 'Juan',
+            lastName: 'Cruz',
+            examineeNumber: 'EX-1',
+          ),
+          result: LocalScanResult(
+            rawScore: 60,
+            totalGraded: 72,
+            totalItems: 72,
+            percentage: 83.33,
+            status: 'Graded',
+            scannedAt: DateTime.utc(2026, 1, 1),
+            processedByUid: 'uid',
+            processedByName: 'Officer',
+          ),
+          items: const [
+            OmrItemResult(
+              sectionName: 'Answer Document',
+              itemNumber: 1,
+              markedChoice: 'A',
+            ),
+            OmrItemResult(
+              sectionName: 'Answer Document',
+              itemNumber: 2,
+              markedChoice: 'B',
+            ),
+          ],
+        );
+
+        await pump(tester, scan: scan, batch: _batch());
+
+        expect(find.text('60 / 72'), findsOneWidget);
+        expect(find.text('83.33%'), findsOneWidget);
+        expect(find.text('Graded'), findsOneWidget);
+        // The recomputed-against-current-key result (0 correct) is never shown.
+        expect(find.text('0 / 72'), findsNothing);
+      },
+    );
+
+    testWidgets(
+      '7. missing OCR name fields show a dash, never a fake placeholder',
+      (tester) async {
+        client.answerKeyToReturn = CloudAnswerKeyRead.found(
+          version: 1,
+          answers: {'Answer Document|1': 'A'},
+          updatedByName: 'Officer',
+          updatedAt: '2026-01-01T00:00:00Z',
+        );
+        final scan = _scan(
+          examinee: const ExamineeInfo(
+            firstName: '',
+            middleName: '',
+            lastName: 'Santos',
+            examineeNumber: 'EX-2',
+          ),
+          result: LocalScanResult(
+            rawScore: 1,
+            totalGraded: 1,
+            totalItems: 1,
+            percentage: 100,
+            status: 'Graded',
+            scannedAt: DateTime.utc(2026, 1, 1),
+            processedByUid: 'uid',
+            processedByName: 'Officer',
+          ),
+          items: const [
+            OmrItemResult(
+              sectionName: 'Answer Document',
+              itemNumber: 1,
+              markedChoice: 'A',
+            ),
+          ],
+        );
+
+        await pump(tester, scan: scan, batch: _batch());
+
+        expect(find.text('EX-2'), findsOneWidget);
+        expect(find.text('Santos'), findsOneWidget);
+        expect(find.text('UNKNOWN'), findsNothing);
+        expect(find.text('N/A'), findsNothing);
+        // First Name and Middle Name both blank -> two dashes from this card.
+        expect(find.text('—'), findsNWidgets(2));
+      },
+    );
+
+    testWidgets(
+      '8. scan.examinee == null does not crash and shows the result/answer data anyway',
+      (tester) async {
+        client.answerKeyToReturn = CloudAnswerKeyRead.found(
+          version: 1,
+          answers: {'Answer Document|1': 'A'},
+          updatedByName: 'Officer',
+          updatedAt: '2026-01-01T00:00:00Z',
+        );
+        final scan = _scan(
+          examinee: null,
+          result: LocalScanResult(
+            rawScore: 1,
+            totalGraded: 1,
+            totalItems: 1,
+            percentage: 100,
+            status: 'Graded',
+            scannedAt: DateTime.utc(2026, 1, 1),
+            processedByUid: 'uid',
+            processedByName: 'Officer',
+          ),
+          items: const [
+            OmrItemResult(
+              sectionName: 'Answer Document',
+              itemNumber: 1,
+              markedChoice: 'A',
+            ),
+          ],
+        );
+
+        await pump(tester, scan: scan, batch: _batch());
+
+        expect(tester.takeException(), isNull);
+        expect(find.text('Detailed Result'), findsOneWidget);
+        expect(find.text('100.00%'), findsOneWidget);
+        // Examinee ID / First / Middle / Last Name all blank -> four dashes.
+        expect(find.text('—'), findsNWidgets(4));
+      },
+    );
 
     Future<void> pumpIdentity(
       WidgetTester tester, {
@@ -650,72 +1023,133 @@ void main() {
           processedByUid: 'uid',
           processedByName: 'Officer',
         ),
-        items: const [OmrItemResult(sectionName: 'Answer Document', itemNumber: 1, markedChoice: 'A')],
+        items: const [
+          OmrItemResult(
+            sectionName: 'Answer Document',
+            itemNumber: 1,
+            markedChoice: 'A',
+          ),
+        ],
       );
-      await pump(tester, scan: scan, batch: _batch(), linkedExaminee: linkedExaminee);
+      await pump(
+        tester,
+        scan: scan,
+        batch: _batch(),
+        linkedExaminee: linkedExaminee,
+      );
     }
 
-    testWidgets('a linked scan shows the canonical applicant, with the scan number as a separate Scan ID '
-        '(the verified Merch / Valdez / Andulana example)', (tester) async {
-      await pumpIdentity(
-        tester,
-        // What the database holds for that scan: blank names, generated number.
-        scanTag: const ExamineeInfo(firstName: '', lastName: '', examineeNumber: 'EX-1790006562335-3'),
-        linkedExaminee: _canonical(),
-      );
+    testWidgets(
+      'a linked scan shows the canonical applicant, with the scan number as a separate Scan ID '
+      '(the verified Merch / Valdez / Andulana example)',
+      (tester) async {
+        await pumpIdentity(
+          tester,
+          // What the database holds for that scan: blank names, generated number.
+          scanTag: const ExamineeInfo(
+            firstName: '',
+            lastName: '',
+            examineeNumber: 'EX-1790006562335-3',
+          ),
+          linkedExaminee: _canonical(),
+        );
 
-      expect(find.text('Examinee ID'), findsOneWidget);
-      expect(find.text('EX-000004'), findsOneWidget);
-      expect(find.text('Merch'), findsOneWidget);
-      expect(find.text('Valdez'), findsOneWidget);
-      expect(find.text('Andulana'), findsOneWidget);
-      expect(find.text('Scan ID'), findsOneWidget);
-      expect(find.text('EX-1790006562335-3'), findsOneWidget);
-      // Pure display: the fake client throws on any link/unlink/create/push, so an
-      // exception here would mean this view tried to write something.
-      expect(tester.takeException(), isNull);
-    });
+        expect(find.text('Examinee ID'), findsOneWidget);
+        expect(find.text('EX-000004'), findsOneWidget);
+        expect(find.text('Merch'), findsOneWidget);
+        expect(find.text('Valdez'), findsOneWidget);
+        expect(find.text('Andulana'), findsOneWidget);
+        expect(find.text('Scan ID'), findsOneWidget);
+        expect(find.text('EX-1790006562335-3'), findsOneWidget);
+        // A genuinely linked, verified identity never shows the unverified notice.
+        expect(find.byKey(const Key('unverifiedIdentityNotice')), findsNothing);
+        // Pure display: the fake client throws on any link/unlink/create/push, so an
+        // exception here would mean this view tried to write something.
+        expect(tester.takeException(), isNull);
+      },
+    );
 
-    testWidgets("a linked scan whose canonical record has no usable name falls back to the scan's own tag",
-        (tester) async {
-      await pumpIdentity(
-        tester,
-        scanTag: const ExamineeInfo(firstName: 'Juan', lastName: 'Cruz', examineeNumber: 'EX-9'),
-        linkedExaminee: _canonical(firstName: '', middleName: null, lastName: ''),
-      );
+    testWidgets(
+      "a linked scan whose canonical record has no usable name falls back to the scan's own tag",
+      (tester) async {
+        await pumpIdentity(
+          tester,
+          scanTag: const ExamineeInfo(
+            firstName: 'Juan',
+            lastName: 'Cruz',
+            examineeNumber: 'EX-9',
+          ),
+          linkedExaminee: _canonical(
+            firstName: '',
+            middleName: null,
+            lastName: '',
+          ),
+        );
 
-      expect(find.text('EX-9'), findsOneWidget);
-      expect(find.text('Juan'), findsOneWidget);
-      expect(find.text('Cruz'), findsOneWidget);
-      expect(find.text('EX-000004'), findsNothing);
-      expect(find.text('Scan ID'), findsNothing);
-    });
+        expect(find.text('EX-9'), findsOneWidget);
+        expect(find.text('Juan'), findsOneWidget);
+        expect(find.text('Cruz'), findsOneWidget);
+        expect(find.text('EX-000004'), findsNothing);
+        expect(find.text('Scan ID'), findsNothing);
+        // The scan IS linked, so the notice must never claim it is "not
+        // linked" -- but the name shown is still the unverified scan tag, so
+        // the notice still appears.
+        expect(
+          find.byKey(const Key('unverifiedIdentityNotice')),
+          findsOneWidget,
+        );
+        expect(find.textContaining('not linked'), findsNothing);
+      },
+    );
 
-    testWidgets('an unlinked/legacy scan keeps showing its own tag, with no Scan ID row', (tester) async {
-      await pumpIdentity(
-        tester,
-        scanTag: const ExamineeInfo(firstName: 'Ana', middleName: 'Reyes', lastName: 'Lim', examineeNumber: 'OLD-7'),
-      );
+    testWidgets(
+      'an unlinked/legacy scan keeps showing its own tag, with no Scan ID row, and the unverified notice',
+      (tester) async {
+        await pumpIdentity(
+          tester,
+          scanTag: const ExamineeInfo(
+            firstName: 'Ana',
+            middleName: 'Reyes',
+            lastName: 'Lim',
+            examineeNumber: 'OLD-7',
+          ),
+        );
 
-      expect(find.text('OLD-7'), findsOneWidget);
-      expect(find.text('Ana'), findsOneWidget);
-      expect(find.text('Reyes'), findsOneWidget);
-      expect(find.text('Lim'), findsOneWidget);
-      expect(find.text('Scan ID'), findsNothing);
-    });
+        expect(find.text('OLD-7'), findsOneWidget);
+        expect(find.text('Ana'), findsOneWidget);
+        expect(find.text('Reyes'), findsOneWidget);
+        expect(find.text('Lim'), findsOneWidget);
+        expect(find.text('Scan ID'), findsNothing);
+        expect(
+          find.byKey(const Key('unverifiedIdentityNotice')),
+          findsOneWidget,
+        );
+      },
+    );
 
-    testWidgets('no usable canonical or scan identity keeps the existing dashes', (tester) async {
-      await pumpIdentity(
-        tester,
-        scanTag: null,
-        linkedExaminee: _canonical(firstName: '', middleName: null, lastName: ''),
-      );
+    testWidgets(
+      'no usable canonical or scan identity keeps the existing dashes, with the unverified notice',
+      (tester) async {
+        await pumpIdentity(
+          tester,
+          scanTag: null,
+          linkedExaminee: _canonical(
+            firstName: '',
+            middleName: null,
+            lastName: '',
+          ),
+        );
 
-      expect(tester.takeException(), isNull);
-      // Examinee ID / First / Middle / Last Name -> four dashes, no Scan ID row.
-      expect(find.text('—'), findsNWidgets(4));
-      expect(find.text('Scan ID'), findsNothing);
-    });
+        expect(tester.takeException(), isNull);
+        // Examinee ID / First / Middle / Last Name -> four dashes, no Scan ID row.
+        expect(find.text('—'), findsNWidgets(4));
+        expect(find.text('Scan ID'), findsNothing);
+        expect(
+          find.byKey(const Key('unverifiedIdentityNotice')),
+          findsOneWidget,
+        );
+      },
+    );
 
     // --- manual corrections (LocalScan.effectiveDecoded) ------------------
     //
@@ -737,99 +1171,162 @@ void main() {
       );
     }
 
-    testWidgets('1. BLANK -> A correction shows A / Correct in Answer Details (and Incorrect without it)',
-        (tester) async {
-      answerKeyOf({'$atSection|1': 'A'});
-      final machineOnly = _scan(
-        result: _storedResult(raw: 0),
-        items: const [OmrItemResult(sectionName: atSection, itemNumber: 1, markedChoice: null)],
-      );
-      await pump(tester, scan: machineOnly, batch: _batch());
-      expect(find.text('Incorrect'), findsOneWidget, reason: 'control: the machine read this item as blank');
-      expect(find.text('Correct'), findsNothing);
-      expect(find.text('—'), findsNWidgets(5), reason: '4 empty examinee fields + the blank answer');
-
-      final corrected = _scan(
-        result: _storedResult(raw: 1),
-        items: const [OmrItemResult(sectionName: atSection, itemNumber: 1, markedChoice: null)],
-        corrections: [
-          _correction(
-            section: atSection,
-            item: 1,
-            original: const CorrectedAnswer.blank(),
-            corrected: const CorrectedAnswer.choice('A'),
-          ),
-        ],
-      );
-      await pump(tester, scan: corrected, batch: _batch());
-      expect(find.text('Correct'), findsOneWidget);
-      expect(find.text('Incorrect'), findsNothing);
-      // The Examinee Information card shows 4 dashes (no examinee on this scan);
-      // the control above showed a 5th, for the blank examinee answer.
-      expect(find.text('—'), findsNWidgets(4), reason: 'the item is no longer shown as unanswered');
-      expect(corrected.decoded.items.single.markedChoice, isNull,
-          reason: 'the machine-detected answer itself is never modified');
-    });
-
-    testWidgets('2. the corrected answer produces a green overlay (and the uncorrected one does not)',
-        (tester) async {
-      answerKeyOf({'Section 1|1': 'A'});
-      client.rectifiedImageToReturn = CloudImageRead.found(_pngBytes);
-      const blank = [OmrItemResult(sectionName: 'Section 1', itemNumber: 1, markedChoice: null)];
-      final bubbles = bubblesForOverlayItem(omrTemplates['AT']!, 'Section 1', 1);
-
-      List<ScoredItem> overlayItems(WidgetTester t) {
-        final paint = t.widget<CustomPaint>(find.byKey(const Key('gradedOverlayPaint')));
-        return ((paint.painter as dynamic).scoredItems as List).cast<ScoredItem>();
-      }
-
-      // Control: no correction -> nothing marked, only the yellow key ring.
-      await pump(
-        tester,
-        scan: _scan(
-          rectifiedImageFileName: 'images/s1_rectified.enc',
+    testWidgets(
+      '1. BLANK -> A correction shows A / Correct in Answer Details (and Incorrect without it)',
+      (tester) async {
+        answerKeyOf({'$atSection|1': 'A'});
+        final machineOnly = _scan(
           result: _storedResult(raw: 0),
-          items: blank,
-        ),
-        batch: _batch(),
-      );
-      final before = planOverlayForItem(overlayItems(tester).single, bubbles)!;
-      expect(before.markedBubble, isNull);
-      expect(before.keyBubble?.choice, 'A');
+          items: const [
+            OmrItemResult(
+              sectionName: atSection,
+              itemNumber: 1,
+              markedChoice: null,
+            ),
+          ],
+        );
+        await pump(tester, scan: machineOnly, batch: _batch());
+        expect(
+          find.text('Incorrect'),
+          findsOneWidget,
+          reason: 'control: the machine read this item as blank',
+        );
+        expect(find.text('Correct'), findsNothing);
+        expect(
+          find.text('—'),
+          findsNWidgets(5),
+          reason: '4 empty examinee fields + the blank answer',
+        );
 
-      await pump(
-        tester,
-        scan: _scan(
-          rectifiedImageFileName: 'images/s1_rectified.enc',
+        final corrected = _scan(
           result: _storedResult(raw: 1),
-          items: blank,
+          items: const [
+            OmrItemResult(
+              sectionName: atSection,
+              itemNumber: 1,
+              markedChoice: null,
+            ),
+          ],
           corrections: [
             _correction(
-              section: 'Section 1',
+              section: atSection,
               item: 1,
               original: const CorrectedAnswer.blank(),
               corrected: const CorrectedAnswer.choice('A'),
             ),
           ],
-        ),
-        batch: _batch(),
-      );
-      final item = overlayItems(tester).single;
-      expect(item.markedChoice, 'A');
-      final after = planOverlayForItem(item, bubbles)!;
-      expect(after.markedBubble?.choice, 'A');
-      expect(after.markedColor, WebOverlayColors.correct, reason: 'the corrected bubble is drawn green');
-      expect(after.badgeIsCorrect, isTrue);
-      expect(after.keyBubble, isNull, reason: 'already correct -- no separate key ring');
-    });
+        );
+        await pump(tester, scan: corrected, batch: _batch());
+        expect(find.text('Correct'), findsOneWidget);
+        expect(find.text('Incorrect'), findsNothing);
+        // The Examinee Information card shows 4 dashes (no examinee on this scan);
+        // the control above showed a 5th, for the blank examinee answer.
+        expect(
+          find.text('—'),
+          findsNWidgets(4),
+          reason: 'the item is no longer shown as unanswered',
+        );
+        expect(
+          corrected.decoded.items.single.markedChoice,
+          isNull,
+          reason: 'the machine-detected answer itself is never modified',
+        );
+      },
+    );
 
-    testWidgets('3. wrong -> correct answer flips Incorrect to Correct', (tester) async {
+    testWidgets(
+      '2. the corrected answer produces a green overlay (and the uncorrected one does not)',
+      (tester) async {
+        answerKeyOf({'Section 1|1': 'A'});
+        client.rectifiedImageToReturn = CloudImageRead.found(_pngBytes);
+        const blank = [
+          OmrItemResult(
+            sectionName: 'Section 1',
+            itemNumber: 1,
+            markedChoice: null,
+          ),
+        ];
+        final bubbles = bubblesForOverlayItem(
+          omrTemplates['AT']!,
+          'Section 1',
+          1,
+        );
+
+        List<ScoredItem> overlayItems(WidgetTester t) {
+          final paint = t.widget<CustomPaint>(
+            find.byKey(const Key('gradedOverlayPaint')),
+          );
+          return ((paint.painter as dynamic).scoredItems as List)
+              .cast<ScoredItem>();
+        }
+
+        // Control: no correction -> nothing marked, only the yellow key ring.
+        await pump(
+          tester,
+          scan: _scan(
+            rectifiedImageFileName: 'images/s1_rectified.enc',
+            result: _storedResult(raw: 0),
+            items: blank,
+          ),
+          batch: _batch(),
+        );
+        final before = planOverlayForItem(
+          overlayItems(tester).single,
+          bubbles,
+        )!;
+        expect(before.markedBubble, isNull);
+        expect(before.keyBubble?.choice, 'A');
+
+        await pump(
+          tester,
+          scan: _scan(
+            rectifiedImageFileName: 'images/s1_rectified.enc',
+            result: _storedResult(raw: 1),
+            items: blank,
+            corrections: [
+              _correction(
+                section: 'Section 1',
+                item: 1,
+                original: const CorrectedAnswer.blank(),
+                corrected: const CorrectedAnswer.choice('A'),
+              ),
+            ],
+          ),
+          batch: _batch(),
+        );
+        final item = overlayItems(tester).single;
+        expect(item.markedChoice, 'A');
+        final after = planOverlayForItem(item, bubbles)!;
+        expect(after.markedBubble?.choice, 'A');
+        expect(
+          after.markedColor,
+          WebOverlayColors.correct,
+          reason: 'the corrected bubble is drawn green',
+        );
+        expect(after.badgeIsCorrect, isTrue);
+        expect(
+          after.keyBubble,
+          isNull,
+          reason: 'already correct -- no separate key ring',
+        );
+      },
+    );
+
+    testWidgets('3. wrong -> correct answer flips Incorrect to Correct', (
+      tester,
+    ) async {
       answerKeyOf({'$atSection|1': 'A'});
       await pump(
         tester,
         scan: _scan(
           result: _storedResult(raw: 1),
-          items: const [OmrItemResult(sectionName: atSection, itemNumber: 1, markedChoice: 'B')],
+          items: const [
+            OmrItemResult(
+              sectionName: atSection,
+              itemNumber: 1,
+              markedChoice: 'B',
+            ),
+          ],
           corrections: [
             _correction(
               section: atSection,
@@ -845,13 +1342,21 @@ void main() {
       expect(find.text('Incorrect'), findsNothing);
     });
 
-    testWidgets('4. correct -> wrong answer flips Correct to Incorrect', (tester) async {
+    testWidgets('4. correct -> wrong answer flips Correct to Incorrect', (
+      tester,
+    ) async {
       answerKeyOf({'$atSection|1': 'A'});
       await pump(
         tester,
         scan: _scan(
           result: _storedResult(raw: 0),
-          items: const [OmrItemResult(sectionName: atSection, itemNumber: 1, markedChoice: 'A')],
+          items: const [
+            OmrItemResult(
+              sectionName: atSection,
+              itemNumber: 1,
+              markedChoice: 'A',
+            ),
+          ],
           corrections: [
             _correction(
               section: atSection,
@@ -868,15 +1373,31 @@ void main() {
     });
 
     testWidgets('5. multiple corrections all apply together', (tester) async {
-      answerKeyOf({'$atSection|1': 'A', '$atSection|2': 'A', '$atSection|3': 'A'});
+      answerKeyOf({
+        '$atSection|1': 'A',
+        '$atSection|2': 'A',
+        '$atSection|3': 'A',
+      });
       await pump(
         tester,
         scan: _scan(
           result: _storedResult(raw: 3, graded: 3),
           items: const [
-            OmrItemResult(sectionName: atSection, itemNumber: 1, markedChoice: null), // blank
-            OmrItemResult(sectionName: atSection, itemNumber: 2, markedChoice: 'B'), // wrong
-            OmrItemResult(sectionName: atSection, itemNumber: 3, markedChoice: 'A'), // correct
+            OmrItemResult(
+              sectionName: atSection,
+              itemNumber: 1,
+              markedChoice: null,
+            ), // blank
+            OmrItemResult(
+              sectionName: atSection,
+              itemNumber: 2,
+              markedChoice: 'B',
+            ), // wrong
+            OmrItemResult(
+              sectionName: atSection,
+              itemNumber: 3,
+              markedChoice: 'A',
+            ), // correct
           ],
           corrections: [
             _correction(
@@ -901,391 +1422,595 @@ void main() {
       expect(find.text('Incorrect'), findsNothing);
     });
 
-    testWidgets('6. a TAT correction updates the per-test breakdown (Test I x 2 rule unchanged)',
-        (tester) async {
-      answerKeyOf({'Test I|1': 'A', 'Test II|1': 'T', 'Test III|1': 'T'});
-      const items = [
-        OmrItemResult(sectionName: 'Test I', itemNumber: 1, markedChoice: null), // blank
-        OmrItemResult(sectionName: 'Test II', itemNumber: 1, markedChoice: 'T'),
-        OmrItemResult(sectionName: 'Test III', itemNumber: 1, markedChoice: 'T'),
-      ];
-      final tatBatch = _batch(examCode: 'TAT', examTitle: 'Teaching Aptitude Test');
-
-      // Control: the machine result -> Test I scores 0.
-      await pump(tester, scan: _scan(examCode: 'TAT', result: _storedResult(raw: 2, graded: 3, total: 130), items: items), batch: tatBatch);
-      expect(find.text('0 correct × 2 = 0 / 60'), findsOneWidget);
-
-      await pump(
-        tester,
-        scan: _scan(
+    testWidgets(
+      '6. a TAT correction updates the per-test breakdown (Test I x 2 rule unchanged)',
+      (tester) async {
+        answerKeyOf({'Test I|1': 'A', 'Test II|1': 'T', 'Test III|1': 'T'});
+        const items = [
+          OmrItemResult(
+            sectionName: 'Test I',
+            itemNumber: 1,
+            markedChoice: null,
+          ), // blank
+          OmrItemResult(
+            sectionName: 'Test II',
+            itemNumber: 1,
+            markedChoice: 'T',
+          ),
+          OmrItemResult(
+            sectionName: 'Test III',
+            itemNumber: 1,
+            markedChoice: 'T',
+          ),
+        ];
+        final tatBatch = _batch(
           examCode: 'TAT',
-          // The stored headline as pushed after the correction: 2 (Test I) + 1 + 1.
-          result: _storedResult(raw: 4, graded: 3, total: 130),
-          items: items,
-          corrections: [
-            _correction(
-              section: 'Test I',
-              item: 1,
-              original: const CorrectedAnswer.blank(),
-              corrected: const CorrectedAnswer.choice('A'),
-            ),
-          ],
-        ),
-        batch: tatBatch,
-      );
-      expect(find.text('1 correct × 2 = 2 / 60'), findsOneWidget);
-      expect(find.text('1 correct − 0 wrong = 1 / 80'), findsOneWidget, reason: 'Test II is untouched');
-      expect(find.text('1 correct − 0 wrong = 1 / 20'), findsOneWidget, reason: 'Test III is untouched');
-      expect(find.text('4 / 160'), findsOneWidget, reason: 'the stored headline is still shown verbatim');
-    });
+          examTitle: 'Teaching Aptitude Test',
+        );
 
-    testWidgets('7. a scan with no corrections renders exactly as before', (tester) async {
+        // Control: the machine result -> Test I scores 0.
+        await pump(
+          tester,
+          scan: _scan(
+            examCode: 'TAT',
+            result: _storedResult(raw: 2, graded: 3, total: 130),
+            items: items,
+          ),
+          batch: tatBatch,
+        );
+        expect(find.text('0 correct × 2 = 0 / 60'), findsOneWidget);
+
+        await pump(
+          tester,
+          scan: _scan(
+            examCode: 'TAT',
+            // The stored headline as pushed after the correction: 2 (Test I) + 1 + 1.
+            result: _storedResult(raw: 4, graded: 3, total: 130),
+            items: items,
+            corrections: [
+              _correction(
+                section: 'Test I',
+                item: 1,
+                original: const CorrectedAnswer.blank(),
+                corrected: const CorrectedAnswer.choice('A'),
+              ),
+            ],
+          ),
+          batch: tatBatch,
+        );
+        expect(find.text('1 correct × 2 = 2 / 60'), findsOneWidget);
+        expect(
+          find.text('1 correct − 0 wrong = 1 / 80'),
+          findsOneWidget,
+          reason: 'Test II is untouched',
+        );
+        expect(
+          find.text('1 correct − 0 wrong = 1 / 20'),
+          findsOneWidget,
+          reason: 'Test III is untouched',
+        );
+        expect(
+          find.text('4 / 160'),
+          findsOneWidget,
+          reason: 'the stored headline is still shown verbatim',
+        );
+      },
+    );
+
+    testWidgets('7. a scan with no corrections renders exactly as before', (
+      tester,
+    ) async {
       answerKeyOf({'$atSection|1': 'A', '$atSection|2': 'A'});
       final scan = _scan(
         result: _storedResult(raw: 1, graded: 2),
         items: const [
-          OmrItemResult(sectionName: atSection, itemNumber: 1, markedChoice: 'A'),
-          OmrItemResult(sectionName: atSection, itemNumber: 2, markedChoice: null),
+          OmrItemResult(
+            sectionName: atSection,
+            itemNumber: 1,
+            markedChoice: 'A',
+          ),
+          OmrItemResult(
+            sectionName: atSection,
+            itemNumber: 2,
+            markedChoice: null,
+          ),
         ],
       );
-      expect(identical(scan.effectiveDecoded, scan.decoded), isTrue,
-          reason: 'no active corrections -> the machine result is used as-is');
-
-      await pump(tester, scan: scan, batch: _batch());
-      expect(find.text('Correct'), findsOneWidget);
-      expect(find.text('Incorrect'), findsOneWidget);
-    });
-
-    testWidgets('8. a correction from an EARLIER capture revision is not applied to a rescanned sheet',
-        (tester) async {
-      answerKeyOf({'$atSection|1': 'A'});
-      const items = [OmrItemResult(sectionName: atSection, itemNumber: 1, markedChoice: null)];
-      final oldCorrection = _correction(
-        section: atSection,
-        item: 1,
-        original: const CorrectedAnswer.blank(),
-        corrected: const CorrectedAnswer.choice('A'),
-        revision: 0,
-      );
-
-      // The sheet was rescanned (revision 1): the revision-0 correction must not apply.
-      await pump(
-        tester,
-        scan: _scan(result: _storedResult(raw: 0), items: items, captureRevision: 1, corrections: [oldCorrection]),
-        batch: _batch(),
-      );
-      expect(find.text('Incorrect'), findsOneWidget);
-      expect(find.text('Correct'), findsNothing);
-
-      // Control: the same correction recorded on the CURRENT revision does apply.
-      await pump(
-        tester,
-        scan: _scan(
-          result: _storedResult(raw: 1),
-          items: items,
-          captureRevision: 1,
-          corrections: [
-            _correction(
-              id: 'c9',
-              section: atSection,
-              item: 1,
-              original: const CorrectedAnswer.blank(),
-              corrected: const CorrectedAnswer.choice('A'),
-              revision: 1,
-            ),
-          ],
-        ),
-        batch: _batch(),
-      );
-      expect(find.text('Correct'), findsOneWidget);
-    });
-
-    testWidgets('2. a missing answer key does not crash; marked answers are still shown, '
-        'correctness is "Not graded"', (tester) async {
-      client.answerKeyToReturn = const CloudAnswerKeyRead.absent();
-      final scan = _scan(
-        examinee: const ExamineeInfo(firstName: 'Juan', lastName: 'Cruz', examineeNumber: 'EX-3'),
-        result: LocalScanResult(
-          rawScore: 0,
-          totalGraded: 0,
-          totalItems: 2,
-          percentage: 0,
-          status: 'Ungraded',
-          scannedAt: DateTime.utc(2026, 1, 1),
-          processedByUid: 'uid',
-          processedByName: 'Officer',
-        ),
-        items: const [
-          OmrItemResult(sectionName: 'Answer Document', itemNumber: 1, markedChoice: 'A'),
-          OmrItemResult(sectionName: 'Answer Document', itemNumber: 2, markedChoice: null),
-        ],
-      );
-
-      await pump(tester, scan: scan, batch: _batch());
-
-      expect(tester.takeException(), isNull);
       expect(
-        find.textContaining('No answer key is currently available'),
-        findsOneWidget,
+        identical(scan.effectiveDecoded, scan.decoded),
+        isTrue,
+        reason: 'no active corrections -> the machine result is used as-is',
       );
-      expect(find.text('Not graded'), findsNWidgets(2));
+
+      await pump(tester, scan: scan, batch: _batch());
+      expect(find.text('Correct'), findsOneWidget);
+      expect(find.text('Incorrect'), findsOneWidget);
     });
 
-    testWidgets('6b. a TAT result groups Answer Details by section (Test I / II / III)', (tester) async {
-      client.answerKeyToReturn = CloudAnswerKeyRead.found(
-        version: 1,
-        answers: {'Test I|1': 'A', 'Test II|1': 'T', 'Test III|1': 'T'},
-        updatedByName: 'Officer',
-        updatedAt: '2026-01-01T00:00:00Z',
-      );
-      final scan = _scan(
-        examCode: 'TAT',
-        examinee: const ExamineeInfo(firstName: 'Juan', lastName: 'Cruz', examineeNumber: 'EX-4'),
-        result: LocalScanResult(
-          rawScore: 3,
-          totalGraded: 3,
-          totalItems: 130,
-          percentage: 0,
-          status: 'Graded',
-          scannedAt: DateTime.utc(2026, 1, 1),
-          processedByUid: 'uid',
-          processedByName: 'Officer',
-        ),
-        items: const [
-          OmrItemResult(sectionName: 'Test I', itemNumber: 1, markedChoice: 'A'),
-          OmrItemResult(sectionName: 'Test II', itemNumber: 1, markedChoice: 'T'),
-          OmrItemResult(sectionName: 'Test III', itemNumber: 1, markedChoice: 'T'),
-        ],
-      );
-
-      await pump(tester, scan: scan, batch: _batch(examCode: 'TAT', examTitle: 'Teaching Aptitude Test'));
-
-      expect(find.text('Test I'), findsOneWidget);
-      expect(find.text('Test II'), findsOneWidget);
-      expect(find.text('Test III'), findsOneWidget);
-      // Headline stays the stored 3 / 160 (TAT denominator), not recomputed.
-      expect(find.text('3 / 160'), findsOneWidget);
-    });
-
-    LocalScanResult gradedResult() => LocalScanResult(
-          rawScore: 1,
-          totalGraded: 1,
-          totalItems: 1,
-          percentage: 100,
-          status: 'Graded',
-          scannedAt: DateTime.utc(2026, 1, 1),
-          processedByUid: 'uid',
-          processedByName: 'Officer',
+    testWidgets(
+      '8. a correction from an EARLIER capture revision is not applied to a rescanned sheet',
+      (tester) async {
+        answerKeyOf({'$atSection|1': 'A'});
+        const items = [
+          OmrItemResult(
+            sectionName: atSection,
+            itemNumber: 1,
+            markedChoice: null,
+          ),
+        ];
+        final oldCorrection = _correction(
+          section: atSection,
+          item: 1,
+          original: const CorrectedAnswer.blank(),
+          corrected: const CorrectedAnswer.choice('A'),
+          revision: 0,
         );
 
-    testWidgets('5. the rectified image is preferred when available; original is never even requested',
-        (tester) async {
-      client.rectifiedImageToReturn = CloudImageRead.found(_pngBytes);
-      final scan = _scan(rectifiedImageFileName: 'images/s1_rectified.enc', result: gradedResult());
+        // The sheet was rescanned (revision 1): the revision-0 correction must not apply.
+        await pump(
+          tester,
+          scan: _scan(
+            result: _storedResult(raw: 0),
+            items: items,
+            captureRevision: 1,
+            corrections: [oldCorrection],
+          ),
+          batch: _batch(),
+        );
+        expect(find.text('Incorrect'), findsOneWidget);
+        expect(find.text('Correct'), findsNothing);
 
-      await pump(tester, scan: scan, batch: _batch());
+        // Control: the same correction recorded on the CURRENT revision does apply.
+        await pump(
+          tester,
+          scan: _scan(
+            result: _storedResult(raw: 1),
+            items: items,
+            captureRevision: 1,
+            corrections: [
+              _correction(
+                id: 'c9',
+                section: atSection,
+                item: 1,
+                original: const CorrectedAnswer.blank(),
+                corrected: const CorrectedAnswer.choice('A'),
+                revision: 1,
+              ),
+            ],
+          ),
+          batch: _batch(),
+        );
+        expect(find.text('Correct'), findsOneWidget);
+      },
+    );
 
-      expect(client.imageCalls, ['rectified']);
-      expect(find.text('No scanned image available for this sheet.'), findsNothing);
-      expect(find.byType(Image), findsOneWidget);
-    });
+    testWidgets(
+      '2. a missing answer key does not crash; marked answers are still shown, '
+      'correctness is "Not graded"',
+      (tester) async {
+        client.answerKeyToReturn = const CloudAnswerKeyRead.absent();
+        final scan = _scan(
+          examinee: const ExamineeInfo(
+            firstName: 'Juan',
+            lastName: 'Cruz',
+            examineeNumber: 'EX-3',
+          ),
+          result: LocalScanResult(
+            rawScore: 0,
+            totalGraded: 0,
+            totalItems: 2,
+            percentage: 0,
+            status: 'Ungraded',
+            scannedAt: DateTime.utc(2026, 1, 1),
+            processedByUid: 'uid',
+            processedByName: 'Officer',
+          ),
+          items: const [
+            OmrItemResult(
+              sectionName: 'Answer Document',
+              itemNumber: 1,
+              markedChoice: 'A',
+            ),
+            OmrItemResult(
+              sectionName: 'Answer Document',
+              itemNumber: 2,
+              markedChoice: null,
+            ),
+          ],
+        );
 
-    testWidgets('6c. the original image is used when the rectified copy is absent', (tester) async {
-      client.rectifiedImageToReturn = const CloudImageRead.absent();
-      client.originalImageToReturn = CloudImageRead.found(_pngBytes);
-      final scan = _scan(rectifiedImageFileName: 'images/s1_rectified.enc', result: gradedResult());
+        await pump(tester, scan: scan, batch: _batch());
 
-      await pump(tester, scan: scan, batch: _batch());
+        expect(tester.takeException(), isNull);
+        expect(
+          find.textContaining('No answer key is currently available'),
+          findsOneWidget,
+        );
+        expect(find.text('Not graded'), findsNWidgets(2));
+      },
+    );
 
-      expect(client.imageCalls, ['rectified', 'original']);
-      expect(find.text('No scanned image available for this sheet.'), findsNothing);
-      expect(find.byType(Image), findsOneWidget);
-    });
+    testWidgets(
+      '6b. a TAT result groups Answer Details by section (Test I / II / III)',
+      (tester) async {
+        client.answerKeyToReturn = CloudAnswerKeyRead.found(
+          version: 1,
+          answers: {'Test I|1': 'A', 'Test II|1': 'T', 'Test III|1': 'T'},
+          updatedByName: 'Officer',
+          updatedAt: '2026-01-01T00:00:00Z',
+        );
+        final scan = _scan(
+          examCode: 'TAT',
+          examinee: const ExamineeInfo(
+            firstName: 'Juan',
+            lastName: 'Cruz',
+            examineeNumber: 'EX-4',
+          ),
+          result: LocalScanResult(
+            rawScore: 3,
+            totalGraded: 3,
+            totalItems: 130,
+            percentage: 0,
+            status: 'Graded',
+            scannedAt: DateTime.utc(2026, 1, 1),
+            processedByUid: 'uid',
+            processedByName: 'Officer',
+          ),
+          items: const [
+            OmrItemResult(
+              sectionName: 'Test I',
+              itemNumber: 1,
+              markedChoice: 'A',
+            ),
+            OmrItemResult(
+              sectionName: 'Test II',
+              itemNumber: 1,
+              markedChoice: 'T',
+            ),
+            OmrItemResult(
+              sectionName: 'Test III',
+              itemNumber: 1,
+              markedChoice: 'T',
+            ),
+          ],
+        );
 
-    testWidgets('7b. neither image exists -> a friendly empty state, never an exception', (tester) async {
-      client.rectifiedImageToReturn = const CloudImageRead.absent();
-      client.originalImageToReturn = const CloudImageRead.absent();
-      final scan = _scan(rectifiedImageFileName: 'images/s1_rectified.enc', result: gradedResult());
+        await pump(
+          tester,
+          scan: scan,
+          batch: _batch(examCode: 'TAT', examTitle: 'Teaching Aptitude Test'),
+        );
 
-      await pump(tester, scan: scan, batch: _batch());
+        expect(find.text('Test I'), findsOneWidget);
+        expect(find.text('Test II'), findsOneWidget);
+        expect(find.text('Test III'), findsOneWidget);
+        // Headline stays the stored 3 / 160 (TAT denominator), not recomputed.
+        expect(find.text('3 / 160'), findsOneWidget);
+      },
+    );
 
-      expect(tester.takeException(), isNull);
-      expect(find.text('No scanned image available for this sheet.'), findsOneWidget);
-    });
+    LocalScanResult gradedResult() => LocalScanResult(
+      rawScore: 1,
+      totalGraded: 1,
+      totalItems: 1,
+      percentage: 100,
+      status: 'Graded',
+      scannedAt: DateTime.utc(2026, 1, 1),
+      processedByUid: 'uid',
+      processedByName: 'Officer',
+    );
 
-    testWidgets('8b. a missing image never prevents the rest of Detailed Result from rendering',
-        (tester) async {
-      client.answerKeyToReturn = CloudAnswerKeyRead.found(
-        version: 1,
-        answers: {'Answer Document|1': 'A'},
-        updatedByName: 'Officer',
-        updatedAt: '2026-01-01T00:00:00Z',
-      );
-      client.rectifiedImageToReturn = const CloudImageRead.absent();
-      client.originalImageToReturn = const CloudImageRead.absent();
-      final scan = _scan(
-        examinee: const ExamineeInfo(firstName: 'Juan', lastName: 'Cruz', examineeNumber: 'EX-5'),
-        result: gradedResult(),
-        items: const [OmrItemResult(sectionName: 'Answer Document', itemNumber: 1, markedChoice: 'A')],
-      );
+    testWidgets(
+      '5. the rectified image is preferred when available; original is never even requested',
+      (tester) async {
+        client.rectifiedImageToReturn = CloudImageRead.found(_pngBytes);
+        final scan = _scan(
+          rectifiedImageFileName: 'images/s1_rectified.enc',
+          result: gradedResult(),
+        );
 
-      await pump(tester, scan: scan, batch: _batch());
+        await pump(tester, scan: scan, batch: _batch());
 
-      expect(find.text('No scanned image available for this sheet.'), findsOneWidget);
-      // Result Summary and Answer Details still rendered normally.
-      expect(find.text('1 / 1'), findsOneWidget);
-      expect(find.text('100.00%'), findsOneWidget);
-      expect(find.text('Correct'), findsOneWidget);
-    });
+        expect(client.imageCalls, ['rectified']);
+        expect(
+          find.text('No scanned image available for this sheet.'),
+          findsNothing,
+        );
+        expect(find.byType(Image), findsOneWidget);
+      },
+    );
 
-    testWidgets('9. corrupted image bytes never crash the widget -- errorBuilder shows a friendly message',
-        (tester) async {
-      // Not a real image -- decoding must fail, but the errorBuilder must
-      // catch it rather than letting it surface as an unhandled exception.
-      client.originalImageToReturn = CloudImageRead.found([1, 2, 3, 4, 5]);
-      final scan = _scan(result: gradedResult());
+    testWidgets(
+      '6c. the original image is used when the rectified copy is absent',
+      (tester) async {
+        client.rectifiedImageToReturn = const CloudImageRead.absent();
+        client.originalImageToReturn = CloudImageRead.found(_pngBytes);
+        final scan = _scan(
+          rectifiedImageFileName: 'images/s1_rectified.enc',
+          result: gradedResult(),
+        );
 
-      await pump(tester, scan: scan, batch: _batch());
+        await pump(tester, scan: scan, batch: _batch());
 
-      expect(tester.takeException(), isNull);
-      expect(find.text('Unable to display this scanned sheet.'), findsOneWidget);
-    });
+        expect(client.imageCalls, ['rectified', 'original']);
+        expect(
+          find.text('No scanned image available for this sheet.'),
+          findsNothing,
+        );
+        expect(find.byType(Image), findsOneWidget);
+      },
+    );
 
-    testWidgets('10. the full image viewer opens on tap and closes via its close button',
-        (tester) async {
-      client.originalImageToReturn = CloudImageRead.found(_pngBytes);
-      final scan = _scan(result: gradedResult());
+    testWidgets(
+      '7b. neither image exists -> a friendly empty state, never an exception',
+      (tester) async {
+        client.rectifiedImageToReturn = const CloudImageRead.absent();
+        client.originalImageToReturn = const CloudImageRead.absent();
+        final scan = _scan(
+          rectifiedImageFileName: 'images/s1_rectified.enc',
+          result: gradedResult(),
+        );
 
-      await pump(tester, scan: scan, batch: _batch());
+        await pump(tester, scan: scan, batch: _batch());
 
-      expect(find.byKey(const Key('scannedSheetPreview')), findsOneWidget);
-      expect(find.byType(Image), findsOneWidget);
-      expect(find.byType(InteractiveViewer), findsNothing);
-      await tester.ensureVisible(find.byKey(const Key('scannedSheetPreview')));
-      await tester.tap(find.byKey(const Key('scannedSheetPreview')));
-      await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        expect(
+          find.text('No scanned image available for this sheet.'),
+          findsOneWidget,
+        );
+      },
+    );
 
-      expect(find.byType(InteractiveViewer), findsOneWidget);
-      expect(find.byIcon(Icons.close), findsOneWidget);
+    testWidgets(
+      '8b. a missing image never prevents the rest of Detailed Result from rendering',
+      (tester) async {
+        client.answerKeyToReturn = CloudAnswerKeyRead.found(
+          version: 1,
+          answers: {'Answer Document|1': 'A'},
+          updatedByName: 'Officer',
+          updatedAt: '2026-01-01T00:00:00Z',
+        );
+        client.rectifiedImageToReturn = const CloudImageRead.absent();
+        client.originalImageToReturn = const CloudImageRead.absent();
+        final scan = _scan(
+          examinee: const ExamineeInfo(
+            firstName: 'Juan',
+            lastName: 'Cruz',
+            examineeNumber: 'EX-5',
+          ),
+          result: gradedResult(),
+          items: const [
+            OmrItemResult(
+              sectionName: 'Answer Document',
+              itemNumber: 1,
+              markedChoice: 'A',
+            ),
+          ],
+        );
 
-      await tester.tap(find.byIcon(Icons.close));
-      await tester.pumpAndSettle();
+        await pump(tester, scan: scan, batch: _batch());
 
-      expect(find.byType(InteractiveViewer), findsNothing);
-      expect(find.text('Detailed Result'), findsOneWidget);
-    });
+        expect(
+          find.text('No scanned image available for this sheet.'),
+          findsOneWidget,
+        );
+        // Result Summary and Answer Details still rendered normally.
+        expect(find.text('1 / 1'), findsOneWidget);
+        expect(find.text('100.00%'), findsOneWidget);
+        expect(find.text('Correct'), findsOneWidget);
+      },
+    );
 
-    testWidgets('1. a rectified image with a registered template gets the graded overlay',
-        (tester) async {
-      client.answerKeyToReturn = CloudAnswerKeyRead.found(
-        version: 1,
-        answers: {'Answer Document|1': 'A'},
-        updatedByName: 'Officer',
-        updatedAt: '2026-01-01T00:00:00Z',
-      );
-      client.rectifiedImageToReturn = CloudImageRead.found(_pngBytes);
-      final scan = _scan(
-        rectifiedImageFileName: 'images/s1_rectified.enc',
-        result: gradedResult(),
-        items: const [OmrItemResult(sectionName: 'Answer Document', itemNumber: 1, markedChoice: 'A')],
-      );
+    testWidgets(
+      '9. corrupted image bytes never crash the widget -- errorBuilder shows a friendly message',
+      (tester) async {
+        // Not a real image -- decoding must fail, but the errorBuilder must
+        // catch it rather than letting it surface as an unhandled exception.
+        client.originalImageToReturn = CloudImageRead.found([1, 2, 3, 4, 5]);
+        final scan = _scan(result: gradedResult());
 
-      await pump(tester, scan: scan, batch: _batch());
+        await pump(tester, scan: scan, batch: _batch());
 
-      expect(find.byKey(const Key('gradedOverlayPaint')), findsOneWidget);
-    });
+        expect(tester.takeException(), isNull);
+        expect(
+          find.text('Unable to display this scanned sheet.'),
+          findsOneWidget,
+        );
+      },
+    );
 
-    testWidgets('1b. mesh-correction metadata on the scan flows through to the overlay '
-        'without crashing (AT/QTM redesigned-sheet case)', (tester) async {
-      client.answerKeyToReturn = CloudAnswerKeyRead.found(
-        version: 1,
-        answers: {'Answer Document|1': 'A'},
-        updatedByName: 'Officer',
-        updatedAt: '2026-01-01T00:00:00Z',
-      );
-      client.rectifiedImageToReturn = CloudImageRead.found(_pngBytes);
-      final template = omrTemplates['AT']!;
-      final scan = _scan(
-        rectifiedImageFileName: 'images/s1_rectified.enc',
-        result: gradedResult(),
-        items: const [OmrItemResult(sectionName: 'Answer Document', itemNumber: 1, markedChoice: 'A')],
-        meshInteriorMeasuredFrac: {
-          'centerAboveAnswers': (0.45357 + 10 / template.pageWidthPt, 0.22568),
-          'centerAtDivider': (0.45357, 0.59034 - 10 / template.pageHeightPt),
-          'centerBelowAnswers': (0.45357 + 8 / template.pageWidthPt, 0.94312 + 8 / template.pageHeightPt),
-        },
-      );
+    testWidgets(
+      '10. the full image viewer opens on tap and closes via its close button',
+      (tester) async {
+        client.originalImageToReturn = CloudImageRead.found(_pngBytes);
+        final scan = _scan(result: gradedResult());
 
-      await pump(tester, scan: scan, batch: _batch());
+        await pump(tester, scan: scan, batch: _batch());
 
-      expect(tester.takeException(), isNull);
-      expect(find.byKey(const Key('gradedOverlayPaint')), findsOneWidget);
-    });
+        expect(find.byKey(const Key('scannedSheetPreview')), findsOneWidget);
+        expect(find.byType(Image), findsOneWidget);
+        expect(find.byType(InteractiveViewer), findsNothing);
+        await tester.ensureVisible(
+          find.byKey(const Key('scannedSheetPreview')),
+        );
+        await tester.tap(find.byKey(const Key('scannedSheetPreview')));
+        await tester.pumpAndSettle();
 
-    testWidgets('2b. the original fallback (no rectified copy) never gets the overlay',
-        (tester) async {
-      client.answerKeyToReturn = CloudAnswerKeyRead.found(
-        version: 1,
-        answers: {'Answer Document|1': 'A'},
-        updatedByName: 'Officer',
-        updatedAt: '2026-01-01T00:00:00Z',
-      );
-      client.originalImageToReturn = CloudImageRead.found(_pngBytes);
-      final scan = _scan(
-        result: gradedResult(),
-        items: const [OmrItemResult(sectionName: 'Answer Document', itemNumber: 1, markedChoice: 'A')],
-      );
+        expect(find.byType(InteractiveViewer), findsOneWidget);
+        expect(find.byIcon(Icons.close), findsOneWidget);
 
-      await pump(tester, scan: scan, batch: _batch());
+        await tester.tap(find.byIcon(Icons.close));
+        await tester.pumpAndSettle();
 
-      expect(find.byType(Image), findsOneWidget);
-      expect(find.byKey(const Key('gradedOverlayPaint')), findsNothing);
-    });
+        expect(find.byType(InteractiveViewer), findsNothing);
+        expect(find.text('Detailed Result'), findsOneWidget);
+      },
+    );
 
-    testWidgets('5b. a rectified image for an exam code with no registered template gets no overlay, no crash',
-        (tester) async {
-      client.rectifiedImageToReturn = CloudImageRead.found(_pngBytes);
-      final scan = _scan(
-        examCode: 'ZZZ',
-        rectifiedImageFileName: 'images/s1_rectified.enc',
-        result: gradedResult(),
-      );
+    testWidgets(
+      '1. a rectified image with a registered template gets the graded overlay',
+      (tester) async {
+        client.answerKeyToReturn = CloudAnswerKeyRead.found(
+          version: 1,
+          answers: {'Answer Document|1': 'A'},
+          updatedByName: 'Officer',
+          updatedAt: '2026-01-01T00:00:00Z',
+        );
+        client.rectifiedImageToReturn = CloudImageRead.found(_pngBytes);
+        final scan = _scan(
+          rectifiedImageFileName: 'images/s1_rectified.enc',
+          result: gradedResult(),
+          items: const [
+            OmrItemResult(
+              sectionName: 'Answer Document',
+              itemNumber: 1,
+              markedChoice: 'A',
+            ),
+          ],
+        );
 
-      await pump(tester, scan: scan, batch: _batch(examCode: 'ZZZ', examTitle: 'Unregistered Exam'));
+        await pump(tester, scan: scan, batch: _batch());
 
-      expect(tester.takeException(), isNull);
-      expect(find.byType(Image), findsOneWidget);
-      expect(find.byKey(const Key('gradedOverlayPaint')), findsNothing);
-    });
+        expect(find.byKey(const Key('gradedOverlayPaint')), findsOneWidget);
+      },
+    );
 
-    testWidgets('12. the full-screen viewer keeps the image and overlay inside the SAME InteractiveViewer',
-        (tester) async {
-      client.answerKeyToReturn = CloudAnswerKeyRead.found(
-        version: 1,
-        answers: {'Answer Document|1': 'A'},
-        updatedByName: 'Officer',
-        updatedAt: '2026-01-01T00:00:00Z',
-      );
-      client.rectifiedImageToReturn = CloudImageRead.found(_pngBytes);
-      final scan = _scan(
-        rectifiedImageFileName: 'images/s1_rectified.enc',
-        result: gradedResult(),
-        items: const [OmrItemResult(sectionName: 'Answer Document', itemNumber: 1, markedChoice: 'A')],
-      );
+    testWidgets(
+      '1b. mesh-correction metadata on the scan flows through to the overlay '
+      'without crashing (AT/QTM redesigned-sheet case)',
+      (tester) async {
+        client.answerKeyToReturn = CloudAnswerKeyRead.found(
+          version: 1,
+          answers: {'Answer Document|1': 'A'},
+          updatedByName: 'Officer',
+          updatedAt: '2026-01-01T00:00:00Z',
+        );
+        client.rectifiedImageToReturn = CloudImageRead.found(_pngBytes);
+        final template = omrTemplates['AT']!;
+        final scan = _scan(
+          rectifiedImageFileName: 'images/s1_rectified.enc',
+          result: gradedResult(),
+          items: const [
+            OmrItemResult(
+              sectionName: 'Answer Document',
+              itemNumber: 1,
+              markedChoice: 'A',
+            ),
+          ],
+          meshInteriorMeasuredFrac: {
+            'centerAboveAnswers': (
+              0.45357 + 10 / template.pageWidthPt,
+              0.22568,
+            ),
+            'centerAtDivider': (0.45357, 0.59034 - 10 / template.pageHeightPt),
+            'centerBelowAnswers': (
+              0.45357 + 8 / template.pageWidthPt,
+              0.94312 + 8 / template.pageHeightPt,
+            ),
+          },
+        );
 
-      await pump(tester, scan: scan, batch: _batch());
-      await tester.ensureVisible(find.byKey(const Key('scannedSheetPreview')));
-      await tester.tap(find.byKey(const Key('scannedSheetPreview')));
-      await tester.pumpAndSettle();
+        await pump(tester, scan: scan, batch: _batch());
 
-      final viewer = find.byType(InteractiveViewer);
-      expect(viewer, findsOneWidget);
-      expect(find.descendant(of: viewer, matching: find.byType(Image)), findsOneWidget);
-      expect(
-        find.descendant(of: viewer, matching: find.byKey(const Key('gradedOverlayPaint'))),
-        findsOneWidget,
-      );
-    });
+        expect(tester.takeException(), isNull);
+        expect(find.byKey(const Key('gradedOverlayPaint')), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      '2b. the original fallback (no rectified copy) never gets the overlay',
+      (tester) async {
+        client.answerKeyToReturn = CloudAnswerKeyRead.found(
+          version: 1,
+          answers: {'Answer Document|1': 'A'},
+          updatedByName: 'Officer',
+          updatedAt: '2026-01-01T00:00:00Z',
+        );
+        client.originalImageToReturn = CloudImageRead.found(_pngBytes);
+        final scan = _scan(
+          result: gradedResult(),
+          items: const [
+            OmrItemResult(
+              sectionName: 'Answer Document',
+              itemNumber: 1,
+              markedChoice: 'A',
+            ),
+          ],
+        );
+
+        await pump(tester, scan: scan, batch: _batch());
+
+        expect(find.byType(Image), findsOneWidget);
+        expect(find.byKey(const Key('gradedOverlayPaint')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      '5b. a rectified image for an exam code with no registered template gets no overlay, no crash',
+      (tester) async {
+        client.rectifiedImageToReturn = CloudImageRead.found(_pngBytes);
+        final scan = _scan(
+          examCode: 'ZZZ',
+          rectifiedImageFileName: 'images/s1_rectified.enc',
+          result: gradedResult(),
+        );
+
+        await pump(
+          tester,
+          scan: scan,
+          batch: _batch(examCode: 'ZZZ', examTitle: 'Unregistered Exam'),
+        );
+
+        expect(tester.takeException(), isNull);
+        expect(find.byType(Image), findsOneWidget);
+        expect(find.byKey(const Key('gradedOverlayPaint')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      '12. the full-screen viewer keeps the image and overlay inside the SAME InteractiveViewer',
+      (tester) async {
+        client.answerKeyToReturn = CloudAnswerKeyRead.found(
+          version: 1,
+          answers: {'Answer Document|1': 'A'},
+          updatedByName: 'Officer',
+          updatedAt: '2026-01-01T00:00:00Z',
+        );
+        client.rectifiedImageToReturn = CloudImageRead.found(_pngBytes);
+        final scan = _scan(
+          rectifiedImageFileName: 'images/s1_rectified.enc',
+          result: gradedResult(),
+          items: const [
+            OmrItemResult(
+              sectionName: 'Answer Document',
+              itemNumber: 1,
+              markedChoice: 'A',
+            ),
+          ],
+        );
+
+        await pump(tester, scan: scan, batch: _batch());
+        await tester.ensureVisible(
+          find.byKey(const Key('scannedSheetPreview')),
+        );
+        await tester.tap(find.byKey(const Key('scannedSheetPreview')));
+        await tester.pumpAndSettle();
+
+        final viewer = find.byType(InteractiveViewer);
+        expect(viewer, findsOneWidget);
+        expect(
+          find.descendant(of: viewer, matching: find.byType(Image)),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: viewer,
+            matching: find.byKey(const Key('gradedOverlayPaint')),
+          ),
+          findsOneWidget,
+        );
+      },
+    );
   });
 }
 
@@ -1293,9 +2018,74 @@ void main() {
 /// real decodable image so `Image.memory` never hits its errorBuilder in
 /// tests that aren't specifically about corrupted bytes.
 final List<int> _pngBytes = [
-  0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
-  0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
-  0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x64, 0x60, 0x60, 0x60,
-  0x00, 0x00, 0x00, 0x05, 0x00, 0x01, 0x5E, 0xF8, 0x27, 0x93, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
-  0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+  0x89,
+  0x50,
+  0x4E,
+  0x47,
+  0x0D,
+  0x0A,
+  0x1A,
+  0x0A,
+  0x00,
+  0x00,
+  0x00,
+  0x0D,
+  0x49,
+  0x48,
+  0x44,
+  0x52,
+  0x00,
+  0x00,
+  0x00,
+  0x01,
+  0x00,
+  0x00,
+  0x00,
+  0x01,
+  0x08,
+  0x06,
+  0x00,
+  0x00,
+  0x00,
+  0x1F,
+  0x15,
+  0xC4,
+  0x89,
+  0x00,
+  0x00,
+  0x00,
+  0x0D,
+  0x49,
+  0x44,
+  0x41,
+  0x54,
+  0x78,
+  0x9C,
+  0x63,
+  0x64,
+  0x60,
+  0x60,
+  0x60,
+  0x00,
+  0x00,
+  0x00,
+  0x05,
+  0x00,
+  0x01,
+  0x5E,
+  0xF8,
+  0x27,
+  0x93,
+  0x00,
+  0x00,
+  0x00,
+  0x00,
+  0x49,
+  0x45,
+  0x4E,
+  0x44,
+  0xAE,
+  0x42,
+  0x60,
+  0x82,
 ];

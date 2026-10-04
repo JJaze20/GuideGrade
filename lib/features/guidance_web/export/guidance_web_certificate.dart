@@ -120,7 +120,7 @@ List<List<CertEntry>> _filterColumns(
 
 /// The certificate for a scan, or null when none is issued:
 ///  * not graded, or
-///  * the recorded score falls in an unclassified gap (AT 55–57, QTM 46–47,
+///  * the recorded score falls in an unclassified gap (QTM 46–47,
 ///    TAT 122–127) — the templates define no certificate for it.
 ///
 /// A scan with no name (untagged, or a tag with blank names) still gets its

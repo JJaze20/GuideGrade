@@ -6,8 +6,11 @@ import '../../../core/services/firestore_service.dart';
 import '../../../core/services/user_provisioning_service.dart';
 import '../../../core/state/app_state.dart';
 import '../../../models/user.dart';
+import '../../../shared/widgets/form_field_decoration.dart';
+import '../../../shared/widgets/form_layout.dart';
 import '../../../shared/widgets/primary_button.dart';
-import '../widgets/add_guidance_position_dialog.dart';
+import '../../../models/guidance_position.dart';
+import '../widgets/position_management_dialog.dart';
 
 /// Create User screen for the System Administrator.
 ///
@@ -101,24 +104,20 @@ class _CreateUserScreenState extends State<CreateUserScreen> {
     await appState.loadGuidancePositions(_firestoreService);
   }
 
-  Future<void> _addPosition() async {
-    final label = await showAddGuidancePositionDialog(context);
-    if (label == null) return; // cancelled
-    if (!mounted) return;
+  /// Opens Position Management (list + add + delete) instead of going
+  /// straight to the add-only dialog. Whatever changed while it was open
+  /// (a position added and/or deleted) is picked up by the one
+  /// [AppState.loadGuidancePositions] refresh below -- the same refresh
+  /// this screen already did after the old add-only dialog closed.
+  Future<void> _managePositions() async {
     final appState = AppStateScope.of(context);
-    try {
-      await _firestoreService.addGuidancePosition(label, appState.guidancePositions);
-      if (!mounted) return;
-      await appState.loadGuidancePositions(_firestoreService);
-    } on ArgumentError catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message.toString())));
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not add the position. Please try again.')),
-      );
-    }
+    await showPositionManagementDialog(
+      context,
+      firestoreService: _firestoreService,
+      initialPositions: appState.guidancePositions,
+    );
+    if (!mounted) return;
+    await appState.loadGuidancePositions(_firestoreService);
   }
 
   @override
@@ -189,20 +188,20 @@ class _CreateUserScreenState extends State<CreateUserScreen> {
       appBar: AppBar(
         backgroundColor: Colors.white,
         foregroundColor: AppColors.textDark,
-        elevation: 0.5,
-        title: Text('Create User', style: AppTextStyles.heading(size: 13)),
+        elevation: 0,
+        shape: const Border(bottom: BorderSide(color: AppColors.border)),
+        title: Text('Create User', style: AppTextStyles.heading(size: 17)),
       ),
       body: SafeArea(
         child: Form(
           key: _formKey,
           child: ListView(
-            padding: const EdgeInsets.all(16),
+            padding: FormLayout.padding(context),
             children: [
-              _buildSection('Name'),
-              const SizedBox(height: 16),
+              const FormSectionHeader('Name', first: true),
               Text(
                 'Optional -- the account holder can complete this themselves in the app.',
-                style: AppTextStyles.body(size: 9.5, color: AppColors.textGray),
+                style: AppTextStyles.caption(),
               ),
               const SizedBox(height: 8),
               _buildTextField(
@@ -235,17 +234,16 @@ class _CreateUserScreenState extends State<CreateUserScreen> {
                 validator: (v) => _structuredNameProvided ? UserNameRules.validateLastName(v) : null,
               ),
               const SizedBox(height: 16),
-              _buildSection('Account'),
-              const SizedBox(height: 16),
+              const FormSectionHeader('Account'),
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: AppColors.emerald100,
+                  color: AppColors.successBg,
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: Text(
                   'This creates a Guidance Council account. System Administrator accounts are provisioned separately.',
-                  style: AppTextStyles.body(size: 10, color: const Color(0xFF065F46)),
+                  style: AppTextStyles.body(size: 12.5, color: AppColors.successFg),
                 ),
               ),
               const SizedBox(height: 16),
@@ -270,8 +268,7 @@ class _CreateUserScreenState extends State<CreateUserScreen> {
                 fieldKey: const Key('createUser.displayName'),
               ),
               const SizedBox(height: 16),
-              _buildSection('Guidance Details'),
-              const SizedBox(height: 16),
+              const FormSectionHeader('Guidance Details'),
               _buildGuidancePositionField(),
               const SizedBox(height: 12),
               _buildTextField(
@@ -293,13 +290,6 @@ class _CreateUserScreenState extends State<CreateUserScreen> {
     );
   }
 
-  Widget _buildSection(String title) {
-    return Text(
-      title,
-      style: AppTextStyles.body(size: 11, weight: FontWeight.w700, color: AppColors.primaryGreen),
-    );
-  }
-
   Widget _buildTextField({
     required String label,
     required TextEditingController controller,
@@ -312,33 +302,12 @@ class _CreateUserScreenState extends State<CreateUserScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            Text(label, style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600)),
-            if (required) Text(' *', style: AppTextStyles.body(size: 10.5, color: Colors.red)),
-          ],
-        ),
-        const SizedBox(height: 6),
+        FieldLabel(label, required: required),
         TextFormField(
           key: fieldKey,
           controller: controller,
           keyboardType: keyboardType,
-          decoration: InputDecoration(
-            hintText: hint,
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: AppColors.cardBorder),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: AppColors.cardBorder),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: AppColors.primaryGreen),
-            ),
-            contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          ),
+          decoration: FormFieldStyle.outlined(hint: hint),
           validator: validator ??
               (required
                   ? (value) {
@@ -357,56 +326,56 @@ class _CreateUserScreenState extends State<CreateUserScreen> {
   /// [AppState.guidancePositions]) rather than a hardcoded map, so a
   /// position added here -- or on Edit User -- is immediately reflected.
   Widget _buildGuidancePositionField() {
-    final positions = AppStateScope.of(context).guidancePositions;
+    // ensureIncludes: if the position currently picked in this (unsaved)
+    // form was deleted via Position Management while this screen was open,
+    // it must still appear as a selectable item -- otherwise
+    // DropdownButtonFormField asserts because its own value no longer
+    // matches any item. Mirrors EditUserScreen's existing safeguard for the
+    // same dropdown.
+    final positions = GuidancePositions.ensureIncludes(
+      AppStateScope.of(context).guidancePositions,
+      _guidancePosition,
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Guidance Position', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600)),
+            const FieldLabel('Guidance Position'),
             InkWell(
               key: const Key('createUser.addPosition'),
-              onTap: _addPosition,
+              onTap: _managePositions,
+              borderRadius: BorderRadius.circular(8),
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(Icons.add_circle_outline, size: 14, color: AppColors.primaryGreen),
+                    const Icon(Icons.tune, size: 16, color: AppColors.primaryGreen),
                     const SizedBox(width: 4),
-                    Text('Add Position', style: AppTextStyles.body(size: 10.5, color: AppColors.primaryGreen, weight: FontWeight.w600)),
+                    Text(
+                      'Manage Positions',
+                      style: AppTextStyles.body(size: 12.5, color: AppColors.primaryGreen, weight: FontWeight.w700),
+                    ),
                   ],
                 ),
               ),
             ),
           ],
         ),
-        const SizedBox(height: 6),
         DropdownButtonFormField<String>(
           key: const Key('createUser.position'),
           initialValue: _guidancePosition,
+          isExpanded: true,
           hint: Text(
             'Not set (the account holder can choose this later)',
-            style: AppTextStyles.body(size: 10.5, color: AppColors.textGray),
+            style: AppTextStyles.body(size: 13, color: AppColors.textMuted),
           ),
-          decoration: InputDecoration(
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: AppColors.cardBorder),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: AppColors.cardBorder),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: AppColors.primaryGreen),
-            ),
-            contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          ),
+          decoration: FormFieldStyle.outlined(),
           items: positions
-              .map((p) => DropdownMenuItem(value: p.value, child: Text(p.label, style: AppTextStyles.body(size: 11))))
+              .map((p) => DropdownMenuItem(value: p.value, child: Text(p.label, style: AppTextStyles.body(size: 13))))
               .toList(),
           onChanged: (value) => setState(() => _guidancePosition = value),
         ),

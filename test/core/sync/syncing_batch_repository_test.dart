@@ -226,6 +226,9 @@ class _FakeLocal implements LocalBatchRepository {
   Future<LocalBatch> deleteScan({
     required String batchId,
     required String scanId,
+    String? deletedByUid,
+    String? deletedByName,
+    String? reason,
   }) async {
     calls.add('deleteScan:$batchId/$scanId');
     _maybeThrow('deleteScan');
@@ -1002,7 +1005,12 @@ void main() {
       scanId: 's2',
     ));
 
-    await repo.deleteScan(batchId: 'b1', scanId: 's1');
+    await repo.deleteScan(
+      batchId: 'b1',
+      scanId: 's1',
+      deletedByUid: 'uid-1',
+      reason: 'Duplicate capture',
+    );
     await waitForJobs(3);
 
     expect(jobLabels(), ['pushScan', 'deleteScan', 'pushBatch']);
@@ -1019,7 +1027,12 @@ void main() {
     fakeLocal.failWith['deleteScan'] = const FileSystemException('nope');
 
     await expectLater(
-      repo.deleteScan(batchId: 'b1', scanId: 's1'),
+      repo.deleteScan(
+        batchId: 'b1',
+        scanId: 's1',
+        deletedByUid: 'uid-1',
+        reason: 'Duplicate capture',
+      ),
       throwsA(isA<FileSystemException>()),
     );
     await Future<void>.delayed(const Duration(milliseconds: 20));

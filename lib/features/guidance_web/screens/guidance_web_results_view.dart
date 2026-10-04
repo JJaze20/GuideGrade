@@ -1,10 +1,14 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
+import '../../../core/constants/app_tokens.dart';
+import '../../../shared/widgets/state_views.dart';
+import '../../../shared/widgets/status_badge.dart';
+import '../../../shared/widgets/surface_card.dart';
 import '../../../core/constants/exam_catalog.dart';
 import '../../../models/examinee_record.dart';
 import '../../../models/local_batch.dart';
@@ -136,9 +140,12 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
   List<LocalScan> _scans = [];
   String? _scansError;
 
-  /// The canonical examinee for each LINKED scan (keyed by scan id), read
-  /// through `scans.examinee_id` -> `examinees.id`. A scan with no entry is
-  /// unlinked/legacy and shows its own tag, exactly as before.
+  /// The canonical examinee for each scan in [_scans] that has one (keyed
+  /// by scan id), read through `scans.examinee_id` -> `examinees.id`. NOT
+  /// every scan in [_scans] has an entry here -- [_scans] now holds every
+  /// scan in the batch, linked or not, while this map only ever has one for
+  /// a scan whose `examinee_id` resolves to a real `examinees` row (see
+  /// [GuidanceWebResultsService.loadResultsForBatch]'s own doc comment).
   Map<String, ExamineeRecord> _linkedExaminees = {};
 
   String _statusFilter = 'All';
@@ -148,6 +155,7 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
   /// null on each tap of the Score header. Purely a display-order concern —
   /// never mutates [_scans] or recomputes any result value.
   bool? _scoreSortAscending;
+  final ScrollController _tableScroll = ScrollController();
 
   /// The scan currently open in the Detailed Result view (Phase 3), or null
   /// while the Results table itself is showing. Set only by a row's View
@@ -183,6 +191,7 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
   void dispose() {
     _refreshTimer?.cancel();
     _searchController.dispose();
+    _tableScroll.dispose();
     super.dispose();
   }
 
@@ -353,6 +362,11 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
   /// status value is introduced beyond the two the app already defines.
   String _effectiveStatus(LocalScan scan) => scan.result?.status ?? 'Ungraded';
 
+  /// Search matches the official linked identity first; a scan with no
+  /// resolved [ExamineeRecord] falls back to its own OCR/staff tag so it
+  /// can still be found by the name/number staff typed in while reviewing
+  /// the sheet -- that fallback is search-matching only, never a change to
+  /// what identity the row displays as official (see [_displayName]).
   List<LocalScan> get _filteredScans {
     final term = _searchController.text.trim().toLowerCase();
     return _scans.where((scan) {
@@ -381,7 +395,9 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
     final viewing = _viewingScan;
     final batch = _activeBatch;
     return Padding(
-      padding: const EdgeInsets.all(24),
+      padding: EdgeInsets.all(
+        AppSpace.gutterFor(MediaQuery.sizeOf(context).width),
+      ),
       child: (viewing != null && batch != null)
           ? GuidanceWebResultDetailView(
               scan: viewing,
@@ -390,25 +406,27 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
               service: _service,
               onBack: () => setState(() => _viewingScan = null),
             )
-          : Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _buildControls(),
-                const SizedBox(height: 16),
-                Expanded(child: _buildBody()),
-              ],
+          : LayoutBuilder(
+              builder: (context, constraints) => Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxHeight: constraints.maxHeight * .6,
+                    ),
+                    child: SingleChildScrollView(child: _buildControls()),
+                  ),
+                  const SizedBox(height: 16),
+                  Expanded(child: _buildBody()),
+                ],
+              ),
             ),
     );
   }
 
   Widget _buildControls() {
-    return Container(
+    return SurfaceCard(
       padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.cardBorder),
-      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -432,22 +450,45 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
               _buildBatchDescription(_activeBatch!),
             ],
             const SizedBox(height: 14),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Expanded(flex: 2, child: _buildSearchField()),
-                const SizedBox(width: 16),
-                Expanded(flex: 1, child: _buildStatusFilter()),
-                if (widget.archivedBatch == null) ...[
-                  const SizedBox(width: 16),
-                  OutlinedButton.icon(
-                    key: const Key('archiveBatchButton'),
-                    onPressed: _archiveActiveBatch,
-                    icon: const FaIcon(FontAwesomeIcons.boxArchive, size: 13),
-                    label: const Text('Archive Batch'),
-                  ),
-                ],
-              ],
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final archive = OutlinedButton.icon(
+                  key: const Key('archiveBatchButton'),
+                  onPressed: _archiveActiveBatch,
+                  icon: const Icon(Icons.inventory_2_outlined, size: 18),
+                  label: const Text('Archive Batch'),
+                );
+                if (constraints.maxWidth < 600) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _buildSearchField(),
+                      const SizedBox(height: 12),
+                      Wrap(
+                        spacing: 12,
+                        runSpacing: 12,
+                        crossAxisAlignment: WrapCrossAlignment.end,
+                        children: [
+                          SizedBox(width: 140, child: _buildStatusFilter()),
+                          if (widget.archivedBatch == null) archive,
+                        ],
+                      ),
+                    ],
+                  );
+                }
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Expanded(flex: 2, child: _buildSearchField()),
+                    const SizedBox(width: 16),
+                    Expanded(flex: 1, child: _buildStatusFilter()),
+                    if (widget.archivedBatch == null) ...[
+                      const SizedBox(width: 16),
+                      archive,
+                    ],
+                  ],
+                );
+              },
             ),
           ],
         ],
@@ -458,79 +499,66 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
   /// Exam-type tabs (AT / TAT / QTM). Selecting one swaps the batch dropdown
   /// below it to that exam's batches.
   Widget _buildExamTabs() {
-    return Row(
-      children: [
-        for (var i = 0; i < _examGroups.length; i++) ...[
-          if (i > 0) const SizedBox(width: 12),
-          Expanded(
-            child: _ExamTab(
-              key: Key('examTab_${_examGroups[i].$1}'),
-              label: _examGroups[i].$2,
-              count: _batchesFor(_examGroups[i].$1).length,
-              hasNew: _hasNewBatches(_examGroups[i].$1),
-              selected: _selectedExam == _examGroups[i].$1,
-              onTap: () => _selectExamTab(_examGroups[i].$1),
+    return LayoutBuilder(
+      builder: (context, constraints) => Row(
+        children: [
+          for (var i = 0; i < _examGroups.length; i++) ...[
+            if (i > 0) const SizedBox(width: 12),
+            Expanded(
+              child: _ExamTab(
+                key: Key('examTab_${_examGroups[i].$1}'),
+                label: constraints.maxWidth < 600
+                    ? _examGroups[i].$1
+                    : _examGroups[i].$2,
+                tooltip: _examGroups[i].$2,
+                count: _batchesFor(_examGroups[i].$1).length,
+                hasNew: _hasNewBatches(_examGroups[i].$1),
+                selected: _selectedExam == _examGroups[i].$1,
+                onTap: () => _selectExamTab(_examGroups[i].$1),
+              ),
             ),
-          ),
+          ],
         ],
-      ],
+      ),
     );
   }
 
   /// Header shown instead of the exam tabs and batch dropdown when an ARCHIVED batch is
   /// opened from the Web Archive.
   Widget _buildArchivedHeader(LocalBatch batch) {
-    return Row(
+    return Wrap(
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: 12,
       children: [
         TextButton.icon(
           onPressed: widget.onBackToArchive,
           icon: const Icon(Icons.arrow_back, size: 16),
           label: const Text('Back to Archive'),
         ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Text(
-            '${batch.batchCode} — ${batch.examTitle.isNotEmpty ? batch.examTitle : batch.examCode} (Archived)',
-            style: AppTextStyles.body(size: 12, weight: FontWeight.w700),
-            overflow: TextOverflow.ellipsis,
-          ),
+        Text(
+          '${batch.batchCode} — ${batch.examTitle.isNotEmpty ? batch.examTitle : batch.examCode} (Archived)',
+          style: AppTextStyles.body(size: 13, weight: FontWeight.w700),
         ),
       ],
     );
   }
 
-  /// "Archive Batch": only a Completed batch can be archived. Confirms, then
-  /// creates the Web Archive marker (never touching the batch, its scans, or
-  /// its mobile status) and drops the batch from this normal Results list.
+  /// "Archive Batch": confirms the action, then
+  /// completes eligible Active batches, creates the archive marker, and
+  /// removes the batch from this normal Results list.
   Future<void> _archiveActiveBatch() async {
     final batch = _activeBatch;
     if (batch == null) return;
-
-    if (!batch.isCompleted) {
-      await showDialog<void>(
-        context: context,
-        builder: (_) => AlertDialog(
-          title: const Text('Cannot Archive This Batch'),
-          content: Text(
-            'Only completed batches can be archived. '
-            '${batch.batchCode} is currently ${batch.status}.',
-          ),
-          actions: [
-            FilledButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('OK'),
-            ),
-          ],
-        ),
-      );
-      return;
-    }
 
     final reasonController = TextEditingController();
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
-        title: const Text('Archive this completed batch?'),
+        title: Text(
+          batch.isCompleted
+              ? 'Archive this completed batch?'
+              : 'Complete and archive this batch?',
+        ),
         content: SizedBox(
           width: 420,
           child: Column(
@@ -539,7 +567,7 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
             children: [
               const Text(
                 'The batch will be removed from the normal Results list and '
-                'moved to Archive. Its results, scans, images, answers, and '
+                'moved to Completed Batch after verifying completion. Its results, scans, images, answers, and '
                 'examinee records will remain available.',
               ),
               const SizedBox(height: 12),
@@ -607,8 +635,8 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
   // Batch identification hierarchy (Results batch selection/display area):
   // the DESCRIPTION is the main focus -- larger and bold -- while the batch
   // name/code line stays clearly readable but smaller.
-  static const double _descriptionSize = 13;
-  static const double _batchNameSize = 10.5;
+  static const double _descriptionSize = 14;
+  static const double _batchNameSize = 12;
   static const double _descriptionHeadingSize = 16;
 
   /// The selected batch's own description (the existing
@@ -634,7 +662,7 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
           Text(
             'Batch Description',
             style: AppTextStyles.body(
-              size: 9.5,
+              size: 12,
               weight: FontWeight.w600,
               color: AppColors.textGray,
             ),
@@ -665,7 +693,7 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
       children: [
         Text(
           label,
-          style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600),
+          style: AppTextStyles.body(size: 12, weight: FontWeight.w600),
         ),
         const SizedBox(height: 6),
         if (!_loadingBatches && options.isEmpty)
@@ -698,7 +726,7 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
                   child: b.description.trim().isEmpty
                       ? Text(
                           _batchOptionLabel(b),
-                          style: AppTextStyles.body(size: 11),
+                          style: AppTextStyles.body(size: 13),
                           overflow: TextOverflow.ellipsis,
                         )
                       : Text.rich(
@@ -732,7 +760,7 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
                 child: description.isEmpty
                     ? Text(
                         _batchOptionLabel(b),
-                        style: AppTextStyles.body(size: 11),
+                        style: AppTextStyles.body(size: 13),
                         overflow: TextOverflow.ellipsis,
                       )
                     : Column(
@@ -775,23 +803,22 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
       children: [
         Text(
           'Search',
-          style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600),
+          style: AppTextStyles.body(size: 12, weight: FontWeight.w600),
         ),
         const SizedBox(height: 6),
         TextField(
+          key: const Key('resultsSearch'),
           controller: _searchController,
-          decoration:
-              _fieldDecoration(
-                hint: 'Search examinee name or number...',
-              ).copyWith(
-                prefixIcon: const Icon(Icons.search, size: 18),
-                suffixIcon: _searchController.text.isNotEmpty
-                    ? IconButton(
-                        icon: const Icon(Icons.clear, size: 18),
-                        onPressed: _searchController.clear,
-                      )
-                    : null,
-              ),
+          decoration: _fieldDecoration(hint: 'Name or examinee ID').copyWith(
+            prefixIcon: const Icon(Icons.search, size: 18),
+            suffixIcon: _searchController.text.isNotEmpty
+                ? IconButton(
+                    tooltip: 'Clear search',
+                    icon: const Icon(Icons.clear, size: 18),
+                    onPressed: _searchController.clear,
+                  )
+                : null,
+          ),
         ),
       ],
     );
@@ -803,17 +830,18 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
       children: [
         Text(
           'Status',
-          style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600),
+          style: AppTextStyles.body(size: 12, weight: FontWeight.w600),
         ),
         const SizedBox(height: 6),
         DropdownButtonFormField<String>(
           value: _statusFilter,
+          isExpanded: true,
           decoration: _fieldDecoration(),
           items: _statusFilterOptions
               .map(
                 (s) => DropdownMenuItem(
                   value: s,
-                  child: Text(s, style: AppTextStyles.body(size: 11)),
+                  child: Text(s, style: AppTextStyles.body(size: 13)),
                 ),
               )
               .toList(),
@@ -845,41 +873,32 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
 
   Widget _buildBody() {
     if (_loadingBatches)
-      return _buildMessage(FontAwesomeIcons.spinner, 'Loading batches...');
+      return const LoadingState(message: 'Loading batches...');
     if (_batchesError != null)
-      return _buildMessage(
-        FontAwesomeIcons.triangleExclamation,
-        _batchesError!,
-        isError: true,
-      );
+      return _buildMessage(Icons.error_outline, _batchesError!, isError: true);
     if (_batches.isEmpty)
       return _buildMessage(
-        FontAwesomeIcons.boxOpen,
+        Icons.inventory_2_outlined,
         'No examination batches found.',
       );
     if (_activeBatch == null)
       return _buildMessage(
-        FontAwesomeIcons.fileLines,
+        Icons.description_outlined,
         'Select a batch to view its results.',
       );
-    if (_loadingScans)
-      return _buildMessage(FontAwesomeIcons.spinner, 'Loading results...');
+    if (_loadingScans) return const LoadingState(message: 'Loading results...');
     if (_scansError != null)
-      return _buildMessage(
-        FontAwesomeIcons.triangleExclamation,
-        _scansError!,
-        isError: true,
-      );
+      return _buildMessage(Icons.error_outline, _scansError!, isError: true);
     if (_scans.isEmpty)
       return _buildMessage(
-        FontAwesomeIcons.fileLines,
+        Icons.description_outlined,
         'No results found for this batch.',
       );
 
     final filtered = _filteredScans;
     if (filtered.isEmpty) {
       return _buildMessage(
-        FontAwesomeIcons.magnifyingGlass,
+        Icons.search,
         'No results match your search or filter.',
       );
     }
@@ -902,58 +921,168 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
     });
   }
 
-  Widget _buildMessage(
-    FaIconData icon,
-    String message, {
-    bool isError = false,
-  }) {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          FaIcon(
-            icon,
-            size: 36,
-            color: isError ? AppColors.warmRedOrange : AppColors.textGray,
-          ),
-          const SizedBox(height: 14),
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 360),
-            child: Text(
-              message,
-              textAlign: TextAlign.center,
-              style: AppTextStyles.body(
-                size: 11.5,
-                color: isError ? AppColors.warmRedOrange : AppColors.textGray,
-              ),
-            ),
-          ),
-        ],
-      ),
+  Widget _buildMessage(IconData icon, String message, {bool isError = false}) {
+    if (isError) {
+      return ErrorState(
+        title: 'Could not load results',
+        message: message,
+        onRetry: _batchesError != null
+            ? _loadBatches
+            : () => _selectExamBatch(_activeBatch!.examCode, _activeBatch),
+      );
+    }
+    return EmptyState(
+      title: message,
+      icon: icon,
+      action: _scans.isNotEmpty && _filteredScans.isEmpty
+          ? TextButton(
+              onPressed: () {
+                setState(() => _statusFilter = 'All');
+                _searchController.clear();
+              },
+              child: const Text('Clear filters'),
+            )
+          : null,
     );
   }
 
   Widget _buildTable(List<LocalScan> scans) {
     final batch = _activeBatch!;
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.cardBorder),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          _buildTableHeader(),
-          const Divider(height: 1, color: AppColors.cardBorder),
-          Expanded(
-            child: ListView.separated(
-              itemCount: scans.length,
-              separatorBuilder: (_, _) =>
-                  const Divider(height: 1, color: AppColors.cardBorder),
-              itemBuilder: (context, index) =>
-                  _buildResultRow(index + 1, scans[index], batch),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compact = constraints.maxWidth < 600;
+        final scale = MediaQuery.textScalerOf(context).scale(13) / 13;
+        final table = SurfaceCard(
+          padding: EdgeInsets.zero,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _buildTableHeader(),
+              const Divider(height: 1, color: AppColors.cardBorder),
+              Expanded(
+                child: ListView.separated(
+                  itemCount: scans.length,
+                  separatorBuilder: (_, _) =>
+                      const Divider(height: 1, color: AppColors.cardBorder),
+                  itemBuilder: (context, index) =>
+                      _buildResultRow(index + 1, scans[index], batch),
+                ),
+              ),
+            ],
+          ),
+        );
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Wrap(
+                spacing: 16,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  Text(
+                    '${scans.length} of ${_scans.length} results',
+                    style: AppTextStyles.body(size: 12),
+                  ),
+                  if (compact)
+                    _buildScoreHeader(
+                      AppTextStyles.body(size: 12, weight: FontWeight.w600),
+                    ),
+                ],
+              ),
             ),
+            Expanded(
+              child: compact
+                  ? ListView.separated(
+                      key: const Key('resultsCards'),
+                      itemCount: scans.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 12),
+                      itemBuilder: (_, index) =>
+                          _buildResultCard(index + 1, scans[index], batch),
+                    )
+                  : Scrollbar(
+                      controller: _tableScroll,
+                      thumbVisibility: true,
+                      child: SingleChildScrollView(
+                        key: const Key('resultsTable'),
+                        controller: _tableScroll,
+                        scrollDirection: Axis.horizontal,
+                        child: SizedBox(
+                          width: math.max(
+                            constraints.maxWidth,
+                            740 * scale.clamp(1, 2),
+                          ),
+                          child: table,
+                        ),
+                      ),
+                    ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _viewButton(LocalScan scan) => Tooltip(
+    message: 'View result for ${_displayName(scan, _linkedExaminees[scan.id])}',
+    child: TextButton(
+      onPressed: () => setState(() => _viewingScan = scan),
+      style: TextButton.styleFrom(minimumSize: const Size(60, 44)),
+      child: Text(
+        'View',
+        style: AppTextStyles.body(
+          size: 13,
+          weight: FontWeight.w700,
+          color: AppColors.primaryGreen,
+        ),
+      ),
+    ),
+  );
+
+  Widget _buildResultCard(int index, LocalScan scan, LocalBatch batch) {
+    final linked = _linkedExaminees[scan.id];
+    final result = scan.result;
+    final status = _effectiveStatus(scan);
+    return SurfaceCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('$index', style: AppTextStyles.caption()),
+          const SizedBox(height: 4),
+          Text(
+            _displayName(scan, linked),
+            style: AppTextStyles.body(size: 14, weight: FontWeight.w600),
+          ),
+          if (linked != null)
+            Text(linked.temporaryExamineeId, style: AppTextStyles.caption()),
+          if (linked == null) _notLinkedBadge(),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 16,
+            runSpacing: 8,
+            children: [
+              Text(
+                result == null
+                    ? 'Score: —'
+                    : 'Score: ${result.rawScore} / ${_denominatorFor(batch, result)}',
+                style: AppTextStyles.body(size: 13, weight: FontWeight.w600),
+              ),
+              Text(
+                result == null
+                    ? 'Percentage: —'
+                    : '${result.percentage.toStringAsFixed(1)}%',
+                style: AppTextStyles.body(size: 13),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 16,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              _statusChip(status, status == 'Graded'),
+              _viewButton(scan),
+            ],
           ),
         ],
       ),
@@ -962,7 +1091,7 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
 
   Widget _buildTableHeader() {
     TextStyle style = AppTextStyles.body(
-      size: 9.5,
+      size: 11.5,
       weight: FontWeight.w800,
       color: AppColors.textGray,
     );
@@ -990,25 +1119,54 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
     final IconData icon = ascending == null
         ? Icons.unfold_more
         : (ascending ? Icons.arrow_upward : Icons.arrow_downward);
-    return InkWell(
-      key: const Key('scoreSortHeader'),
-      onTap: _cycleScoreSort,
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text('SCORE', style: style),
-          const SizedBox(width: 4),
-          Icon(icon, size: 13, color: style.color),
-        ],
+    return Semantics(
+      button: true,
+      label: ascending == null
+          ? 'Sort score: original order'
+          : ascending
+          ? 'Sort score: lowest first'
+          : 'Sort score: highest first',
+      child: Tooltip(
+        message: 'Sort by score',
+        child: InkWell(
+          key: const Key('scoreSortHeader'),
+          onTap: _cycleScoreSort,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 44),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('SCORE', style: style),
+                const SizedBox(width: 4),
+                Icon(icon, size: 13, color: style.color),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
 
+  /// Display name for a row. Branches on [linked] itself, NOT on whether
+  /// [resultExamineeName] returned something -- a linked scan whose official
+  /// record has no usable name must show a plain placeholder, never fall
+  /// back to the scan's own OCR/staff tag, since that would print OCR text
+  /// on a row this view otherwise marks as having an official identity
+  /// (bold/dark, no "not linked" badge -- see [_buildResultRow]'s
+  /// [hasIdentity]), misrepresenting it as official. The OCR tag is only
+  /// ever shown as plain scan information when the scan has NO link at all.
+  String _displayName(LocalScan scan, ExamineeRecord? linked) {
+    if (linked != null) return resultExamineeName(linked) ?? 'No name on file';
+    final tag = scan.examinee;
+    if (tag != null) return tag.displayName;
+    return 'No name on file';
+  }
+
   Widget _buildResultRow(int index, LocalScan scan, LocalBatch batch) {
     final linked = _linkedExaminees[scan.id];
-    final hasIdentity = linked != null || scan.examinee != null;
+    final hasIdentity = linked != null;
     final result = scan.result;
-    final name = resultExamineeName(scan, linked) ?? 'Untagged';
+    final name = _displayName(scan, linked);
     final score = result == null
         ? '—'
         : '${result.rawScore} / ${_denominatorFor(batch, result)}';
@@ -1024,48 +1182,72 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
         children: [
           SizedBox(
             width: 28,
-            child: Text('$index', style: AppTextStyles.body(size: 11)),
+            child: Text('$index', style: AppTextStyles.body(size: 13)),
           ),
           Expanded(
             flex: 4,
-            child: Text(
-              name,
-              style: AppTextStyles.body(
-                size: 11,
-                weight: FontWeight.w600,
-                color: hasIdentity ? AppColors.textDark : AppColors.textGray,
-              ),
-              overflow: TextOverflow.ellipsis,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Tooltip(
+                  message: name,
+                  child: Text(
+                    name,
+                    style: AppTextStyles.body(
+                      size: 13,
+                      weight: FontWeight.w600,
+                      color: hasIdentity
+                          ? AppColors.textDark
+                          : AppColors.textGray,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 2,
+                  ),
+                ),
+                if (!hasIdentity) _notLinkedBadge(),
+              ],
             ),
           ),
           Expanded(
             flex: 2,
-            child: Text(score, style: AppTextStyles.body(size: 11)),
+            child: Text(score, style: AppTextStyles.body(size: 13)),
           ),
           Expanded(
             flex: 1,
-            child: Text(percentage, style: AppTextStyles.body(size: 11)),
+            child: Text(percentage, style: AppTextStyles.body(size: 13)),
           ),
           Expanded(flex: 2, child: _statusChip(status, isGraded)),
-          SizedBox(
-            width: 72,
-            child: TextButton(
-              onPressed: () => setState(() => _viewingScan = scan),
-              style: TextButton.styleFrom(
-                padding: EdgeInsets.zero,
-                minimumSize: const Size(60, 30),
-              ),
-              child: Text(
-                'View',
-                style: AppTextStyles.body(
-                  size: 10.5,
-                  weight: FontWeight.w700,
-                  color: AppColors.primaryGreen,
-                ),
-              ),
-            ),
-          ),
+          SizedBox(width: 72, child: _viewButton(scan)),
         ],
+      ),
+    );
+  }
+
+  /// "This scan is not linked to an official Examinee Record" -- shown under
+  /// the name of every row with no resolved [ExamineeRecord], whether that's
+  /// because `examinee_id` is null or because it no longer resolves (both
+  /// look the same to the Guidance Council: the row needs processing in
+  /// Examinee Records / Unlinked Scans either way). Status indication only --
+  /// this view never offers a linking action of its own, to avoid a second,
+  /// independent linking implementation alongside the existing one.
+  Widget _notLinkedBadge() {
+    return Container(
+      key: const Key('notLinkedBadge'),
+      margin: const EdgeInsets.only(top: 3),
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF3F4F6),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppColors.cardBorder),
+      ),
+      child: Text(
+        'Not linked to an Examinee Record',
+        style: AppTextStyles.body(
+          size: 10.5,
+          weight: FontWeight.w700,
+          color: AppColors.textGray,
+        ),
       ),
     );
   }
@@ -1083,20 +1265,9 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
   Widget _statusChip(String status, bool isGraded) {
     return Align(
       alignment: Alignment.centerLeft,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-        decoration: BoxDecoration(
-          color: isGraded ? AppColors.emerald100 : const Color(0xFFFFF3E0),
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Text(
-          status,
-          style: AppTextStyles.body(
-            size: 9.5,
-            weight: FontWeight.w700,
-            color: isGraded ? const Color(0xFF065F46) : const Color(0xFF92400E),
-          ),
-        ),
+      child: StatusBadge(
+        label: status,
+        tone: isGraded ? StatusTone.success : StatusTone.warning,
       ),
     );
   }
@@ -1119,24 +1290,32 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
   String _fmtDate(DateTime d) => '${_months[d.month - 1]} ${d.day}, ${d.year}';
 }
 
-/// The name the Results table shows for [scan]: the LINKED canonical examinee
-/// when the scan is linked to one (`scans.examinee_id` -> `examinees`) and
-/// that record has a usable name (first or last non-blank), otherwise the
-/// scan's own tag, otherwise null (the caller shows "Untagged"). One source
-/// at a time -- fields are never mixed -- and nothing is written anywhere.
-String? resultExamineeName(LocalScan scan, ExamineeRecord? linked) {
+/// The OFFICIAL name the Results table shows for a row: the linked canonical
+/// examinee's name (`scans.examinee_id` -> `examinees`) when it has a usable
+/// name (first or last non-blank), otherwise null. [linked] is null for a
+/// scan that was never linked, or one whose `examinee_id` is dangling --
+/// [GuidanceWebResultsService.loadResultsForBatch] now returns every scan in
+/// the batch, not only linked ones, so a null [linked] here is a normal,
+/// expected case, not a defensive fallback. Deliberately does NOT fall back
+/// to the scan's own OCR/staff-tagged [LocalScan.examinee] -- that is not an
+/// official identity and must never be shown as though it were one; a
+/// caller that wants to display the OCR tag as plain scan information
+/// (never as the official name) reads [LocalScan.examinee] itself, as
+/// [_buildResultRow] does.
+String? resultExamineeName(ExamineeRecord? linked) {
   if (linked != null &&
       (linked.firstName.trim().isNotEmpty ||
           linked.lastName.trim().isNotEmpty)) {
     return linked.displayName;
   }
-  return scan.examinee?.displayName;
+  return null;
 }
 
 class _ExamTab extends StatelessWidget {
   const _ExamTab({
     super.key,
     required this.label,
+    required this.tooltip,
     required this.count,
     required this.hasNew,
     required this.selected,
@@ -1144,6 +1323,7 @@ class _ExamTab extends StatelessWidget {
   });
 
   final String label;
+  final String tooltip;
   final int count;
   final bool hasNew;
   final bool selected;
@@ -1151,64 +1331,75 @@ class _ExamTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(10),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        decoration: BoxDecoration(
-          color: selected ? const Color(0xFFD1FAE5) : Colors.white,
+    return Semantics(
+      selected: selected,
+      button: true,
+      label:
+          '$tooltip, $count batches${hasNew ? ', new batches available' : ''}',
+      child: Tooltip(
+        message: tooltip,
+        child: InkWell(
+          onTap: onTap,
           borderRadius: BorderRadius.circular(10),
-          border: Border.all(
-            color: selected ? AppColors.primaryGreen : AppColors.cardBorder,
-            width: selected ? 1.5 : 1,
-          ),
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                label,
-                overflow: TextOverflow.ellipsis,
-                style: AppTextStyles.body(
-                  size: 12,
-                  weight: selected ? FontWeight.w700 : FontWeight.w600,
-                  color: selected ? AppColors.primaryGreen : AppColors.textDark,
-                ),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              color: selected ? const Color(0xFFD1FAE5) : Colors.white,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: selected ? AppColors.primaryGreen : AppColors.cardBorder,
+                width: selected ? 1.5 : 1,
               ),
             ),
-            const SizedBox(width: 8),
-            Stack(
-              clipBehavior: Clip.none,
+            child: Row(
               children: [
-                Text(
-                  '$count',
-                  style: AppTextStyles.body(
-                    size: 13,
-                    weight: FontWeight.w800,
-                    color: selected
-                        ? AppColors.primaryGreen
-                        : AppColors.textDark,
-                  ),
-                ),
-                if (hasNew)
-                  Positioned(
-                    key: const Key('newBatchDot'),
-                    top: -4,
-                    right: -6,
-                    child: Container(
-                      width: 8,
-                      height: 8,
-                      decoration: BoxDecoration(
-                        color: Colors.red,
-                        shape: BoxShape.circle,
-                        border: Border.all(color: Colors.white, width: 1),
-                      ),
+                Expanded(
+                  child: Text(
+                    label,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTextStyles.body(
+                      size: 12,
+                      weight: selected ? FontWeight.w700 : FontWeight.w600,
+                      color: selected
+                          ? AppColors.primaryGreen
+                          : AppColors.textDark,
                     ),
                   ),
+                ),
+                const SizedBox(width: 8),
+                Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Text(
+                      '$count',
+                      style: AppTextStyles.body(
+                        size: 13,
+                        weight: FontWeight.w800,
+                        color: selected
+                            ? AppColors.primaryGreen
+                            : AppColors.textDark,
+                      ),
+                    ),
+                    if (hasNew)
+                      Positioned(
+                        key: const Key('newBatchDot'),
+                        top: -4,
+                        right: -6,
+                        child: Container(
+                          width: 8,
+                          height: 8,
+                          decoration: BoxDecoration(
+                            color: Colors.red,
+                            shape: BoxShape.circle,
+                            border: Border.all(color: Colors.white, width: 1),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
               ],
             ),
-          ],
+          ),
         ),
       ),
     );

@@ -39,9 +39,9 @@ void main() {
       expect(cert('AT', null), isNull);
     });
 
-    test('no certificate for the unclassified score gaps', () {
-      expect(cert('AT', 55), isNull);
-      expect(cert('AT', 57), isNull);
+    test('AT 55–57 is B; QTM and TAT retain their existing gaps', () {
+      expect(cert('AT', 55)!.letter, 'B');
+      expect(cert('AT', 57)!.letter, 'B');
       expect(cert('QTM', 46), isNull);
       expect(cert('QTM', 47), isNull);
       expect(cert('TAT', 122), isNull);
