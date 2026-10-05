@@ -35,7 +35,7 @@ class BatchArchiveCoordinator {
   /// Compare-and-set archive: succeeds only if the batch's saved revision
   /// still equals the one passed (see BatchRepository.confirmBatchArchived).
   final Future<bool> Function(String batchId, DateTime confirmedUpdatedAt)
-      confirmArchived;
+  confirmArchived;
 
   bool _running = false;
   bool _rerun = false;
@@ -76,7 +76,7 @@ class BatchArchiveCoordinator {
   /// new revision, jobs for the change are outstanding, or the stored
   /// revision no longer matches at the moment of the write.
   Future<bool> evaluate(LocalBatch batch) async {
-    if (batch.isArchived) return false;
+    if (batch.isArchived || batch.isCompleted) return false;
     final problems = BatchLifecycle.problems(
       batchCode: batch.batchCode,
       examCode: batch.examCode,

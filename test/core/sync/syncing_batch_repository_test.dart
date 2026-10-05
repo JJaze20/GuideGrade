@@ -36,17 +36,16 @@ LocalScan _scanWithCrops(
   bool first = false,
   bool mi = false,
   bool rectified = false,
-}) =>
-    LocalScan(
-      id: id,
-      imageFileName: 'images/$id.enc',
-      rectifiedImageFileName: rectified ? 'images/${id}_rectified.enc' : null,
-      capturedAt: DateTime.utc(2026),
-      decoded: const OmrScanResult(examCode: 'AT', items: []),
-      nameCropLastFileName: last ? 'images/${id}_name_last.enc' : null,
-      nameCropFirstFileName: first ? 'images/${id}_name_first.enc' : null,
-      nameCropMiddleFileName: mi ? 'images/${id}_name_mi.enc' : null,
-    );
+}) => LocalScan(
+  id: id,
+  imageFileName: 'images/$id.enc',
+  rectifiedImageFileName: rectified ? 'images/${id}_rectified.enc' : null,
+  capturedAt: DateTime.utc(2026),
+  decoded: const OmrScanResult(examCode: 'AT', items: []),
+  nameCropLastFileName: last ? 'images/${id}_name_last.enc' : null,
+  nameCropFirstFileName: first ? 'images/${id}_name_first.enc' : null,
+  nameCropMiddleFileName: mi ? 'images/${id}_name_mi.enc' : null,
+);
 
 const _examinee = ExamineeInfo(
   firstName: 'Juan',
@@ -123,25 +122,37 @@ class _FakeLocal implements LocalBatchRepository {
   }
 
   @override
-  Future<Uint8List?> resolveScanRectifiedImage(String batchId, LocalScan scan) async {
+  Future<Uint8List?> resolveScanRectifiedImage(
+    String batchId,
+    LocalScan scan,
+  ) async {
     calls.add('resolveScanRectifiedImage:$batchId/${scan.id}');
     return null;
   }
 
   @override
-  Future<Uint8List?> resolveScanNameCropLast(String batchId, LocalScan scan) async {
+  Future<Uint8List?> resolveScanNameCropLast(
+    String batchId,
+    LocalScan scan,
+  ) async {
     calls.add('resolveScanNameCropLast:$batchId/${scan.id}');
     return null;
   }
 
   @override
-  Future<Uint8List?> resolveScanNameCropFirst(String batchId, LocalScan scan) async {
+  Future<Uint8List?> resolveScanNameCropFirst(
+    String batchId,
+    LocalScan scan,
+  ) async {
     calls.add('resolveScanNameCropFirst:$batchId/${scan.id}');
     return null;
   }
 
   @override
-  Future<Uint8List?> resolveScanNameCropMiddle(String batchId, LocalScan scan) async {
+  Future<Uint8List?> resolveScanNameCropMiddle(
+    String batchId,
+    LocalScan scan,
+  ) async {
     calls.add('resolveScanNameCropMiddle:$batchId/${scan.id}');
     return null;
   }
@@ -268,7 +279,10 @@ class _FakeLocal implements LocalBatchRepository {
   }
 
   @override
-  Future<bool> confirmBatchArchived(String batchId, DateTime confirmedUpdatedAt) async {
+  Future<bool> confirmBatchArchived(
+    String batchId,
+    DateTime confirmedUpdatedAt,
+  ) async {
     calls.add('confirmBatchArchived:$batchId');
     return true;
   }
@@ -311,9 +325,13 @@ class _FakeLocal implements LocalBatchRepository {
   }
 }
 
-/// A [SyncClient] that must never be called by the repository.
+/// Only deletion-protection reads are allowed; mutations remain queued.
 class _NeverSyncClient implements SyncClient {
   final List<String> calls = [];
+  CloudBatchesRead deletionBatches = CloudBatchesRead.found(const []);
+  CloudBatchArchivesRead deletionArchives = CloudBatchArchivesRead.found(
+    const [],
+  );
 
   Future<SyncOutcome> _rec(String method) async {
     calls.add(method);
@@ -323,18 +341,21 @@ class _NeverSyncClient implements SyncClient {
   @override
   Future<SyncOutcome> pushBatch(String batchId) => _rec('pushBatch');
   @override
-  Future<SyncOutcome> pushScan(String batchId, String scanId,
-          {Map<String, String> meta = const {}}) =>
-      _rec('pushScan');
+  Future<SyncOutcome> pushScan(
+    String batchId,
+    String scanId, {
+    Map<String, String> meta = const {},
+  }) => _rec('pushScan');
   @override
   Future<SyncOutcome> uploadImage(SyncJob job) => _rec('uploadImage');
   @override
   Future<SyncOutcome> patchImageStatus(String batchId, String scanId) =>
       _rec('patchImageStatus');
   @override
-  Future<SyncOutcome> pushAnswerKey(String examCode,
-          {Map<String, String> meta = const {}}) =>
-      _rec('pushAnswerKey');
+  Future<SyncOutcome> pushAnswerKey(
+    String examCode, {
+    Map<String, String> meta = const {},
+  }) => _rec('pushAnswerKey');
   @override
   Future<CloudAnswerKeyRead> readAnswerKey(String examCode) async {
     calls.add('readAnswerKey');
@@ -344,7 +365,7 @@ class _NeverSyncClient implements SyncClient {
   @override
   Future<CloudBatchesRead> readCloudBatches() async {
     calls.add('readCloudBatches');
-    throw StateError('SyncingBatchRepository must not call the network client');
+    return deletionBatches;
   }
 
   @override
@@ -373,11 +394,11 @@ class _NeverSyncClient implements SyncClient {
     throw StateError('SyncingBatchRepository must not call the network client');
   }
 
-
   @override
   Future<SyncOutcome> deleteBatch(String batchId) => _rec('deleteBatch');
   @override
-  Future<SyncOutcome> deleteScan(String batchId, String scanId) => _rec('deleteScan');
+  Future<SyncOutcome> deleteScan(String batchId, String scanId) =>
+      _rec('deleteScan');
   @override
   Future<SyncOutcome> deleteStoragePrefix(String batchId) =>
       _rec('deleteStoragePrefix');
@@ -412,7 +433,10 @@ class _NeverSyncClient implements SyncClient {
   }
 
   @override
-  Future<CloudExamineeWrite> setExamineeArchived(String id, bool archived) async {
+  Future<CloudExamineeWrite> setExamineeArchived(
+    String id,
+    bool archived,
+  ) async {
     calls.add('setExamineeArchived');
     throw StateError('SyncingBatchRepository must not call the network client');
   }
@@ -422,8 +446,7 @@ class _NeverSyncClient implements SyncClient {
     required String batchId,
     required String scanId,
     required String? examineeId,
-  }) =>
-      _rec('linkScanToExaminee');
+  }) => _rec('linkScanToExaminee');
 
   @override
   Future<SyncOutcome> unlinkScanFromExaminee({
@@ -438,7 +461,7 @@ class _NeverSyncClient implements SyncClient {
   @override
   Future<CloudBatchArchivesRead> readBatchArchives() async {
     calls.add('readBatchArchives');
-    throw StateError('SyncingBatchRepository must not call the network client');
+    return deletionArchives;
   }
 
   @override
@@ -524,9 +547,9 @@ void main() {
   late SyncingBatchRepository repo;
 
   SyncQueue makeQueue([Directory? root]) => SyncQueue(
-        rootOverride: root ?? Directory('${tempDir.path}/queue'),
-        clock: () => DateTime.utc(2026),
-      );
+    rootOverride: root ?? Directory('${tempDir.path}/queue'),
+    clock: () => DateTime.utc(2026),
+  );
 
   void rebuild(SyncQueue q) {
     queue = q;
@@ -552,7 +575,8 @@ void main() {
   }
 
   /// A brief settle so a would-be *second* wake / extra enqueue would show.
-  Future<void> settle() => Future<void>.delayed(const Duration(milliseconds: 60));
+  Future<void> settle() =>
+      Future<void>.delayed(const Duration(milliseconds: 60));
 
   Future<void> waitUntil(bool Function() cond) async {
     for (var i = 0; i < 400 && !cond(); i++) {
@@ -561,27 +585,36 @@ void main() {
   }
 
   SyncJob? pushScanJobFor(String batchId, String scanId) {
-    final matches = queue.jobs.where((j) =>
-        j.type == SyncJobType.pushScan &&
-        j.batchId == batchId &&
-        j.scanId == scanId);
+    final matches = queue.jobs.where(
+      (j) =>
+          j.type == SyncJobType.pushScan &&
+          j.batchId == batchId &&
+          j.scanId == scanId,
+    );
     return matches.isEmpty ? null : matches.first;
   }
 
   List<SyncJob> pushScanJobsFor(String batchId, String scanId) => queue.jobs
-      .where((j) =>
-          j.type == SyncJobType.pushScan &&
-          j.batchId == batchId &&
-          j.scanId == scanId)
+      .where(
+        (j) =>
+            j.type == SyncJobType.pushScan &&
+            j.batchId == batchId &&
+            j.scanId == scanId,
+      )
       .toList();
 
   List<String> jobLabels() => queue.jobs.map((j) {
-        final v = j.meta['variant'];
-        return v == null ? j.type.name : '${j.type.name}:$v';
-      }).toList();
+    final v = j.meta['variant'];
+    return v == null ? j.type.name : '${j.type.name}:$v';
+  }).toList();
 
   void expectNoNetworkOrDrain() {
-    expect(neverClient.calls, isEmpty);
+    expect(
+      neverClient.calls.where(
+        (call) => call != 'readCloudBatches' && call != 'readBatchArchives',
+      ),
+      isEmpty,
+    );
     expect(spyManager.processQueueCalls, 0);
     expect(spyManager.startCalls, 0);
     expect(spyManager.syncNowCalls, 0);
@@ -598,28 +631,32 @@ void main() {
     spyManager.dispose();
     try {
       if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
-    } catch (_) {/* Windows may briefly hold a handle */}
+    } catch (_) {
+      /* Windows may briefly hold a handle */
+    }
   });
 
-  test('1. read methods delegate to local and cause no queue/network work',
-      () async {
-    final scan = _scan('s1');
-    await repo.getBatches();
-    await repo.getBatchById('b1');
-    await repo.getBatchesByExamCode('AT');
-    await repo.resolveScanImage('b1', scan);
-    await repo.resolveScanRectifiedImage('b1', scan);
+  test(
+    '1. read methods delegate to local and cause no queue/network work',
+    () async {
+      final scan = _scan('s1');
+      await repo.getBatches();
+      await repo.getBatchById('b1');
+      await repo.getBatchesByExamCode('AT');
+      await repo.resolveScanImage('b1', scan);
+      await repo.resolveScanRectifiedImage('b1', scan);
 
-    expect(fakeLocal.calls, [
-      'getBatches',
-      'getBatchById:b1',
-      'getBatchesByExamCode:AT',
-      'resolveScanImage:b1/s1',
-      'resolveScanRectifiedImage:b1/s1',
-    ]);
-    expect(queue.jobs, isEmpty);
-    expectNoNetworkOrDrain();
-  });
+      expect(fakeLocal.calls, [
+        'getBatches',
+        'getBatchById:b1',
+        'getBatchesByExamCode:AT',
+        'resolveScanImage:b1/s1',
+        'resolveScanRectifiedImage:b1/s1',
+      ]);
+      expect(queue.jobs, isEmpty);
+      expectNoNetworkOrDrain();
+    },
+  );
 
   test('2. createBatch local success enqueues exactly PUSH_BATCH', () async {
     final batch = await repo.createBatch(
@@ -691,50 +728,66 @@ void main() {
     expectNoNetworkOrDrain();
   });
 
-  test('5b. addScan without a rectified image omits the rectified upload',
-      () async {
-    fakeLocal.batchResult = _batch(scans: [_scan('s1', rectified: false)]);
+  test(
+    '5b. addScan without a rectified image omits the rectified upload',
+    () async {
+      fakeLocal.batchResult = _batch(scans: [_scan('s1', rectified: false)]);
 
-    await repo.addScan(
-      batchId: 'b1',
-      decoded: _decoded,
-      sourceImage: File('src.jpg'),
-    );
-    await waitForJobs(4);
+      await repo.addScan(
+        batchId: 'b1',
+        decoded: _decoded,
+        sourceImage: File('src.jpg'),
+      );
+      await waitForJobs(4);
 
-    expect(jobLabels(), [
+      expect(jobLabels(), [
+        'pushBatch',
+        'pushScan',
+        'uploadImage:original',
+        'patchImageStatus',
+      ]);
+      expectNoNetworkOrDrain();
+    },
+  );
+
+  group('name-crop upload jobs', () {
+    const core = [
       'pushBatch',
       'pushScan',
       'uploadImage:original',
       'patchImageStatus',
-    ]);
-    expectNoNetworkOrDrain();
-  });
-
-  group('name-crop upload jobs', () {
-    const core = ['pushBatch', 'pushScan', 'uploadImage:original', 'patchImageStatus'];
+    ];
 
     Future<void> add(LocalScan scan) async {
       fakeLocal.batchResult = _batch(scans: [scan]);
-      await repo.addScan(batchId: 'b1', decoded: _decoded, sourceImage: File('src.jpg'));
+      await repo.addScan(
+        batchId: 'b1',
+        decoded: _decoded,
+        sourceImage: File('src.jpg'),
+      );
     }
 
-    test('addScan with all three crops queues three separate jobs, after the core jobs', () async {
-      await add(_scanWithCrops('s1', last: true, first: true, mi: true));
-      await waitForJobs(7);
+    test(
+      'addScan with all three crops queues three separate jobs, after the core jobs',
+      () async {
+        await add(_scanWithCrops('s1', last: true, first: true, mi: true));
+        await waitForJobs(7);
 
-      expect(jobLabels(), [
-        ...core,
-        'uploadImage:name_last',
-        'uploadImage:name_first',
-        'uploadImage:name_mi',
-      ]);
-      for (final j in queue.jobs.where((j) => '${j.meta['variant']}'.startsWith('name_'))) {
-        expect(j.batchId, 'b1');
-        expect(j.scanId, 's1');
-      }
-      expectNoNetworkOrDrain();
-    });
+        expect(jobLabels(), [
+          ...core,
+          'uploadImage:name_last',
+          'uploadImage:name_first',
+          'uploadImage:name_mi',
+        ]);
+        for (final j in queue.jobs.where(
+          (j) => '${j.meta['variant']}'.startsWith('name_'),
+        )) {
+          expect(j.batchId, 'b1');
+          expect(j.scanId, 's1');
+        }
+        expectNoNetworkOrDrain();
+      },
+    );
 
     test('crop jobs come after the rectified job too', () async {
       await add(_scanWithCrops('s1', last: true, rectified: true));
@@ -768,72 +821,98 @@ void main() {
       expect(jobLabels(), [...core, 'uploadImage:name_mi']);
     });
 
-    test('any missing crop is skipped while the others are still queued', () async {
-      await add(_scanWithCrops('s1', first: true, mi: true)); // no last
-      await waitForJobs(6);
-      expect(jobLabels(), [...core, 'uploadImage:name_first', 'uploadImage:name_mi']);
-    });
+    test(
+      'any missing crop is skipped while the others are still queued',
+      () async {
+        await add(_scanWithCrops('s1', first: true, mi: true)); // no last
+        await waitForJobs(6);
+        expect(jobLabels(), [
+          ...core,
+          'uploadImage:name_first',
+          'uploadImage:name_mi',
+        ]);
+      },
+    );
 
-    test('a scan with no crops keeps exactly its previous job sequence', () async {
-      await add(_scanWithCrops('s1'));
-      await waitForJobs(4);
-      expect(jobLabels(), core);
-    });
+    test(
+      'a scan with no crops keeps exactly its previous job sequence',
+      () async {
+        await add(_scanWithCrops('s1'));
+        await waitForJobs(4);
+        expect(jobLabels(), core);
+      },
+    );
 
-    test('rescan with all crops queues the crop uploads after the existing five jobs', () async {
-      fakeLocal.batchResult = _batch(scans: [_scanWithCrops('s1', last: true, first: true, mi: true)]);
-      await repo.replaceScan(
-        batchId: 'b1',
-        scanId: 's1',
-        decoded: _decoded,
-        sourceImage: File('src.jpg'),
-      );
-      await waitForJobs(8);
+    test(
+      'rescan with all crops queues the crop uploads after the existing five jobs',
+      () async {
+        fakeLocal.batchResult = _batch(
+          scans: [_scanWithCrops('s1', last: true, first: true, mi: true)],
+        );
+        await repo.replaceScan(
+          batchId: 'b1',
+          scanId: 's1',
+          decoded: _decoded,
+          sourceImage: File('src.jpg'),
+        );
+        await waitForJobs(8);
 
-      expect(jobLabels(), [
-        'pushScan',
-        'uploadImage:original',
-        'uploadImage:rectified',
-        'patchImageStatus',
-        'pushBatch',
-        'uploadImage:name_last',
-        'uploadImage:name_first',
-        'uploadImage:name_mi',
-      ]);
-    });
+        expect(jobLabels(), [
+          'pushScan',
+          'uploadImage:original',
+          'uploadImage:rectified',
+          'patchImageStatus',
+          'pushBatch',
+          'uploadImage:name_last',
+          'uploadImage:name_first',
+          'uploadImage:name_mi',
+        ]);
+      },
+    );
 
-    test('rescan without a particular crop queues no job for it (and never a delete)', () async {
-      fakeLocal.batchResult = _batch(scans: [_scanWithCrops('s1', last: true, mi: true)]);
-      await repo.replaceScan(
-        batchId: 'b1',
-        scanId: 's1',
-        decoded: _decoded,
-        sourceImage: File('src.jpg'),
-      );
-      await waitForJobs(7);
+    test(
+      'rescan without a particular crop queues no job for it (and never a delete)',
+      () async {
+        fakeLocal.batchResult = _batch(
+          scans: [_scanWithCrops('s1', last: true, mi: true)],
+        );
+        await repo.replaceScan(
+          batchId: 'b1',
+          scanId: 's1',
+          decoded: _decoded,
+          sourceImage: File('src.jpg'),
+        );
+        await waitForJobs(7);
 
-      final labels = jobLabels();
-      expect(labels.where((l) => l.contains('name_')), ['uploadImage:name_last', 'uploadImage:name_mi']);
-      expect(labels.any((l) => l.startsWith('delete')), isFalse);
-    });
+        final labels = jobLabels();
+        expect(labels.where((l) => l.contains('name_')), [
+          'uploadImage:name_last',
+          'uploadImage:name_mi',
+        ]);
+        expect(labels.any((l) => l.startsWith('delete')), isFalse);
+      },
+    );
 
-    test('rescan that produced no crops keeps the previous five-job sequence', () async {
-      fakeLocal.batchResult = _batch(scans: [_scanWithCrops('s1')]);
-      await repo.replaceScan(
-        batchId: 'b1',
-        scanId: 's1',
-        decoded: _decoded,
-        sourceImage: File('src.jpg'),
-      );
-      await waitForJobs(5);
-      expect(jobLabels(), [
-        'pushScan',
-        'uploadImage:original',
-        'uploadImage:rectified',
-        'patchImageStatus',
-        'pushBatch',
-      ]);
-    });
+    test(
+      'rescan that produced no crops keeps the previous five-job sequence',
+      () async {
+        fakeLocal.batchResult = _batch(scans: [_scanWithCrops('s1')]);
+        await repo.replaceScan(
+          batchId: 'b1',
+          scanId: 's1',
+          decoded: _decoded,
+          sourceImage: File('src.jpg'),
+        );
+        await waitForJobs(5);
+        expect(jobLabels(), [
+          'pushScan',
+          'uploadImage:original',
+          'uploadImage:rectified',
+          'patchImageStatus',
+          'pushBatch',
+        ]);
+      },
+    );
   });
 
   test('6. addScan local failure (scan-limit) enqueues nothing', () async {
@@ -874,10 +953,14 @@ void main() {
   });
 
   test('replaceScan local failure enqueues no cloud work', () async {
-    fakeLocal.failWith['replaceScan'] = const FileSystemException('replacement write failed');
+    fakeLocal.failWith['replaceScan'] = const FileSystemException(
+      'replacement write failed',
+    );
     await expectLater(
       repo.replaceScan(
-        batchId: 'b1', scanId: 's1', decoded: _decoded,
+        batchId: 'b1',
+        scanId: 's1',
+        decoded: _decoded,
         sourceImage: File('src.jpg'),
       ),
       throwsA(isA<FileSystemException>()),
@@ -912,18 +995,20 @@ void main() {
     expectNoNetworkOrDrain();
   });
 
-  test('9b. a real answer correction enqueues PUSH_SCAN then PUSH_BATCH',
-      () async {
-    await repo.updateScanCorrections(
-      batchId: 'b1',
-      scanId: 's1',
-      corrections: const [],
-    );
-    await waitForJobs(2);
+  test(
+    '9b. a real answer correction enqueues PUSH_SCAN then PUSH_BATCH',
+    () async {
+      await repo.updateScanCorrections(
+        batchId: 'b1',
+        scanId: 's1',
+        corrections: const [],
+      );
+      await waitForJobs(2);
 
-    expect(jobLabels(), ['pushScan', 'pushBatch']);
-    expectNoNetworkOrDrain();
-  });
+      expect(jobLabels(), ['pushScan', 'pushBatch']);
+      expectNoNetworkOrDrain();
+    },
+  );
 
   test('9c. a repeated correction (no change) enqueues nothing', () async {
     fakeLocal.correctionsChangeBatch = false;
@@ -937,24 +1022,82 @@ void main() {
     expect(fakeLocal.calls, contains('updateScanCorrections:b1/s1'));
   });
 
-  test('9d. confirming an archive is a pure delegation and never queues a job',
-      () async {
-    final ok = await repo.confirmBatchArchived('b1', DateTime.utc(2026));
+  test(
+    '9d. confirming an archive is a pure delegation and never queues a job',
+    () async {
+      final ok = await repo.confirmBatchArchived('b1', DateTime.utc(2026));
 
-    expect(ok, isTrue);
-    expect(queue.jobs, isEmpty);
-    expect(fakeLocal.calls, contains('confirmBatchArchived:b1'));
+      expect(ok, isTrue);
+      expect(queue.jobs, isEmpty);
+      expect(fakeLocal.calls, contains('confirmBatchArchived:b1'));
+    },
+  );
+
+  test(
+    'protected Web archive blocks deletion before files or queue change',
+    () async {
+      neverClient.deletionArchives = CloudBatchArchivesRead.found([
+        CloudBatchArchiveRow(
+          batchId: 'b1',
+          archivedAt: DateTime.utc(2026),
+          archivedByUid: 'u',
+        ),
+      ]);
+      await queue.enqueue(
+        SyncJob.create(
+          type: SyncJobType.pushBatch,
+          entityId: 'b1',
+          batchId: 'b1',
+        ),
+      );
+      await expectLater(repo.deleteBatch('b1'), throwsStateError);
+      expect(
+        fakeLocal.calls.where((call) => call.startsWith('deleteBatch:')),
+        isEmpty,
+      );
+      expect(jobLabels(), ['pushBatch']);
+      await expectLater(
+        repo.deleteScan(batchId: 'b1', scanId: 's1', reason: 'test'),
+        throwsStateError,
+      );
+      expect(
+        fakeLocal.calls.where((call) => call.startsWith('deleteScan:')),
+        isEmpty,
+      );
+      expect(jobLabels(), ['pushBatch']);
+    },
+  );
+
+  test('offline verification preserves batch and pending jobs', () async {
+    neverClient.deletionBatches = const CloudBatchesRead.failed(
+      SyncOutcome.transient('offline'),
+    );
+    await queue.enqueue(
+      SyncJob.create(
+        type: SyncJobType.pushBatch,
+        entityId: 'b1',
+        batchId: 'b1',
+      ),
+    );
+    await expectLater(repo.deleteBatch('b1'), throwsStateError);
+    expect(
+      fakeLocal.calls.where((call) => call.startsWith('deleteBatch:')),
+      isEmpty,
+    );
+    expect(jobLabels(), ['pushBatch']);
   });
 
   test('10. deleteBatch cancels pending content pushes before the local '
       'delete runs', () async {
     // Seed a pending content push for b1.
-    await queue.enqueue(SyncJob.create(
-      type: SyncJobType.pushScan,
-      entityId: 's1',
-      batchId: 'b1',
-      scanId: 's1',
-    ));
+    await queue.enqueue(
+      SyncJob.create(
+        type: SyncJobType.pushScan,
+        entityId: 's1',
+        batchId: 'b1',
+        scanId: 's1',
+      ),
+    );
     expect(
       queue.jobs.where((j) => j.batchId == 'b1' && j.isBatchContentPush),
       hasLength(1),
@@ -985,25 +1128,31 @@ void main() {
 
   test('11b. deleteScan success cancels that scan\'s pending pushes and '
       'enqueues DELETE_SCAN then PUSH_BATCH', () async {
-    await queue.enqueue(SyncJob.create(
-      type: SyncJobType.pushScan,
-      entityId: 's1',
-      batchId: 'b1',
-      scanId: 's1',
-    ));
-    await queue.enqueue(SyncJob.create(
-      type: SyncJobType.uploadImage,
-      entityId: 's1',
-      batchId: 'b1',
-      scanId: 's1',
-      meta: const {'variant': 'original'},
-    ));
-    await queue.enqueue(SyncJob.create(
-      type: SyncJobType.pushScan,
-      entityId: 's2',
-      batchId: 'b1',
-      scanId: 's2',
-    ));
+    await queue.enqueue(
+      SyncJob.create(
+        type: SyncJobType.pushScan,
+        entityId: 's1',
+        batchId: 'b1',
+        scanId: 's1',
+      ),
+    );
+    await queue.enqueue(
+      SyncJob.create(
+        type: SyncJobType.uploadImage,
+        entityId: 's1',
+        batchId: 'b1',
+        scanId: 's1',
+        meta: const {'variant': 'original'},
+      ),
+    );
+    await queue.enqueue(
+      SyncJob.create(
+        type: SyncJobType.pushScan,
+        entityId: 's2',
+        batchId: 'b1',
+        scanId: 's2',
+      ),
+    );
 
     await repo.deleteScan(
       batchId: 'b1',
@@ -1014,7 +1163,9 @@ void main() {
     await waitForJobs(3);
 
     expect(jobLabels(), ['pushScan', 'deleteScan', 'pushBatch']);
-    final survivor = queue.jobs.firstWhere((j) => j.type == SyncJobType.pushScan);
+    final survivor = queue.jobs.firstWhere(
+      (j) => j.type == SyncJobType.pushScan,
+    );
     expect(survivor.scanId, 's2'); // an unrelated scan's push is untouched
     expect(
       queue.jobs.firstWhere((j) => j.type == SyncJobType.deleteScan).scanId,
@@ -1051,25 +1202,29 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 20));
 
     expect(
-      queue.jobs.where((j) =>
-          j.type == SyncJobType.deleteBatch ||
-          j.type == SyncJobType.deleteStoragePrefix),
+      queue.jobs.where(
+        (j) =>
+            j.type == SyncJobType.deleteBatch ||
+            j.type == SyncJobType.deleteStoragePrefix,
+      ),
       isEmpty,
     );
     expectNoNetworkOrDrain();
   });
 
-  test('13. an enqueue failure does not fail the successful local mutation',
-      () async {
-    rebuild(_ThrowingQueue(Directory('${tempDir.path}/throwing')));
+  test(
+    '13. an enqueue failure does not fail the successful local mutation',
+    () async {
+      rebuild(_ThrowingQueue(Directory('${tempDir.path}/throwing')));
 
-    final batch = await repo.updateBatch(_batch(id: 'b1'));
-    await Future<void>.delayed(const Duration(milliseconds: 20));
+      final batch = await repo.updateBatch(_batch(id: 'b1'));
+      await Future<void>.delayed(const Duration(milliseconds: 20));
 
-    expect(batch.id, 'b1'); // local result still returned, no throw
-    expect(fakeLocal.calls, contains('updateBatch:b1'));
-    expectNoNetworkOrDrain();
-  });
+      expect(batch.id, 'b1'); // local result still returned, no throw
+      expect(fakeLocal.calls, contains('updateBatch:b1'));
+      expectNoNetworkOrDrain();
+    },
+  );
 
   test('14. read methods never trigger the queue or a drain', () async {
     await repo.getBatches();
@@ -1083,7 +1238,7 @@ void main() {
     expectNoNetworkOrDrain();
   });
 
-  test('15. no mutation causes the repository to call the network client or '
+  test('15. mutations only allow deletion-protection reads and never call '
       'a drain method', () async {
     fakeLocal.batchResult = _batch(scans: [_scan('s1', rectified: true)]);
 
@@ -1098,9 +1253,16 @@ void main() {
     );
     await repo.updateBatch(_batch(id: 'b1'));
     await repo.addScan(
-        batchId: 'b1', decoded: _decoded, sourceImage: File('s.jpg'));
+      batchId: 'b1',
+      decoded: _decoded,
+      sourceImage: File('s.jpg'),
+    );
     await repo.replaceScan(
-        batchId: 'b1', scanId: 's1', decoded: _decoded, sourceImage: File('s.jpg'));
+      batchId: 'b1',
+      scanId: 's1',
+      decoded: _decoded,
+      sourceImage: File('s.jpg'),
+    );
     await repo.attachResult(batchId: 'b1', scanId: 's1', result: _result);
     await repo.setScanExaminee(batchId: 'b1', scanId: 's1');
     await repo.deleteBatch('b1');
@@ -1113,209 +1275,259 @@ void main() {
 
   // --- wake() wiring (Phase 9B-7C) --------------------------------------
 
-  test('16. successful createBatch wakes the sync manager exactly once',
-      () async {
-    await repo.createBatch(
-      batchCode: 'B-1',
-      examCode: 'AT',
-      examTitle: 'Aptitude',
-      description: '',
-      expectedCount: 10,
-      createdByUid: 'uid',
-      createdByName: 'Officer',
-    );
-    await waitForWake();
-    await settle();
+  test(
+    '16. successful createBatch wakes the sync manager exactly once',
+    () async {
+      await repo.createBatch(
+        batchCode: 'B-1',
+        examCode: 'AT',
+        examTitle: 'Aptitude',
+        description: '',
+        expectedCount: 10,
+        createdByUid: 'uid',
+        createdByName: 'Officer',
+      );
+      await waitForWake();
+      await settle();
 
-    expect(jobLabels(), ['pushBatch']);
-    expect(spyManager.wakeCalls, 1);
-    expectNoNetworkOrDrain();
-  });
+      expect(jobLabels(), ['pushBatch']);
+      expect(spyManager.wakeCalls, 1);
+      expectNoNetworkOrDrain();
+    },
+  );
 
-  test('17. successful updateBatch wakes the sync manager exactly once',
-      () async {
-    await repo.updateBatch(_batch(id: 'b1'));
-    await waitForWake();
-    await settle();
+  test(
+    '17. successful updateBatch wakes the sync manager exactly once',
+    () async {
+      await repo.updateBatch(_batch(id: 'b1'));
+      await waitForWake();
+      await settle();
 
-    expect(jobLabels(), ['pushBatch']);
-    expect(spyManager.wakeCalls, 1);
-    expectNoNetworkOrDrain();
-  });
+      expect(jobLabels(), ['pushBatch']);
+      expect(spyManager.wakeCalls, 1);
+      expectNoNetworkOrDrain();
+    },
+  );
 
-  test('18. successful addScan wakes exactly once after all 5 jobs enqueue',
-      () async {
-    fakeLocal.batchResult = _batch(scans: [_scan('s1', rectified: true)]);
+  test(
+    '18. successful addScan wakes exactly once after all 5 jobs enqueue',
+    () async {
+      fakeLocal.batchResult = _batch(scans: [_scan('s1', rectified: true)]);
 
-    await repo.addScan(
-        batchId: 'b1', decoded: _decoded, sourceImage: File('src.jpg'));
-    await waitForJobs(5);
-    await waitForWake();
-    await settle();
+      await repo.addScan(
+        batchId: 'b1',
+        decoded: _decoded,
+        sourceImage: File('src.jpg'),
+      );
+      await waitForJobs(5);
+      await waitForWake();
+      await settle();
 
-    expect(jobLabels(), [
-      'pushBatch',
-      'pushScan',
-      'uploadImage:original',
-      'uploadImage:rectified',
-      'patchImageStatus',
-    ]);
-    expect(spyManager.wakeCalls, 1); // one wake for the whole mutation
-    expectNoNetworkOrDrain();
-  });
+      expect(jobLabels(), [
+        'pushBatch',
+        'pushScan',
+        'uploadImage:original',
+        'uploadImage:rectified',
+        'patchImageStatus',
+      ]);
+      expect(spyManager.wakeCalls, 1); // one wake for the whole mutation
+      expectNoNetworkOrDrain();
+    },
+  );
 
-  test('19. successful replaceScan wakes the sync manager exactly once',
-      () async {
-    await repo.replaceScan(
-      batchId: 'b1',
-      scanId: 's1',
-      decoded: _decoded,
-      sourceImage: File('src.jpg'),
-    );
-    await waitForJobs(5);
-    await waitForWake();
-    await settle();
-
-    expect(jobLabels(), [
-      'pushScan',
-      'uploadImage:original',
-      'uploadImage:rectified',
-      'patchImageStatus',
-      'pushBatch',
-    ]);
-    expect(spyManager.wakeCalls, 1);
-    expectNoNetworkOrDrain();
-  });
-
-  test('20. successful attachResult wakes the sync manager exactly once',
-      () async {
-    await repo.attachResult(batchId: 'b1', scanId: 's1', result: _result);
-    await waitForJobs(2);
-    await waitForWake();
-    await settle();
-
-    expect(jobLabels(), ['pushScan', 'pushBatch']);
-    expect(spyManager.wakeCalls, 1);
-    expectNoNetworkOrDrain();
-  });
-
-  test('21. successful setScanExaminee wakes the sync manager exactly once',
-      () async {
-    await repo.setScanExaminee(batchId: 'b1', scanId: 's1');
-    await waitForJobs(2);
-    await waitForWake();
-    await settle();
-
-    expect(jobLabels(), ['pushScan', 'pushBatch']);
-    expect(spyManager.wakeCalls, 1);
-    expectNoNetworkOrDrain();
-  });
-
-  test('22. successful deleteBatch wakes once after the deletion jobs queue',
-      () async {
-    await repo.deleteBatch('b1');
-    await waitForJobs(2);
-    await waitForWake();
-    await settle();
-
-    expect(jobLabels(), ['deleteBatch', 'deleteStoragePrefix']);
-    expect(spyManager.wakeCalls, 1);
-    expectNoNetworkOrDrain();
-  });
-
-  test('23. a failed local mutation enqueues nothing and never wakes',
-      () async {
-    fakeLocal.failWith['addScan'] = BatchScanLimitExceededException(5);
-
-    await expectLater(
-      repo.addScan(
-          batchId: 'b1', decoded: _decoded, sourceImage: File('src.jpg')),
-      throwsA(isA<BatchScanLimitExceededException>()),
-    );
-    await settle();
-
-    expect(queue.jobs, isEmpty);
-    expect(spyManager.wakeCalls, 0);
-    expectNoNetworkOrDrain();
-  });
-
-  test('24. a total enqueue failure keeps local success and does not wake',
-      () async {
-    rebuild(_ThrowingQueue(Directory('${tempDir.path}/throwing')));
-
-    final batch = await repo.updateBatch(_batch(id: 'b1'));
-    await settle();
-
-    expect(batch.id, 'b1'); // local result still returned, no throw
-    expect(fakeLocal.calls, contains('updateBatch:b1'));
-    expect(spyManager.wakeCalls, 0); // no job landed -> no wake
-    expectNoNetworkOrDrain();
-  });
-
-  test('25. the mutation returns without awaiting wake() (fire-and-forget)',
-      () async {
-    spyManager.wakeGate = Completer<void>();
-
-    final batch = await repo
-        .updateBatch(_batch(id: 'b1'))
-        .timeout(const Duration(seconds: 2)); // would hang if wake were awaited
-
-    expect(batch.id, 'b1');
-    await waitForWake(); // wake was invoked...
-    expect(spyManager.wakeCalls, 1);
-    expect(spyManager.wakeGate!.isCompleted, isFalse); // ...and is still blocked
-
-    spyManager.wakeGate!.complete(); // let the fire-and-forget finish
-    await settle();
-  });
-
-  test('26. no mutation calls start / processQueue / syncNow — only wake',
-      () async {
-    fakeLocal.batchResult = _batch(scans: [_scan('s1', rectified: true)]);
-
-    await repo.createBatch(
-      batchCode: 'B-1',
-      examCode: 'AT',
-      examTitle: 'Aptitude',
-      description: '',
-      expectedCount: 10,
-      createdByUid: 'uid',
-      createdByName: 'Officer',
-    );
-    await repo.updateBatch(_batch(id: 'b1'));
-    await repo.addScan(
-        batchId: 'b1', decoded: _decoded, sourceImage: File('s.jpg'));
-    await repo.replaceScan(
+  test(
+    '19. successful replaceScan wakes the sync manager exactly once',
+    () async {
+      await repo.replaceScan(
         batchId: 'b1',
         scanId: 's1',
         decoded: _decoded,
-        sourceImage: File('s.jpg'));
-    await repo.attachResult(batchId: 'b1', scanId: 's1', result: _result);
-    await repo.setScanExaminee(batchId: 'b1', scanId: 's1');
-    await repo.deleteBatch('b1');
-    await waitForWake();
-    await settle();
+        sourceImage: File('src.jpg'),
+      );
+      await waitForJobs(5);
+      await waitForWake();
+      await settle();
 
-    expect(spyManager.startCalls, 0);
-    expect(spyManager.processQueueCalls, 0);
-    expect(spyManager.syncNowCalls, 0);
-    expect(neverClient.calls, isEmpty);
-    expect(spyManager.wakeCalls, greaterThan(0)); // wake IS the mechanism used
-  });
+      expect(jobLabels(), [
+        'pushScan',
+        'uploadImage:original',
+        'uploadImage:rectified',
+        'patchImageStatus',
+        'pushBatch',
+      ]);
+      expect(spyManager.wakeCalls, 1);
+      expectNoNetworkOrDrain();
+    },
+  );
+
+  test(
+    '20. successful attachResult wakes the sync manager exactly once',
+    () async {
+      await repo.attachResult(batchId: 'b1', scanId: 's1', result: _result);
+      await waitForJobs(2);
+      await waitForWake();
+      await settle();
+
+      expect(jobLabels(), ['pushScan', 'pushBatch']);
+      expect(spyManager.wakeCalls, 1);
+      expectNoNetworkOrDrain();
+    },
+  );
+
+  test(
+    '21. successful setScanExaminee wakes the sync manager exactly once',
+    () async {
+      await repo.setScanExaminee(batchId: 'b1', scanId: 's1');
+      await waitForJobs(2);
+      await waitForWake();
+      await settle();
+
+      expect(jobLabels(), ['pushScan', 'pushBatch']);
+      expect(spyManager.wakeCalls, 1);
+      expectNoNetworkOrDrain();
+    },
+  );
+
+  test(
+    '22. successful deleteBatch wakes once after the deletion jobs queue',
+    () async {
+      await repo.deleteBatch('b1');
+      await waitForJobs(2);
+      await waitForWake();
+      await settle();
+
+      expect(jobLabels(), ['deleteBatch', 'deleteStoragePrefix']);
+      expect(spyManager.wakeCalls, 1);
+      expectNoNetworkOrDrain();
+    },
+  );
+
+  test(
+    '23. a failed local mutation enqueues nothing and never wakes',
+    () async {
+      fakeLocal.failWith['addScan'] = BatchScanLimitExceededException(5);
+
+      await expectLater(
+        repo.addScan(
+          batchId: 'b1',
+          decoded: _decoded,
+          sourceImage: File('src.jpg'),
+        ),
+        throwsA(isA<BatchScanLimitExceededException>()),
+      );
+      await settle();
+
+      expect(queue.jobs, isEmpty);
+      expect(spyManager.wakeCalls, 0);
+      expectNoNetworkOrDrain();
+    },
+  );
+
+  test(
+    '24. a total enqueue failure keeps local success and does not wake',
+    () async {
+      rebuild(_ThrowingQueue(Directory('${tempDir.path}/throwing')));
+
+      final batch = await repo.updateBatch(_batch(id: 'b1'));
+      await settle();
+
+      expect(batch.id, 'b1'); // local result still returned, no throw
+      expect(fakeLocal.calls, contains('updateBatch:b1'));
+      expect(spyManager.wakeCalls, 0); // no job landed -> no wake
+      expectNoNetworkOrDrain();
+    },
+  );
+
+  test(
+    '25. the mutation returns without awaiting wake() (fire-and-forget)',
+    () async {
+      spyManager.wakeGate = Completer<void>();
+
+      final batch = await repo
+          .updateBatch(_batch(id: 'b1'))
+          .timeout(
+            const Duration(seconds: 2),
+          ); // would hang if wake were awaited
+
+      expect(batch.id, 'b1');
+      await waitForWake(); // wake was invoked...
+      expect(spyManager.wakeCalls, 1);
+      expect(
+        spyManager.wakeGate!.isCompleted,
+        isFalse,
+      ); // ...and is still blocked
+
+      spyManager.wakeGate!.complete(); // let the fire-and-forget finish
+      await settle();
+    },
+  );
+
+  test(
+    '26. no mutation calls start / processQueue / syncNow — only wake',
+    () async {
+      fakeLocal.batchResult = _batch(scans: [_scan('s1', rectified: true)]);
+
+      await repo.createBatch(
+        batchCode: 'B-1',
+        examCode: 'AT',
+        examTitle: 'Aptitude',
+        description: '',
+        expectedCount: 10,
+        createdByUid: 'uid',
+        createdByName: 'Officer',
+      );
+      await repo.updateBatch(_batch(id: 'b1'));
+      await repo.addScan(
+        batchId: 'b1',
+        decoded: _decoded,
+        sourceImage: File('s.jpg'),
+      );
+      await repo.replaceScan(
+        batchId: 'b1',
+        scanId: 's1',
+        decoded: _decoded,
+        sourceImage: File('s.jpg'),
+      );
+      await repo.attachResult(batchId: 'b1', scanId: 's1', result: _result);
+      await repo.setScanExaminee(batchId: 'b1', scanId: 's1');
+      await repo.deleteBatch('b1');
+      await waitForWake();
+      await settle();
+
+      expect(spyManager.startCalls, 0);
+      expect(spyManager.processQueueCalls, 0);
+      expect(spyManager.syncNowCalls, 0);
+      expect(
+        neverClient.calls.where(
+          (call) => call != 'readCloudBatches' && call != 'readBatchArchives',
+        ),
+        isEmpty,
+      );
+      expect(
+        spyManager.wakeCalls,
+        greaterThan(0),
+      ); // wake IS the mechanism used
+    },
+  );
 
   test('27. addScan is local-first: returns the local result with no network '
       'call and without awaiting wake()', () async {
-    spyManager.wakeGate = Completer<void>(); // wake blocks if the repo awaits it
+    spyManager.wakeGate =
+        Completer<void>(); // wake blocks if the repo awaits it
     fakeLocal.batchResult = _batch(scans: [_scan('s1')]);
 
     final batch = await repo
-        .addScan(
-            batchId: 'b1', decoded: _decoded, sourceImage: File('src.jpg'))
+        .addScan(batchId: 'b1', decoded: _decoded, sourceImage: File('src.jpg'))
         .timeout(const Duration(seconds: 2));
 
     expect(batch.id, 'b1'); // local result, returned promptly
     expect(fakeLocal.calls, contains('addScan:b1'));
-    expect(neverClient.calls, isEmpty); // no Supabase from the scanner path
+    expect(
+      neverClient.calls.where(
+        (call) => call != 'readCloudBatches' && call != 'readBatchArchives',
+      ),
+      isEmpty,
+    ); // no Supabase from the scanner path
     await waitForWake();
     expect(spyManager.wakeGate!.isCompleted, isFalse); // fired, not awaited
 
@@ -1325,34 +1537,43 @@ void main() {
 
   // --- examinee tag-audit metadata (Phase 9B-7E) ------------------------
 
-  test('28. setScanExaminee (tag) enqueues PUSH_SCAN with examinee_tag meta',
-      () async {
-    fakeLocal.batchResult = _batch(scans: [_scan('s1', examinee: _examinee)]);
+  test(
+    '28. setScanExaminee (tag) enqueues PUSH_SCAN with examinee_tag meta',
+    () async {
+      fakeLocal.batchResult = _batch(scans: [_scan('s1', examinee: _examinee)]);
 
-    await repo.setScanExaminee(
-        batchId: 'b1', scanId: 's1', examinee: _examinee);
-    await waitForJobs(2);
-    await waitForWake();
-    await settle();
+      await repo.setScanExaminee(
+        batchId: 'b1',
+        scanId: 's1',
+        examinee: _examinee,
+      );
+      await waitForJobs(2);
+      await waitForWake();
+      await settle();
 
-    final job = pushScanJobFor('b1', 's1')!;
-    expect(job.meta['operation'], 'examinee_tag');
-    expect(DateTime.tryParse(job.meta['opAt'] ?? '')?.isUtc, isTrue);
-    expect(jobLabels(), ['pushScan', 'pushBatch']); // order unchanged
-    expect(spyManager.wakeCalls, 1);
-    expectNoNetworkOrDrain();
-  });
+      final job = pushScanJobFor('b1', 's1')!;
+      expect(job.meta['operation'], 'examinee_tag');
+      expect(DateTime.tryParse(job.meta['opAt'] ?? '')?.isUtc, isTrue);
+      expect(jobLabels(), ['pushScan', 'pushBatch']); // order unchanged
+      expect(spyManager.wakeCalls, 1);
+      expectNoNetworkOrDrain();
+    },
+  );
 
-  test('29. setScanExaminee (clear) enqueues PUSH_SCAN with examinee_clear meta',
-      () async {
-    fakeLocal.batchResult = _batch(scans: [_scan('s1')]); // stored examinee == null
+  test(
+    '29. setScanExaminee (clear) enqueues PUSH_SCAN with examinee_clear meta',
+    () async {
+      fakeLocal.batchResult = _batch(
+        scans: [_scan('s1')],
+      ); // stored examinee == null
 
-    await repo.setScanExaminee(batchId: 'b1', scanId: 's1', examinee: null);
-    await waitForJobs(2);
-    await settle();
+      await repo.setScanExaminee(batchId: 'b1', scanId: 's1', examinee: null);
+      await waitForJobs(2);
+      await settle();
 
-    expect(pushScanJobFor('b1', 's1')!.meta['operation'], 'examinee_clear');
-  });
+      expect(pushScanJobFor('b1', 's1')!.meta['operation'], 'examinee_clear');
+    },
+  );
 
   test('30. an all-blank ExamineeInfo is treated as examinee_clear', () async {
     // LocalBatchRepository clears an empty ExamineeInfo, so the stored scan
@@ -1363,7 +1584,10 @@ void main() {
       batchId: 'b1',
       scanId: 's1',
       examinee: const ExamineeInfo(
-          firstName: '', lastName: '', examineeNumber: ''),
+        firstName: '',
+        lastName: '',
+        examineeNumber: '',
+      ),
     );
     await waitForJobs(2);
     await settle();
@@ -1371,136 +1595,184 @@ void main() {
     expect(pushScanJobFor('b1', 's1')!.meta['operation'], 'examinee_clear');
   });
 
-  test('31. PUSH_SCAN meta holds exactly {operation, opAt} and no PII',
-      () async {
-    fakeLocal.batchResult = _batch(scans: [_scan('s1', examinee: _examinee)]);
+  test(
+    '31. PUSH_SCAN meta holds exactly {operation, opAt} and no PII',
+    () async {
+      fakeLocal.batchResult = _batch(scans: [_scan('s1', examinee: _examinee)]);
 
-    await repo.setScanExaminee(
-        batchId: 'b1', scanId: 's1', examinee: _examinee);
-    await waitForJobs(2);
-    await settle();
+      await repo.setScanExaminee(
+        batchId: 'b1',
+        scanId: 's1',
+        examinee: _examinee,
+      );
+      await waitForJobs(2);
+      await settle();
 
-    final meta = pushScanJobFor('b1', 's1')!.meta;
-    expect(meta.keys.toSet(), {'operation', 'opAt'});
-    final blob = meta.values.join('|').toLowerCase();
-    for (final forbidden in const [
-      'juan', 'test', 'x-1', 'uid', 'token', 'bearer',
-      'first_name', 'last_name', 'examinee_number',
-    ]) {
-      expect(blob.contains(forbidden), isFalse,
-          reason: 'meta must not contain "$forbidden"');
-    }
-  });
+      final meta = pushScanJobFor('b1', 's1')!.meta;
+      expect(meta.keys.toSet(), {'operation', 'opAt'});
+      final blob = meta.values.join('|').toLowerCase();
+      for (final forbidden in const [
+        'juan',
+        'test',
+        'x-1',
+        'uid',
+        'token',
+        'bearer',
+        'first_name',
+        'last_name',
+        'examinee_number',
+      ]) {
+        expect(
+          blob.contains(forbidden),
+          isFalse,
+          reason: 'meta must not contain "$forbidden"',
+        );
+      }
+    },
+  );
 
-  test('32. a pending plain PUSH_SCAN for the scan is replaced by the tag job',
-      () async {
-    await queue.enqueue(SyncJob.create(
-      type: SyncJobType.pushScan,
-      entityId: 's1',
-      batchId: 'b1',
-      scanId: 's1',
-    ));
-    expect(pushScanJobsFor('b1', 's1'), hasLength(1));
+  test(
+    '32. a pending plain PUSH_SCAN for the scan is replaced by the tag job',
+    () async {
+      await queue.enqueue(
+        SyncJob.create(
+          type: SyncJobType.pushScan,
+          entityId: 's1',
+          batchId: 'b1',
+          scanId: 's1',
+        ),
+      );
+      expect(pushScanJobsFor('b1', 's1'), hasLength(1));
 
-    fakeLocal.batchResult = _batch(scans: [_scan('s1', examinee: _examinee)]);
-    await repo.setScanExaminee(
-        batchId: 'b1', scanId: 's1', examinee: _examinee);
-    await waitUntil(
-        () => pushScanJobFor('b1', 's1')?.meta['operation'] == 'examinee_tag');
-    await settle();
+      fakeLocal.batchResult = _batch(scans: [_scan('s1', examinee: _examinee)]);
+      await repo.setScanExaminee(
+        batchId: 'b1',
+        scanId: 's1',
+        examinee: _examinee,
+      );
+      await waitUntil(
+        () => pushScanJobFor('b1', 's1')?.meta['operation'] == 'examinee_tag',
+      );
+      await settle();
 
-    final scanJobs = pushScanJobsFor('b1', 's1');
-    expect(scanJobs, hasLength(1)); // plain removed, tag added
-    expect(scanJobs.single.meta['operation'], 'examinee_tag');
-  });
+      final scanJobs = pushScanJobsFor('b1', 's1');
+      expect(scanJobs, hasLength(1)); // plain removed, tag added
+      expect(scanJobs.single.meta['operation'], 'examinee_tag');
+    },
+  );
 
-  test('33. an inProgress PUSH_SCAN is preserved and a new tag job is added',
-      () async {
-    final plain = await queue.enqueue(SyncJob.create(
-      type: SyncJobType.pushScan,
-      entityId: 's1',
-      batchId: 'b1',
-      scanId: 's1',
-    ));
-    await queue.update(plain!.copyWith(status: SyncJobStatus.inProgress));
+  test(
+    '33. an inProgress PUSH_SCAN is preserved and a new tag job is added',
+    () async {
+      final plain = await queue.enqueue(
+        SyncJob.create(
+          type: SyncJobType.pushScan,
+          entityId: 's1',
+          batchId: 'b1',
+          scanId: 's1',
+        ),
+      );
+      await queue.update(plain!.copyWith(status: SyncJobStatus.inProgress));
 
-    fakeLocal.batchResult = _batch(scans: [_scan('s1', examinee: _examinee)]);
-    await repo.setScanExaminee(
-        batchId: 'b1', scanId: 's1', examinee: _examinee);
-    await waitUntil(() => pushScanJobsFor('b1', 's1').length == 2);
-    await settle();
+      fakeLocal.batchResult = _batch(scans: [_scan('s1', examinee: _examinee)]);
+      await repo.setScanExaminee(
+        batchId: 'b1',
+        scanId: 's1',
+        examinee: _examinee,
+      );
+      await waitUntil(() => pushScanJobsFor('b1', 's1').length == 2);
+      await settle();
 
-    final scanJobs = pushScanJobsFor('b1', 's1');
-    expect(scanJobs, hasLength(2));
-    expect(
-      scanJobs.any((j) =>
-          j.status == SyncJobStatus.inProgress && j.meta.isEmpty),
-      isTrue,
-    );
-    expect(
-      scanJobs.any((j) =>
-          j.status == SyncJobStatus.pending &&
-          j.meta['operation'] == 'examinee_tag'),
-      isTrue,
-    );
-  });
+      final scanJobs = pushScanJobsFor('b1', 's1');
+      expect(scanJobs, hasLength(2));
+      expect(
+        scanJobs.any(
+          (j) => j.status == SyncJobStatus.inProgress && j.meta.isEmpty,
+        ),
+        isTrue,
+      );
+      expect(
+        scanJobs.any(
+          (j) =>
+              j.status == SyncJobStatus.pending &&
+              j.meta['operation'] == 'examinee_tag',
+        ),
+        isTrue,
+      );
+    },
+  );
 
-  test('34. tag pending then rescan: the tag meta survives coalescing',
-      () async {
-    fakeLocal.batchResult = _batch(scans: [_scan('s1', examinee: _examinee)]);
-    await repo.setScanExaminee(
-        batchId: 'b1', scanId: 's1', examinee: _examinee);
-    await waitUntil(
-        () => pushScanJobFor('b1', 's1')?.meta['operation'] == 'examinee_tag');
+  test(
+    '34. tag pending then rescan: the tag meta survives coalescing',
+    () async {
+      fakeLocal.batchResult = _batch(scans: [_scan('s1', examinee: _examinee)]);
+      await repo.setScanExaminee(
+        batchId: 'b1',
+        scanId: 's1',
+        examinee: _examinee,
+      );
+      await waitUntil(
+        () => pushScanJobFor('b1', 's1')?.meta['operation'] == 'examinee_tag',
+      );
 
-    await repo.replaceScan(
-      batchId: 'b1',
-      scanId: 's1',
-      decoded: _decoded,
-      sourceImage: File('src.jpg'),
-    );
-    await waitForJobs(5);
-    await settle();
+      await repo.replaceScan(
+        batchId: 'b1',
+        scanId: 's1',
+        decoded: _decoded,
+        sourceImage: File('src.jpg'),
+      );
+      await waitForJobs(5);
+      await settle();
 
-    final scanJobs = pushScanJobsFor('b1', 's1');
-    expect(scanJobs, hasLength(1)); // rescan's plain PUSH_SCAN coalesced away
-    expect(scanJobs.single.meta['operation'], 'examinee_tag'); // meta kept
-  });
+      final scanJobs = pushScanJobsFor('b1', 's1');
+      expect(scanJobs, hasLength(1)); // rescan's plain PUSH_SCAN coalesced away
+      expect(scanJobs.single.meta['operation'], 'examinee_tag'); // meta kept
+    },
+  );
 
-  test('35. rescan pending then tag: the plain PUSH_SCAN is replaced', () async {
-    await repo.replaceScan(
-      batchId: 'b1',
-      scanId: 's1',
-      decoded: _decoded,
-      sourceImage: File('src.jpg'),
-    );
-    await waitForJobs(5);
-    await waitUntil(() => pushScanJobFor('b1', 's1')?.meta.isEmpty ?? false);
+  test(
+    '35. rescan pending then tag: the plain PUSH_SCAN is replaced',
+    () async {
+      await repo.replaceScan(
+        batchId: 'b1',
+        scanId: 's1',
+        decoded: _decoded,
+        sourceImage: File('src.jpg'),
+      );
+      await waitForJobs(5);
+      await waitUntil(() => pushScanJobFor('b1', 's1')?.meta.isEmpty ?? false);
 
-    fakeLocal.batchResult = _batch(scans: [_scan('s1', examinee: _examinee)]);
-    await repo.setScanExaminee(
-        batchId: 'b1', scanId: 's1', examinee: _examinee);
-    await waitUntil(
-        () => pushScanJobFor('b1', 's1')?.meta['operation'] == 'examinee_tag');
-    await settle();
+      fakeLocal.batchResult = _batch(scans: [_scan('s1', examinee: _examinee)]);
+      await repo.setScanExaminee(
+        batchId: 'b1',
+        scanId: 's1',
+        examinee: _examinee,
+      );
+      await waitUntil(
+        () => pushScanJobFor('b1', 's1')?.meta['operation'] == 'examinee_tag',
+      );
+      await settle();
 
-    final scanJobs = pushScanJobsFor('b1', 's1');
-    expect(scanJobs, hasLength(1));
-    expect(scanJobs.single.meta['operation'], 'examinee_tag');
-  });
+      final scanJobs = pushScanJobsFor('b1', 's1');
+      expect(scanJobs, hasLength(1));
+      expect(scanJobs.single.meta['operation'], 'examinee_tag');
+    },
+  );
 
-  test('36. a failed local setScanExaminee enqueues nothing and never wakes',
-      () async {
-    fakeLocal.failWith['setScanExaminee'] = StateError('local write failed');
+  test(
+    '36. a failed local setScanExaminee enqueues nothing and never wakes',
+    () async {
+      fakeLocal.failWith['setScanExaminee'] = StateError('local write failed');
 
-    await expectLater(
-      repo.setScanExaminee(batchId: 'b1', scanId: 's1', examinee: _examinee),
-      throwsA(isA<StateError>()),
-    );
-    await settle();
+      await expectLater(
+        repo.setScanExaminee(batchId: 'b1', scanId: 's1', examinee: _examinee),
+        throwsA(isA<StateError>()),
+      );
+      await settle();
 
-    expect(queue.jobs, isEmpty);
-    expect(spyManager.wakeCalls, 0);
-    expectNoNetworkOrDrain();
-  });
+      expect(queue.jobs, isEmpty);
+      expect(spyManager.wakeCalls, 0);
+      expectNoNetworkOrDrain();
+    },
+  );
 }

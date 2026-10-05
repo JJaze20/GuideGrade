@@ -8,6 +8,7 @@ import '../../models/omr_scan_result.dart';
 import '../services/batch_repository.dart';
 import '../services/local_batch_repository.dart';
 import 'sync_job.dart';
+import 'batch_deletion_guard.dart';
 import 'sync_manager.dart';
 import 'sync_queue.dart' show SyncQueue;
 
@@ -30,14 +31,13 @@ import 'sync_queue.dart' show SyncQueue;
 ///  * `wake()` is itself fire-and-forget and cannot throw to the caller;
 ///    it only (re)starts the existing drain — it runs no sync logic here.
 ///
-/// This class makes **no** Supabase / Storage / Firebase calls and never
+/// Non-destructive mutations make no Supabase / Storage / Firebase calls.
+/// Deletion first reads cloud completion/archive protection and fails closed.
+/// This class never
 /// invokes [SyncManager.processQueue] / [SyncManager.start] /
 /// [SyncManager.syncNow] — only [SyncManager.wake].
 class SyncingBatchRepository implements BatchRepository {
-  SyncingBatchRepository({
-    required this.local,
-    required this.syncManager,
-  });
+  SyncingBatchRepository({required this.local, required this.syncManager});
 
   final LocalBatchRepository local;
   final SyncManager syncManager;
@@ -66,8 +66,10 @@ class SyncingBatchRepository implements BatchRepository {
       local.resolveScanImage(batchId, scan);
 
   @override
-  Future<Uint8List?> resolveScanRectifiedImage(String batchId, LocalScan scan) =>
-      local.resolveScanRectifiedImage(batchId, scan);
+  Future<Uint8List?> resolveScanRectifiedImage(
+    String batchId,
+    LocalScan scan,
+  ) => local.resolveScanRectifiedImage(batchId, scan);
 
   @override
   Future<Uint8List?> resolveScanNameCropLast(String batchId, LocalScan scan) =>
@@ -78,8 +80,10 @@ class SyncingBatchRepository implements BatchRepository {
       local.resolveScanNameCropFirst(batchId, scan);
 
   @override
-  Future<Uint8List?> resolveScanNameCropMiddle(String batchId, LocalScan scan) =>
-      local.resolveScanNameCropMiddle(batchId, scan);
+  Future<Uint8List?> resolveScanNameCropMiddle(
+    String batchId,
+    LocalScan scan,
+  ) => local.resolveScanNameCropMiddle(batchId, scan);
 
   // ---------------------------------------------------------------------------
   // B2. Cloud restore -- pure delegation, same as the reads above: no
@@ -96,24 +100,29 @@ class SyncingBatchRepository implements BatchRepository {
   Future<LocalBatch> upsertScanFromCloud({
     required String batchId,
     required LocalScan scan,
-  }) =>
-      local.upsertScanFromCloud(batchId: batchId, scan: scan);
+  }) => local.upsertScanFromCloud(batchId: batchId, scan: scan);
 
   @override
   Future<void> writeRestoredScanImage({
     required String batchId,
     required String scanId,
     required Uint8List bytes,
-  }) =>
-      local.writeRestoredScanImage(batchId: batchId, scanId: scanId, bytes: bytes);
+  }) => local.writeRestoredScanImage(
+    batchId: batchId,
+    scanId: scanId,
+    bytes: bytes,
+  );
 
   @override
   Future<void> writeRestoredScanRectifiedImage({
     required String batchId,
     required String scanId,
     required Uint8List bytes,
-  }) =>
-      local.writeRestoredScanRectifiedImage(batchId: batchId, scanId: scanId, bytes: bytes);
+  }) => local.writeRestoredScanRectifiedImage(
+    batchId: batchId,
+    scanId: scanId,
+    bytes: bytes,
+  );
 
   // ---------------------------------------------------------------------------
   // C. createBatch
@@ -304,8 +313,10 @@ class SyncingBatchRepository implements BatchRepository {
   /// this revision; pushing it again would be a pointless round trip and,
   /// worse, could look like a new change.
   @override
-  Future<bool> confirmBatchArchived(String batchId, DateTime confirmedUpdatedAt) =>
-      local.confirmBatchArchived(batchId, confirmedUpdatedAt);
+  Future<bool> confirmBatchArchived(
+    String batchId,
+    DateTime confirmedUpdatedAt,
+  ) => local.confirmBatchArchived(batchId, confirmedUpdatedAt);
 
   // ---------------------------------------------------------------------------
   // G3. deleteScan
@@ -327,9 +338,14 @@ class SyncingBatchRepository implements BatchRepository {
     String? deletedByName,
     String? reason,
   }) async {
+    await _verifyDeletion(batchId);
     final trimmedReason = reason?.trim();
     if (trimmedReason == null || trimmedReason.isEmpty) {
-      throw ArgumentError.value(reason, 'reason', 'A reason is required to delete a scan.');
+      throw ArgumentError.value(
+        reason,
+        'reason',
+        'A reason is required to delete a scan.',
+      );
     }
     // Local first: if it throws, nothing is enqueued and the caller sees the
     // failure — the sheet is still there. The queue drops this scan's pending
@@ -368,8 +384,7 @@ class SyncingBatchRepository implements BatchRepository {
     // (it clears when examinee == null || examinee.isEmpty), not from the
     // argument — so an all-blank ExamineeInfo is treated as a clear.
     final stored = _examineeOf(batch, scanId);
-    final operation =
-        stored == null ? 'examinee_clear' : 'examinee_tag';
+    final operation = stored == null ? 'examinee_clear' : 'examinee_tag';
     final opAt = DateTime.now().toUtc().toIso8601String();
 
     // Make this operation's meta the one the drain sees: synchronously drop
@@ -389,8 +404,7 @@ class SyncingBatchRepository implements BatchRepository {
     }
 
     _fireEnqueue([
-      _pushScan(batchId, scanId,
-          meta: {'operation': operation, 'opAt': opAt}),
+      _pushScan(batchId, scanId, meta: {'operation': operation, 'opAt': opAt}),
       _pushBatch(batchId),
     ]);
     return batch;
@@ -409,6 +423,7 @@ class SyncingBatchRepository implements BatchRepository {
 
   @override
   Future<void> deleteBatch(String id) async {
+    await _verifyDeletion(id);
     // 1. Drop queued content pushes for this batch before the local data
     //    goes (best-effort; never blocks the delete).
     await _cancelPendingPushes(id);
@@ -420,6 +435,24 @@ class SyncingBatchRepository implements BatchRepository {
   }
 
   // ---------------------------------------------------------------------------
+  Future<void> _verifyDeletion(String batchId) async {
+    final batch = await local.getBatchById(batchId);
+    if (batch?.isCompleted == true) {
+      throw StateError('Completed batches cannot be deleted.');
+    }
+    final outcome = await checkBatchDeletionAllowed(
+      syncManager.client,
+      batchId,
+    );
+    if (!outcome.isSuccess) {
+      throw StateError(
+        outcome.code == 'completed_batch_protected'
+            ? 'Completed batches and their scans cannot be deleted.'
+            : 'Could not verify batch protection. Connect and try again; nothing was deleted.',
+      );
+    }
+  }
+
   // Job builders (entity-id convention matches SyncManager._reconcile:
   // batch id for batch/delete jobs, scan id for scan/image jobs).
   // ---------------------------------------------------------------------------
@@ -453,23 +486,22 @@ class SyncingBatchRepository implements BatchRepository {
   }
 
   SyncJob _pushBatch(String batchId) => SyncJob.create(
-        type: SyncJobType.pushBatch,
-        entityId: batchId,
-        batchId: batchId,
-      );
+    type: SyncJobType.pushBatch,
+    entityId: batchId,
+    batchId: batchId,
+  );
 
   SyncJob _pushScan(
     String batchId,
     String scanId, {
     Map<String, String> meta = const {},
-  }) =>
-      SyncJob.create(
-        type: SyncJobType.pushScan,
-        entityId: scanId,
-        batchId: batchId,
-        scanId: scanId,
-        meta: meta,
-      );
+  }) => SyncJob.create(
+    type: SyncJobType.pushScan,
+    entityId: scanId,
+    batchId: batchId,
+    scanId: scanId,
+    meta: meta,
+  );
 
   SyncJob _uploadImage(String batchId, String scanId, String variant) =>
       SyncJob.create(
@@ -481,11 +513,11 @@ class SyncingBatchRepository implements BatchRepository {
       );
 
   SyncJob _patchImageStatus(String batchId, String scanId) => SyncJob.create(
-        type: SyncJobType.patchImageStatus,
-        entityId: scanId,
-        batchId: batchId,
-        scanId: scanId,
-      );
+    type: SyncJobType.patchImageStatus,
+    entityId: scanId,
+    batchId: batchId,
+    scanId: scanId,
+  );
 
   /// `meta` carries ONLY the three small strings
   /// `SyncManager._dispatch`'s `deleteScan` case needs to call
@@ -498,30 +530,29 @@ class SyncingBatchRepository implements BatchRepository {
     required String deletedByUid,
     String? deletedByName,
     required String reason,
-  }) =>
-      SyncJob.create(
-        type: SyncJobType.deleteScan,
-        entityId: scanId,
-        batchId: batchId,
-        scanId: scanId,
-        meta: {
-          'deletedByUid': deletedByUid,
-          'deletedByName': ?deletedByName,
-          'reason': reason,
-        },
-      );
+  }) => SyncJob.create(
+    type: SyncJobType.deleteScan,
+    entityId: scanId,
+    batchId: batchId,
+    scanId: scanId,
+    meta: {
+      'deletedByUid': deletedByUid,
+      'deletedByName': ?deletedByName,
+      'reason': reason,
+    },
+  );
 
   SyncJob _deleteBatch(String batchId) => SyncJob.create(
-        type: SyncJobType.deleteBatch,
-        entityId: batchId,
-        batchId: batchId,
-      );
+    type: SyncJobType.deleteBatch,
+    entityId: batchId,
+    batchId: batchId,
+  );
 
   SyncJob _deleteStoragePrefix(String batchId) => SyncJob.create(
-        type: SyncJobType.deleteStoragePrefix,
-        entityId: batchId,
-        batchId: batchId,
-      );
+    type: SyncJobType.deleteStoragePrefix,
+    entityId: batchId,
+    batchId: batchId,
+  );
 
   // ---------------------------------------------------------------------------
   // Enqueue plumbing — local/disk only, never blocks the caller, never
@@ -586,7 +617,9 @@ class SyncingBatchRepository implements BatchRepository {
   void _logSyncFailure(Object error) {
     // Type only — a raw message may carry a file path or payload.
     // ignore: avoid_print
-    print('SyncingBatchRepository: background sync step failed '
-        '(${error.runtimeType})');
+    print(
+      'SyncingBatchRepository: background sync step failed '
+      '(${error.runtimeType})',
+    );
   }
 }

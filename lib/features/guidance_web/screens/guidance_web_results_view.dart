@@ -149,6 +149,7 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
   Map<String, ExamineeRecord> _linkedExaminees = {};
 
   String _statusFilter = 'All';
+  String _identityFilter = 'All';
 
   /// `null` = natural (as-loaded) order; `true`/`false` = Score column
   /// sorted ascending/descending. Cycles null → ascending → descending →
@@ -370,6 +371,11 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
   List<LocalScan> get _filteredScans {
     final term = _searchController.text.trim().toLowerCase();
     return _scans.where((scan) {
+      final isLinked = _linkedExaminees.containsKey(scan.id);
+      if (_identityFilter == 'Examinee' && !isLinked) {
+        return false;
+      }
+      if (_identityFilter == 'Unlinked Examinee' && isLinked) return false;
       if (_statusFilter != 'All' && _effectiveStatus(scan) != _statusFilter)
         return false;
       if (term.isEmpty) return true;
@@ -445,6 +451,10 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
               ],
             ),
           if (_activeBatch != null) ...[
+            if (!_loadingScans && _scansError == null) ...[
+              const SizedBox(height: 14),
+              _buildIdentityFilter(),
+            ],
             if (_activeBatch!.description.trim().isNotEmpty) ...[
               const SizedBox(height: 14),
               _buildBatchDescription(_activeBatch!),
@@ -797,6 +807,31 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
     );
   }
 
+  Widget _buildIdentityFilter() {
+    final linkedCount = _scans
+        .where((scan) => _linkedExaminees.containsKey(scan.id))
+        .length;
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        for (final group in ['All', 'Examinee', 'Unlinked Examinee'])
+          ChoiceChip(
+            key: Key('resultsIdentity$group'),
+            label: Text(
+              '$group (${group == 'All'
+                  ? _scans.length
+                  : group == 'Examinee'
+                  ? linkedCount
+                  : _scans.length - linkedCount})',
+            ),
+            selected: _identityFilter == group,
+            onSelected: (_) => setState(() => _identityFilter = group),
+          ),
+      ],
+    );
+  }
+
   Widget _buildSearchField() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -937,7 +972,10 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
       action: _scans.isNotEmpty && _filteredScans.isEmpty
           ? TextButton(
               onPressed: () {
-                setState(() => _statusFilter = 'All');
+                setState(() {
+                  _statusFilter = 'All';
+                  _identityFilter = 'All';
+                });
                 _searchController.clear();
               },
               child: const Text('Clear filters'),

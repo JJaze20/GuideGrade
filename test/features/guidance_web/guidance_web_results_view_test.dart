@@ -272,6 +272,46 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  testWidgets(
+    'linked and unlinked groups use canonical resolution and preserve search',
+    (tester) async {
+      client.scansByBatchId['b1'] = CloudScansRead.found([
+        _scanRow(
+          id: 's1',
+          firstName: 'Juan',
+          lastName: 'Cruz',
+          number: 'A-1',
+          examineeId: 'e1',
+        ),
+        _scanRow(id: 's2', firstName: 'Ana', lastName: 'Lim', number: 'U-1'),
+        _scanRow(
+          id: 's3',
+          firstName: 'Missing',
+          lastName: 'Link',
+          number: 'U-2',
+          examineeId: 'missing',
+        ),
+      ]);
+      await pumpResultsView(tester);
+      await selectTheOnlyBatch(tester);
+      await tester.tap(find.byKey(const Key('resultsIdentityExaminee')));
+      await tester.pumpAndSettle();
+      expect(find.text('Cruz, Juan'), findsOneWidget);
+      expect(find.text('Lim, Ana'), findsNothing);
+      await tester.tap(
+        find.byKey(const Key('resultsIdentityUnlinked Examinee')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Cruz, Juan'), findsNothing);
+      expect(find.text('Lim, Ana'), findsOneWidget);
+      expect(find.text('Link, Missing'), findsOneWidget);
+      await tester.enterText(find.byKey(const Key('resultsSearch')), 'Ana');
+      await tester.pumpAndSettle();
+      expect(find.text('Lim, Ana'), findsOneWidget);
+      expect(find.text('Link, Missing'), findsNothing);
+    },
+  );
+
   for (final width in [320.0, 390.0, 768.0, 1280.0]) {
     testWidgets('Results controls and rows remain usable at $width', (
       tester,

@@ -42,3 +42,20 @@ and nothing else — every `examinees` row a Guidance Council user creates
 going forward still comes from an explicit, human-confirmed click in the Web
 Console (see `guidance_web_examinee_records_view.dart`), never an automatic
 background reconciliation.
+
+## Completed Batch deletion protection
+
+`0012_protect_completed_batches.sql` is a separately deployed migration.
+It prevents batch deletion, scan deletion/soft deletion, scan reassignment,
+completion-status reopening and archive-marker removal for business-completed
+batches (`Completed` or a Web `batch_archives` marker). Mobile `Archived`
+means cloud-synchronized and is not business completion.
+
+Review and validate this migration in a test database before applying it to
+production. It requires the existing batches/scans tables and migrations
+0007 and 0009. No data is deleted or updated by applying it. Existing
+Requirement #4 checks remain in place for non-completed batches. Application
+deletion now requires successful cloud verification before local files are
+removed; a verification failure preserves files and pending jobs. Cloud image
+deletion also checks batch protection. This migration does not alter Storage
+policies; direct Storage API access is still governed by the deployed policies.

@@ -50,7 +50,9 @@ class _EditBatchScreenState extends State<EditBatchScreen> {
   }
 
   Future<void> _loadBatch() async {
-    final args = widget.batch ?? ModalRoute.of(context)?.settings.arguments as LocalBatch?;
+    final args =
+        widget.batch ??
+        ModalRoute.of(context)?.settings.arguments as LocalBatch?;
     if (args == null) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -65,7 +67,9 @@ class _EditBatchScreenState extends State<EditBatchScreen> {
       _batch = args;
       _batchCodeController = TextEditingController(text: args.batchCode);
       _descriptionController = TextEditingController(text: args.description);
-      _expectedCountController = TextEditingController(text: args.expectedCount.toString());
+      _expectedCountController = TextEditingController(
+        text: args.expectedCount.toString(),
+      );
       _isLoading = false;
     });
   }
@@ -81,7 +85,8 @@ class _EditBatchScreenState extends State<EditBatchScreen> {
   }
 
   Future<void> _saveBatch() async {
-    if (_batch == null || _isSaving) return; // ignore repeated taps
+    if (_batch == null || _isSaving || _batch!.isCompleted)
+      return; // ignore repeated taps
     if (!_formKey.currentState!.validate()) return;
 
     setState(() => _isSaving = true);
@@ -105,9 +110,9 @@ class _EditBatchScreenState extends State<EditBatchScreen> {
     } catch (e) {
       debugPrint('Error updating batch: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error updating batch: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error updating batch: $e')));
       }
     } finally {
       if (mounted) setState(() => _isSaving = false);
@@ -129,15 +134,11 @@ class _EditBatchScreenState extends State<EditBatchScreen> {
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      );
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
     if (_batch == null) {
-      return const Scaffold(
-        body: Center(child: Text('Error loading batch')),
-      );
+      return const Scaffold(body: Center(child: Text('Error loading batch')));
     }
 
     return Scaffold(
@@ -146,7 +147,10 @@ class _EditBatchScreenState extends State<EditBatchScreen> {
         backgroundColor: Colors.white,
         foregroundColor: AppColors.textDark,
         elevation: 0.5,
-        title: Text('Edit Batch', style: AppTextStyles.heading(size: 13)),
+        title: Text(
+          _batch!.isCompleted ? 'Completed Batch' : 'Edit Batch',
+          style: AppTextStyles.heading(size: 13),
+        ),
       ),
       body: SafeArea(
         child: Form(
@@ -165,13 +169,15 @@ class _EditBatchScreenState extends State<EditBatchScreen> {
                 decoration: FormFieldStyle.disabled(
                   label: 'Batch code',
                   required: true,
-                  helper: 'Assigned when the batch was created and can not be changed.',
+                  helper:
+                      'Assigned when the batch was created and can not be changed.',
                 ),
               ),
               const SizedBox(height: 16),
               TextFormField(
                 key: const Key('editBatch.description'),
                 controller: _descriptionController,
+                enabled: !_batch!.isCompleted,
                 textInputAction: TextInputAction.next,
                 textCapitalization: TextCapitalization.sentences,
                 maxLength: 120,
@@ -197,23 +203,32 @@ class _EditBatchScreenState extends State<EditBatchScreen> {
                     child: TextFormField(
                       key: const Key('editBatch.expectedCount'),
                       controller: _expectedCountController,
+                      enabled: !_batch!.isCompleted,
                       keyboardType: TextInputType.number,
-                      inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(5)],
+                      inputFormatters: [
+                        FilteringTextInputFormatter.digitsOnly,
+                        LengthLimitingTextInputFormatter(5),
+                      ],
                       textInputAction: TextInputAction.done,
-                      onChanged: (_) => setState(() {}), // refresh the status preview
+                      onChanged: (_) =>
+                          setState(() {}), // refresh the status preview
                       onFieldSubmitted: (_) => _saveBatch(),
                       decoration: FormFieldStyle.decoration(
                         label: 'Expected sheets',
                         required: true,
                         // The count is a hard scan cap (LocalBatch.isFull), so
                         // it can never go below the sheets already saved.
-                        helper: _batch!.scanCount > 0 ? 'At least ${_batch!.scanCount} (already scanned).' : null,
+                        helper: _batch!.scanCount > 0
+                            ? 'At least ${_batch!.scanCount} (already scanned).'
+                            : null,
                       ),
                       validator: (value) {
                         final t = value?.trim() ?? '';
-                        if (t.isEmpty) return 'Required. Enter how many sheets to expect.';
+                        if (t.isEmpty)
+                          return 'Required. Enter how many sheets to expect.';
                         final number = int.tryParse(t);
-                        if (number == null || number <= 0) return 'Enter a whole number greater than zero.';
+                        if (number == null || number <= 0)
+                          return 'Enter a whole number greater than zero.';
                         if (number < _batch!.scanCount) {
                           return 'Must be at least ${_batch!.scanCount}, the sheets already saved.';
                         }
@@ -222,7 +237,12 @@ class _EditBatchScreenState extends State<EditBatchScreen> {
                     ),
                   ),
                   const SizedBox(width: 12),
-                  Expanded(child: _buildInfoField('Scans captured', '${_batch!.scanCount}')),
+                  Expanded(
+                    child: _buildInfoField(
+                      'Scans captured',
+                      '${_batch!.scanCount}',
+                    ),
+                  ),
                 ],
               ),
               const SizedBox(height: 20),
@@ -232,7 +252,7 @@ class _EditBatchScreenState extends State<EditBatchScreen> {
               const SizedBox(height: 24),
               PrimaryButton(
                 label: _isSaving ? 'Saving...' : 'Save Changes',
-                onPressed: _isSaving ? null : _saveBatch,
+                onPressed: _isSaving || _batch!.isCompleted ? null : _saveBatch,
               ),
               const SizedBox(height: 16),
             ],
@@ -245,7 +265,11 @@ class _EditBatchScreenState extends State<EditBatchScreen> {
   Widget _buildSection(String title) {
     return Text(
       title,
-      style: AppTextStyles.body(size: 11, weight: FontWeight.w700, color: AppColors.primaryGreen),
+      style: AppTextStyles.body(
+        size: 11,
+        weight: FontWeight.w700,
+        color: AppColors.primaryGreen,
+      ),
     );
   }
 
@@ -259,12 +283,16 @@ class _EditBatchScreenState extends State<EditBatchScreen> {
   /// The batch's status, read-only, with the rule that produced it.
   Widget _buildStatusCard() {
     final current = _batch!.status;
-    final ifSaved = _statusIfSaved;
+    final ifSaved = _batch!.isCompleted ? 'Completed' : _statusIfSaved;
     final String explanation = switch (ifSaved) {
-      BatchLifecycle.draft => 'Draft: a required field is missing or invalid. '
-          'Fill in every field marked * to make this batch Active.',
-      _ => 'Active: every required field is filled in. The batch becomes Archived '
-          'automatically once the cloud has confirmed this saved version.',
+      'Completed' =>
+        'Completed batches are read-only. Description and expected sheets cannot be changed.',
+      BatchLifecycle.draft =>
+        'Draft: a required field is missing or invalid. '
+            'Fill in every field marked * to make this batch Active.',
+      _ =>
+        'Active: every required field is filled in. The batch becomes Archived '
+            'automatically once the cloud has confirmed this saved version.',
     };
     return Container(
       key: const Key('editBatch.statusCard'),
@@ -273,17 +301,30 @@ class _EditBatchScreenState extends State<EditBatchScreen> {
       decoration: BoxDecoration(
         color: FormFieldStyle.disabledFill,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: FormFieldStyle.disabledBorder, width: FormFieldStyle.restingWidth),
+        border: Border.all(
+          color: FormFieldStyle.disabledBorder,
+          width: FormFieldStyle.restingWidth,
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const FaIcon(FontAwesomeIcons.lock, size: 11, color: AppColors.textGray),
+              const FaIcon(
+                FontAwesomeIcons.lock,
+                size: 11,
+                color: AppColors.textGray,
+              ),
               const SizedBox(width: 8),
-              Text('Current status: ', style: AppTextStyles.body(size: 11, color: AppColors.textGray)),
-              Text(current, style: AppTextStyles.body(size: 11.5, weight: FontWeight.w800)),
+              Text(
+                'Current status: ',
+                style: AppTextStyles.body(size: 11, color: AppColors.textGray),
+              ),
+              Text(
+                current,
+                style: AppTextStyles.body(size: 11.5, weight: FontWeight.w800),
+              ),
             ],
           ),
           const SizedBox(height: 6),
@@ -293,7 +334,7 @@ class _EditBatchScreenState extends State<EditBatchScreen> {
           ),
           const SizedBox(height: 8),
           Text(
-            'If saved now: $explanation',
+            _batch!.isCompleted ? explanation : 'If saved now: $explanation',
             key: const Key('editBatch.statusExplanation'),
             style: AppTextStyles.body(size: 10.5),
           ),

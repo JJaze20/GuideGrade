@@ -26,6 +26,7 @@ class _FakeHttp extends http.BaseClient {
   int status = 200;
   String responseBody = '[]';
   Map<String, String> extraHeaders = const {};
+  bool allowProtectionReads = false;
   final List<_Recorded> requests = [];
 
   @override
@@ -38,7 +39,11 @@ class _FakeHttp extends http.BaseClient {
       ),
     );
     return http.StreamedResponse(
-      Stream.value(utf8.encode(responseBody)),
+      Stream.value(
+        utf8.encode(
+          allowProtectionReads && request.method == 'GET' ? '[]' : responseBody,
+        ),
+      ),
       status,
       headers: {
         'content-type': 'application/json; charset=utf-8',
@@ -324,6 +329,7 @@ void main() {
       'calls the soft_delete_unlinked_scan RPC with exactly the five p_-prefixed params',
       () async {
         final fake = _FakeHttp()
+          ..allowProtectionReads = true
           ..responseBody = jsonEncode([
             {
               'batch_id': 'b1',
@@ -342,8 +348,11 @@ void main() {
             );
 
         expect(outcome.isSuccess, isTrue);
-        expect(fake.requests, hasLength(1));
-        final r = fake.requests.single;
+        expect(fake.requests, hasLength(3));
+        expect(fake.requests.take(2).map((r) => r.method), ['GET', 'GET']);
+        expect(fake.requests[0].url.path, '/rest/v1/batches');
+        expect(fake.requests[1].url.path, '/rest/v1/batch_archives');
+        final r = fake.requests.last;
         expect(r.method, 'POST');
         expect(r.url.path, '/rest/v1/rpc/soft_delete_unlinked_scan');
         expect(jsonDecode(r.body), {
