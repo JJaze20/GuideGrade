@@ -153,7 +153,7 @@ class _Sidebar extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: 240,
-      color: Colors.white,
+      color: const Color(0xFF14243D),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -173,14 +173,14 @@ class _Sidebar extends StatelessWidget {
                       'Guide',
                       style: AppTextStyles.logo(
                         size: 20,
-                        color: AppColors.warmRedOrange,
+                        color: const Color(0xFFF5C78E),
                       ),
                     ),
                     Text(
                       'Grade',
                       style: AppTextStyles.logo(
                         size: 20,
-                        color: AppColors.primaryGreen,
+                        color: const Color(0xFF99E2B0),
                       ),
                     ),
                   ],
@@ -191,13 +191,13 @@ class _Sidebar extends StatelessWidget {
                   style: AppTextStyles.body(
                     size: 12,
                     weight: FontWeight.w800,
-                    color: AppColors.textGray,
+                    color: Colors.white,
                   ).copyWith(letterSpacing: 1.0),
                 ),
               ],
             ),
           ),
-          const Divider(height: 1, color: AppColors.cardBorder),
+          const Divider(height: 1, color: Color(0xFF344963)),
           Expanded(
             child: ListView(
               padding: const EdgeInsets.symmetric(vertical: 12),
@@ -212,7 +212,7 @@ class _Sidebar extends StatelessWidget {
                   .toList(),
             ),
           ),
-          const Divider(height: 1, color: AppColors.cardBorder),
+          const Divider(height: 1, color: Color(0xFF344963)),
           Padding(
             padding: const EdgeInsets.all(16),
             child: Column(
@@ -220,7 +220,7 @@ class _Sidebar extends StatelessWidget {
               children: [
                 Text(
                   userDisplayName ?? 'Account',
-                  style: AppTextStyles.body(size: 14, weight: FontWeight.w700),
+                  style: AppTextStyles.body(size: 14, weight: FontWeight.w700, color: Colors.white),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -230,7 +230,7 @@ class _Sidebar extends StatelessWidget {
                     userEmail!,
                     style: AppTextStyles.body(
                       size: 12,
-                      color: AppColors.textGray,
+                      color: const Color(0xFFB8C6D9),
                     ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
@@ -251,8 +251,8 @@ class _Sidebar extends StatelessWidget {
                       style: TextStyle(fontSize: 14),
                     ),
                     style: OutlinedButton.styleFrom(
-                      foregroundColor: AppColors.textDark,
-                      side: const BorderSide(color: AppColors.cardBorder),
+                      foregroundColor: Colors.white,
+                      side: const BorderSide(color: Color(0xFF344963)),
                       padding: const EdgeInsets.symmetric(vertical: 14),
                     ),
                   ),
@@ -285,7 +285,7 @@ class _SidebarItem extends StatelessWidget {
         margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
         decoration: BoxDecoration(
-          color: isSelected ? AppColors.emerald100 : Colors.transparent,
+          color: isSelected ? const Color(0xFF2B4563) : Colors.transparent,
           borderRadius: BorderRadius.circular(10),
         ),
         child: Row(
@@ -293,7 +293,7 @@ class _SidebarItem extends StatelessWidget {
             FaIcon(
               destination.icon,
               size: 14,
-              color: isSelected ? AppColors.primaryGreen : AppColors.textGray,
+              color: isSelected ? const Color(0xFF99E2B0) : const Color(0xFFB8C6D9),
             ),
             const SizedBox(width: 12),
             Text(
@@ -301,7 +301,7 @@ class _SidebarItem extends StatelessWidget {
               style: AppTextStyles.body(
                 size: 14,
                 weight: isSelected ? FontWeight.w700 : FontWeight.w600,
-                color: isSelected ? AppColors.primaryGreen : AppColors.textDark,
+                color: isSelected ? const Color(0xFF99E2B0) : Colors.white,
               ),
             ),
           ],

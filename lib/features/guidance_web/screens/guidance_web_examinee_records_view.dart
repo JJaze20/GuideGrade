@@ -517,6 +517,7 @@ class _GuidanceWebExamineeRecordsViewState
 
   Widget _buildExamineesControls() {
     return SurfaceCard(
+      color: const Color(0xFFEAF0F8),
       padding: const EdgeInsets.all(16),
       child: LayoutBuilder(
         builder: (context, constraints) {
@@ -600,6 +601,8 @@ class _GuidanceWebExamineeRecordsViewState
   InputDecoration _fieldDecoration({String? hint}) {
     return InputDecoration(
       hintText: hint,
+      filled: true,
+      fillColor: const Color(0xFFF7FAFE),
       isDense: true,
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(10),
@@ -804,9 +807,10 @@ class _GuidanceWebExamineeRecordsViewState
     final style = AppTextStyles.body(
       size: 11.5,
       weight: FontWeight.w800,
-      color: AppColors.textGray,
+      color: const Color(0xFFF4F7FC),
     );
-    return Padding(
+    return Container(
+      color: const Color(0xFF14243D),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Row(
         children: [
@@ -897,7 +901,7 @@ class _GuidanceWebExamineeRecordsViewState
                   minWidth: 1200,
                   child: Container(
                     decoration: BoxDecoration(
-                      color: Colors.white,
+                      color: const Color(0xFFF4F7FC),
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(color: AppColors.cardBorder),
                     ),
@@ -1035,7 +1039,7 @@ class _GuidanceWebExamineeRecordsViewState
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: const Color(0xFFF4F7FC),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: AppColors.cardBorder),
       ),
@@ -1104,9 +1108,10 @@ class _GuidanceWebExamineeRecordsViewState
     final style = AppTextStyles.body(
       size: 9.5,
       weight: FontWeight.w800,
-      color: AppColors.textGray,
+      color: const Color(0xFFF4F7FC),
     );
-    return Padding(
+    return Container(
+      color: const Color(0xFF14243D),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Row(
         children: [
@@ -1292,7 +1297,7 @@ class _GuidanceWebExamineeRecordsViewState
             minWidth: 1050,
             child: Container(
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: const Color(0xFFF4F7FC),
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(color: AppColors.cardBorder),
               ),
@@ -1323,7 +1328,7 @@ class _GuidanceWebExamineeRecordsViewState
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: const Color(0xFFF4F7FC),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: AppColors.cardBorder),
       ),
@@ -1356,9 +1361,10 @@ class _GuidanceWebExamineeRecordsViewState
     final style = AppTextStyles.body(
       size: 9.5,
       weight: FontWeight.w800,
-      color: AppColors.textGray,
+      color: const Color(0xFFF4F7FC),
     );
-    return Padding(
+    return Container(
+      color: const Color(0xFF14243D),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Row(
         children: [

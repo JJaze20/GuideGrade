@@ -181,7 +181,8 @@ class _GuidanceWebBatchAnalyticsViewState
 
   // --- filters -----------------------------------------------------------
 
-  Widget _card({required Widget child}) => SurfaceCard(child: child);
+  Widget _card({required Widget child}) =>
+      SurfaceCard(color: const Color(0xFFF1F5FB), child: child);
 
   InputDecoration _decoration(String label) => InputDecoration(
     labelText: label,
@@ -704,7 +705,23 @@ class _GuidanceWebBatchAnalyticsViewState
     showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('Examinees — ${group.label}'),
+        backgroundColor: const Color(0xFFF1F5FB),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        title: Container(
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            color: const Color(0xFF14243D),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Text(
+            'Examinees — ${group.label}',
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 20,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
         content: SizedBox(
           width: 680,
           child: ConstrainedBox(
@@ -732,32 +749,47 @@ class _GuidanceWebBatchAnalyticsViewState
                         child: ListView.separated(
                           shrinkWrap: true,
                           itemCount: examinees.length,
-                          separatorBuilder: (_, _) => const Divider(height: 24),
+                          separatorBuilder: (_, _) =>
+                              const SizedBox(height: 12),
                           itemBuilder: (context, index) {
                             final matches = examinees[index];
                             final person = matches.first.examinee;
-                            return Column(
-                              key: ValueKey(
-                                'distribution.examinee.${person.id}',
+                            return Container(
+                              padding: const EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                                color: index.isEven
+                                    ? const Color(0xFFE2EBF7)
+                                    : const Color(0xFFE6F2EC),
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(
+                                  color: const Color(0xFFCFDAE8),
+                                ),
                               ),
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  person.displayName,
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w700,
-                                  ),
+                              child: Column(
+                                key: ValueKey(
+                                  'distribution.examinee.${person.id}',
                                 ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  'ID: ${person.officialStudentId ?? person.temporaryExamineeId}',
-                                ),
-                                Text('Exam: $exam'),
-                                for (final match in matches)
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
                                   Text(
-                                    'Score: ${match.score} · Batch: ${match.batchCode}',
+                                    person.displayName,
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 16,
+                                      color: Color(0xFF14243D),
+                                    ),
                                   ),
-                              ],
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'ID: ${person.officialStudentId ?? person.temporaryExamineeId}',
+                                  ),
+                                  Text('Exam: $exam'),
+                                  for (final match in matches)
+                                    Text(
+                                      'Score: ${match.score} · Batch: ${match.batchCode}',
+                                    ),
+                                ],
+                              ),
                             );
                           },
                         ),
@@ -767,7 +799,7 @@ class _GuidanceWebBatchAnalyticsViewState
           ),
         ),
         actions: [
-          TextButton(
+          FilledButton(
             onPressed: () => Navigator.pop(context),
             child: const Text('Close'),
           ),
@@ -778,6 +810,15 @@ class _GuidanceWebBatchAnalyticsViewState
 
   Widget _distribution(String title) {
     final groups = _result!.distributionGroups(title);
+    const barColors = [
+      Color(0xFF3B82F6),
+      Color(0xFF10B981),
+      Color(0xFFF59E0B),
+      Color(0xFF8B5CF6),
+      Color(0xFFEC4899),
+      Color(0xFF06B6D4),
+      Color(0xFFEF4444),
+    ];
     // Every row's count and action share the same resolved result membership.
     final max = groups.fold<int>(
       0,
@@ -787,25 +828,67 @@ class _GuidanceWebBatchAnalyticsViewState
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(title, style: AppTextStyles.heading(size: 15)),
+          Text(
+            title,
+            style: AppTextStyles.heading(
+              size: 18,
+              color: const Color(0xFF14243D),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Number of results · Bars scaled to the largest group',
+            style: AppTextStyles.caption(),
+          ),
           const SizedBox(height: 12),
           for (final group in groups)
             Padding(
-              padding: const EdgeInsets.symmetric(vertical: 6),
+              padding: const EdgeInsets.symmetric(vertical: 10),
               child: LayoutBuilder(
                 builder: (context, constraints) {
                   final compact = constraints.maxWidth < 560;
+                  final barColor =
+                      barColors[groups.indexOf(group) % barColors.length];
                   final label = Text(
                     group.label,
-                    style: AppTextStyles.body(size: 13),
+                    style: AppTextStyles.body(
+                      size: 13,
+                      weight: FontWeight.w600,
+                    ),
                   );
-                  final bar = ClipRRect(
-                    borderRadius: BorderRadius.circular(6),
-                    child: LinearProgressIndicator(
-                      value: max == 0 ? 0 : group.results.length / max,
-                      minHeight: 14,
-                      backgroundColor: AppColors.lightBg,
-                      color: AppColors.primaryGreen,
+                  final bar = Semantics(
+                    label: '${group.label}: ${group.results.length} results',
+                    child: Container(
+                      height: 22,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFDDE6F1),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      clipBehavior: Clip.antiAlias,
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: FractionallySizedBox(
+                          widthFactor: max == 0
+                              ? 0
+                              : group.results.length / max,
+                          heightFactor: 1,
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                colors: [
+                                  barColor,
+                                  Color.lerp(
+                                    barColor,
+                                    const Color(0xFF14243D),
+                                    0.2,
+                                  )!,
+                                ],
+                              ),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                          ),
+                        ),
+                      ),
                     ),
                   );
                   final action = Row(

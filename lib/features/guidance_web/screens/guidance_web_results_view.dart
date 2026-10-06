@@ -432,7 +432,8 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
 
   Widget _buildControls() {
     return SurfaceCard(
-      padding: const EdgeInsets.all(16),
+      color: const Color(0xFFEAF0F8),
+      padding: EdgeInsets.all(widget.archivedBatch != null ? 12 : 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -443,7 +444,7 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _buildExamTabs(),
-                const SizedBox(height: 14),
+                SizedBox(height: widget.archivedBatch != null ? 8 : 14),
                 _buildExamDropdown(
                   _selectedExam,
                   _examGroups.firstWhere((g) => g.$1 == _selectedExam).$2,
@@ -452,14 +453,15 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
             ),
           if (_activeBatch != null) ...[
             if (!_loadingScans && _scansError == null) ...[
-              const SizedBox(height: 14),
+              SizedBox(height: widget.archivedBatch != null ? 8 : 14),
               _buildIdentityFilter(),
             ],
-            if (_activeBatch!.description.trim().isNotEmpty) ...[
-              const SizedBox(height: 14),
+            if (widget.archivedBatch != null &&
+                _activeBatch!.description.trim().isNotEmpty) ...[
+              SizedBox(height: widget.archivedBatch != null ? 8 : 14),
               _buildBatchDescription(_activeBatch!),
             ],
-            const SizedBox(height: 14),
+            SizedBox(height: widget.archivedBatch != null ? 8 : 14),
             LayoutBuilder(
               builder: (context, constraints) {
                 final archive = OutlinedButton.icon(
@@ -657,41 +659,17 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
   /// Capped at three lines; the full text is in the tooltip.
   Widget _buildBatchDescription(LocalBatch batch) {
     final description = batch.description.trim();
-    return Container(
-      key: const Key('batchDescription'),
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        color: AppColors.lightBg,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppColors.cardBorder),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Batch Description',
-            style: AppTextStyles.body(
-              size: 12,
-              weight: FontWeight.w600,
-              color: AppColors.textGray,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Tooltip(
-            message: description,
-            child: Text(
-              description,
-              style: AppTextStyles.heading(size: _descriptionHeadingSize),
-              maxLines: 3,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-        ],
+    return Tooltip(
+      message: description,
+      child: Text(
+        description,
+        key: const Key('batchDescription'),
+        style: AppTextStyles.heading(size: _descriptionHeadingSize),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
       ),
     );
   }
-
   /// One exam-specific batch dropdown, populated ONLY with [_batchesFor]
   /// that [examCode] — never batches from another exam type. Shows a
   /// harmless disabled placeholder instead of an empty dropdown when this
@@ -889,6 +867,8 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
   InputDecoration _fieldDecoration({String? hint}) {
     return InputDecoration(
       hintText: hint,
+      filled: true,
+      fillColor: const Color(0xFFF7FAFE),
       isDense: true,
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(10),
@@ -1131,9 +1111,10 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
     TextStyle style = AppTextStyles.body(
       size: 11.5,
       weight: FontWeight.w800,
-      color: AppColors.textGray,
+      color: Colors.white,
     );
-    return Padding(
+    return Container(
+      color: const Color(0xFF14243D),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Row(
         children: [
@@ -1382,10 +1363,10 @@ class _ExamTab extends StatelessWidget {
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
             decoration: BoxDecoration(
-              color: selected ? const Color(0xFFD1FAE5) : Colors.white,
+              color: selected ? const Color(0xFF244361) : const Color(0xFFF4F7FC),
               borderRadius: BorderRadius.circular(10),
               border: Border.all(
-                color: selected ? AppColors.primaryGreen : AppColors.cardBorder,
+                color: selected ? const Color(0xFF244361) : const Color(0xFFCFDAE8),
                 width: selected ? 1.5 : 1,
               ),
             ),
@@ -1399,7 +1380,7 @@ class _ExamTab extends StatelessWidget {
                       size: 12,
                       weight: selected ? FontWeight.w700 : FontWeight.w600,
                       color: selected
-                          ? AppColors.primaryGreen
+                          ? const Color(0xFFB3EDC5)
                           : AppColors.textDark,
                     ),
                   ),
@@ -1414,7 +1395,7 @@ class _ExamTab extends StatelessWidget {
                         size: 13,
                         weight: FontWeight.w800,
                         color: selected
-                            ? AppColors.primaryGreen
+                            ? const Color(0xFFB3EDC5)
                             : AppColors.textDark,
                       ),
                     ),

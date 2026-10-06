@@ -101,53 +101,78 @@ class _DashboardState extends State<GuidanceWebDashboardView> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Text(
-              'Examination overview',
-              style: TextStyle(
-                fontSize: 26,
-                fontWeight: FontWeight.w800,
-                color: AppColors.textDark,
+            Container(
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF14243D), Color(0xFF254B62)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                borderRadius: BorderRadius.circular(22),
               ),
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              'Compare result distributions across the three examinations.',
-              style: TextStyle(
-                fontSize: 14,
-                height: 1.5,
-                color: AppColors.textGray,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Wrap(
-              spacing: 8,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                if (widget.refreshInterval != null)
-                  const Row(
-                    mainAxisSize: MainAxisSize.min,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Examination overview',
+                    style: TextStyle(
+                      fontSize: 26,
+                      fontWeight: FontWeight.w800,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Compare result distributions across the three examinations.',
+                    style: TextStyle(
+                      fontSize: 14,
+                      height: 1.5,
+                      color: const Color(0xFFCDDBEA),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Wrap(
+                    spacing: 8,
+                    crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
-                      Icon(Icons.sync, size: 16, color: AppColors.primaryGreen),
-                      SizedBox(width: 6),
-                      Flexible(
-                        child: Text(
-                          'Updates automatically',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: AppColors.textGray,
-                          ),
+                      if (widget.refreshInterval != null)
+                        const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.sync,
+                              size: 16,
+                              color: Color(0xFF99E2B0),
+                            ),
+                            SizedBox(width: 6),
+                            Flexible(
+                              child: Text(
+                                'Updates automatically',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: const Color(0xFFCDDBEA),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      IconButton(
+                        tooltip: 'About these statistics',
+                        onPressed: _showStatisticsInformation,
+                        icon: const Icon(
+                          Icons.info_outline,
+                          size: 20,
+                          color: Colors.white,
                         ),
                       ),
                     ],
                   ),
-                IconButton(
-                  tooltip: 'About these statistics',
-                  onPressed: _showStatisticsInformation,
-                  icon: const Icon(Icons.info_outline, size: 20),
-                ),
-              ],
+                  const SizedBox(height: 12),
+                ],
+              ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 20),
             FutureBuilder<GuidanceDashboardData>(
               future: _data,
               builder: (context, snapshot) {
@@ -222,7 +247,12 @@ class _ChartCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) => SurfaceCard(
     key: ValueKey('dashboard.chart.${data.title}'),
-    padding: const EdgeInsets.all(16),
+    color: switch (data.title) {
+      'Admission Test' => const Color(0xFFEDF3FC),
+      'QTM' => const Color(0xFFEDF6F1),
+      _ => const Color(0xFFF4F0FA),
+    },
+    padding: const EdgeInsets.all(20),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -231,7 +261,7 @@ class _ChartCard extends StatelessWidget {
           style: const TextStyle(
             fontSize: 20,
             fontWeight: FontWeight.w700,
-            color: AppColors.textDark,
+            color: const Color(0xFF14243D),
           ),
         ),
         const SizedBox(height: 6),
@@ -298,8 +328,7 @@ class _BarPainter extends CustomPainter {
     }
     final match = RegExp(r'(\d+)–(\d+)').firstMatch(label);
     if (match == null) return AppColors.primaryGreen;
-    final mid =
-        (int.parse(match.group(1)!) + int.parse(match.group(2)!)) ~/ 2;
+    final mid = (int.parse(match.group(1)!) + int.parse(match.group(2)!)) ~/ 2;
     final index = switch (data.title) {
       'QTM' => qtmCategory(mid)?.index ?? 0,
       'TAT' => tatCategory(mid)?.index ?? 0,
@@ -326,6 +355,7 @@ class _BarPainter extends CustomPainter {
       canvas,
       centered ? offset - Offset(painter.width / 2, 0) : offset,
     );
+    painter.dispose();
   }
 
   @override
@@ -365,15 +395,24 @@ class _BarPainter extends CustomPainter {
       final x = left + slot * (i + 0.5);
       final barHeight = height * data.counts[i] / ceiling;
       final bar = Rect.fromLTWH(
-        x - slot * .26,
+        x - math.min(64.0, slot * .52) / 2,
         top + height - barHeight,
-        slot * .52,
+        math.min(64.0, slot * .52),
         barHeight,
       );
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(bar, const Radius.circular(5)),
-        Paint()..color = _barColor(i),
-      );
+      if (barHeight > 0)
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(bar, const Radius.circular(5)),
+          Paint()
+            ..shader = LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                _barColor(i),
+                Color.lerp(_barColor(i), const Color(0xFF14243D), 0.18)!,
+              ],
+            ).createShader(bar),
+        );
       _text(
         canvas,
         '${data.counts[i]}',

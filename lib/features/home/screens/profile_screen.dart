@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -62,7 +63,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
     // AppState.guidancePositions already starts at GuidancePositions.
     // defaults and FirestoreService.loadGuidancePositions falls back to the
     // same on any failure.
-    unawaited(AppStateScope.of(context).loadGuidancePositions(_firestoreService));
+    unawaited(
+      AppStateScope.of(context).loadGuidancePositions(_firestoreService),
+    );
   }
 
   /// Enters edit mode, pre-filled with this account's current values -- the
@@ -72,7 +75,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
   void _startEditing(UserModel user) {
     _firstNameController = TextEditingController(text: user.firstName ?? '');
     _lastNameController = TextEditingController(text: user.lastName ?? '');
-    _middleInitialController = TextEditingController(text: user.middleInitial ?? '');
+    _middleInitialController = TextEditingController(
+      text: user.middleInitial ?? '',
+    );
     _displayNameController = TextEditingController(text: user.displayName);
     // Trusted as-is, with no membership check against the loaded/fallback
     // position list -- an already-saved position (including one a System
@@ -125,7 +130,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final appState = AppStateScope.of(context);
     final current = appState.currentUser;
     if (current == null) {
-      setState(() => _error = 'Unable to verify your session. Please sign in again.');
+      setState(
+        () => _error = 'Unable to verify your session. Please sign in again.',
+      );
       return;
     }
 
@@ -136,7 +143,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
     final firstName = _firstNameController!.text.trim();
     final lastName = _lastNameController!.text.trim();
-    final middleInitial = UserNameRules.normalizeMiddleInitial(_middleInitialController!.text);
+    final middleInitial = UserNameRules.normalizeMiddleInitial(
+      _middleInitialController!.text,
+    );
     final displayName = _displayNameController!.text.trim();
     final position = _guidancePosition!;
 
@@ -152,18 +161,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
       // Update AppState in place -- the existing single source of truth --
       // so this screen (and every other screen) reflects the change
       // immediately, with no re-login and no second read required.
-      appState.setCurrentUser(current.copyWith(
-        firstName: firstName,
-        lastName: lastName,
-        middleInitial: middleInitial,
-        displayName: displayName,
-        guidancePosition: position,
-      ));
+      appState.setCurrentUser(
+        current.copyWith(
+          firstName: firstName,
+          lastName: lastName,
+          middleInitial: middleInitial,
+          displayName: displayName,
+          guidancePosition: position,
+        ),
+      );
       _disposeFormControllers();
       setState(() => _isEditing = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Profile updated.')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Profile updated.')));
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -186,122 +197,189 @@ class _ProfileScreenState extends State<ProfileScreen> {
     // instead of the account's real, Guidance-Council-maintained profile.
     final user = AppStateScope.of(context).currentUser;
     final displayName = user?.displayName.trim();
-    final name = (displayName != null && displayName.isNotEmpty) ? displayName : 'NDMU Staff Officer';
+    final name = (displayName != null && displayName.isNotEmpty)
+        ? displayName
+        : 'NDMU Staff Officer';
     final email = user?.email;
 
     return Scaffold(
-      backgroundColor: AppColors.lightBg,
+      backgroundColor: kIsWeb ? const Color(0xFFEAF0F7) : AppColors.lightBg,
       appBar: AppBar(
-        backgroundColor: Colors.white,
-        foregroundColor: AppColors.textDark,
+        backgroundColor: kIsWeb ? const Color(0xFF14243D) : Colors.white,
+        foregroundColor: kIsWeb ? Colors.white : AppColors.textDark,
         elevation: 0.5,
-        title: Text('Profile', style: AppTextStyles.heading(size: 13)),
+        title: Text(
+          'Profile',
+          style: AppTextStyles.heading(
+            size: kIsWeb ? 18 : 13,
+            color: kIsWeb ? Colors.white : AppColors.darkNavy,
+          ),
+        ),
       ),
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(16),
-          child: Form(
-            key: _formKey,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: AppColors.cardBorder),
-                  ),
-                  child: Column(
-                    children: [
-                      Container(
-                        width: 72,
-                        height: 72,
-                        alignment: Alignment.center,
-                        decoration: const BoxDecoration(color: Color(0xFF1B5E20), shape: BoxShape.circle),
-                        child: const FaIcon(FontAwesomeIcons.userTie, size: 28, color: Colors.white),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: kIsWeb ? 800 : double.infinity,
+              ),
+              child: Form(
+                key: _formKey,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(20),
+                      decoration: BoxDecoration(
+                        color: kIsWeb ? const Color(0xFF1B304D) : Colors.white,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: AppColors.cardBorder),
                       ),
-                      const SizedBox(height: 14),
-                      Text(name, style: AppTextStyles.heading(size: 15), textAlign: TextAlign.center),
-                      if (email != null) ...[
-                        const SizedBox(height: 4),
-                        Text(email, style: AppTextStyles.body(size: 11, color: AppColors.textGray)),
-                      ],
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Container(
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: AppColors.cardBorder),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      child: Column(
                         children: [
-                          Text('Profile Information', style: AppTextStyles.heading(size: 12)),
-                          if (!_isEditing && user != null)
-                            InkWell(
-                              key: const Key('profile.editButton'),
-                              onTap: () => _startEditing(user),
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    const FaIcon(FontAwesomeIcons.penToSquare, size: 11, color: AppColors.primaryGreen),
-                                    const SizedBox(width: 4),
-                                    Text('Edit', style: AppTextStyles.body(size: 10.5, color: AppColors.primaryGreen, weight: FontWeight.w600)),
-                                  ],
-                                ),
-                              ),
+                          Container(
+                            width: 72,
+                            height: 72,
+                            alignment: Alignment.center,
+                            decoration: const BoxDecoration(
+                              color: Color(0xFF1B5E20),
+                              shape: BoxShape.circle,
                             ),
-                        ],
-                      ),
-                      const SizedBox(height: 14),
-                      if (_isEditing) _buildEditForm() else _buildReadOnlyInfo(user),
-                      if (_error != null) ...[
-                        const SizedBox(height: 12),
-                        Text(_error!, style: AppTextStyles.body(size: 11, color: AppColors.warmRedOrange)),
-                      ],
-                      if (_isEditing) ...[
-                        const SizedBox(height: 16),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: SecondaryButton(
-                                key: const Key('profile.cancelButton'),
-                                label: 'CANCEL',
-                                onPressed: _isSaving ? null : _cancelEditing,
-                              ),
+                            child: const FaIcon(
+                              FontAwesomeIcons.userTie,
+                              size: 28,
+                              color: Colors.white,
                             ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: PrimaryButton(
-                                key: const Key('profile.saveButton'),
-                                label: _isSaving ? 'Saving...' : 'SAVE',
-                                onPressed: _isSaving ? null : _save,
+                          ),
+                          const SizedBox(height: 14),
+                          Text(
+                            name,
+                            style: AppTextStyles.heading(
+                              size: kIsWeb ? 22 : 15,
+                              color: kIsWeb ? Colors.white : AppColors.darkNavy,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                          if (email != null) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              email,
+                              style: AppTextStyles.body(
+                                size: kIsWeb ? 13 : 11,
+                                color: kIsWeb
+                                    ? const Color(0xFFC4D1E2)
+                                    : AppColors.textGray,
                               ),
                             ),
                           ],
-                        ),
-                      ],
-                    ],
-                  ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Container(
+                      padding: const EdgeInsets.all(20),
+                      decoration: BoxDecoration(
+                        color: kIsWeb ? const Color(0xFFEAF1FA) : Colors.white,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: AppColors.cardBorder),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                'Profile Information',
+                                style: AppTextStyles.heading(
+                                  size: kIsWeb ? 18 : 12,
+                                ),
+                              ),
+                              if (!_isEditing && user != null)
+                                InkWell(
+                                  key: const Key('profile.editButton'),
+                                  onTap: () => _startEditing(user),
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 4,
+                                      vertical: 2,
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        const FaIcon(
+                                          FontAwesomeIcons.penToSquare,
+                                          size: 11,
+                                          color: AppColors.primaryGreen,
+                                        ),
+                                        const SizedBox(width: 4),
+                                        Text(
+                                          'Edit',
+                                          style: AppTextStyles.body(
+                                            size: 10.5,
+                                            color: AppColors.primaryGreen,
+                                            weight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                          const SizedBox(height: 14),
+                          if (_isEditing)
+                            _buildEditForm()
+                          else
+                            _buildReadOnlyInfo(user),
+                          if (_error != null) ...[
+                            const SizedBox(height: 12),
+                            Text(
+                              _error!,
+                              style: AppTextStyles.body(
+                                size: 11,
+                                color: AppColors.warmRedOrange,
+                              ),
+                            ),
+                          ],
+                          if (_isEditing) ...[
+                            const SizedBox(height: 16),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: SecondaryButton(
+                                    key: const Key('profile.cancelButton'),
+                                    label: 'CANCEL',
+                                    onPressed: _isSaving
+                                        ? null
+                                        : _cancelEditing,
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: PrimaryButton(
+                                    key: const Key('profile.saveButton'),
+                                    label: _isSaving ? 'Saving...' : 'SAVE',
+                                    onPressed: _isSaving ? null : _save,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    PrimaryButton(
+                      label: 'LOG OUT',
+                      icon: FontAwesomeIcons.rightFromBracket,
+                      color: AppColors.warmRedOrange,
+                      onPressed: () => confirmLogout(context),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 24),
-                PrimaryButton(
-                  label: 'LOG OUT',
-                  icon: FontAwesomeIcons.rightFromBracket,
-                  color: AppColors.warmRedOrange,
-                  onPressed: () => confirmLogout(context),
-                ),
-              ],
+              ),
             ),
           ),
         ),
@@ -349,11 +427,21 @@ class _ProfileScreenState extends State<ProfileScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SizedBox(
-            width: 110,
-            child: Text(label, style: AppTextStyles.body(size: 11, color: AppColors.textGray)),
+            width: kIsWeb ? 150 : 110,
+            child: Text(
+              label,
+              style: AppTextStyles.body(
+                size: kIsWeb ? 14 : 11,
+                weight: kIsWeb ? FontWeight.w600 : FontWeight.w400,
+                color: kIsWeb ? const Color(0xFF334B65) : AppColors.textGray,
+              ),
+            ),
           ),
           Expanded(
-            child: Text(display, style: AppTextStyles.body(size: 11.5, weight: FontWeight.w600)),
+            child: Text(
+              display,
+              style: AppTextStyles.body(size: kIsWeb ? 14 : 11.5, weight: FontWeight.w600),
+            ),
           ),
         ],
       ),
@@ -395,8 +483,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
           controller: _displayNameController!,
           hint: 'e.g., Juan Dela Cruz',
           fieldKey: const Key('profile.displayName'),
-          validator: (value) =>
-              (value == null || value.trim().isEmpty) ? 'This field is required' : null,
+          validator: (value) => (value == null || value.trim().isEmpty)
+              ? 'This field is required'
+              : null,
         ),
         const SizedBox(height: 12),
         _buildPositionDropdown(),
@@ -414,7 +503,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label, style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600)),
+        Text(
+          label,
+          style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600),
+        ),
         const SizedBox(height: 6),
         TextFormField(
           key: fieldKey,
@@ -434,7 +526,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
               borderRadius: BorderRadius.circular(10),
               borderSide: BorderSide(color: AppColors.primaryGreen),
             ),
-            contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 14,
+              vertical: 12,
+            ),
           ),
           validator: validator,
         ),
@@ -454,7 +549,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Position', style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600)),
+        Text(
+          'Position',
+          style: AppTextStyles.body(size: 10.5, weight: FontWeight.w600),
+        ),
         const SizedBox(height: 6),
         DropdownButtonFormField<String>(
           key: const Key('profile.position'),
@@ -473,17 +571,25 @@ class _ProfileScreenState extends State<ProfileScreen> {
               borderRadius: BorderRadius.circular(10),
               borderSide: BorderSide(color: AppColors.primaryGreen),
             ),
-            contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 14,
+              vertical: 12,
+            ),
           ),
           items: positions
-              .map((p) => DropdownMenuItem(value: p.value, child: Text(p.label, style: AppTextStyles.body(size: 11))))
+              .map(
+                (p) => DropdownMenuItem(
+                  value: p.value,
+                  child: Text(p.label, style: AppTextStyles.body(size: 11)),
+                ),
+              )
               .toList(),
           onChanged: _isSaving
               ? null
               : (value) => setState(() {
-                    _guidancePosition = value;
-                    _error = null;
-                  }),
+                  _guidancePosition = value;
+                  _error = null;
+                }),
           validator: (value) => value == null ? 'Position is required' : null,
         ),
       ],

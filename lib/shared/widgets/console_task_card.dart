@@ -11,6 +11,7 @@ class ConsoleTaskCard extends StatelessWidget {
     required this.description,
     required this.onTap,
     this.accent = AppColors.primaryGreen,
+    this.dark = false,
   });
 
   final IconData icon;
@@ -18,16 +19,17 @@ class ConsoleTaskCard extends StatelessWidget {
   final String description;
   final VoidCallback onTap;
   final Color accent;
+  final bool dark;
 
   @override
   Widget build(BuildContext context) {
     return Semantics(
       button: true,
       child: Material(
-        color: Colors.white,
+        color: dark ? const Color(0xFF1B304D) : Colors.white,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(18),
-          side: const BorderSide(color: AppColors.cardBorder),
+          side: BorderSide(color: dark ? const Color(0xFF354D6A) : AppColors.cardBorder),
         ),
         clipBehavior: Clip.antiAlias,
         child: InkWell(
@@ -43,7 +45,7 @@ class ConsoleTaskCard extends StatelessWidget {
                     Container(
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: accent.withValues(alpha: 0.09),
+                        color: accent.withValues(alpha: dark ? 0.16 : 0.09),
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Icon(icon, color: accent, size: 24),
@@ -55,19 +57,19 @@ class ConsoleTaskCard extends StatelessWidget {
                 const SizedBox(height: 20),
                 Text(
                   title,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 17,
                     fontWeight: FontWeight.w700,
-                    color: AppColors.textDark,
+                    color: dark ? const Color(0xFFF4F7FC) : AppColors.textDark,
                   ),
                 ),
                 const SizedBox(height: 8),
                 Text(
                   description,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 14,
                     height: 1.5,
-                    color: AppColors.textGray,
+                    color: dark ? const Color(0xFFC4D1E2) : AppColors.textGray,
                   ),
                 ),
               ],

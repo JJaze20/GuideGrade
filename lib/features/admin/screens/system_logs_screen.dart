@@ -28,7 +28,8 @@ class SystemLogsScreen extends StatefulWidget {
 }
 
 class _SystemLogsScreenState extends State<SystemLogsScreen> {
-  late final LoggingService _loggingService = widget.loggingService ?? LoggingService();
+  late final LoggingService _loggingService =
+      widget.loggingService ?? LoggingService();
   final _searchController = TextEditingController();
 
   String _categoryFilter = 'All';
@@ -86,7 +87,10 @@ class _SystemLogsScreenState extends State<SystemLogsScreen> {
   Future<void> _loadMore() async {
     if (_isLoadingMore || !_hasMore) return;
     setState(() => _isLoadingMore = true);
-    final page = await _loggingService.getRecentLogs(limit: _pageSize, startAfter: _lastDocument);
+    final page = await _loggingService.getRecentLogs(
+      limit: _pageSize,
+      startAfter: _lastDocument,
+    );
     if (!mounted) return;
     if (page.isError) {
       // A pagination failure must not disturb the logs already loaded and
@@ -95,7 +99,9 @@ class _SystemLogsScreenState extends State<SystemLogsScreen> {
       // button just reappears for the user to retry.
       setState(() => _isLoadingMore = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not load more logs. Please try again.')),
+        const SnackBar(
+          content: Text('Could not load more logs. Please try again.'),
+        ),
       );
       return;
     }
@@ -110,10 +116,13 @@ class _SystemLogsScreenState extends State<SystemLogsScreen> {
   List<LogEntry> get _filteredLogs {
     final term = _searchController.text.trim().toLowerCase();
     return _logs.where((log) {
-      if (_categoryFilter != 'All' && log.category != _categoryFilter) return false;
-      if (_severityFilter != 'All' && log.severity != _severityFilter) return false;
+      if (_categoryFilter != 'All' && log.category != _categoryFilter)
+        return false;
+      if (_severityFilter != 'All' && log.severity != _severityFilter)
+        return false;
       if (term.isNotEmpty) {
-        return log.actorEmail.toLowerCase().contains(term) || log.description.toLowerCase().contains(term);
+        return log.actorEmail.toLowerCase().contains(term) ||
+            log.description.toLowerCase().contains(term);
       }
       return true;
     }).toList();
@@ -135,13 +144,21 @@ class _SystemLogsScreenState extends State<SystemLogsScreen> {
               _buildDetailRow('Success', log.success ? 'Yes' : 'No'),
               _buildDetailRow('Actor', '${log.actorEmail} (${log.actorRole})'),
               _buildDetailRow('Actor UID', log.actorUid),
-              if (log.targetUserEmail != null) _buildDetailRow('Target', log.targetUserEmail!),
-              _buildDetailRow('Timestamp', log.timestamp?.toLocal().toString() ?? 'Pending server confirmation'),
+              if (log.targetUserEmail != null)
+                _buildDetailRow('Target', log.targetUserEmail!),
+              _buildDetailRow(
+                'Timestamp',
+                log.timestamp?.toLocal().toString() ??
+                    'Pending server confirmation',
+              ),
             ],
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.of(dialogContext).pop(), child: const Text('Close')),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Close'),
+          ),
         ],
       ),
     );
@@ -162,7 +179,9 @@ class _SystemLogsScreenState extends State<SystemLogsScreen> {
   }
 
   bool get _filtersActive =>
-      _searchController.text.isNotEmpty || _categoryFilter != 'All' || _severityFilter != 'All';
+      _searchController.text.isNotEmpty ||
+      _categoryFilter != 'All' ||
+      _severityFilter != 'All';
 
   void _clearFilters() {
     setState(() {
@@ -174,20 +193,26 @@ class _SystemLogsScreenState extends State<SystemLogsScreen> {
 
   /// Keeps the toolbar and list readable on wide desktop windows.
   Widget _centered(Widget child) => Align(
-        alignment: Alignment.topCenter,
-        child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 960), child: child),
-      );
+    alignment: Alignment.topCenter,
+    child: ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 960),
+      child: child,
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.lightBg,
+      backgroundColor: const Color(0xFFEAF0F7),
       appBar: AppBar(
-        backgroundColor: Colors.white,
-        foregroundColor: AppColors.textDark,
+        backgroundColor: const Color(0xFF14243D),
+        foregroundColor: Colors.white,
         elevation: 0,
         shape: const Border(bottom: BorderSide(color: AppColors.border)),
-        title: Text('System Logs', style: AppTextStyles.heading(size: 17)),
+        title: Text(
+          'System Logs',
+          style: AppTextStyles.heading(size: 17, color: Colors.white),
+        ),
         actions: [
           IconButton(
             tooltip: 'Refresh logs',
@@ -205,10 +230,10 @@ class _SystemLogsScreenState extends State<SystemLogsScreen> {
               child: _isLoading
                   ? const LoadingState(message: 'Loading logs…')
                   : _hasError
-                      ? _buildErrorState()
-                      : _filteredLogs.isEmpty
-                          ? _buildEmptyState()
-                          : _buildLogList(),
+                  ? _buildErrorState()
+                  : _filteredLogs.isEmpty
+                  ? _buildEmptyState()
+                  : _buildLogList(),
             ),
           ],
         ),
@@ -220,7 +245,7 @@ class _SystemLogsScreenState extends State<SystemLogsScreen> {
     return Container(
       width: double.infinity,
       decoration: const BoxDecoration(
-        color: AppColors.surface,
+        color: const Color(0xFFDDE7F3),
         border: Border(bottom: BorderSide(color: AppColors.border)),
       ),
       padding: const EdgeInsets.all(AppSpace.lg),
@@ -231,6 +256,7 @@ class _SystemLogsScreenState extends State<SystemLogsScreen> {
             TextField(
               controller: _searchController,
               decoration: FormFieldStyle.outlined(
+                fillColor: const Color(0xFFF0F5FC),
                 hint: 'Search by actor email or description',
                 prefixIcon: const Icon(Icons.search, size: 20),
                 suffixIcon: _searchController.text.isNotEmpty
@@ -243,24 +269,18 @@ class _SystemLogsScreenState extends State<SystemLogsScreen> {
               ),
             ),
             const SizedBox(height: AppSpace.md),
-            _filterGroup(
-              'Category',
-              _categoryFilter,
-              const [
-                'All',
-                LogCategory.authentication,
-                LogCategory.userManagement,
-                LogCategory.authorization,
-              ],
-              (v) => setState(() => _categoryFilter = v),
-            ),
+            _filterGroup('Category', _categoryFilter, const [
+              'All',
+              LogCategory.authentication,
+              LogCategory.userManagement,
+              LogCategory.authorization,
+            ], (v) => setState(() => _categoryFilter = v)),
             const SizedBox(height: AppSpace.sm),
-            _filterGroup(
-              'Severity',
-              _severityFilter,
-              const ['All', LogSeverity.info, LogSeverity.warning],
-              (v) => setState(() => _severityFilter = v),
-            ),
+            _filterGroup('Severity', _severityFilter, const [
+              'All',
+              LogSeverity.info,
+              LogSeverity.warning,
+            ], (v) => setState(() => _severityFilter = v)),
           ],
         ),
       ),
@@ -281,12 +301,17 @@ class _SystemLogsScreenState extends State<SystemLogsScreen> {
       runSpacing: AppSpace.xs,
       children: [
         SizedBox(width: 72, child: Text(label, style: AppTextStyles.label())),
-        for (final option in options) _buildFilterChip(current, option, onSelect),
+        for (final option in options)
+          _buildFilterChip(current, option, onSelect),
       ],
     );
   }
 
-  Widget _buildFilterChip(String currentValue, String label, void Function(String) onSelect) {
+  Widget _buildFilterChip(
+    String currentValue,
+    String label,
+    void Function(String) onSelect,
+  ) {
     final isSelected = currentValue == label;
     return FilterChip(
       label: Text(label),
@@ -295,7 +320,9 @@ class _SystemLogsScreenState extends State<SystemLogsScreen> {
       showCheckmark: false,
       selectedColor: AppColors.successBg,
       backgroundColor: AppColors.surface,
-      side: BorderSide(color: isSelected ? AppColors.successBorder : AppColors.borderStrong),
+      side: BorderSide(
+        color: isSelected ? AppColors.successBorder : AppColors.borderStrong,
+      ),
       labelStyle: AppTextStyles.body(
         size: 12.5,
         weight: isSelected ? FontWeight.w800 : FontWeight.w600,
@@ -313,7 +340,10 @@ class _SystemLogsScreenState extends State<SystemLogsScreen> {
         itemBuilder: (context, index) {
           if (index >= logs.length) {
             return Padding(
-              padding: const EdgeInsets.only(top: AppSpace.xs, bottom: AppSpace.lg),
+              padding: const EdgeInsets.only(
+                top: AppSpace.xs,
+                bottom: AppSpace.lg,
+              ),
               child: Center(
                 child: _isLoadingMore
                     ? const CircularProgressIndicator()
@@ -346,7 +376,10 @@ class _SystemLogsScreenState extends State<SystemLogsScreen> {
           ? 'Try adjusting your search or filters'
           : 'System activity will appear here as it happens',
       action: _filtersActive
-          ? OutlinedButton(onPressed: _clearFilters, child: const Text('Clear filters'))
+          ? OutlinedButton(
+              onPressed: _clearFilters,
+              child: const Text('Clear filters'),
+            )
           : null,
     );
   }

@@ -118,7 +118,8 @@ class _EditUserScreenState extends State<EditUserScreen> {
   }
 
   Future<void> _loadUser() async {
-    final args = widget.user ?? ModalRoute.of(context)?.settings.arguments as UserModel?;
+    final args =
+        widget.user ?? ModalRoute.of(context)?.settings.arguments as UserModel?;
     if (args == null) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -140,7 +141,9 @@ class _EditUserScreenState extends State<EditUserScreen> {
       _displayNameController = TextEditingController(text: fresh.displayName);
       // Empty for an older account that has no structured name yet.
       _firstNameController = TextEditingController(text: fresh.firstName ?? '');
-      _middleInitialController = TextEditingController(text: fresh.middleInitial ?? '');
+      _middleInitialController = TextEditingController(
+        text: fresh.middleInitial ?? '',
+      );
       _lastNameController = TextEditingController(text: fresh.lastName ?? '');
       _institutionController = TextEditingController(text: fresh.institution);
       _guidancePosition = fresh.guidancePosition;
@@ -186,22 +189,28 @@ class _EditUserScreenState extends State<EditUserScreen> {
         displayName: _displayNameController.text.trim(),
         firstName: saveName ? _firstNameController.text.trim() : null,
         middleInitial: saveName
-            ? UserNameRules.normalizeMiddleInitial(_middleInitialController.text)
+            ? UserNameRules.normalizeMiddleInitial(
+                _middleInitialController.text,
+              )
             : null,
         lastName: saveName ? _lastNameController.text.trim() : null,
-        institution: _institutionController.text.trim().isEmpty ? 'NDMU' : _institutionController.text.trim(),
+        institution: _institutionController.text.trim().isEmpty
+            ? 'NDMU'
+            : _institutionController.text.trim(),
         guidancePosition: _guidancePosition,
       );
       await _firestoreService.updateUser(updated);
       if (!mounted) return;
       setState(() => _user = updated);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('User updated.')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('User updated.')));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not save changes. Please try again.')),
+        const SnackBar(
+          content: Text('Could not save changes. Please try again.'),
+        ),
       );
     } finally {
       if (mounted) setState(() => _isSaving = false);
@@ -216,7 +225,9 @@ class _EditUserScreenState extends State<EditUserScreen> {
     // can never deactivate their own account from here.
     if (_isEditingSelf) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('You cannot deactivate your own account.')),
+        const SnackBar(
+          content: Text('You cannot deactivate your own account.'),
+        ),
       );
       return;
     }
@@ -225,10 +236,18 @@ class _EditUserScreenState extends State<EditUserScreen> {
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('Deactivate this account?'),
-        content: Text('${_user!.displayName} will no longer be able to sign in until reactivated.'),
+        content: Text(
+          '${_user!.displayName} will no longer be able to sign in until reactivated.',
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.of(dialogContext).pop(false), child: const Text('Cancel')),
-          TextButton(onPressed: () => Navigator.of(dialogContext).pop(true), child: const Text('Deactivate')),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Deactivate'),
+          ),
         ],
       ),
     );
@@ -263,20 +282,34 @@ class _EditUserScreenState extends State<EditUserScreen> {
       // having failed.
       if (admin != null) {
         if (isActive) {
-          await _loggingService.logUserActivated(admin, targetUserId: _user!.userId, targetUserEmail: _user!.email);
+          await _loggingService.logUserActivated(
+            admin,
+            targetUserId: _user!.userId,
+            targetUserEmail: _user!.email,
+          );
         } else {
-          await _loggingService.logUserDeactivated(admin, targetUserId: _user!.userId, targetUserEmail: _user!.email);
+          await _loggingService.logUserDeactivated(
+            admin,
+            targetUserId: _user!.userId,
+            targetUserEmail: _user!.email,
+          );
         }
       }
       if (!mounted) return;
       setState(() => _user = _user!.copyWith(isActive: isActive));
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(isActive ? 'Account activated.' : 'Account deactivated.')),
+        SnackBar(
+          content: Text(
+            isActive ? 'Account activated.' : 'Account deactivated.',
+          ),
+        ),
       );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not update account status. Please try again.')),
+        const SnackBar(
+          content: Text('Could not update account status. Please try again.'),
+        ),
       );
     } finally {
       if (mounted) setState(() => _isSaving = false);
@@ -293,18 +326,26 @@ class _EditUserScreenState extends State<EditUserScreen> {
       await FirebaseAuth.instance.sendPasswordResetEmail(email: _user!.email);
       // Log only after the send above has already succeeded.
       if (admin != null) {
-        await _loggingService.logPasswordResetSent(admin, targetUserId: _user!.userId, targetUserEmail: _user!.email);
+        await _loggingService.logPasswordResetSent(
+          admin,
+          targetUserId: _user!.userId,
+          targetUserEmail: _user!.email,
+        );
       }
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Password reset email sent to ${_user!.email}.')),
+        SnackBar(
+          content: Text('Password reset email sent to ${_user!.email}.'),
+        ),
       );
     } on FirebaseAuthException catch (e) {
       if (!mounted) return;
       final message = e.code == 'user-not-found'
           ? 'No Firebase Authentication account exists for this email.'
           : 'Could not send the reset email. Please try again.';
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
     } finally {
       if (mounted) setState(() => _isSendingReset = false);
     }
@@ -319,13 +360,16 @@ class _EditUserScreenState extends State<EditUserScreen> {
     final isSelf = _isEditingSelf;
 
     return Scaffold(
-      backgroundColor: AppColors.lightBg,
+      backgroundColor: const Color(0xFFEAF0F7),
       appBar: AppBar(
-        backgroundColor: Colors.white,
-        foregroundColor: AppColors.textDark,
+        backgroundColor: const Color(0xFF14243D),
+        foregroundColor: Colors.white,
         elevation: 0,
         shape: const Border(bottom: BorderSide(color: AppColors.border)),
-        title: Text('Edit User', style: AppTextStyles.heading(size: 17)),
+        title: Text(
+          'Edit User',
+          style: AppTextStyles.heading(size: 17, color: Colors.white),
+        ),
       ),
       body: SafeArea(
         child: Form(
@@ -343,13 +387,21 @@ class _EditUserScreenState extends State<EditUserScreen> {
                   ),
                   child: Text(
                     'This is your own account. Role changes and deactivation are disabled here to prevent losing access.',
-                    style: AppTextStyles.body(size: 12.5, color: AppColors.warningFg),
+                    style: AppTextStyles.body(
+                      size: 12.5,
+                      color: AppColors.warningFg,
+                    ),
                   ),
                 ),
               const FormSectionHeader('Account', first: true),
               _buildReadOnlyField('Email', _user!.email),
               const SizedBox(height: 12),
-              _buildReadOnlyField('Role', _user!.role == 'system_admin' ? 'System Admin' : 'Guidance Council'),
+              _buildReadOnlyField(
+                'Role',
+                _user!.role == 'system_admin'
+                    ? 'System Admin'
+                    : 'Guidance Council',
+              ),
               const SizedBox(height: 12),
               _buildStatusRow(),
               const SizedBox(height: 16),
@@ -359,7 +411,9 @@ class _EditUserScreenState extends State<EditUserScreen> {
                   label: 'First Name',
                   controller: _firstNameController,
                   fieldKey: const Key('editUser.firstName'),
-                  validator: (v) => _structuredNameRequired ? UserNameRules.validateFirstName(v) : null,
+                  validator: (v) => _structuredNameRequired
+                      ? UserNameRules.validateFirstName(v)
+                      : null,
                 ),
                 const SizedBox(height: 12),
                 Align(
@@ -371,7 +425,9 @@ class _EditUserScreenState extends State<EditUserScreen> {
                       controller: _middleInitialController,
                       hint: 'e.g., D.',
                       fieldKey: const Key('editUser.middleInitial'),
-                      validator: (v) => _structuredNameRequired ? UserNameRules.validateMiddleInitial(v) : null,
+                      validator: (v) => _structuredNameRequired
+                          ? UserNameRules.validateMiddleInitial(v)
+                          : null,
                     ),
                   ),
                 ),
@@ -380,7 +436,9 @@ class _EditUserScreenState extends State<EditUserScreen> {
                   label: 'Last Name',
                   controller: _lastNameController,
                   fieldKey: const Key('editUser.lastName'),
-                  validator: (v) => _structuredNameRequired ? UserNameRules.validateLastName(v) : null,
+                  validator: (v) => _structuredNameRequired
+                      ? UserNameRules.validateLastName(v)
+                      : null,
                 ),
                 const SizedBox(height: 16),
               ],
@@ -394,7 +452,11 @@ class _EditUserScreenState extends State<EditUserScreen> {
                 _buildGuidancePositionDropdown(),
                 const SizedBox(height: 12),
               ],
-              _buildTextField(label: 'Institution', controller: _institutionController, required: false),
+              _buildTextField(
+                label: 'Institution',
+                controller: _institutionController,
+                required: false,
+              ),
               const SizedBox(height: 24),
               PrimaryButton(
                 label: _isSaving ? 'Saving...' : 'Save Changes',
@@ -402,7 +464,9 @@ class _EditUserScreenState extends State<EditUserScreen> {
               ),
               const SizedBox(height: 12),
               SecondaryButton(
-                label: _isSendingReset ? 'Sending...' : 'Send Password Reset Email',
+                label: _isSendingReset
+                    ? 'Sending...'
+                    : 'Send Password Reset Email',
                 onPressed: _isSendingReset ? null : _sendPasswordReset,
               ),
               const SizedBox(height: 24),
@@ -410,16 +474,29 @@ class _EditUserScreenState extends State<EditUserScreen> {
               SizedBox(
                 width: double.infinity,
                 child: OutlinedButton(
-                  onPressed: (_isSaving || isSelf) ? null : (_user!.isActive ? _deactivate : _activate),
+                  onPressed: (_isSaving || isSelf)
+                      ? null
+                      : (_user!.isActive ? _deactivate : _activate),
                   style: OutlinedButton.styleFrom(
-                    foregroundColor: _user!.isActive ? AppColors.dangerFg : AppColors.primaryGreen,
-                    side: BorderSide(color: _user!.isActive ? AppColors.dangerFg : AppColors.primaryGreen),
+                    foregroundColor: _user!.isActive
+                        ? AppColors.dangerFg
+                        : AppColors.primaryGreen,
+                    side: BorderSide(
+                      color: _user!.isActive
+                          ? AppColors.dangerFg
+                          : AppColors.primaryGreen,
+                    ),
                     padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
                   ),
                   child: Text(
                     _user!.isActive ? 'Deactivate Account' : 'Activate Account',
-                    style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12.5),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 12.5,
+                    ),
                   ),
                 ),
               ),
@@ -458,9 +535,15 @@ class _EditUserScreenState extends State<EditUserScreen> {
           decoration: BoxDecoration(
             color: FormFieldStyle.disabledFill,
             borderRadius: BorderRadius.circular(FormFieldStyle.radius),
-            border: Border.all(color: FormFieldStyle.disabledBorder, width: FormFieldStyle.restingWidth),
+            border: Border.all(
+              color: FormFieldStyle.disabledBorder,
+              width: FormFieldStyle.restingWidth,
+            ),
           ),
-          child: Text(value, style: AppTextStyles.body(size: 13, color: AppColors.textMuted)),
+          child: Text(
+            value,
+            style: AppTextStyles.body(size: 13, color: AppColors.textMuted),
+          ),
         ),
       ],
     );
@@ -481,11 +564,16 @@ class _EditUserScreenState extends State<EditUserScreen> {
         TextFormField(
           key: fieldKey,
           controller: controller,
-          decoration: FormFieldStyle.outlined(hint: hint),
-          validator: validator ??
+          decoration: FormFieldStyle.outlined(
+            fillColor: const Color(0xFFF0F5FC),
+            hint: hint,
+          ),
+          validator:
+              validator ??
               (required
                   ? (value) {
-                      if (value == null || value.trim().isEmpty) return 'This field is required';
+                      if (value == null || value.trim().isEmpty)
+                        return 'This field is required';
                       return null;
                     }
                   : null),
@@ -525,11 +613,19 @@ class _EditUserScreenState extends State<EditUserScreen> {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(Icons.tune, size: 16, color: AppColors.primaryGreen),
+                    const Icon(
+                      Icons.tune,
+                      size: 16,
+                      color: AppColors.primaryGreen,
+                    ),
                     const SizedBox(width: 4),
                     Text(
                       'Manage Positions',
-                      style: AppTextStyles.body(size: 12.5, color: AppColors.primaryGreen, weight: FontWeight.w700),
+                      style: AppTextStyles.body(
+                        size: 12.5,
+                        color: AppColors.primaryGreen,
+                        weight: FontWeight.w700,
+                      ),
                     ),
                   ],
                 ),
@@ -541,9 +637,16 @@ class _EditUserScreenState extends State<EditUserScreen> {
           key: const Key('editUser.position'),
           initialValue: _guidancePosition,
           isExpanded: true,
-          decoration: FormFieldStyle.outlined(),
+          decoration: FormFieldStyle.outlined(
+            fillColor: const Color(0xFFF0F5FC),
+          ),
           items: positions
-              .map((p) => DropdownMenuItem(value: p.value, child: Text(p.label, style: AppTextStyles.body(size: 13))))
+              .map(
+                (p) => DropdownMenuItem(
+                  value: p.value,
+                  child: Text(p.label, style: AppTextStyles.body(size: 13)),
+                ),
+              )
               .toList(),
           onChanged: (value) => setState(() => _guidancePosition = value),
         ),

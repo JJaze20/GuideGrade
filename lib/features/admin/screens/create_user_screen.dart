@@ -37,7 +37,11 @@ import '../widgets/position_management_dialog.dart';
 class CreateUserScreen extends StatefulWidget {
   /// [provisioningService]/[firestoreService] are only for tests; the app
   /// uses the real ones.
-  const CreateUserScreen({super.key, this.provisioningService, this.firestoreService});
+  const CreateUserScreen({
+    super.key,
+    this.provisioningService,
+    this.firestoreService,
+  });
 
   final UserProvisioningService? provisioningService;
   final FirestoreService? firestoreService;
@@ -140,7 +144,11 @@ class _CreateUserScreenState extends State<CreateUserScreen> {
     final admin = appState.currentUser;
     if (admin == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Unable to verify your admin session. Please sign in again.')),
+        const SnackBar(
+          content: Text(
+            'Unable to verify your admin session. Please sign in again.',
+          ),
+        ),
       );
       return;
     }
@@ -157,24 +165,36 @@ class _CreateUserScreenState extends State<CreateUserScreen> {
         lastName: _lastNameController.text,
         actor: admin,
         guidancePosition: _guidancePosition,
-        institution: _institutionController.text.trim().isEmpty ? 'NDMU' : _institutionController.text.trim(),
+        institution: _institutionController.text.trim().isEmpty
+            ? 'NDMU'
+            : _institutionController.text.trim(),
       );
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Account created. The new user will receive an email to set their password.')),
+        const SnackBar(
+          content: Text(
+            'Account created. The new user will receive an email to set their password.',
+          ),
+        ),
       );
       Navigator.of(context).pop(true);
     } on EmailAlreadyExistsException catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.message)));
     } on UserProvisioningException catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.message)));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not create the account. Please try again.')),
+        const SnackBar(
+          content: Text('Could not create the account. Please try again.'),
+        ),
       );
     } finally {
       if (mounted) setState(() => _isSaving = false);
@@ -184,13 +204,16 @@ class _CreateUserScreenState extends State<CreateUserScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.lightBg,
+      backgroundColor: const Color(0xFFEAF0F7),
       appBar: AppBar(
-        backgroundColor: Colors.white,
-        foregroundColor: AppColors.textDark,
+        backgroundColor: const Color(0xFF14243D),
+        foregroundColor: Colors.white,
         elevation: 0,
         shape: const Border(bottom: BorderSide(color: AppColors.border)),
-        title: Text('Create User', style: AppTextStyles.heading(size: 17)),
+        title: Text(
+          'Create User',
+          style: AppTextStyles.heading(size: 17, color: Colors.white),
+        ),
       ),
       body: SafeArea(
         child: Form(
@@ -209,7 +232,9 @@ class _CreateUserScreenState extends State<CreateUserScreen> {
                 controller: _firstNameController,
                 hint: 'e.g., Juan',
                 fieldKey: const Key('createUser.firstName'),
-                validator: (v) => _structuredNameProvided ? UserNameRules.validateFirstName(v) : null,
+                validator: (v) => _structuredNameProvided
+                    ? UserNameRules.validateFirstName(v)
+                    : null,
               ),
               const SizedBox(height: 12),
               Align(
@@ -221,7 +246,9 @@ class _CreateUserScreenState extends State<CreateUserScreen> {
                     controller: _middleInitialController,
                     hint: 'e.g., D.',
                     fieldKey: const Key('createUser.middleInitial'),
-                    validator: (v) => _structuredNameProvided ? UserNameRules.validateMiddleInitial(v) : null,
+                    validator: (v) => _structuredNameProvided
+                        ? UserNameRules.validateMiddleInitial(v)
+                        : null,
                   ),
                 ),
               ),
@@ -231,7 +258,9 @@ class _CreateUserScreenState extends State<CreateUserScreen> {
                 controller: _lastNameController,
                 hint: 'e.g., Dela Cruz',
                 fieldKey: const Key('createUser.lastName'),
-                validator: (v) => _structuredNameProvided ? UserNameRules.validateLastName(v) : null,
+                validator: (v) => _structuredNameProvided
+                    ? UserNameRules.validateLastName(v)
+                    : null,
               ),
               const SizedBox(height: 16),
               const FormSectionHeader('Account'),
@@ -243,7 +272,10 @@ class _CreateUserScreenState extends State<CreateUserScreen> {
                 ),
                 child: Text(
                   'This creates a Guidance Council account. System Administrator accounts are provisioned separately.',
-                  style: AppTextStyles.body(size: 12.5, color: AppColors.successFg),
+                  style: AppTextStyles.body(
+                    size: 12.5,
+                    color: AppColors.successFg,
+                  ),
                 ),
               ),
               const SizedBox(height: 16),
@@ -255,8 +287,10 @@ class _CreateUserScreenState extends State<CreateUserScreen> {
                 fieldKey: const Key('createUser.email'),
                 keyboardType: TextInputType.emailAddress,
                 validator: (value) {
-                  if (value == null || value.trim().isEmpty) return 'Email is required';
-                  if (!RegExp(_emailPattern).hasMatch(value.trim())) return 'Enter a valid email address';
+                  if (value == null || value.trim().isEmpty)
+                    return 'Email is required';
+                  if (!RegExp(_emailPattern).hasMatch(value.trim()))
+                    return 'Enter a valid email address';
                   return null;
                 },
               ),
@@ -307,11 +341,16 @@ class _CreateUserScreenState extends State<CreateUserScreen> {
           key: fieldKey,
           controller: controller,
           keyboardType: keyboardType,
-          decoration: FormFieldStyle.outlined(hint: hint),
-          validator: validator ??
+          decoration: FormFieldStyle.outlined(
+            fillColor: const Color(0xFFF0F5FC),
+            hint: hint,
+          ),
+          validator:
+              validator ??
               (required
                   ? (value) {
-                      if (value == null || value.trim().isEmpty) return 'This field is required';
+                      if (value == null || value.trim().isEmpty)
+                        return 'This field is required';
                       return null;
                     }
                   : null),
@@ -353,11 +392,19 @@ class _CreateUserScreenState extends State<CreateUserScreen> {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(Icons.tune, size: 16, color: AppColors.primaryGreen),
+                    const Icon(
+                      Icons.tune,
+                      size: 16,
+                      color: AppColors.primaryGreen,
+                    ),
                     const SizedBox(width: 4),
                     Text(
                       'Manage Positions',
-                      style: AppTextStyles.body(size: 12.5, color: AppColors.primaryGreen, weight: FontWeight.w700),
+                      style: AppTextStyles.body(
+                        size: 12.5,
+                        color: AppColors.primaryGreen,
+                        weight: FontWeight.w700,
+                      ),
                     ),
                   ],
                 ),
@@ -373,9 +420,16 @@ class _CreateUserScreenState extends State<CreateUserScreen> {
             'Not set (the account holder can choose this later)',
             style: AppTextStyles.body(size: 13, color: AppColors.textMuted),
           ),
-          decoration: FormFieldStyle.outlined(),
+          decoration: FormFieldStyle.outlined(
+            fillColor: const Color(0xFFF0F5FC),
+          ),
           items: positions
-              .map((p) => DropdownMenuItem(value: p.value, child: Text(p.label, style: AppTextStyles.body(size: 13))))
+              .map(
+                (p) => DropdownMenuItem(
+                  value: p.value,
+                  child: Text(p.label, style: AppTextStyles.body(size: 13)),
+                ),
+              )
               .toList(),
           onChanged: (value) => setState(() => _guidancePosition = value),
         ),
