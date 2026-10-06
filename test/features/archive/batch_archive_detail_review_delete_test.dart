@@ -292,6 +292,49 @@ void main() {
     expect(repo.deleted, isEmpty);
   });
 
+  testWidgets('Active batch deletion requires opening its action menu', (
+    tester,
+  ) async {
+    var deleted = false;
+    var opened = false;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: BatchListItem(
+            batch: _batch([], status: 'Active'),
+            onTap: () => opened = true,
+            onDelete: () => deleted = true,
+          ),
+        ),
+      ),
+    );
+    expect(find.text('Delete batch'), findsNothing);
+    await tester.tap(find.byType(PopupMenuButton<String>));
+    await tester.pumpAndSettle();
+    expect(deleted, isFalse);
+    expect(opened, isFalse);
+    await tester.tap(find.text('Delete batch'));
+    await tester.pumpAndSettle();
+    expect(deleted, isTrue);
+    expect(opened, isFalse);
+  });
+
+  testWidgets('Completed batch exposes no deletion menu', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: BatchListItem(
+            batch: _batch([], status: 'Completed'),
+            onTap: () {},
+            onDelete: () {},
+          ),
+        ),
+      ),
+    );
+    expect(find.byType(PopupMenuButton<String>), findsNothing);
+    expect(find.byIcon(Icons.delete_outline_rounded), findsNothing);
+  });
+
   group('batch card', () {
     testWidgets(
       'shows a Needs review indicator with the affected-sheet count',
