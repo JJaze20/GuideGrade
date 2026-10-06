@@ -16,6 +16,7 @@ import '../../../core/omr/omr_decoder.dart';
 import '../../../core/omr/omr_scorer.dart';
 import '../../../core/omr/omr_templates.dart';
 import '../../../core/omr/rescan_comparison.dart';
+import '../../../core/omr/sheet_exam_recognizer.dart';
 import '../../../core/routes/app_routes.dart';
 import '../../../core/state/app_state.dart';
 import '../../../core/state/rescan_candidate.dart';
@@ -1131,6 +1132,30 @@ class _ExamScanningScreenState extends State<ExamScanningScreen>
       }
       final template = omrTemplates[appState.activeExamCode];
       if (template != null) {
+        final detectedExam = await recognizeSheetExam(file.path);
+        if (!mounted) return;
+        if (detectedExam != null && detectedExam != template.examCode) {
+          _autoCaptureArmed = false;
+          await showDialog<void>(
+            context: context,
+            barrierDismissible: false,
+            builder: (context) => AlertDialog(
+              title: Text('Sheet does not match ${template.examCode} template'),
+              content: Text(
+                'The printed title identifies a $detectedExam sheet. Please use a '
+                '${template.examCode} answer sheet or open the correct exam batch. '
+                'This capture was not saved.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('OK'),
+                ),
+              ],
+            ),
+          );
+          return;
+        }
         final alignmentSw = kOmrPerfDebug ? (Stopwatch()..start()) : null;
         final check = await compute(
           _checkAlignment,

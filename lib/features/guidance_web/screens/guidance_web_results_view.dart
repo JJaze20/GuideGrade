@@ -793,7 +793,11 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
       spacing: 8,
       runSpacing: 8,
       children: [
-        for (final group in ['All', 'Examinee', 'Unlinked Examinee'])
+        for (final group in [
+          'All',
+          'Examinee',
+          if (widget.archivedBatch == null) 'Unlinked Examinee',
+        ])
           ChoiceChip(
             key: Key('resultsIdentity$group'),
             label: Text(

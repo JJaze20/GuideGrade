@@ -409,7 +409,7 @@ void main() {
     }
 
     testWidgets(
-      'a selected batch shows its own description under the dropdowns, results unaffected',
+      'a selected batch keeps its description in the selector without a duplicate panel',
       (tester) async {
         seedBatchWith(description);
         await pumpResultsView(tester);
@@ -421,9 +421,12 @@ void main() {
 
         await selectTheOnlyBatch(tester);
 
-        expect(find.byKey(const Key('batchDescription')), findsOneWidget);
-        expect(find.text('Batch Description'), findsOneWidget);
-        expect(find.text(description), findsOneWidget);
+        expect(find.byKey(const Key('batchDescription')), findsNothing);
+        expect(find.text('Batch Description'), findsNothing);
+        expect(
+          find.textContaining(description, findRichText: true),
+          findsOneWidget,
+        );
         // The existing table, search and filter are all still there.
         expect(find.widgetWithText(TextButton, 'View'), findsNWidgets(2));
         expect(find.byKey(const Key('archiveBatchButton')), findsOneWidget);
@@ -453,7 +456,7 @@ void main() {
 
     testWidgets(
       'the description is the visual focus: larger and bolder than the batch name, in the open menu, '
-      'the closed field and the strip',
+      'the closed field without a duplicate strip',
       (tester) async {
         seedBatchWith(description);
         await pumpResultsView(tester);
@@ -502,28 +505,7 @@ void main() {
           reason: 'the batch name is still shown',
         );
 
-        // Strip under the dropdowns: the largest, boldest text in the batch area.
-        final strip = find.byKey(const Key('batchDescription'));
-        final stripDescription = tester
-            .widget<Text>(
-              find.descendant(of: strip, matching: find.text(description)),
-            )
-            .style!;
-        expect(stripDescription.fontWeight, FontWeight.w800);
-        expect(stripDescription.fontSize!, greaterThanOrEqualTo(16));
-        expect(
-          stripDescription.fontSize!,
-          greaterThan(menuDescription.fontSize!),
-        );
-        final caption = tester
-            .widget<Text>(
-              find.descendant(
-                of: strip,
-                matching: find.text('Batch Description'),
-              ),
-            )
-            .style!;
-        expect(stripDescription.fontSize!, greaterThan(caption.fontSize!));
+        expect(find.byKey(const Key('batchDescription')), findsNothing);
       },
     );
 
@@ -1160,6 +1142,11 @@ void main() {
 
       await pumpArchivedBatch(tester);
 
+      expect(
+        find.byKey(const Key('resultsIdentityUnlinked Examinee')),
+        findsNothing,
+      );
+      expect(find.byKey(const Key('resultsIdentityExaminee')), findsOneWidget);
       expect(find.text('Andulana, Merch'), findsOneWidget);
       expect(find.text('Lim, Ana'), findsOneWidget);
       expect(find.byKey(const Key('notLinkedBadge')), findsOneWidget);
