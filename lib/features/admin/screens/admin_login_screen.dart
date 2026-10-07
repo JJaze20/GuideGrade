@@ -151,18 +151,8 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
                         ),
                       ),
                       const SizedBox(width: 16),
-                      Image.asset(
-                        'assets/images/guidance_council_logo.png',
-                        key: const Key('webLoginGuidanceLogo'),
-                        width: MediaQuery.sizeOf(context).width < 600
-                            ? 64
-                            : 100,
-                        height: MediaQuery.sizeOf(context).width < 600
-                            ? 64
-                            : 100,
-                        fit: BoxFit.contain,
-                        filterQuality: FilterQuality.high,
-                        semanticLabel: 'NDMU Guidance and Testing Center logo',
+                      SizedBox(
+                        width: MediaQuery.sizeOf(context).width < 600 ? 96 : 180,
                       ),
                     ],
                   ),
@@ -188,6 +178,21 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
                   ),
                 ),
               ],
+            ),
+          ),
+          Positioned(
+            top: 24,
+            right: 24,
+            child: SafeArea(
+              child: Image.asset(
+                'assets/images/guidance_council_logo.png',
+                key: const Key('webLoginGuidanceLogo'),
+                width: MediaQuery.sizeOf(context).width < 600 ? 96 : 180,
+                height: MediaQuery.sizeOf(context).width < 600 ? 96 : 180,
+                fit: BoxFit.contain,
+                filterQuality: FilterQuality.high,
+                semanticLabel: 'NDMU Guidance and Testing Center logo',
+              ),
             ),
           ),
         ],
