@@ -1775,4 +1775,39 @@ void main() {
       expectNoNetworkOrDrain();
     },
   );
+
+  test(
+    'a rescan clears the recorded "crop uploaded" flags so the new crops are '
+    're-uploaded even if their jobs are lost',
+    () async {
+      queue.state
+        ..setScanNameCropUploaded('b1', 's1', 'name_last', true)
+        ..setScanNameCropUploaded('b1', 's1', 'name_first', true)
+        ..setScanNameCropUploaded('b1', 's1', 'name_mi', true)
+        ..setScanNameCropUploaded('b1', 's2', 'name_last', true); // another scan: untouched
+      fakeLocal.batchResult = _batch(scans: [_scanWithCrops('s1', last: true)]);
+
+      await repo.replaceScan(
+        batchId: 'b1',
+        scanId: 's1',
+        decoded: _decoded,
+        sourceImage: File('src.jpg'),
+      );
+
+      for (final v in ['name_last', 'name_first', 'name_mi']) {
+        expect(queue.state.scanNameCropUploaded('b1', 's1', v), isFalse, reason: v);
+      }
+      expect(queue.state.scanNameCropUploaded('b1', 's2', 'name_last'), isTrue);
+      // Let the fire-and-forget enqueue finish writing queue.json before a second
+      // SyncQueue opens the same folder (Windows will not rename over a file that
+      // is mid-write).
+      await waitForJobs(6);
+      await settle();
+      // The cleared state was persisted, not only changed in memory.
+      final reloaded = SyncQueue(rootOverride: Directory('${tempDir.path}/queue'));
+      await reloaded.restore();
+      expect(reloaded.state.scanNameCropUploaded('b1', 's1', 'name_last'), isFalse);
+      expect(reloaded.state.scanNameCropUploaded('b1', 's2', 'name_last'), isTrue);
+    },
+  );
 }

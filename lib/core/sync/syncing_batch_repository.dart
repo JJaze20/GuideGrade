@@ -246,6 +246,11 @@ class SyncingBatchRepository implements BatchRepository {
       nameCropMiddleImage: nameCropMiddleImage,
       expectedOriginal: expectedOriginal,
     );
+    // The rescan replaced this sheet's crops locally: any earlier "crop
+    // uploaded" record is now about a DIFFERENT image, so clear it before the
+    // upload jobs below. If those jobs are then lost, the startup reconcile
+    // still re-uploads the new crops instead of trusting the old record.
+    await _clearNameCropUploadedFlags(batchId, scanId);
     _fireEnqueue([
       _pushScan(batchId, scanId),
       _uploadImage(batchId, scanId, _variantOriginal),
@@ -469,6 +474,25 @@ class SyncingBatchRepository implements BatchRepository {
       if (s.id == scanId) return s;
     }
     return null;
+  }
+
+  /// Forgets that this scan's name crops were uploaded (see
+  /// [SyncState.scanNameCropUploaded]). Best-effort and local-only: a failure
+  /// here is logged and never fails the already-successful rescan.
+  Future<void> _clearNameCropUploadedFlags(String batchId, String scanId) async {
+    try {
+      final state = _queue.state;
+      for (final variant in const [
+        _variantNameLast,
+        _variantNameFirst,
+        _variantNameMiddle,
+      ]) {
+        state.setScanNameCropUploaded(batchId, scanId, variant, false);
+      }
+      await _queue.saveState();
+    } catch (error) {
+      _logSyncFailure(error);
+    }
   }
 
   /// One optional-crop upload job per name crop [scan] actually has (by its

@@ -793,10 +793,22 @@ class SupabaseSyncClient
     if (nameCropVariants.contains(variant)) {
       // Optional handwritten-name crop. The local copy is the source of truth
       // (already the JPEG cropNameFields produced -- uploaded as-is, never
-      // re-encoded). No local crop (an older scan, a sheet whose crop failed,
-      // or one that was deleted) means there is nothing to upload: a no-op
-      // success, never a fake object and never a scan-level failure. Unlike
-      // the photos there is no *_uploaded flag to record.
+      // re-encoded). A sheet that never had this crop (an older scan, a sheet
+      // whose crop failed, a restored scan) has nothing to upload: a no-op
+      // success, never a fake object and never a scan-level failure.
+      //
+      // A crop the scan RECORDS but whose local bytes cannot be read is
+      // different: that is a real, permanent problem (`local_file_missing`,
+      // same as a missing original photo), not a quiet success -- otherwise
+      // the job would vanish and the crop would never reach Storage with no
+      // trace. A successful upload is recorded per variant in [SyncState] so
+      // the startup reconcile can tell which crops still need uploading.
+      final recordedName = switch (variant) {
+        variantNameLast => scan.nameCropLastFileName,
+        variantNameFirst => scan.nameCropFirstFileName,
+        _ => scan.nameCropMiddleFileName,
+      };
+      if (recordedName == null) return const SyncOutcome.success();
       final cropBytes = switch (variant) {
         variantNameLast => await batches.resolveScanNameCropLast(batchId, scan),
         variantNameFirst => await batches.resolveScanNameCropFirst(
@@ -805,7 +817,9 @@ class SupabaseSyncClient
         ),
         _ => await batches.resolveScanNameCropMiddle(batchId, scan),
       };
-      if (cropBytes == null) return const SyncOutcome.success();
+      if (cropBytes == null) {
+        return const SyncOutcome.permanent('local_file_missing');
+      }
       return _guardStorage(StorageOp.write, () async {
         await _client.storage
             .from(storageBucket)
@@ -817,6 +831,7 @@ class SupabaseSyncClient
                 contentType: 'image/jpeg',
               ),
             );
+        syncState.setScanNameCropUploaded(batchId, scanId, variant, true);
         return const SyncOutcome.success();
       });
     }
