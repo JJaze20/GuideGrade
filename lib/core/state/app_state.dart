@@ -1094,7 +1094,7 @@ class AppState extends ChangeNotifier {
     required DateTime updatedAt,
   }) async {
     answerKeys[examCode] =
-        AnswerKey(examCode: examCode, correctChoices: Map.of(answers));
+        AnswerKey.fromCloudAnswers(examCode, Map.of(answers));
     notifyListeners();
     await _localStorage.saveAnswerKeys(answerKeys);
 

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
 import '../../../core/omr/admission_category.dart';
+import '../../../core/omr/at_categories.dart';
 import '../../../core/omr/exam_score.dart';
 import '../../../core/omr/omr_scorer.dart';
 import '../../../core/omr/qtm_result.dart';
@@ -28,7 +29,13 @@ class ScanResultSummary extends StatelessWidget {
     required this.examCode,
     this.result,
     this.live,
+    this.categoryScores,
   });
+
+  /// Admission Test only: raw score per subtest (VC / VR / FR / QR),
+  /// computed by the caller with [computeAtCategoryScores]. Null hides the
+  /// breakdown.
+  final AtCategoryScores? categoryScores;
 
   /// The batch's exam code (`AT` / `QTM` / `TAT`). Taken from the batch,
   /// never inferred from [ScoredResult.examCode].
@@ -84,7 +91,30 @@ class ScanResultSummary extends StatelessWidget {
           _categoryLabel(category),
           valueColor: _categoryColor(category),
         ),
+      ..._atSubtestRows(),
     ]);
+  }
+
+  List<Widget> _atSubtestRows() {
+    final c = categoryScores;
+    if (c == null) return const [];
+    String v(AtCategory cat) {
+      final s = c.scoreOf(cat);
+      return '${s.right} / ${s.total}';
+    }
+
+    return [
+      const Padding(
+        padding: EdgeInsets.symmetric(vertical: 4),
+        child: Divider(height: 1, color: AppColors.cardBorder),
+      ),
+      for (final cat in AtCategory.values)
+        _row(cat.label, v(cat), labelWidth: 120),
+      _row('Verbal (VC + VR)', '${c.verbalRight} / ${c.verbalTotal}',
+          valueColor: AppColors.darkNavy, labelWidth: 120),
+      _row('Non-Verbal (FR + QR)', '${c.nonVerbalRight} / ${c.nonVerbalTotal}',
+          valueColor: AppColors.darkNavy, labelWidth: 120),
+    ];
   }
 
   /// The official Admission Test percentage (fixed 72 denominator).
@@ -226,14 +256,14 @@ class ScanResultSummary extends StatelessWidget {
         children: children,
       );
 
-  Widget _row(String label, String value, {Color? valueColor}) {
+  Widget _row(String label, String value, {Color? valueColor, double labelWidth = 78}) {
     return Padding(
       padding: const EdgeInsets.only(top: 3),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SizedBox(
-            width: 78,
+            width: labelWidth,
             child: Text(
               label,
               style: AppTextStyles.body(
