@@ -428,7 +428,7 @@ class SyncingBatchRepository implements BatchRepository {
 
   @override
   Future<void> deleteBatch(String id) async {
-    await _verifyDeletion(id);
+    await _verifyBatchDeletion(id);
     // 1. Drop queued content pushes for this batch before the local data
     //    goes (best-effort; never blocks the delete).
     await _cancelPendingPushes(id);
@@ -454,6 +454,31 @@ class SyncingBatchRepository implements BatchRepository {
         outcome.code == 'completed_batch_protected'
             ? 'Completed batches and their scans cannot be deleted.'
             : 'Could not verify batch protection. Connect and try again; nothing was deleted.',
+      );
+    }
+  }
+
+  /// Deleting a whole batch additionally requires it to hold no scanned
+  /// sheet at all -- on this device and in the cloud, soft-deleted scans
+  /// included. Kept apart from [_verifyDeletion], which also guards deleting
+  /// a single scan inside a batch.
+  Future<void> _verifyBatchDeletion(String batchId) async {
+    const hasScans =
+        'Batches with scanned sheets cannot be deleted. Nothing was deleted.';
+    final batch = await local.getBatchById(batchId);
+    if (batch != null && batch.scans.isNotEmpty) {
+      throw StateError(hasScans);
+    }
+    await _verifyDeletion(batchId);
+    final outcome = await checkBatchEmptyForDeletion(
+      syncManager.client,
+      batchId,
+    );
+    if (!outcome.isSuccess) {
+      throw StateError(
+        outcome.code == 'batch_has_scans'
+            ? hasScans
+            : 'Could not verify that the batch is empty. Connect and try again; nothing was deleted.',
       );
     }
   }

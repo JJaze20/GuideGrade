@@ -122,7 +122,7 @@ class _BatchManagementScreenState extends State<BatchManagementScreen> {
   }
 
   Future<void> _confirmDeleteBatch(LocalBatch batch) async {
-    if (batch.isCompleted) return;
+    if (batch.isCompleted || batch.scanCount > 0) return;
     final repo = AppStateScope.of(context).batchRepository;
     final confirmed = await showDialog<bool>(
       context: context,
@@ -131,7 +131,6 @@ class _BatchManagementScreenState extends State<BatchManagementScreen> {
         content: Text(
           'This will permanently delete "${batch.batchCode}"'
           '${batch.description.isNotEmpty ? ' (${batch.description})' : ''}. '
-          '${batch.scanCount > 0 ? 'This batch contains ${batch.scanCount} scanned sheets. Their stored images and results will also be removed. ' : ''}'
           'This cannot be undone.',
         ),
         actions: [

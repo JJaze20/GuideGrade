@@ -52,7 +52,9 @@ class BatchListItem extends StatelessWidget {
               BatchStatusBadge(
                 status: batch.isCompleted ? 'Completed' : 'Active',
               ),
-              if (!batch.isCompleted)
+              // Only an empty, uncompleted batch can be deleted: a batch that
+              // holds any scanned sheet is kept.
+              if (!batch.isCompleted && batch.scanCount == 0)
                 PopupMenuButton<String>(
                   key: ValueKey('batch-actions-${batch.id}'),
                   tooltip: 'Batch actions',

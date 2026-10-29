@@ -114,7 +114,8 @@ class SupabaseSyncClient
         RetakeClient,
         ScanDeleteClient,
         ScanRestoreClient,
-        AdminScanRestoreClient {
+        AdminScanRestoreClient,
+        BatchScanRowCountClient {
   SupabaseSyncClient({
     required this.batches,
     required this.localStorage,
@@ -1835,19 +1836,29 @@ class SupabaseSyncClient
   /// is not counted, so this stays over exactly the same population as
   /// [readCloudScans] -- Analytics' completeness check compares the two.
   @override
-  Future<CloudScanCountsRead> readScanCounts(List<String> batchIds) async {
+  Future<CloudScanCountsRead> readScanCounts(List<String> batchIds) =>
+      _readScanCounts(batchIds, activeOnly: true);
+
+  /// Exact count of EVERY `scans` row per batch, soft-deleted rows included.
+  /// Used only to decide whether a batch is empty enough to be deleted -- a
+  /// soft-deleted scan is still a row in its batch (see
+  /// [BatchScanRowCountClient]).
+  @override
+  Future<CloudScanCountsRead> readAllScanRowCounts(List<String> batchIds) =>
+      _readScanCounts(batchIds, activeOnly: false);
+
+  Future<CloudScanCountsRead> _readScanCounts(
+    List<String> batchIds, {
+    required bool activeOnly,
+  }) async {
     var refreshed = false;
     while (true) {
       try {
         final counts = <String, int>{};
         for (final id in batchIds) {
-          final response = await _client
-              .from('scans')
-              .select('id')
-              .eq('batch_id', id)
-              .isFilter('deleted_at', null)
-              .limit(1)
-              .count(CountOption.exact);
+          var query = _client.from('scans').select('id').eq('batch_id', id);
+          if (activeOnly) query = query.isFilter('deleted_at', null);
+          final response = await query.limit(1).count(CountOption.exact);
           counts[id] = response.count;
         }
         return CloudScanCountsRead.found(counts);
@@ -2416,14 +2427,17 @@ class SupabaseSyncClient
   // G. deleteBatch
   // ---------------------------------------------------------------------------
 
-  /// Deletes the `batches` row. Zero rows affected is still success. Scans
-  /// are removed by the DB cascade and the `batch_deleted` audit row is
-  /// written by the DB trigger — this never touches `scans` or
-  /// `guidance_activity`.
+  /// Deletes the `batches` row. Zero rows affected is still success. Only an
+  /// EMPTY batch is deleted: one with any scan row (soft-deleted included)
+  /// is refused with `batch_has_scans`, so this job can never cascade away
+  /// scans. The `batch_deleted` audit row is written by the DB trigger —
+  /// this never touches `scans` or `guidance_activity`.
   @override
   Future<SyncOutcome> deleteBatch(String batchId) async {
     final allowed = await checkBatchDeletionAllowed(this, batchId);
     if (!allowed.isSuccess) return allowed;
+    final empty = await checkBatchEmptyForDeletion(this, batchId);
+    if (!empty.isSuccess) return empty;
     return _guardPostgrest(() async {
       await _client.from('batches').delete().eq('id', batchId);
       syncState.forgetBatch(batchId);
