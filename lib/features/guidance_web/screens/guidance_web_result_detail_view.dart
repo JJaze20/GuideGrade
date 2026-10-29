@@ -7,6 +7,7 @@ import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
 import '../../../core/constants/exam_catalog.dart';
 import '../../../core/omr/admission_category.dart';
+import '../../../core/omr/at_categories.dart';
 import '../../../core/omr/cluster_analysis.dart';
 import '../../../core/omr/tat_cluster_analysis.dart';
 import '../../../core/omr/exam_score.dart';
@@ -429,7 +430,11 @@ class _GuidanceWebResultDetailViewState
           );
           averages = widget.batch.examCode == 'TAT'
               ? tatClusterAverages(scoredScans)
-              : computeClusterAverages(widget.batch.examCode, scoredScans);
+              : computeClusterAverages(
+                  widget.batch.examCode,
+                  scoredScans,
+                  key: key,
+                );
         } catch (_) {
           // Averages are supplementary; the table still shows the counts.
         }
@@ -670,6 +675,7 @@ class _GuidanceWebResultDetailViewState
                     ),
                     _analyticsFact('Status', result?.status ?? 'Ungraded'),
                     _analyticsFact('Category', letter ?? '—'),
+                    ..._atAnalyticsFacts(),
                   ],
                 ),
               ]);
@@ -900,12 +906,127 @@ class _GuidanceWebResultDetailViewState
     if (result == null) {
       return _card('RESULT SUMMARY', [_infoRow('Status', 'Ungraded')]);
     }
-    return _card('RESULT SUMMARY', [
+    final scoreRows = [
       _infoRow('Score', '${result.rawScore} / ${_denominatorFor(result)}'),
       _infoRow('Percentage', '${result.percentage.toStringAsFixed(2)}%'),
       _infoRow('Status', result.status),
+    ];
+    if (widget.batch.examCode == 'AT') {
+      final scores = computeAtCategoryScores(_scored.items, _answerKey);
+      if (scores != null) {
+        return _card('RESULT SUMMARY', [
+          _atSummaryBody(result, scoreRows, scores),
+        ]);
+      }
+    }
+    return _card('RESULT SUMMARY', [
+      ...scoreRows,
       ..._examSpecificRows(result),
     ]);
+  }
+
+  /// The AT subtest scores as compact facts for the Examinee Analytics
+  /// summary (same numbers as the Examinee Records Result Summary). Empty for
+  /// other exams or when there is no answer key to grade against.
+  List<Widget> _atAnalyticsFacts() {
+    if (widget.batch.examCode != 'AT' || widget.scan.result == null) {
+      return const [];
+    }
+    final scores = computeAtCategoryScores(_scored.items, _answerKey);
+    if (scores == null) return const [];
+    String of(int right, int total) => '$right / $total';
+    return [
+      for (final category in AtCategory.values)
+        _analyticsFact(
+          category.label,
+          of(scores.scoreOf(category).right, scores.scoreOf(category).total),
+        ),
+      _analyticsFact(
+        'Verbal (VC + VR)',
+        of(scores.verbalRight, scores.verbalTotal),
+      ),
+      _analyticsFact(
+        'Non-Verbal (FR + QR)',
+        of(scores.nonVerbalRight, scores.nonVerbalTotal),
+      ),
+    ];
+  }
+
+  /// AT Result Summary body: the ten rows split five and five into two
+  /// columns with the Total centred in the space to their right, level with the third
+  /// line. Narrow screens fall back to one column with Total last.
+  Widget _atSummaryBody(
+    LocalScanResult result,
+    List<Widget> scoreRows,
+    AtCategoryScores scores,
+  ) {
+    Widget row(String label, String value) =>
+        _infoRow(label, value, labelWidth: 170);
+    String of(int right, int total) => '$right / $total';
+    final rows = [
+      ...scoreRows,
+      row('Category', _categoryLabel(admissionCategory(result.rawScore))),
+      for (final category in AtCategory.values)
+        row(
+          category.label,
+          of(scores.scoreOf(category).right, scores.scoreOf(category).total),
+        ),
+      row('Verbal (VC + VR)', of(scores.verbalRight, scores.verbalTotal)),
+      row(
+        'Non-Verbal (FR + QR)',
+        of(scores.nonVerbalRight, scores.nonVerbalTotal),
+      ),
+    ];
+    final total = of(scores.totalRight, scores.totalItems);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < 800) {
+          return Column(children: [...rows, row('Total', total)]);
+        }
+        return IntrinsicHeight(
+          child: Row(
+            key: const Key('atSummaryColumns'),
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SizedBox(
+                width: 300,
+                child: Column(children: rows.take(5).toList()),
+              ),
+              const SizedBox(width: 24),
+              SizedBox(
+                width: 300,
+                child: Column(children: rows.skip(5).toList()),
+              ),
+              Expanded(
+                child: Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'Total',
+                        style: AppTextStyles.body(
+                          size: 10.5,
+                          weight: FontWeight.w700,
+                          color: AppColors.textGray,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        total,
+                        style: AppTextStyles.body(
+                          size: 20,
+                          weight: FontWeight.w800,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   /// TAT's official denominator is its 160-point maximum score, never
@@ -927,7 +1048,10 @@ class _GuidanceWebResultDetailViewState
     switch (widget.batch.examCode) {
       case 'AT':
         final category = admissionCategory(result.rawScore);
-        return [_infoRow('Category', _categoryLabel(category))];
+        return [
+          _infoRow('Category', _categoryLabel(category)),
+          ..._atSubtestRows(),
+        ];
       case 'QTM':
         final eligibility = qtmEligibility(result.rawScore);
         return [_infoRow('Eligibility', _eligibilityLabel(eligibility))];
@@ -936,6 +1060,36 @@ class _GuidanceWebResultDetailViewState
       default:
         return const [];
     }
+  }
+
+  /// AT raw score per subtest (Verbal Comprehension, Verbal Reasoning,
+  /// Figural Reasoning, Quantitative Reasoning) plus the Verbal / Non-Verbal
+  /// subtotals from the paper answer document, via the existing pure
+  /// [computeAtCategoryScores] the Guidance App's View Scan also uses. Shown
+  /// as extra detail only: the recorded Score/Percentage/Category above are
+  /// never replaced. Without an answer key nothing is graded, so the
+  /// breakdown reads Unavailable rather than showing zeros.
+  List<Widget> _atSubtestRows() {
+    final scores = computeAtCategoryScores(_scored.items, _answerKey);
+    if (scores == null) {
+      return [_infoRow('Subtests', 'Unavailable for this result')];
+    }
+    return [
+      for (final category in AtCategory.values)
+        _infoRow(
+          category.label,
+          '${scores.scoreOf(category).right} / ${scores.scoreOf(category).total}',
+        ),
+      _infoRow(
+        'Verbal (VC + VR)',
+        '${scores.verbalRight} / ${scores.verbalTotal}',
+      ),
+      _infoRow(
+        'Non-Verbal (FR + QR)',
+        '${scores.nonVerbalRight} / ${scores.nonVerbalTotal}',
+      ),
+      _infoRow('Total', '${scores.totalRight} / ${scores.totalItems}'),
+    ];
   }
 
   static String _categoryLabel(AdmissionCategory? c) => switch (c) {
@@ -1146,6 +1300,7 @@ class _GuidanceWebResultDetailViewState
             widget.batch.examCode,
             _scored.items,
             averages: _clusterAverages,
+            key: _answerKey,
           )!;
     final headerStyle = AppTextStyles.body(
       size: 9.5,
@@ -1214,7 +1369,7 @@ class _GuidanceWebResultDetailViewState
                 child: Padding(
                   padding: EdgeInsets.only(left: r.def.isGroup ? 8 : 20),
                   child: Text(
-                    '${r.def.label} (${r.def.fromItem}–${r.def.toItem})',
+                    r.def.displayLabel,
                     style: AppTextStyles.body(
                       size: 11,
                       weight: r.def.isGroup ? FontWeight.w700 : FontWeight.w400,
@@ -1297,6 +1452,7 @@ class _GuidanceWebResultDetailViewState
             widget.batch.examCode,
             _scored.items,
             averages: _clusterAverages,
+            key: _answerKey,
           );
     // TAT cluster names are long; "Test 1: Core Learning Theories, ..." becomes
     // "T1: Core Learning Theories" on the radar axes.
@@ -1788,14 +1944,14 @@ class _GuidanceWebResultDetailViewState
     );
   }
 
-  Widget _infoRow(String label, String value) {
+  Widget _infoRow(String label, String value, {double labelWidth = 140}) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SizedBox(
-            width: 140,
+            width: labelWidth,
             child: Text(
               label,
               style: AppTextStyles.body(

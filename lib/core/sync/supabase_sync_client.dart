@@ -978,7 +978,7 @@ class SupabaseSyncClient
           .maybeSingle();
 
       final decision = decideAnswerKeyPush(
-        localAnswers: key.correctChoices,
+        localAnswers: key.toCloudAnswers(),
         meta: meta,
         lastPushedVersion: syncState.answerKeyLastPushedVersion(examCode),
         cloudVersion: existing == null
@@ -1005,7 +1005,7 @@ class SupabaseSyncClient
         case AnswerKeyAction.upsert:
           final row = answerKeyRow(
             examCode: examCode,
-            answers: key.correctChoices,
+            answers: key.toCloudAnswers(),
             version: decision.version!,
             updatedByUid: identity.uid,
             updatedByName: identity.displayName,

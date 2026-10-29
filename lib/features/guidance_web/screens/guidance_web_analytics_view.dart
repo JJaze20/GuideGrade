@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 import '../../../core/analytics/at_batch_analytics.dart';
+import '../../../core/analytics/at_category_averages.dart';
+import '../../../core/omr/at_categories.dart';
 import '../../../core/analytics/qtm_batch_analytics.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
@@ -687,7 +689,115 @@ class _GuidanceWebBatchAnalyticsViewState
       _distribution('Score Distribution'),
       const SizedBox(height: 16),
       _distribution('Category Distribution'),
+      if (_result!.atCategoryAverages != null) ...[
+        const SizedBox(height: 16),
+        _subtestAverages(_result!.atCategoryAverages!),
+      ],
     ];
+  }
+
+  /// Average score per Admission Test subtest, one bar each (scaled to the
+  /// subtest's own item count so 100% is a perfect average), in the same
+  /// colours the answer key uses for the four subtests.
+  Widget _subtestAverages(AtCategoryAverages averages) {
+    const colors = {
+      AtCategory.vc: Color(0xFFEA580C),
+      AtCategory.vr: Color(0xFF3B82F6),
+      AtCategory.fr: Color(0xFF8B5CF6),
+      AtCategory.qr: Color(0xFF0D9488),
+    };
+    return _card(
+      child: Column(
+        key: const Key('analytics.subtestAverages'),
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Subtest Averages',
+            style: AppTextStyles.heading(size: 18, color: ConsoleColors.ink),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Average score of ${averages.examineeCount} '
+            '${averages.examineeCount == 1 ? 'examinee' : 'examinees'} · '
+            'Bars show the share of each subtest answered correctly',
+            style: AppTextStyles.caption(),
+          ),
+          const SizedBox(height: 12),
+          for (final a in averages.byCategory)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final compact = constraints.maxWidth < 560;
+                  final value =
+                      '${a.average.toStringAsFixed(1)} / ${a.total}'
+                      ' (${a.percentage.toStringAsFixed(1)}%)';
+                  final label = Text(
+                    a.category.label,
+                    style: AppTextStyles.body(
+                      size: 13,
+                      weight: FontWeight.w600,
+                    ),
+                  );
+                  final bar = Semantics(
+                    label: '${a.category.label}: $value',
+                    child: Container(
+                      height: 22,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFE0ECE4),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      clipBehavior: Clip.antiAlias,
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: FractionallySizedBox(
+                          widthFactor: (a.percentage / 100).clamp(0.0, 1.0),
+                          heightFactor: 1,
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: colors[a.category],
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                  final number = Text(
+                    value,
+                    textAlign: TextAlign.right,
+                    style: AppTextStyles.body(
+                      size: 13,
+                      weight: FontWeight.w700,
+                    ),
+                  );
+                  if (compact) {
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        label,
+                        const SizedBox(height: 6),
+                        bar,
+                        const SizedBox(height: 4),
+                        number,
+                      ],
+                    );
+                  }
+                  return Row(
+                    children: [
+                      SizedBox(width: constraints.maxWidth * .28, child: label),
+                      const SizedBox(width: 16),
+                      Expanded(child: bar),
+                      const SizedBox(width: 12),
+                      SizedBox(width: 150, child: number),
+                    ],
+                  );
+                },
+              ),
+            ),
+        ],
+      ),
+    );
   }
 
   // --- QTM -----------------------------------------------------------------

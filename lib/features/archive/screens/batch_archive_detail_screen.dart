@@ -7,6 +7,7 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
+import '../../../core/omr/at_categories.dart';
 import '../../../core/omr/omr_scorer.dart';
 import '../../../core/omr/omr_templates.dart';
 import '../../../core/routes/app_routes.dart';
@@ -879,7 +880,16 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
                   repository: appState.batchRepository,
                 ),
                 const SizedBox(height: 8),
-                ScanResultSummary(examCode: batch.examCode, result: result),
+                ScanResultSummary(
+                  examCode: batch.examCode,
+                  result: result,
+                  categoryScores: batch.examCode == 'AT'
+                      ? computeAtCategoryScores(
+                          scored.items,
+                          appState.answerKeys[batch.examCode],
+                        )
+                      : null,
+                ),
                 const SizedBox(height: 8),
                 Wrap(
                   spacing: 8,
@@ -1068,6 +1078,7 @@ class _BatchArchiveDetailScreenState extends State<BatchArchiveDetailScreen> {
               ? null
               : scanEditingFor(appState, batch.id, scan),
           meshInteriorMeasuredFrac: scored.meshInteriorMeasuredFrac,
+          answerKey: appState.answerKeys[batch.examCode],
         ),
       ),
     );

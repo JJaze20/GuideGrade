@@ -1,3 +1,5 @@
+import '../../models/answer_key.dart';
+import 'at_categories.dart';
 import 'omr_scorer.dart';
 
 /// Cluster analysis for the Admission Test (AT) and Quantitative Math Test
@@ -15,23 +17,52 @@ class ClusterDef {
   final int toItem;
   final bool isGroup;
 
+  /// Set for AT: the cluster is the items of these subtests, wherever they
+  /// sit on the sheet (the four subtests are interleaved through items
+  /// 1-72, so no item range describes them). Null for a plain item range
+  /// ([fromItem]..[toItem]), as QTM uses.
+  final Set<AtCategory>? categories;
+
   const ClusterDef(
     this.label,
     this.fromItem,
     this.toItem, {
     this.isGroup = false,
+    this.categories,
   });
 
-  int get totalItems => toItem - fromItem + 1;
+  /// Nominal item count: the range size, or for a subtest cluster the
+  /// official number of items in those subtests (see [_totalIn] for the
+  /// count actually used on a scored sheet).
+  int get totalItems => categories == null
+      ? toItem - fromItem + 1
+      : officialAtCategories.values.where(categories!.contains).length;
+
+  /// The label to print: a plain range cluster shows its item range, a
+  /// subtest cluster does not (its items are not a range).
+  String get displayLabel =>
+      categories == null ? '$label ($fromItem–$toItem)' : label;
 }
 
 const List<ClusterDef> atClusterDefs = [
-  ClusterDef('Verbal', 1, 36, isGroup: true),
-  ClusterDef('Verbal Comprehension', 1, 18),
-  ClusterDef('Verbal Reasoning', 19, 36),
-  ClusterDef('Non-Verbal', 37, 72, isGroup: true),
-  ClusterDef('Figural Reasoning', 37, 54),
-  ClusterDef('Quantitative Reasoning', 55, 72),
+  ClusterDef(
+    'Verbal',
+    1,
+    72,
+    isGroup: true,
+    categories: {AtCategory.vc, AtCategory.vr},
+  ),
+  ClusterDef('Verbal Comprehension', 1, 72, categories: {AtCategory.vc}),
+  ClusterDef('Verbal Reasoning', 1, 72, categories: {AtCategory.vr}),
+  ClusterDef(
+    'Non-Verbal',
+    1,
+    72,
+    isGroup: true,
+    categories: {AtCategory.fr, AtCategory.qr},
+  ),
+  ClusterDef('Figural Reasoning', 1, 72, categories: {AtCategory.fr}),
+  ClusterDef('Quantitative Reasoning', 1, 72, categories: {AtCategory.qr}),
 ];
 
 const List<ClusterDef> qtmClusterDefs = [
@@ -90,12 +121,28 @@ class ClusterRow {
   });
 }
 
-int? _rightIn(ClusterDef def, List<ScoredItem> items) {
+/// Whether [item] belongs to [def]: by its subtest for an AT cluster (from
+/// the answer key, else the official mapping), by item range otherwise.
+bool _inDef(ClusterDef def, ScoredItem item, AnswerKey? key) {
+  final categories = def.categories;
+  if (categories == null) {
+    return item.itemNumber >= def.fromItem && item.itemNumber <= def.toItem;
+  }
+  final category = atCategoryFor(key, item.sectionName, item.itemNumber);
+  return category != null && categories.contains(category);
+}
+
+/// The items in the cluster on this sheet: the scored items that belong to
+/// it, or the nominal count when the sheet has none to count.
+int _totalIn(ClusterDef def, List<ScoredItem> items, AnswerKey? key) {
+  if (def.categories == null) return def.totalItems;
+  final n = items.where((i) => _inDef(def, i, key)).length;
+  return n > 0 ? n : def.totalItems;
+}
+
+int? _rightIn(ClusterDef def, List<ScoredItem> items, AnswerKey? key) {
   final graded = items.where(
-    (i) =>
-        i.itemNumber >= def.fromItem &&
-        i.itemNumber <= def.toItem &&
-        i.correctChoice != null,
+    (i) => _inDef(def, i, key) && i.correctChoice != null,
   );
   if (graded.isEmpty) return null;
   return graded.where((i) => i.isCorrect == true).length;
@@ -106,15 +153,14 @@ int? _rightIn(ClusterDef def, List<ScoredItem> items) {
 /// are skipped, never counted as zero. Empty map when nothing is graded.
 Map<String, double> computeClusterAverages(
   String examCode,
-  Iterable<List<ScoredItem>> scans,
-) {
+  Iterable<List<ScoredItem>> scans, {
+  AnswerKey? key,
+}) {
   final defs = clusterDefsFor(examCode);
   if (defs == null) return const {};
   final result = <String, double>{};
   for (final def in defs) {
-    final counts = [
-      for (final items in scans) ?_rightIn(def, items),
-    ];
+    final counts = [for (final items in scans) ?_rightIn(def, items, key)];
     if (counts.isNotEmpty) {
       result[def.label] = counts.reduce((a, b) => a + b) / counts.length;
     }
@@ -129,6 +175,7 @@ List<ClusterRow>? computeClusterRows(
   String examCode,
   List<ScoredItem> items, {
   Map<String, double> averages = const {},
+  AnswerKey? key,
 }) {
   final defs = clusterDefsFor(examCode);
   if (defs == null) return null;
@@ -136,10 +183,10 @@ List<ClusterRow>? computeClusterRows(
     for (final def in defs)
       ClusterRow(
         def: def,
-        total: def.totalItems,
-        right: _rightIn(def, items),
+        total: _totalIn(def, items, key),
+        right: _rightIn(def, items, key),
         average: averages[def.label],
-        band: clusterBandFor(_rightIn(def, items), averages[def.label]),
+        band: clusterBandFor(_rightIn(def, items, key), averages[def.label]),
       ),
   ];
 }
@@ -158,6 +205,15 @@ class ClusterInsight {
 const double clusterStrengthFraction = 0.8;
 const double clusterConcernFraction = 0.5;
 
+/// Whether cluster [c] sits inside group [g]: its subtests are among the
+/// group's (AT), or its item range lies within the group's.
+bool _groupHolds(ClusterDef g, ClusterDef c) {
+  final gc = g.categories;
+  final cc = c.categories;
+  if (gc != null && cc != null) return cc.every(gc.contains);
+  if (gc != null || cc != null) return false;
+  return c.fromItem >= g.fromItem && c.toItem <= g.toItem;
+}
 
 /// Names for [picked] clusters, where every cluster of an AT group (Verbal /
 /// Non-Verbal) being picked is reported as the group name instead.
@@ -170,10 +226,7 @@ List<String> _namesCollapsingGroups(
   for (final g in all.where((r) => r.def.isGroup)) {
     final children = [
       for (final r in all)
-        if (!r.def.isGroup &&
-            r.def.fromItem >= g.def.fromItem &&
-            r.def.toItem <= g.def.toItem)
-          r,
+        if (!r.def.isGroup && _groupHolds(g.def, r.def)) r,
     ];
     if (children.length > 1 && children.every(picked.contains)) {
       names.add(g.def.label);
