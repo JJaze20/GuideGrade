@@ -16,6 +16,7 @@ import '../../../models/examinee_record.dart';
 import '../../../models/local_batch.dart';
 import '../services/guidance_web_examinee_records_service.dart';
 import '../services/guidance_web_results_service.dart';
+import '../widgets/console_style.dart';
 import 'guidance_web_examinee_detail_view.dart';
 
 const List<String> _statusFilterOptions = ['All', 'Active', 'Archived'];
@@ -448,7 +449,7 @@ class _GuidanceWebExamineeRecordsViewState
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 _buildTabSwitcher(),
-                const SizedBox(height: 16),
+                const SizedBox(height: 12),
                 Expanded(
                   child: switch (_tab) {
                     _RecordsTab.examinees => _buildExamineesTab(),
@@ -486,11 +487,16 @@ class _GuidanceWebExamineeRecordsViewState
       child: TextButton(
         onPressed: () => setState(() => _tab = tab),
         style: TextButton.styleFrom(
-          backgroundColor: selected ? AppColors.emerald100 : Colors.transparent,
+          backgroundColor: selected
+              ? const Color(0xFFDCEBE2)
+              : Colors.transparent,
           foregroundColor: selected
-              ? AppColors.primaryGreen
-              : AppColors.textGray,
+              ? ConsoleColors.railSelected
+              : ConsoleColors.muted,
           minimumSize: const Size(44, 44),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
         ),
         child: Text(
           label,
@@ -509,7 +515,7 @@ class _GuidanceWebExamineeRecordsViewState
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _buildExamineesControls(),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
         Expanded(child: _buildExamineesBody()),
       ],
     );
@@ -517,8 +523,8 @@ class _GuidanceWebExamineeRecordsViewState
 
   Widget _buildExamineesControls() {
     return SurfaceCard(
-      color: const Color(0xFFEAF0F8),
-      padding: const EdgeInsets.all(16),
+      color: const Color(0xFFEAF3EE),
+      padding: const EdgeInsets.all(12),
       child: LayoutBuilder(
         builder: (context, constraints) {
           if (constraints.maxWidth < 600) {
@@ -535,7 +541,7 @@ class _GuidanceWebExamineeRecordsViewState
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(flex: 2, child: _buildSearchField()),
-              const SizedBox(width: 16),
+              const SizedBox(width: 12),
               Expanded(child: _buildStatusFilter()),
             ],
           );
@@ -598,25 +604,32 @@ class _GuidanceWebExamineeRecordsViewState
     );
   }
 
+  // The green-gray hairline shared by every console page's outlines, dividers
+  // and table borders.
+  static const Color _hairline = Color(0xFFCADBD0);
+
   InputDecoration _fieldDecoration({String? hint}) {
     return InputDecoration(
       hintText: hint,
       filled: true,
-      fillColor: const Color(0xFFF7FAFE),
+      fillColor: Colors.white,
       isDense: true,
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(10),
-        borderSide: const BorderSide(color: AppColors.cardBorder),
+        borderSide: const BorderSide(color: _hairline),
       ),
       enabledBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(10),
-        borderSide: const BorderSide(color: AppColors.cardBorder),
+        borderSide: const BorderSide(color: _hairline),
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(10),
-        borderSide: const BorderSide(color: AppColors.primaryGreen),
+        borderSide: const BorderSide(
+          color: ConsoleColors.railSelected,
+          width: 1.5,
+        ),
       ),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
     );
   }
 
@@ -732,12 +745,12 @@ class _GuidanceWebExamineeRecordsViewState
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 _buildExamineeTableHeader(),
-                const Divider(height: 1, color: AppColors.cardBorder),
+                const Divider(height: 1, color: _hairline),
                 Expanded(
                   child: ListView.separated(
                     itemCount: examinees.length,
                     separatorBuilder: (_, _) =>
-                        const Divider(height: 1, color: AppColors.cardBorder),
+                        const Divider(height: 1, color: _hairline),
                     itemBuilder: (context, index) =>
                         _buildExamineeRow(examinees[index]),
                   ),
@@ -810,8 +823,8 @@ class _GuidanceWebExamineeRecordsViewState
       color: const Color(0xFFF4F7FC),
     );
     return Container(
-      color: const Color(0xFF14243D),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      color: ConsoleColors.railGreen,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Row(
         children: [
           Expanded(flex: 3, child: Text('NAME', style: style)),
@@ -825,7 +838,7 @@ class _GuidanceWebExamineeRecordsViewState
 
   Widget _buildExamineeRow(ExamineeRecord examinee) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       child: Row(
         children: [
           Expanded(
@@ -888,7 +901,7 @@ class _GuidanceWebExamineeRecordsViewState
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _buildUnlinkedControls(visible.length),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
         Expanded(
           child: visible.isEmpty
               ? _buildMessage(
@@ -901,22 +914,20 @@ class _GuidanceWebExamineeRecordsViewState
                   minWidth: 1200,
                   child: Container(
                     decoration: BoxDecoration(
-                      color: const Color(0xFFF4F7FC),
+                      color: Colors.white,
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: AppColors.cardBorder),
+                      border: Border.all(color: _hairline),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         _buildUnlinkedTableHeader(),
-                        const Divider(height: 1, color: AppColors.cardBorder),
+                        const Divider(height: 1, color: _hairline),
                         Expanded(
                           child: ListView.separated(
                             itemCount: visible.length,
-                            separatorBuilder: (_, _) => const Divider(
-                              height: 1,
-                              color: AppColors.cardBorder,
-                            ),
+                            separatorBuilder: (_, _) =>
+                                const Divider(height: 1, color: _hairline),
                             itemBuilder: (context, index) =>
                                 _buildUnlinkedRow(visible[index]),
                           ),
@@ -1037,15 +1048,15 @@ class _GuidanceWebExamineeRecordsViewState
 
   Widget _buildUnlinkedControls(int shown) {
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: const Color(0xFFF4F7FC),
+        color: const Color(0xFFEAF3EE),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.cardBorder),
+        border: Border.all(color: _hairline),
       ),
       child: Wrap(
-        spacing: 16,
-        runSpacing: 12,
+        spacing: 12,
+        runSpacing: 10,
         crossAxisAlignment: WrapCrossAlignment.end,
         children: [
           SizedBox(
@@ -1111,8 +1122,8 @@ class _GuidanceWebExamineeRecordsViewState
       color: const Color(0xFFF4F7FC),
     );
     return Container(
-      color: const Color(0xFF14243D),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      color: ConsoleColors.railGreen,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Row(
         children: [
           Expanded(flex: 3, child: Text('OCR NAME', style: style)),
@@ -1291,26 +1302,26 @@ class _GuidanceWebExamineeRecordsViewState
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _buildRetainedControls(),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
         Expanded(
           child: _scrollableTable(
             minWidth: 1050,
             child: Container(
               decoration: BoxDecoration(
-                color: const Color(0xFFF4F7FC),
+                color: Colors.white,
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: AppColors.cardBorder),
+                border: Border.all(color: _hairline),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   _buildRetainedTableHeader(),
-                  const Divider(height: 1, color: AppColors.cardBorder),
+                  const Divider(height: 1, color: _hairline),
                   Expanded(
                     child: ListView.separated(
                       itemCount: _retainedScans.length,
                       separatorBuilder: (_, _) =>
-                          const Divider(height: 1, color: AppColors.cardBorder),
+                          const Divider(height: 1, color: _hairline),
                       itemBuilder: (context, index) =>
                           _buildRetainedRow(_retainedScans[index]),
                     ),
@@ -1326,14 +1337,14 @@ class _GuidanceWebExamineeRecordsViewState
 
   Widget _buildRetainedControls() {
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: const Color(0xFFF4F7FC),
+        color: const Color(0xFFEAF3EE),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.cardBorder),
+        border: Border.all(color: _hairline),
       ),
       child: Wrap(
-        spacing: 16,
+        spacing: 12,
         runSpacing: 8,
         crossAxisAlignment: WrapCrossAlignment.center,
         children: [
@@ -1364,8 +1375,8 @@ class _GuidanceWebExamineeRecordsViewState
       color: const Color(0xFFF4F7FC),
     );
     return Container(
-      color: const Color(0xFF14243D),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      color: ConsoleColors.railGreen,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Row(
         children: [
           Expanded(flex: 2, child: Text('BATCH', style: style)),
