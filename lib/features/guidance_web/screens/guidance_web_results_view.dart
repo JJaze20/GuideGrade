@@ -14,6 +14,7 @@ import '../../../models/examinee_record.dart';
 import '../../../models/local_batch.dart';
 import '../services/guidance_web_archive_service.dart';
 import '../services/guidance_web_results_service.dart';
+import '../widgets/console_style.dart';
 import 'guidance_web_result_detail_view.dart';
 
 /// The Guidance Council Web Console's Results page — a READ-ONLY viewer
@@ -422,7 +423,7 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
                     ),
                     child: SingleChildScrollView(child: _buildControls()),
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 12),
                   Expanded(child: _buildBody()),
                 ],
               ),
@@ -432,8 +433,8 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
 
   Widget _buildControls() {
     return SurfaceCard(
-      color: const Color(0xFFEAF0F8),
-      padding: EdgeInsets.all(widget.archivedBatch != null ? 12 : 16),
+      color: const Color(0xFFE9F2EC),
+      padding: const EdgeInsets.all(12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -444,7 +445,7 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _buildExamTabs(),
-                SizedBox(height: widget.archivedBatch != null ? 8 : 14),
+                const SizedBox(height: 8),
                 _buildExamDropdown(
                   _selectedExam,
                   _examGroups.firstWhere((g) => g.$1 == _selectedExam).$2,
@@ -453,15 +454,15 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
             ),
           if (_activeBatch != null) ...[
             if (!_loadingScans && _scansError == null) ...[
-              SizedBox(height: widget.archivedBatch != null ? 8 : 14),
+              const SizedBox(height: 8),
               _buildIdentityFilter(),
             ],
             if (widget.archivedBatch != null &&
                 _activeBatch!.description.trim().isNotEmpty) ...[
-              SizedBox(height: widget.archivedBatch != null ? 8 : 14),
+              const SizedBox(height: 8),
               _buildBatchDescription(_activeBatch!),
             ],
-            SizedBox(height: widget.archivedBatch != null ? 8 : 14),
+            const SizedBox(height: 8),
             LayoutBuilder(
               builder: (context, constraints) {
                 final archive = OutlinedButton.icon(
@@ -886,7 +887,7 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
         borderRadius: BorderRadius.circular(10),
         borderSide: const BorderSide(color: AppColors.primaryGreen),
       ),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
     );
   }
 
@@ -997,7 +998,7 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Padding(
-              padding: const EdgeInsets.only(bottom: 12),
+              padding: const EdgeInsets.only(bottom: 6),
               child: Wrap(
                 spacing: 16,
                 crossAxisAlignment: WrapCrossAlignment.center,
@@ -1118,8 +1119,8 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
       color: Colors.white,
     );
     return Container(
-      color: const Color(0xFF14243D),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      color: ConsoleColors.railGreen,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
       child: Row(
         children: [
           SizedBox(width: 28, child: Text('#', style: style)),
@@ -1155,7 +1156,7 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
           key: const Key('scoreSortHeader'),
           onTap: _cycleScoreSort,
           child: ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: 44),
+            constraints: const BoxConstraints(minHeight: 40),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -1200,7 +1201,7 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
     final isGraded = status == 'Graded';
 
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       child: Row(
         children: [
           SizedBox(
@@ -1365,12 +1366,12 @@ class _ExamTab extends StatelessWidget {
           onTap: onTap,
           borderRadius: BorderRadius.circular(10),
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
             decoration: BoxDecoration(
-              color: selected ? const Color(0xFF244361) : const Color(0xFFF4F7FC),
+              color: selected ? ConsoleColors.railSelected : const Color(0xFFF7FAF8),
               borderRadius: BorderRadius.circular(10),
               border: Border.all(
-                color: selected ? const Color(0xFF244361) : const Color(0xFFCFDAE8),
+                color: selected ? ConsoleColors.railSelected : const Color(0xFFCADBD0),
                 width: selected ? 1.5 : 1,
               ),
             ),

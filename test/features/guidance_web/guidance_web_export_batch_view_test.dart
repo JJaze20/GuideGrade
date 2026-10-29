@@ -14,6 +14,7 @@ import 'package:guidegrade/features/guidance_web/screens/guidance_web_export_bat
 import 'package:guidegrade/features/guidance_web/services/guidance_web_results_service.dart';
 import 'package:guidegrade/models/examinee_record.dart';
 import 'package:guidegrade/models/local_batch.dart';
+import 'package:guidegrade/shared/widgets/surface_card.dart';
 
 /// The manual-selection Export checklist's data source is
 /// [GuidanceWebResultsService] (real service, fake [SyncClient] underneath --
@@ -325,6 +326,74 @@ void main() {
           );
         });
       }
+      testWidgets(
+        'the Export list has a compact green filter row and light batch cards',
+        (tester) async {
+          seed();
+          tester.view.physicalSize = const Size(1440, 900);
+          tester.view.devicePixelRatio = 1;
+          addTearDown(tester.view.resetPhysicalSize);
+          addTearDown(tester.view.resetDevicePixelRatio);
+          await tester.pumpWidget(
+            MaterialApp(
+              home: Scaffold(
+                body: GuidanceWebExportView(
+                  analyticsService: GuidanceWebAnalyticsService(client: client),
+                  resultsService: resultsService,
+                ),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+
+          // Search, exam type and status share one slim row.
+          final search = tester.getRect(find.byKey(const Key('exportSearch')));
+          final exam = tester.getRect(find.byKey(const Key('exportExamType')));
+          final status = tester.getRect(
+            find.byKey(const Key('exportBatchStatus')),
+          );
+          expect(exam.center.dy, closeTo(search.center.dy, 2));
+          expect(status.center.dy, closeTo(search.center.dy, 2));
+          expect(search.height, lessThanOrEqualTo(48));
+          expect(exam.height, lessThanOrEqualTo(48));
+          final panel = find
+              .ancestor(
+                of: find.byKey(const Key('exportSearch')),
+                matching: find.byType(SurfaceCard),
+              )
+              .first;
+          expect(tester.getSize(panel).height, lessThanOrEqualTo(80));
+
+          // Each batch is a light, softly bordered, rounded card.
+          final row = find.byKey(const Key('exportRow_b1'));
+          final box =
+              tester
+                      .widget<AnimatedContainer>(
+                        find
+                            .descendant(
+                              of: row,
+                              matching: find.byType(AnimatedContainer),
+                            )
+                            .first,
+                      )
+                      .decoration
+                  as BoxDecoration;
+          expect(box.borderRadius, BorderRadius.circular(12));
+          expect(box.border!.top.color, const Color(0xFFCADBD0));
+          expect(box.boxShadow, isEmpty); // no shadow until hovered
+
+          // The actions are still there and still easy to hit.
+          expect(
+            tester.getSize(find.byKey(const Key('exportButton_b1'))).height,
+            greaterThanOrEqualTo(44),
+          );
+          expect(
+            tester.getSize(find.byKey(const Key('viewButton_b1'))).height,
+            greaterThanOrEqualTo(44),
+          );
+          expect(tester.takeException(), isNull);
+        },
+      );
       testWidgets('unlinked examinee preview is view only', (tester) async {
         seed();
         await pumpView(tester);
