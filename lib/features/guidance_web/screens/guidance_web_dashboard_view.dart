@@ -7,6 +7,7 @@ import '../../../core/omr/qtm_category.dart';
 import '../../../core/omr/tat_category.dart';
 import '../../../shared/widgets/surface_card.dart';
 import '../services/guidance_web_dashboard_service.dart';
+import '../widgets/console_style.dart';
 
 class GuidanceWebDashboardView extends StatefulWidget {
   const GuidanceWebDashboardView({
@@ -101,53 +102,12 @@ class _DashboardState extends State<GuidanceWebDashboardView> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Text(
-              'Examination overview',
-              style: TextStyle(
-                fontSize: 26,
-                fontWeight: FontWeight.w800,
-                color: AppColors.textDark,
-              ),
+            _Banner(
+              data: _data,
+              showAutoUpdate: widget.refreshInterval != null,
+              onInfo: _showStatisticsInformation,
             ),
-            const SizedBox(height: 8),
-            const Text(
-              'Compare result distributions across the three examinations.',
-              style: TextStyle(
-                fontSize: 14,
-                height: 1.5,
-                color: AppColors.textGray,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Wrap(
-              spacing: 8,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                if (widget.refreshInterval != null)
-                  const Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.sync, size: 16, color: AppColors.primaryGreen),
-                      SizedBox(width: 6),
-                      Flexible(
-                        child: Text(
-                          'Updates automatically',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: AppColors.textGray,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                IconButton(
-                  tooltip: 'About these statistics',
-                  onPressed: _showStatisticsInformation,
-                  icon: const Icon(Icons.info_outline, size: 20),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 20),
             FutureBuilder<GuidanceDashboardData>(
               future: _data,
               builder: (context, snapshot) {
@@ -216,24 +176,203 @@ class _DashboardState extends State<GuidanceWebDashboardView> {
   );
 }
 
+/// The green hero banner at the top of the Dashboard: what the page shows, a
+/// live-update note, and one tile per examination with its graded-result total.
+class _Banner extends StatelessWidget {
+  const _Banner({
+    required this.data,
+    required this.showAutoUpdate,
+    required this.onInfo,
+  });
+
+  final Future<GuidanceDashboardData> data;
+  final bool showAutoUpdate;
+  final VoidCallback onInfo;
+
+  static const _examNames = ['Admission Test', 'QTM', 'TAT'];
+
+  @override
+  Widget build(BuildContext context) {
+    final intro = Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 52,
+          height: 52,
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.2)),
+          ),
+          child: const Icon(
+            Icons.insights_outlined,
+            color: ConsoleColors.mint,
+            size: 26,
+          ),
+        ),
+        const SizedBox(width: 16),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'EXAMINATION OVERVIEW',
+                style: ConsoleText.eyebrow(color: ConsoleColors.onGreenMuted),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Compare result distributions across the three examinations.',
+                style: ConsoleText.serifTitle(
+                  size: 22,
+                  color: ConsoleColors.onGreen,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  if (showAutoUpdate)
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.sync,
+                          size: 16,
+                          color: ConsoleColors.mint,
+                        ),
+                        const SizedBox(width: 6),
+                        Flexible(
+                          child: Text(
+                            'Updates automatically',
+                            style: ConsoleText.body(
+                              size: 12.5,
+                              color: ConsoleColors.onGreenMuted,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  IconButton(
+                    tooltip: 'About these statistics',
+                    onPressed: onInfo,
+                    icon: const Icon(
+                      Icons.info_outline,
+                      size: 20,
+                      color: Colors.white,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+    final tiles = FutureBuilder<GuidanceDashboardData>(
+      future: data,
+      builder: (context, snapshot) {
+        final totals = {
+          for (final chart
+              in snapshot.data?.charts ?? const <DashboardDistribution>[])
+            chart.title: chart.total,
+        };
+        return Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: [
+            for (final name in _examNames)
+              _BannerTile(label: name, value: totals[name]?.toString() ?? '–'),
+          ],
+        );
+      },
+    );
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [ConsoleColors.bannerStart, ConsoleColors.bannerEnd],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(22),
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          if (constraints.maxWidth < 900) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [intro, const SizedBox(height: 16), tiles],
+            );
+          }
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(child: intro),
+              const SizedBox(width: 24),
+              tiles,
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// One number tile in the banner: a graded-result total and its examination.
+class _BannerTile extends StatelessWidget {
+  const _BannerTile({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: 118,
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+    decoration: BoxDecoration(
+      color: Colors.white.withValues(alpha: 0.1),
+      borderRadius: BorderRadius.circular(14),
+      border: Border.all(color: Colors.white.withValues(alpha: 0.2)),
+    ),
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          value,
+          style: ConsoleText.body(
+            size: 22,
+            weight: FontWeight.w800,
+            color: ConsoleColors.onGreen,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          '${label.toUpperCase()} RESULTS',
+          textAlign: TextAlign.center,
+          maxLines: 2,
+          style: ConsoleText.body(
+            size: 10.5,
+            weight: FontWeight.w700,
+            color: ConsoleColors.onGreenMuted,
+          ).copyWith(letterSpacing: 0.8),
+        ),
+      ],
+    ),
+  );
+}
+
 class _ChartCard extends StatelessWidget {
   const _ChartCard({required this.data});
   final DashboardDistribution data;
   @override
   Widget build(BuildContext context) => SurfaceCard(
     key: ValueKey('dashboard.chart.${data.title}'),
-    padding: const EdgeInsets.all(16),
+    padding: const EdgeInsets.all(20),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          data.title,
-          style: const TextStyle(
-            fontSize: 20,
-            fontWeight: FontWeight.w700,
-            color: AppColors.textDark,
-          ),
-        ),
+        Text(data.title, style: ConsoleText.serifTitle(size: 24)),
         const SizedBox(height: 6),
         Text(
           '${data.total} graded results',
@@ -298,8 +437,7 @@ class _BarPainter extends CustomPainter {
     }
     final match = RegExp(r'(\d+)–(\d+)').firstMatch(label);
     if (match == null) return AppColors.primaryGreen;
-    final mid =
-        (int.parse(match.group(1)!) + int.parse(match.group(2)!)) ~/ 2;
+    final mid = (int.parse(match.group(1)!) + int.parse(match.group(2)!)) ~/ 2;
     final index = switch (data.title) {
       'QTM' => qtmCategory(mid)?.index ?? 0,
       'TAT' => tatCategory(mid)?.index ?? 0,
@@ -326,6 +464,7 @@ class _BarPainter extends CustomPainter {
       canvas,
       centered ? offset - Offset(painter.width / 2, 0) : offset,
     );
+    painter.dispose();
   }
 
   @override
@@ -365,15 +504,24 @@ class _BarPainter extends CustomPainter {
       final x = left + slot * (i + 0.5);
       final barHeight = height * data.counts[i] / ceiling;
       final bar = Rect.fromLTWH(
-        x - slot * .26,
+        x - math.min(64.0, slot * .52) / 2,
         top + height - barHeight,
-        slot * .52,
+        math.min(64.0, slot * .52),
         barHeight,
       );
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(bar, const Radius.circular(5)),
-        Paint()..color = _barColor(i),
-      );
+      if (barHeight > 0)
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(bar, const Radius.circular(5)),
+          Paint()
+            ..shader = LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                _barColor(i),
+                Color.lerp(_barColor(i), const Color(0xFF14243D), 0.18)!,
+              ],
+            ).createShader(bar),
+        );
       _text(
         canvas,
         '${data.counts[i]}',

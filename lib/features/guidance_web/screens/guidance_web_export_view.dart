@@ -8,11 +8,13 @@ import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
 import '../../../core/constants/app_tokens.dart';
 import '../../../shared/widgets/state_views.dart';
+import '../../../shared/widgets/surface_card.dart';
 import '../../../core/constants/exam_catalog.dart';
 import '../../../models/local_batch.dart';
 import '../export/guidance_web_export_service.dart';
 import '../services/guidance_web_analytics_service.dart';
 import '../services/guidance_web_results_service.dart';
+import '../widgets/console_style.dart';
 import 'guidance_web_export_batch_view.dart';
 
 /// (code, "Title (CODE)") pairs for every exam in the canonical catalog,
@@ -287,8 +289,11 @@ class _GuidanceWebExportViewState extends State<GuidanceWebExportView> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           _buildControls(),
-          const SizedBox(height: 16),
-          Text('Batches', style: AppTextStyles.heading(size: 16)),
+          const SizedBox(height: 12),
+          Text(
+            'Batches',
+            style: AppTextStyles.heading(size: 16, color: ConsoleColors.ink),
+          ),
           const SizedBox(height: 8),
           Expanded(child: _buildList()),
         ],
@@ -296,39 +301,65 @@ class _GuidanceWebExportViewState extends State<GuidanceWebExportView> {
     );
   }
 
-  BoxDecoration get _cardDecoration => BoxDecoration(
-    color: Colors.white,
-    borderRadius: BorderRadius.circular(12),
-    border: Border.all(color: AppColors.cardBorder),
-  );
+  // The same soft green panel tint and green-gray hairline as the Analytics
+  // pages, so the console's pages read as one family.
+  static const Color _panelTint = Color(0xFFEAF3EE);
+  static const Color _hairline = Color(0xFFCADBD0);
+
+  TextStyle get _fieldText => AppTextStyles.body(size: 14);
+
+  OutlineInputBorder _outline([Color color = _hairline, double width = 1]) =>
+      OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+        borderSide: BorderSide(color: color, width: width),
+      );
 
   InputDecoration _decoration(String label) => InputDecoration(
     labelText: label,
+    labelStyle: AppTextStyles.body(size: 13, color: ConsoleColors.muted),
+    floatingLabelStyle: AppTextStyles.body(
+      size: 12.5,
+      weight: FontWeight.w600,
+      color: ConsoleColors.eyebrow,
+    ),
     isDense: true,
-    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+    filled: true,
+    fillColor: Colors.white,
+    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+    border: _outline(),
+    enabledBorder: _outline(),
+    focusedBorder: _outline(ConsoleColors.railSelected, 1.5),
   );
 
   Widget _buildControls() {
     final archiveOk = _catalog?.archiveFilterAvailable ?? false;
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: _cardDecoration,
+    return SurfaceCard(
+      color: _panelTint,
+      padding: const EdgeInsets.all(12),
       child: LayoutBuilder(
         builder: (context, box) => Wrap(
-          spacing: 16,
-          runSpacing: 12,
+          spacing: 12,
+          runSpacing: 10,
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
             SizedBox(
-              width: box.maxWidth < 600 ? box.maxWidth : 420,
+              width: box.maxWidth < 600 ? box.maxWidth : 400,
               child: TextField(
                 key: const Key('exportSearch'),
                 controller: _search,
-                decoration: InputDecoration(
-                  labelText: 'Search batches or examinees',
+                style: _fieldText,
+                decoration: _decoration('Search batches or examinees').copyWith(
                   hintText: 'Batch, name or examinee ID',
-                  isDense: true,
                   prefixIcon: const Icon(Icons.search, size: 18),
+                  // Slim icon slots keep the field about 44 px tall.
+                  prefixIconConstraints: const BoxConstraints(
+                    minWidth: 38,
+                    minHeight: 36,
+                  ),
+                  suffixIconConstraints: const BoxConstraints(
+                    minWidth: 38,
+                    minHeight: 36,
+                  ),
                   suffixIcon: _search.text.isNotEmpty
                       ? IconButton(
                           tooltip: 'Clear search',
@@ -336,18 +367,16 @@ class _GuidanceWebExportViewState extends State<GuidanceWebExportView> {
                           onPressed: _search.clear,
                         )
                       : null,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                  ),
                 ),
               ),
             ),
             SizedBox(
-              width: box.maxWidth < 600 ? box.maxWidth : 260,
+              width: box.maxWidth < 600 ? box.maxWidth : 250,
               child: DropdownButtonFormField<String>(
                 key: const Key('exportExamType'),
                 initialValue: _examCode,
                 isExpanded: true,
+                style: _fieldText,
                 decoration: _decoration('Exam Type'),
                 items: [
                   for (final (code, label) in _exportExamTypes)
@@ -364,6 +393,7 @@ class _GuidanceWebExportViewState extends State<GuidanceWebExportView> {
                 key: const Key('exportBatchStatus'),
                 initialValue: _status,
                 isExpanded: true,
+                style: _fieldText,
                 decoration: _decoration('Batch Status'),
                 items: [
                   const DropdownMenuItem(
@@ -436,7 +466,7 @@ class _GuidanceWebExportViewState extends State<GuidanceWebExportView> {
       // Room for the hover shadow around each row.
       padding: const EdgeInsets.fromLTRB(4, 4, 4, 12),
       itemCount: rows.length,
-      separatorBuilder: (_, _) => const SizedBox(height: 10),
+      separatorBuilder: (_, _) => const SizedBox(height: 8),
       itemBuilder: (_, i) => _batchRow(rows[i].$1, rows[i].$2),
     );
   }
@@ -467,7 +497,7 @@ class _GuidanceWebExportViewState extends State<GuidanceWebExportView> {
         _viewing = b;
       }),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         child: LayoutBuilder(
           builder: (context, box) => Wrap(
             spacing: 8,
@@ -484,16 +514,20 @@ class _GuidanceWebExportViewState extends State<GuidanceWebExportView> {
                       '${b.batchCode} — $title (${_fmtDate(b.createdAt)})',
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: AppTextStyles.body(size: 13),
+                      style: AppTextStyles.body(
+                        size: 12.5,
+                        color: ConsoleColors.muted,
+                      ),
                     ),
-                    const SizedBox(height: 4),
+                    const SizedBox(height: 2),
                     Text(
                       b.description.trim().isEmpty
                           ? 'No description'
                           : b.description.trim(),
                       style: AppTextStyles.body(
-                        size: 16,
-                        weight: FontWeight.w600,
+                        size: 15,
+                        weight: FontWeight.w700,
+                        color: ConsoleColors.ink,
                       ),
                     ),
                     if (containsSearch) ...[
@@ -546,7 +580,7 @@ class _GuidanceWebExportViewState extends State<GuidanceWebExportView> {
                     style: AppTextStyles.body(
                       size: 13,
                       weight: FontWeight.w800,
-                      color: AppColors.darkNavy,
+                      color: ConsoleColors.ink,
                     ),
                   ),
                 ),
@@ -583,25 +617,28 @@ class _HoverRowState extends State<_HoverRow> {
         duration: const Duration(milliseconds: 150),
         decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(12),
           border: Border.all(
-            color: _hover ? AppColors.primaryGreen : AppColors.cardBorder,
+            color: _hover
+                ? ConsoleColors.railSelected
+                : const Color(0xFFCADBD0),
           ),
+          // A very soft lift on hover (no heavy shadow).
           boxShadow: _hover
               ? [
                   BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.14),
-                    blurRadius: 14,
-                    offset: const Offset(0, 4),
+                    color: Colors.black.withValues(alpha: 0.06),
+                    blurRadius: 10,
+                    offset: const Offset(0, 3),
                   ),
                 ]
               : const [],
         ),
         child: Material(
           color: Colors.transparent,
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(12),
           child: InkWell(
-            borderRadius: BorderRadius.circular(10),
+            borderRadius: BorderRadius.circular(12),
             onTap: widget.onTap,
             child: widget.child,
           ),

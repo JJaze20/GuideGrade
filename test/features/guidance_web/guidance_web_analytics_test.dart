@@ -15,6 +15,7 @@ import 'package:guidegrade/core/sync/sync_outcome.dart';
 import 'package:guidegrade/features/guidance_web/screens/guidance_web_analytics_view.dart';
 import 'package:guidegrade/features/guidance_web/services/guidance_web_analytics_service.dart';
 import 'package:guidegrade/models/answer_key.dart';
+import 'package:guidegrade/shared/widgets/surface_card.dart';
 
 /// Read-only stand-in for Supabase. ANY write (or an unrelated read) is
 /// recorded in [forbidden] and throws, so a test can prove Analytics never
@@ -212,12 +213,13 @@ CloudBatchRow _batch(
   String examCode, {
   String status = 'Completed',
   int day = 1,
+  String description = '',
 }) => CloudBatchRow(
   id: id,
   batchCode: 'CODE-$id',
   examCode: examCode,
   examTitle: 'Title $examCode',
-  description: '',
+  description: description,
   expectedCount: 100,
   status: status,
   createdByUid: 'uid',
@@ -1472,6 +1474,107 @@ void main() {
         expect(tester.takeException(), isNull);
       });
     }
+
+    testWidgets(
+      'the batch picker shows the description first with the batch name '
+      'stuck close beside it',
+      (tester) async {
+        client.batches.add(
+          _batch('a1', 'AT', description: 'Admission Test Transferees'),
+        );
+        client.scansByBatch['a1'] = [_scan('1', 'a1', 'AT', 56)];
+        await pump(tester);
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byKey(const Key('batchFilter')));
+        await tester.pumpAndSettle();
+        final name = find.byKey(const Key('batchOptionName_a1')).last;
+        final description = find
+            .byKey(const Key('batchOptionDescription_a1'))
+            .last;
+        expect(find.text('CODE-a1 — Title AT'), findsWidgets);
+        expect(find.text('Admission Test Transferees'), findsWidgets);
+        // The description is first (left), the batch name after it (right) ...
+        final descRect = tester.getRect(description);
+        final nameRect = tester.getRect(name);
+        expect(descRect.right, lessThan(nameRect.left));
+        // ... the description starts at the left edge of the picker ...
+        final picker = tester.getRect(find.byKey(const Key('batchFilter')));
+        expect(descRect.left - picker.left, lessThan(40));
+        // ... and the two are stuck together, not pushed far apart.
+        expect(nameRect.left - descRect.right, lessThan(40));
+
+        // Choosing it: the closed field shows the same two parts.
+        await tester.tap(description);
+        await tester.pumpAndSettle();
+        expect(
+          find.descendant(
+            of: find.byKey(const Key('batchFilter')),
+            matching: find.byKey(const Key('batchOptionDescription_a1')),
+          ),
+          findsOneWidget,
+        );
+        expect(tester.takeException(), isNull);
+      },
+    );
+
+    testWidgets('a batch without a description still shows its batch name', (
+      tester,
+    ) async {
+      client.batches.add(_batch('a2', 'AT'));
+      client.scansByBatch['a2'] = [_scan('1', 'a2', 'AT', 56)];
+      await pump(tester);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('batchFilter')));
+      await tester.pumpAndSettle();
+      expect(find.text('CODE-a2 — Title AT'), findsWidgets);
+      expect(find.byKey(const Key('batchOptionDescription_a2')), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets(
+      'the filter panel is one compact row with a small refresh button',
+      (tester) async {
+        client.batches.add(_batch('a1', 'AT'));
+        client.scansByBatch['a1'] = [_scan('1', 'a1', 'AT', 56)];
+        await pump(tester);
+        tester.view.physicalSize = const Size(1440, 900);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.reset);
+        await tester.pumpAndSettle();
+
+        final exam = tester.getRect(find.byKey(const Key('examTypeFilter')));
+        final status = tester.getRect(
+          find.byKey(const Key('batchStatusFilter')),
+        );
+        final batch = tester.getRect(find.byKey(const Key('batchFilter')));
+        final refresh = tester.getRect(
+          find.byKey(const Key('analyticsRefresh')),
+        );
+
+        // Exam type, status, batch and refresh share one row ...
+        expect(status.top, closeTo(exam.top, 1));
+        expect(batch.top, closeTo(exam.top, 1));
+        expect((refresh.center.dy - exam.center.dy).abs(), lessThan(4));
+        // ... the batch field is twice as wide as the others ...
+        expect(batch.width, closeTo(exam.width * 2, 1));
+        // ... the fields are short ...
+        expect(exam.height, lessThanOrEqualTo(52));
+        // ... the refresh control is a small icon button, not a big one ...
+        expect(refresh.width, lessThanOrEqualTo(40));
+        expect(refresh.height, lessThanOrEqualTo(40));
+        // ... and the whole panel is slim.
+        final panel = find
+            .ancestor(
+              of: find.byKey(const Key('examTypeFilter')),
+              matching: find.byType(SurfaceCard),
+            )
+            .first;
+        expect(tester.getSize(panel).height, lessThanOrEqualTo(80));
+        expect(tester.takeException(), isNull);
+      },
+    );
 
     testWidgets('loading state, then AT results', (tester) async {
       client.batches.add(_batch('a1', 'AT'));

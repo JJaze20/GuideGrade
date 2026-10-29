@@ -6,13 +6,17 @@ import 'package:guidegrade/core/sync/batch_deletion_guard.dart';
 import 'package:guidegrade/core/sync/sync_client.dart';
 import 'package:guidegrade/core/sync/sync_outcome.dart';
 
-class _Client implements SyncClient {
+class _Client implements SyncClient, BatchScanRowCountClient {
   CloudBatchesRead batches = CloudBatchesRead.found(const []);
   CloudBatchArchivesRead archives = CloudBatchArchivesRead.found(const []);
+  CloudScanCountsRead rowCounts = CloudScanCountsRead.found(const {});
   @override
   Future<CloudBatchesRead> readCloudBatches() async => batches;
   @override
   Future<CloudBatchArchivesRead> readBatchArchives() async => archives;
+  @override
+  Future<CloudScanCountsRead> readAllScanRowCounts(List<String> batchIds) async =>
+      rowCounts;
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
@@ -152,4 +156,57 @@ void main() {
       );
     expect((await checkBatchDeletionAllowed(client, 'b')).isSuccess, isFalse);
   });
+
+  group('checkBatchEmptyForDeletion', () {
+    test('a batch with no scan rows is allowed', () async {
+      expect(
+        (await checkBatchEmptyForDeletion(_Client(), 'b')).isSuccess,
+        isTrue,
+      );
+      final zero = _Client()..rowCounts = CloudScanCountsRead.found(const {'b': 0});
+      expect((await checkBatchEmptyForDeletion(zero, 'b')).isSuccess, isTrue);
+    });
+
+    test('any scan row, soft-deleted ones included, blocks deletion', () async {
+      final client = _Client()
+        ..rowCounts = CloudScanCountsRead.found(const {'b': 1});
+      final outcome = await checkBatchEmptyForDeletion(client, 'b');
+      expect(outcome.isSuccess, isFalse);
+      expect(outcome.code, 'batch_has_scans');
+    });
+
+    test('scan rows of a different batch do not block this one', () async {
+      final client = _Client()
+        ..rowCounts = CloudScanCountsRead.found(const {'other': 4});
+      expect((await checkBatchEmptyForDeletion(client, 'b')).isSuccess, isTrue);
+    });
+
+    test('a failed count read fails closed', () async {
+      final client = _Client()
+        ..rowCounts = const CloudScanCountsRead.failed(
+          SyncOutcome.transient('offline'),
+        );
+      expect((await checkBatchEmptyForDeletion(client, 'b')).isSuccess, isFalse);
+    });
+
+    test('a client that cannot count scan rows fails closed', () async {
+      expect(
+        (await checkBatchEmptyForDeletion(_NoCountClient(), 'b')).isSuccess,
+        isFalse,
+      );
+    });
+
+    test('the batch-empty rule is not part of the shared per-scan check',
+        () async {
+      final client = _Client()
+        ..rowCounts = CloudScanCountsRead.found(const {'b': 9});
+      expect((await checkBatchDeletionAllowed(client, 'b')).isSuccess, isTrue);
+    });
+  });
+}
+
+/// A [SyncClient] without the optional [BatchScanRowCountClient] capability.
+class _NoCountClient implements SyncClient {
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

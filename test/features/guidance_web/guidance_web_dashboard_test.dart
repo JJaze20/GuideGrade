@@ -209,6 +209,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Updates automatically'), findsOneWidget);
     expect(tester.takeException(), isNull);
+    await tester.ensureVisible(find.byTooltip('About these statistics'));
+    await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('About these statistics'));
     await tester.pumpAndSettle();
     expect(

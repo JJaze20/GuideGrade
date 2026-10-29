@@ -517,55 +517,7 @@ class _GuidanceWebExportBatchViewState
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            children: [
-              TextButton.icon(
-                onPressed: widget.onBack,
-                icon: const Icon(Icons.arrow_back, size: 16),
-                label: const Text('Back to List'),
-              ),
-              if (!_loading && _scans.isNotEmpty)
-                Expanded(
-                  child: Wrap(
-                    alignment: WrapAlignment.end,
-                    spacing: 16,
-                    runSpacing: 8,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      IncludeCertificatesSwitch(
-                        value: _includeCertificates,
-                        onChanged: (v) =>
-                            setState(() => _includeCertificates = v),
-                      ),
-                      Padding(
-                        // Aligns the checkbox with the row checkboxes below.
-                        padding: const EdgeInsets.only(right: 16),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              'Check all',
-                              style: AppTextStyles.body(
-                                size: 13,
-                                weight: FontWeight.w700,
-                                color: AppColors.textGray,
-                              ),
-                            ),
-                            _selectionCheckbox(
-                              key: const Key('checkAllDot'),
-                              on: _allChecked,
-                              tooltip:
-                                  _allChecked ? 'Uncheck all' : 'Check all',
-                              onTap: _toggleAll,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-            ],
-          ),
+          _buildHeaderRow(),
           const SizedBox(height: 8),
           _buildSummaryRow(),
           const SizedBox(height: 16),
@@ -574,6 +526,71 @@ class _GuidanceWebExportBatchViewState
           _buildActions(),
         ],
       ),
+    );
+  }
+
+  /// "Back to List" plus the certificates switch and "Check all". On a wide
+  /// window they share one row (controls right-aligned); on a narrow window
+  /// the controls drop below the back button instead of being squeezed into
+  /// the sliver of width left beside it, which overflowed.
+  Widget _buildHeaderRow() {
+    final back = TextButton.icon(
+      onPressed: widget.onBack,
+      icon: const Icon(Icons.arrow_back, size: 16),
+      label: const Text('Back to List'),
+    );
+    final controls = (!_loading && _scans.isNotEmpty)
+        ? Wrap(
+            alignment: WrapAlignment.end,
+            spacing: 16,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              IncludeCertificatesSwitch(
+                value: _includeCertificates,
+                onChanged: (v) => setState(() => _includeCertificates = v),
+              ),
+              Padding(
+                // Aligns the checkbox with the row checkboxes below.
+                padding: const EdgeInsets.only(right: 16),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'Check all',
+                      style: AppTextStyles.body(
+                        size: 13,
+                        weight: FontWeight.w700,
+                        color: AppColors.textGray,
+                      ),
+                    ),
+                    _selectionCheckbox(
+                      key: const Key('checkAllDot'),
+                      on: _allChecked,
+                      tooltip: _allChecked ? 'Uncheck all' : 'Check all',
+                      onTap: _toggleAll,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          )
+        : null;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (controls != null && constraints.maxWidth < 560) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Align(alignment: Alignment.centerLeft, child: back),
+              controls,
+            ],
+          );
+        }
+        return Row(
+          children: [back, if (controls != null) Expanded(child: controls)],
+        );
+      },
     );
   }
 
@@ -611,44 +628,68 @@ class _GuidanceWebExportBatchViewState
   );
 
   Widget _buildSummaryRow() {
+    final title = Text(
+      _batchTitle,
+      overflow: TextOverflow.ellipsis,
+      style: AppTextStyles.body(size: 13, weight: FontWeight.w600),
+    );
+    final label = Text(
+      'Batch summary',
+      overflow: TextOverflow.ellipsis,
+      style: AppTextStyles.body(size: 13, color: AppColors.textGray),
+    );
+    final viewButton = _viewButton(
+      () => _openPreview(const _Preview(includeSummary: true, scans: [])),
+      key: const Key('summaryView'),
+    );
+    final checkbox = _selectionCheckbox(
+      key: const Key('summaryDot'),
+      on: _includeSummary,
+      tooltip: _includeSummary
+          ? 'Included in export'
+          : 'Not included in export',
+      onTap: () => setState(() => _includeSummary = !_includeSummary),
+    );
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       decoration: _cardDecoration,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.only(top: 14),
-              child: Text(
-                _batchTitle,
-                overflow: TextOverflow.ellipsis,
-                style: AppTextStyles.body(size: 13, weight: FontWeight.w600),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // On a very narrow window the title, label, "view" button and
+          // checkbox cannot share one line; the title gets its own line.
+          if (constraints.maxWidth < 300) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(padding: const EdgeInsets.only(top: 6), child: title),
+                Row(
+                  children: [
+                    Expanded(child: label),
+                    const SizedBox(width: 12),
+                    viewButton,
+                    checkbox,
+                  ],
+                ),
+              ],
+            );
+          }
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 14),
+                  child: title,
+                ),
               ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Padding(
-            padding: const EdgeInsets.only(top: 14),
-            child: Text(
-              'Batch summary',
-              style: AppTextStyles.body(size: 13, color: AppColors.textGray),
-            ),
-          ),
-          const SizedBox(width: 12),
-          _viewButton(
-            () => _openPreview(const _Preview(includeSummary: true, scans: [])),
-            key: const Key('summaryView'),
-          ),
-          _selectionCheckbox(
-            key: const Key('summaryDot'),
-            on: _includeSummary,
-            tooltip: _includeSummary
-                ? 'Included in export'
-                : 'Not included in export',
-            onTap: () => setState(() => _includeSummary = !_includeSummary),
-          ),
-        ],
+              const SizedBox(width: 12),
+              Padding(padding: const EdgeInsets.only(top: 14), child: label),
+              const SizedBox(width: 12),
+              viewButton,
+              checkbox,
+            ],
+          );
+        },
       ),
     );
   }

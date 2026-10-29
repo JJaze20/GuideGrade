@@ -52,19 +52,35 @@ class BatchListItem extends StatelessWidget {
               BatchStatusBadge(
                 status: batch.isCompleted ? 'Completed' : 'Active',
               ),
-              IconButton(
-                onPressed: batch.isCompleted ? null : onDelete,
-                icon: const Icon(
-                  Icons.delete_outline_rounded,
-                  size: 20,
-                  color: AppColors.dangerFg,
+              // Only an empty, uncompleted batch can be deleted: a batch that
+              // holds any scanned sheet is kept.
+              if (!batch.isCompleted && batch.scanCount == 0)
+                PopupMenuButton<String>(
+                  key: ValueKey('batch-actions-${batch.id}'),
+                  tooltip: 'Batch actions',
+                  icon: const Icon(Icons.more_vert),
+                  onSelected: (action) {
+                    if (action == 'delete') onDelete();
+                  },
+                  itemBuilder: (_) => const [
+                    PopupMenuItem(
+                      value: 'delete',
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.delete_outline_rounded,
+                            color: AppColors.dangerFg,
+                          ),
+                          SizedBox(width: AppSpace.sm),
+                          Text(
+                            'Delete batch',
+                            style: TextStyle(color: AppColors.dangerFg),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
-                tooltip: batch.isCompleted
-                    ? 'Completed batches cannot be deleted'
-                    : 'Delete batch',
-                visualDensity: VisualDensity.compact,
-                constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
-              ),
             ],
           ),
           const SizedBox(height: AppSpace.md),

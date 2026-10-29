@@ -30,16 +30,19 @@ enum _RestoreTab { deletedScans, restoreRequests }
 class RestoreManagementScreen extends StatefulWidget {
   /// [service] is only for tests; the app uses the real
   /// [AdminScanRestoreService].
-  const RestoreManagementScreen({super.key, AdminScanRestoreService? service}) : _service = service;
+  const RestoreManagementScreen({super.key, AdminScanRestoreService? service})
+    : _service = service;
 
   final AdminScanRestoreService? _service;
 
   @override
-  State<RestoreManagementScreen> createState() => _RestoreManagementScreenState();
+  State<RestoreManagementScreen> createState() =>
+      _RestoreManagementScreenState();
 }
 
 class _RestoreManagementScreenState extends State<RestoreManagementScreen> {
-  late final AdminScanRestoreService _service = widget._service ?? AdminScanRestoreService();
+  late final AdminScanRestoreService _service =
+      widget._service ?? AdminScanRestoreService();
 
   _RestoreTab _tab = _RestoreTab.deletedScans;
 
@@ -129,12 +132,19 @@ class _RestoreManagementScreenState extends State<RestoreManagementScreen> {
     await Future.wait([_loadDeletedScans(), _loadRestoreRequests()]);
   }
 
-  Future<void> _openReview(CloudAdminRestoreRequestRow request, {required bool approve}) async {
+  Future<void> _openReview(
+    CloudAdminRestoreRequestRow request, {
+    required bool approve,
+  }) async {
     if (_reviewingRequestId != null) return;
     setState(() => _reviewingRequestId = request.requestId);
     final reviewed = await showDialog<bool>(
       context: context,
-      builder: (_) => _ReviewRequestDialog(service: _service, request: request, approve: approve),
+      builder: (_) => _ReviewRequestDialog(
+        service: _service,
+        request: request,
+        approve: approve,
+      ),
     );
     if (!mounted) return;
     setState(() => _reviewingRequestId = null);
@@ -143,7 +153,9 @@ class _RestoreManagementScreenState extends State<RestoreManagementScreen> {
     await _refreshAll();
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(approve ? 'Request approved.' : 'Request rejected.')),
+      SnackBar(
+        content: Text(approve ? 'Request approved.' : 'Request rejected.'),
+      ),
     );
   }
 
@@ -152,7 +164,8 @@ class _RestoreManagementScreenState extends State<RestoreManagementScreen> {
     setState(() => _restoringRequestId = request.requestId);
     final restored = await showDialog<bool>(
       context: context,
-      builder: (_) => _RestoreScanDialog(service: _service, requestId: request.requestId),
+      builder: (_) =>
+          _RestoreScanDialog(service: _service, requestId: request.requestId),
     );
     if (!mounted) return;
     setState(() => _restoringRequestId = null);
@@ -168,13 +181,16 @@ class _RestoreManagementScreenState extends State<RestoreManagementScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.lightBg,
+      backgroundColor: const Color(0xFFEAF0F7),
       appBar: AppBar(
-        backgroundColor: Colors.white,
-        foregroundColor: AppColors.textDark,
+        backgroundColor: const Color(0xFF14243D),
+        foregroundColor: Colors.white,
         elevation: 0,
         shape: const Border(bottom: BorderSide(color: AppColors.border)),
-        title: Text('Restore Management', style: AppTextStyles.heading(size: 17)),
+        title: Text(
+          'Restore Management',
+          style: AppTextStyles.heading(size: 17, color: Colors.white),
+        ),
         actions: [
           IconButton(
             key: const Key('restoreManagementRefreshButton'),
@@ -190,7 +206,9 @@ class _RestoreManagementScreenState extends State<RestoreManagementScreen> {
           children: [
             _buildTabSwitcher(),
             Expanded(
-              child: _tab == _RestoreTab.deletedScans ? _buildDeletedScansTab() : _buildRestoreRequestsTab(),
+              child: _tab == _RestoreTab.deletedScans
+                  ? _buildDeletedScansTab()
+                  : _buildRestoreRequestsTab(),
             ),
           ],
         ),
@@ -202,16 +220,25 @@ class _RestoreManagementScreenState extends State<RestoreManagementScreen> {
     return Container(
       width: double.infinity,
       decoration: const BoxDecoration(
-        color: AppColors.surface,
+        color: const Color(0xFFDDE7F3),
         border: Border(bottom: BorderSide(color: AppColors.border)),
       ),
-      padding: const EdgeInsets.symmetric(horizontal: AppSpace.lg, vertical: AppSpace.md),
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpace.lg,
+        vertical: AppSpace.md,
+      ),
       child: SegmentedTabs<_RestoreTab>(
         selected: _tab,
         onChanged: (tab) => setState(() => _tab = tab),
         items: const [
-          SegmentedTabItem(value: _RestoreTab.deletedScans, label: 'Deleted Scans'),
-          SegmentedTabItem(value: _RestoreTab.restoreRequests, label: 'Restore Requests'),
+          SegmentedTabItem(
+            value: _RestoreTab.deletedScans,
+            label: 'Deleted Scans',
+          ),
+          SegmentedTabItem(
+            value: _RestoreTab.restoreRequests,
+            label: 'Restore Requests',
+          ),
         ],
       ),
     );
@@ -220,9 +247,12 @@ class _RestoreManagementScreenState extends State<RestoreManagementScreen> {
   /// Keeps card lists readable on wide desktop windows instead of stretching
   /// each card across the whole viewport.
   Widget _centered(Widget child) => Align(
-        alignment: Alignment.topCenter,
-        child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 960), child: child),
-      );
+    alignment: Alignment.topCenter,
+    child: ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 960),
+      child: child,
+    ),
+  );
 
   // -------------------------------------------------------------------
   // Deleted Scans tab -- metadata only, via
@@ -230,7 +260,8 @@ class _RestoreManagementScreenState extends State<RestoreManagementScreen> {
   // -------------------------------------------------------------------
 
   Widget _buildDeletedScansTab() {
-    if (_loadingDeleted) return const LoadingState(message: 'Loading deleted scans...');
+    if (_loadingDeleted)
+      return const LoadingState(message: 'Loading deleted scans...');
     if (_deletedError != null) {
       return ErrorState(
         title: 'Could not load deleted scans',
@@ -242,7 +273,8 @@ class _RestoreManagementScreenState extends State<RestoreManagementScreen> {
       return const EmptyState(
         icon: Icons.check_circle_outline_rounded,
         title: 'No soft-deleted scans.',
-        message: 'Deleted unlinked scans stay here for 30 days before they expire.',
+        message:
+            'Deleted unlinked scans stay here for 30 days before they expire.',
       );
     }
     return _centered(
@@ -250,7 +282,8 @@ class _RestoreManagementScreenState extends State<RestoreManagementScreen> {
         padding: const EdgeInsets.all(AppSpace.lg),
         itemCount: _deletedScans.length,
         separatorBuilder: (_, _) => const SizedBox(height: AppSpace.md),
-        itemBuilder: (context, index) => _DeletedScanCard(scan: _deletedScans[index]),
+        itemBuilder: (context, index) =>
+            _DeletedScanCard(scan: _deletedScans[index]),
       ),
     );
   }
@@ -261,7 +294,8 @@ class _RestoreManagementScreenState extends State<RestoreManagementScreen> {
   // -------------------------------------------------------------------
 
   Widget _buildRestoreRequestsTab() {
-    if (_loadingRequests) return const LoadingState(message: 'Loading restore requests...');
+    if (_loadingRequests)
+      return const LoadingState(message: 'Loading restore requests...');
     if (_requestsError != null) {
       return ErrorState(
         title: 'Could not load restore requests',
@@ -272,7 +306,8 @@ class _RestoreManagementScreenState extends State<RestoreManagementScreen> {
     if (_requests.isEmpty) {
       return const EmptyState(
         title: 'No restore requests.',
-        message: 'Requests from Guidance Council to bring back a deleted scan appear here.',
+        message:
+            'Requests from Guidance Council to bring back a deleted scan appear here.',
       );
     }
     return _centered(
@@ -284,9 +319,15 @@ class _RestoreManagementScreenState extends State<RestoreManagementScreen> {
           final request = _requests[index];
           return _RestoreRequestCard(
             request: request,
-            onApprove: _reviewingRequestId != null ? null : () => _openReview(request, approve: true),
-            onReject: _reviewingRequestId != null ? null : () => _openReview(request, approve: false),
-            onRestore: _restoringRequestId != null ? null : () => _openRestore(request),
+            onApprove: _reviewingRequestId != null
+                ? null
+                : () => _openReview(request, approve: true),
+            onReject: _reviewingRequestId != null
+                ? null
+                : () => _openReview(request, approve: false),
+            onRestore: _restoringRequestId != null
+                ? null
+                : () => _openRestore(request),
           );
         },
       ),
@@ -297,7 +338,18 @@ class _RestoreManagementScreenState extends State<RestoreManagementScreen> {
 String _formatDateTime(DateTime d) {
   final local = d.toLocal();
   const months = [
-    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
   ];
   final hh = local.hour.toString().padLeft(2, '0');
   final mm = local.minute.toString().padLeft(2, '0');
@@ -315,6 +367,7 @@ class _DeletedScanCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SurfaceCard(
+      color: const Color(0xFFFFF6E4),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -356,13 +409,17 @@ class _RestoreRequestCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SurfaceCard(
+      color: const Color(0xFFFFF6E4),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _CardTitleRow(
             scanId: request.scanId,
             batchId: request.batchId,
-            badges: [_examBadge(request.examCode), _statusBadge(request.status)],
+            badges: [
+              _examBadge(request.examCode),
+              _statusBadge(request.status),
+            ],
           ),
           const SizedBox(height: AppSpace.md),
           const Divider(),
@@ -370,9 +427,12 @@ class _RestoreRequestCard extends StatelessWidget {
           _detailRow('Request reason', request.reason),
           _detailRow('Requested by', request.requestedByName ?? '—'),
           _detailRow('Requested at', _formatDateTime(request.requestedAt)),
-          if (request.reviewedByName != null) _detailRow('Reviewed by', request.reviewedByName!),
-          if (request.reviewedAt != null) _detailRow('Reviewed at', _formatDateTime(request.reviewedAt!)),
-          if (request.reviewNote != null) _detailRow('Review note', request.reviewNote!),
+          if (request.reviewedByName != null)
+            _detailRow('Reviewed by', request.reviewedByName!),
+          if (request.reviewedAt != null)
+            _detailRow('Reviewed at', _formatDateTime(request.reviewedAt!)),
+          if (request.reviewNote != null)
+            _detailRow('Review note', request.reviewNote!),
           if (request.isPending || request.isApproved) ...[
             const SizedBox(height: AppSpace.sm),
             Wrap(
@@ -424,7 +484,11 @@ class _RestoreRequestCard extends StatelessWidget {
 /// "Scan [id]" with its batch underneath and status/exam badges on the right
 /// (wrapping below the title on narrow screens instead of overflowing).
 class _CardTitleRow extends StatelessWidget {
-  const _CardTitleRow({required this.scanId, required this.batchId, required this.badges});
+  const _CardTitleRow({
+    required this.scanId,
+    required this.batchId,
+    required this.badges,
+  });
 
   final String scanId;
   final String batchId;
@@ -453,7 +517,8 @@ class _CardTitleRow extends StatelessWidget {
   }
 }
 
-Widget _examBadge(String examCode) => StatusBadge(label: examCode, tone: StatusTone.neutral);
+Widget _examBadge(String examCode) =>
+    StatusBadge(label: examCode, tone: StatusTone.neutral);
 
 Widget _statusBadge(String status) {
   final upper = status.toUpperCase();
@@ -474,7 +539,10 @@ Widget _detailRow(String label, String value) {
       children: [
         SizedBox(
           width: 112,
-          child: Text(label, style: AppTextStyles.caption(weight: FontWeight.w700)),
+          child: Text(
+            label,
+            style: AppTextStyles.caption(weight: FontWeight.w700),
+          ),
         ),
         Expanded(child: Text(value, style: AppTextStyles.text())),
       ],
@@ -545,7 +613,9 @@ class _ReviewRequestDialogState extends State<_ReviewRequestDialog> {
   Widget build(BuildContext context) {
     final r = widget.request;
     return AlertDialog(
-      title: Text(widget.approve ? 'Approve Restore Request' : 'Reject Restore Request'),
+      title: Text(
+        widget.approve ? 'Approve Restore Request' : 'Reject Restore Request',
+      ),
       content: SizedBox(
         width: 440,
         child: Form(
@@ -556,21 +626,27 @@ class _ReviewRequestDialogState extends State<_ReviewRequestDialog> {
             children: [
               Text(
                 'Scan ${r.scanId} — Batch ${r.batchId} — ${r.examCode}',
-                style: AppTextStyles.body(size: 10.5, color: AppColors.textGray),
+                style: AppTextStyles.body(
+                  size: 10.5,
+                  color: AppColors.textGray,
+                ),
               ),
               const SizedBox(height: 6),
               Text(
                 'Requested reason: ${r.reason}',
-                style: AppTextStyles.body(size: 10.5, color: AppColors.textGray),
+                style: AppTextStyles.body(
+                  size: 10.5,
+                  color: AppColors.textGray,
+                ),
               ),
               const SizedBox(height: 12),
               Text(
                 widget.approve
                     ? 'This will approve the restoration request. The scan itself is '
-                        'not restored yet -- a separate "Restore Scan" action will become '
-                        'available afterward.'
+                          'not restored yet -- a separate "Restore Scan" action will become '
+                          'available afterward.'
                     : 'This will reject the restoration request. The scan remains '
-                        'soft-deleted, and a new request may be submitted later.',
+                          'soft-deleted, and a new request may be submitted later.',
               ),
               const SizedBox(height: 12),
               TextFormField(
@@ -580,11 +656,19 @@ class _ReviewRequestDialogState extends State<_ReviewRequestDialog> {
                 minLines: 2,
                 maxLines: 4,
                 decoration: const InputDecoration(labelText: 'Review note'),
-                validator: (v) => (v == null || v.trim().isEmpty) ? 'A review note is required' : null,
+                validator: (v) => (v == null || v.trim().isEmpty)
+                    ? 'A review note is required'
+                    : null,
               ),
               if (_error != null) ...[
                 const SizedBox(height: 10),
-                Text(_error!, style: AppTextStyles.body(size: 11, color: AppColors.warmRedOrange)),
+                Text(
+                  _error!,
+                  style: AppTextStyles.body(
+                    size: 11,
+                    color: AppColors.warmRedOrange,
+                  ),
+                ),
               ],
             ],
           ),
@@ -598,7 +682,9 @@ class _ReviewRequestDialogState extends State<_ReviewRequestDialog> {
         FilledButton(
           onPressed: _saving ? null : _submit,
           style: FilledButton.styleFrom(
-            backgroundColor: widget.approve ? AppColors.primaryGreen : AppColors.warmRedOrange,
+            backgroundColor: widget.approve
+                ? AppColors.primaryGreen
+                : AppColors.warmRedOrange,
           ),
           child: Text(
             _saving ? 'Submitting...' : (widget.approve ? 'Approve' : 'Reject'),
@@ -665,7 +751,13 @@ class _RestoreScanDialogState extends State<_RestoreScanDialog> {
             ),
             if (_error != null) ...[
               const SizedBox(height: 10),
-              Text(_error!, style: AppTextStyles.body(size: 11, color: AppColors.warmRedOrange)),
+              Text(
+                _error!,
+                style: AppTextStyles.body(
+                  size: 11,
+                  color: AppColors.warmRedOrange,
+                ),
+              ),
             ],
           ],
         ),

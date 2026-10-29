@@ -146,11 +146,14 @@ void main() {
   });
 
   group('2. Admission Test — category boundaries', () {
+    // Raw score bands: 0-54 A, 55-60 B, 61-64 C, 65-72 D (confirmed rule;
+    // see lib/core/omr/admission_category.dart). "Not classified" now only
+    // appears for a score outside 0-72.
     const cases = <int, String>{
       54: 'A',
-      55: 'Not classified',
-      56: 'Not classified',
-      57: 'Not classified',
+      55: 'B',
+      56: 'B',
+      57: 'B',
       58: 'B',
       60: 'B',
       61: 'C',

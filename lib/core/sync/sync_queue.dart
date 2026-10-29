@@ -435,6 +435,31 @@ class SyncState {
     _raw[key] = entry;
   }
 
+  // --- name-crop images ------------------------------------------------------
+  //
+  // The three optional handwritten-name crops (`name_last` / `name_first` /
+  // `name_mi`) are tracked per variant in the same `scan:<batch>:<scan>` entry
+  // as the photos, so the startup reconcile can re-queue a crop that never
+  // reached Storage (a lost enqueue, an app kill mid-save) exactly like it
+  // already does for a missing photo. Absent == not uploaded.
+
+  static String _nameCropFlag(String variant) => '${variant}Uploaded';
+
+  bool scanNameCropUploaded(String batchId, String scanId, String variant) =>
+      _entry(scanKey(batchId, scanId))?[_nameCropFlag(variant)] == true;
+
+  void setScanNameCropUploaded(
+    String batchId,
+    String scanId,
+    String variant,
+    bool uploaded,
+  ) {
+    final key = scanKey(batchId, scanId);
+    final entry = _entry(key) ?? <String, dynamic>{};
+    entry[_nameCropFlag(variant)] = uploaded;
+    _raw[key] = entry;
+  }
+
   // --- answer key -------------------------------------------------------
 
   int? answerKeyLastPushedVersion(String examCode) {

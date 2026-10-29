@@ -10,7 +10,7 @@ import 'package:guidegrade/core/omr/omr_templates.dart';
 ///
 /// Every sheet has ONE row of open name fields (no per-letter cells, so every
 /// box count is 0). AT and QTM give the Middle Name field room for a full name
-/// rather than an initial; TAT's v5 row keeps its short M.I. box.
+/// rather than an initial; TAT's v5 row now does the same.
 typedef _Rect = ({double x, double y, double w, double h});
 
 void _expectRect(OmrFieldRect r, _Rect e, String label) {
@@ -74,11 +74,13 @@ void main() {
     (x: 0.69359, y: 0.11752, w: 0.13647, h: 0.02137),
     minMiddleWidthPt: 80,
   );
-  // TAT (portrait v5): straight from the sheet's geometry JSON.
+  // TAT (portrait v5): straight from the sheet's geometry JSON. Updated for
+  // the 2026-10-03 name-field change: a wider Last Name field, and a Middle
+  // Name field with room for a full name (no longer a short M.I. box).
   _testNameCrops(
     'TAT',
-    (x: 0.07843, y: 0.11325, w: 0.24510, h: 0.02350),
-    (x: 0.32353, y: 0.11325, w: 0.24510, h: 0.02350),
-    (x: 0.56863, y: 0.11325, w: 0.05882, h: 0.02350),
+    (x: 0.07843, y: 0.11325, w: 0.34314, h: 0.02350),
+    (x: 0.42157, y: 0.11325, w: 0.24510, h: 0.02350),
+    (x: 0.66667, y: 0.11325, w: 0.24510, h: 0.02350),
   );
 }

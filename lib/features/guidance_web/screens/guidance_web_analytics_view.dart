@@ -12,6 +12,7 @@ import '../../../core/constants/exam_catalog.dart';
 import '../../../core/omr/qtm_result.dart';
 import '../../../models/local_batch.dart';
 import '../services/guidance_web_analytics_service.dart';
+import '../widgets/console_style.dart';
 import 'guidance_web_examinee_analytics_view.dart';
 
 /// The Guidance Council Web Console's Analytics page — READ-ONLY.
@@ -181,30 +182,115 @@ class _GuidanceWebBatchAnalyticsViewState
 
   // --- filters -----------------------------------------------------------
 
-  Widget _card({required Widget child}) => SurfaceCard(child: child);
+  /// A white content card (Overall Statistics, Score Distribution, ...).
+  Widget _card({required Widget child}) =>
+      SurfaceCard(color: Colors.white, child: child);
+
+  // The soft green tint of the filter panel, and the green-gray hairline used
+  // for field outlines and chart tracks, so the page reads as one family with
+  // the console's green sidebar and header.
+  static const Color _panelTint = Color(0xFFEAF3EE);
+  static const Color _hairline = Color(0xFFCADBD0);
+
+  TextStyle get _fieldText => AppTextStyles.body(size: 14);
 
   InputDecoration _decoration(String label) => InputDecoration(
     labelText: label,
+    labelStyle: AppTextStyles.body(size: 13, color: ConsoleColors.muted),
+    floatingLabelStyle: AppTextStyles.body(
+      size: 12.5,
+      weight: FontWeight.w600,
+      color: ConsoleColors.eyebrow,
+    ),
     isDense: true,
-    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+    filled: true,
+    fillColor: Colors.white,
+    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+    border: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(10),
+      borderSide: const BorderSide(color: _hairline),
+    ),
+    enabledBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(10),
+      borderSide: const BorderSide(color: _hairline),
+    ),
+    focusedBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(10),
+      borderSide: const BorderSide(
+        color: ConsoleColors.railSelected,
+        width: 1.5,
+      ),
+    ),
   );
+
+  /// One batch in the batch picker: the batch's DESCRIPTION first (larger,
+  /// bold) with the batch name close beside it (smaller, muted), so the
+  /// Guidance Council can tell similarly named batches apart at a glance. A
+  /// batch with no description shows just its batch name, as before.
+  Widget _batchOption(LocalBatch b) {
+    final name =
+        '${b.batchCode} — ${b.examTitle.isNotEmpty ? b.examTitle : b.examCode}';
+    final description = b.description.trim();
+    if (description.isEmpty) {
+      return Text(name, maxLines: 1, overflow: TextOverflow.ellipsis);
+    }
+    return Row(
+      children: [
+        // The description first (left, bold) ...
+        Flexible(
+          flex: 3,
+          child: Text(
+            description,
+            key: Key('batchOptionDescription_${b.id}'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: AppTextStyles.body(size: 14, weight: FontWeight.w700),
+          ),
+        ),
+        // ... with the batch name stuck close beside it, not pushed away.
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: Text(
+            '·',
+            style: AppTextStyles.body(size: 14, color: AppColors.textGray),
+          ),
+        ),
+        Flexible(
+          flex: 2,
+          child: Text(
+            name,
+            key: Key('batchOptionName_${b.id}'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: AppTextStyles.body(size: 12, color: AppColors.textGray),
+          ),
+        ),
+      ],
+    );
+  }
 
   Widget _buildFilters() {
     final catalog = _catalog;
     final archiveOk = catalog?.archiveFilterAvailable ?? true;
-    return _card(
+    return SurfaceCard(
+      color: _panelTint,
+      padding: const EdgeInsets.all(12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           LayoutBuilder(
             builder: (context, box) {
               final narrow = box.maxWidth < 700;
+              // One row on a wide window: exam type, status, batch (twice as
+              // wide) and the small refresh button, 12 px apart.
+              const gap = 12.0;
+              const refreshSize = 40.0;
               final fieldWidth = narrow
                   ? box.maxWidth
-                  : (box.maxWidth - 80) / 4;
+                  : (box.maxWidth - 3 * gap - refreshSize - 1) / 4;
               return Wrap(
-                spacing: 16,
-                runSpacing: 12,
+                spacing: gap,
+                runSpacing: 10,
                 crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
                   SizedBox(
@@ -213,6 +299,7 @@ class _GuidanceWebBatchAnalyticsViewState
                       key: const Key('examTypeFilter'),
                       value: _examCode,
                       isExpanded: true,
+                      style: _fieldText,
                       decoration: _decoration('Exam Type'),
                       items: [
                         for (final (code, label) in _examTypes)
@@ -236,6 +323,7 @@ class _GuidanceWebBatchAnalyticsViewState
                       key: const Key('batchStatusFilter'),
                       value: _status,
                       isExpanded: true,
+                      style: _fieldText,
                       decoration: _decoration('Batch Status'),
                       items: [
                         const DropdownMenuItem(
@@ -281,7 +369,20 @@ class _GuidanceWebBatchAnalyticsViewState
                       key: const Key('batchFilter'),
                       value: _batch,
                       isExpanded: true,
+                      style: _fieldText,
                       decoration: _decoration('Batch'),
+                      // The closed field shows the same one-line layout.
+                      selectedItemBuilder: (context) => [
+                        const Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text('All Batches'),
+                        ),
+                        for (final b in _batchOptions)
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: _batchOption(b),
+                          ),
+                      ],
                       items: [
                         const DropdownMenuItem<LocalBatch?>(
                           value: null,
@@ -290,10 +391,7 @@ class _GuidanceWebBatchAnalyticsViewState
                         for (final b in _batchOptions)
                           DropdownMenuItem<LocalBatch?>(
                             value: b,
-                            child: Text(
-                              '${b.batchCode} — ${b.examTitle.isNotEmpty ? b.examTitle : b.examCode}',
-                              overflow: TextOverflow.ellipsis,
-                            ),
+                            child: _batchOption(b),
                           ),
                       ],
                       onChanged: catalog == null
@@ -304,11 +402,34 @@ class _GuidanceWebBatchAnalyticsViewState
                             },
                     ),
                   ),
-                  IconButton(
-                    key: const Key('analyticsRefresh'),
-                    tooltip: 'Refresh',
-                    onPressed: _loadingCatalog || _running ? null : _refresh,
-                    icon: const Icon(Icons.refresh),
+                  // A small utility control, level with the fields (right
+                  // aligned on a narrow window).
+                  SizedBox(
+                    width: narrow ? fieldWidth : refreshSize,
+                    height: refreshSize,
+                    child: Align(
+                      alignment: narrow
+                          ? Alignment.centerRight
+                          : Alignment.center,
+                      child: IconButton(
+                        key: const Key('analyticsRefresh'),
+                        tooltip: 'Refresh',
+                        onPressed: _loadingCatalog || _running
+                            ? null
+                            : _refresh,
+                        iconSize: 20,
+                        style: IconButton.styleFrom(
+                          fixedSize: const Size(36, 36),
+                          padding: EdgeInsets.zero,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          foregroundColor: ConsoleColors.railSelected,
+                          hoverColor: ConsoleColors.railSelected.withValues(
+                            alpha: 0.12,
+                          ),
+                        ),
+                        icon: const Icon(Icons.refresh),
+                      ),
+                    ),
                   ),
                 ],
               );
@@ -453,7 +574,10 @@ class _GuidanceWebBatchAnalyticsViewState
         key: const Key('analytics.topScorers'),
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text('Top Scorers — $exam', style: AppTextStyles.heading(size: 15)),
+          Text(
+            'Top Scorers — $exam',
+            style: AppTextStyles.heading(size: 15, color: ConsoleColors.ink),
+          ),
           const SizedBox(height: 8),
           const Text(
             'Competition ranks 1–10, including all ties. Each examinee appears once with their highest eligible score in the selected batches.',
@@ -666,7 +790,10 @@ class _GuidanceWebBatchAnalyticsViewState
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(title, style: AppTextStyles.heading(size: 15)),
+          Text(
+            title,
+            style: AppTextStyles.heading(size: 15, color: ConsoleColors.ink),
+          ),
           const SizedBox(height: 12),
           Wrap(
             spacing: 24,
@@ -704,7 +831,23 @@ class _GuidanceWebBatchAnalyticsViewState
     showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('Examinees — ${group.label}'),
+        backgroundColor: const Color(0xFFF3F8F5),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        title: Container(
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            color: const Color(0xFF0A4A37),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Text(
+            'Examinees — ${group.label}',
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 20,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
         content: SizedBox(
           width: 680,
           child: ConstrainedBox(
@@ -732,32 +875,47 @@ class _GuidanceWebBatchAnalyticsViewState
                         child: ListView.separated(
                           shrinkWrap: true,
                           itemCount: examinees.length,
-                          separatorBuilder: (_, _) => const Divider(height: 24),
+                          separatorBuilder: (_, _) =>
+                              const SizedBox(height: 12),
                           itemBuilder: (context, index) {
                             final matches = examinees[index];
                             final person = matches.first.examinee;
-                            return Column(
-                              key: ValueKey(
-                                'distribution.examinee.${person.id}',
+                            return Container(
+                              padding: const EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                                color: index.isEven
+                                    ? const Color(0xFFDCEBE2)
+                                    : const Color(0xFFEAF3EE),
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(
+                                  color: const Color(0xFFCADBD0),
+                                ),
                               ),
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  person.displayName,
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w700,
-                                  ),
+                              child: Column(
+                                key: ValueKey(
+                                  'distribution.examinee.${person.id}',
                                 ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  'ID: ${person.officialStudentId ?? person.temporaryExamineeId}',
-                                ),
-                                Text('Exam: $exam'),
-                                for (final match in matches)
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
                                   Text(
-                                    'Score: ${match.score} · Batch: ${match.batchCode}',
+                                    person.displayName,
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 16,
+                                      color: Color(0xFF10261C),
+                                    ),
                                   ),
-                              ],
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'ID: ${person.officialStudentId ?? person.temporaryExamineeId}',
+                                  ),
+                                  Text('Exam: $exam'),
+                                  for (final match in matches)
+                                    Text(
+                                      'Score: ${match.score} · Batch: ${match.batchCode}',
+                                    ),
+                                ],
+                              ),
                             );
                           },
                         ),
@@ -767,7 +925,7 @@ class _GuidanceWebBatchAnalyticsViewState
           ),
         ),
         actions: [
-          TextButton(
+          FilledButton(
             onPressed: () => Navigator.pop(context),
             child: const Text('Close'),
           ),
@@ -778,6 +936,17 @@ class _GuidanceWebBatchAnalyticsViewState
 
   Widget _distribution(String title) {
     final groups = _result!.distributionGroups(title);
+    // A calmer chart palette: the university green first, then a few muted
+    // tones that sit well beside it (instead of seven saturated hues).
+    const barColors = [
+      Color(0xFF0F7A4F),
+      Color(0xFFD9A021),
+      Color(0xFF2A8C8C),
+      Color(0xFF3F6FB5),
+      Color(0xFFB5523B),
+      Color(0xFF7A8F3A),
+      Color(0xFF6B5B95),
+    ];
     // Every row's count and action share the same resolved result membership.
     final max = groups.fold<int>(
       0,
@@ -787,25 +956,67 @@ class _GuidanceWebBatchAnalyticsViewState
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(title, style: AppTextStyles.heading(size: 15)),
+          Text(
+            title,
+            style: AppTextStyles.heading(
+              size: 18,
+              color: const Color(0xFF10261C),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Number of results · Bars scaled to the largest group',
+            style: AppTextStyles.caption(),
+          ),
           const SizedBox(height: 12),
           for (final group in groups)
             Padding(
-              padding: const EdgeInsets.symmetric(vertical: 6),
+              padding: const EdgeInsets.symmetric(vertical: 10),
               child: LayoutBuilder(
                 builder: (context, constraints) {
                   final compact = constraints.maxWidth < 560;
+                  final barColor =
+                      barColors[groups.indexOf(group) % barColors.length];
                   final label = Text(
                     group.label,
-                    style: AppTextStyles.body(size: 13),
+                    style: AppTextStyles.body(
+                      size: 13,
+                      weight: FontWeight.w600,
+                    ),
                   );
-                  final bar = ClipRRect(
-                    borderRadius: BorderRadius.circular(6),
-                    child: LinearProgressIndicator(
-                      value: max == 0 ? 0 : group.results.length / max,
-                      minHeight: 14,
-                      backgroundColor: AppColors.lightBg,
-                      color: AppColors.primaryGreen,
+                  final bar = Semantics(
+                    label: '${group.label}: ${group.results.length} results',
+                    child: Container(
+                      height: 22,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFE0ECE4),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      clipBehavior: Clip.antiAlias,
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: FractionallySizedBox(
+                          widthFactor: max == 0
+                              ? 0
+                              : group.results.length / max,
+                          heightFactor: 1,
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                colors: [
+                                  barColor,
+                                  Color.lerp(
+                                    barColor,
+                                    const Color(0xFF10261C),
+                                    0.2,
+                                  )!,
+                                ],
+                              ),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                          ),
+                        ),
+                      ),
                     ),
                   );
                   final action = Row(

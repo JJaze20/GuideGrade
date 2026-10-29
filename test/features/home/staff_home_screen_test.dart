@@ -40,6 +40,12 @@ void main() {
   });
 
   Future<void> pumpScreen(WidgetTester tester, {List<LocalBatch> batches = const []}) async {
+    // The home screen is a ListView, which only builds what is on screen. A
+    // tall test surface keeps the batch section (below the welcome card)
+    // visible, as it is on a real phone after scrolling.
+    tester.view.physicalSize = const Size(800, 2400);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
     appState = AppState(batchRepository: _FakeBatchRepository(batches));
     await tester.pumpWidget(
       MaterialApp(

@@ -5,9 +5,11 @@ import '../../../shared/widgets/status_badge.dart';
 import '../../../shared/widgets/surface_card.dart';
 
 import '../../../core/constants/app_text_styles.dart';
+import '../../../core/constants/exam_catalog.dart';
 import '../../../models/batch_archive.dart';
 import '../services/guidance_web_archive_service.dart';
 import '../services/guidance_web_results_service.dart';
+import '../widgets/console_style.dart';
 import 'guidance_web_results_view.dart';
 
 /// The Guidance Council Web Console's Archive page: every batch archived in
@@ -118,35 +120,78 @@ class _GuidanceWebArchiveViewState extends State<GuidanceWebArchiveView> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 _buildControls(),
-                const SizedBox(height: 16),
+                const SizedBox(height: 12),
                 Expanded(child: _buildBody()),
               ],
             ),
     );
   }
 
+  // The same soft green panel tint and green-gray hairline as the other
+  // console pages (Analytics, Export, Results).
+  static const Color _panelTint = Color(0xFFEAF3EE);
+  static const Color _hairline = Color(0xFFCADBD0);
+
+  OutlineInputBorder _outline([Color color = _hairline, double width = 1]) =>
+      OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+        borderSide: BorderSide(color: color, width: width),
+      );
+
+  InputDecoration _decoration(String label) => InputDecoration(
+    labelText: label,
+    labelStyle: AppTextStyles.body(size: 13, color: ConsoleColors.muted),
+    floatingLabelStyle: AppTextStyles.body(
+      size: 12.5,
+      weight: FontWeight.w600,
+      color: ConsoleColors.eyebrow,
+    ),
+    isDense: true,
+    filled: true,
+    fillColor: Colors.white,
+    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+    border: _outline(),
+    enabledBorder: _outline(),
+    focusedBorder: _outline(ConsoleColors.railSelected, 1.5),
+  );
+
+  /// The exam-type filter shows each exam's full name; the filter itself still
+  /// works on the short code (AT / TAT / QTM).
+  String _examFilterLabel(String code) =>
+      code == 'All' ? 'All Exam Types' : examTypeDisplayLabel(code);
+
   Widget _buildControls() => SurfaceCard(
+    color: _panelTint,
+    padding: const EdgeInsets.all(12),
     child: LayoutBuilder(
       builder: (context, constraints) {
         final search = TextField(
           key: const Key('archiveSearch'),
           controller: _search,
-          style: AppTextStyles.text(),
-          decoration: InputDecoration(
-            labelText: 'Search completed batches',
+          style: AppTextStyles.body(size: 14),
+          decoration: _decoration('Search completed batches').copyWith(
             floatingLabelBehavior: constraints.maxWidth < 600
                 ? FloatingLabelBehavior.always
                 : FloatingLabelBehavior.auto,
             hintText: constraints.maxWidth < 600
                 ? 'Search batches'
                 : 'Batch code, exam, description or archived by',
-            prefixIcon: const Icon(Icons.search),
+            prefixIcon: const Icon(Icons.search, size: 18),
+            // Slim icon slots keep the field about 44 px tall.
+            prefixIconConstraints: const BoxConstraints(
+              minWidth: 38,
+              minHeight: 36,
+            ),
+            suffixIconConstraints: const BoxConstraints(
+              minWidth: 38,
+              minHeight: 36,
+            ),
             suffixIcon: _search.text.isEmpty
                 ? null
                 : IconButton(
                     tooltip: 'Clear search',
                     onPressed: _search.clear,
-                    icon: const Icon(Icons.close),
+                    icon: const Icon(Icons.close, size: 18),
                   ),
           ),
         );
@@ -154,25 +199,29 @@ class _GuidanceWebArchiveViewState extends State<GuidanceWebArchiveView> {
           key: const Key('archiveExamFilter'),
           initialValue: _examFilter,
           isExpanded: true,
-          decoration: const InputDecoration(labelText: 'Exam type'),
+          style: AppTextStyles.body(size: 14),
+          decoration: _decoration('Exam type'),
           items: _examFilterOptions
-              .map((c) => DropdownMenuItem(value: c, child: Text(c)))
+              .map(
+                (c) => DropdownMenuItem(
+                  value: c,
+                  child: Text(
+                    _examFilterLabel(c),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              )
               .toList(),
           onChanged: (v) => setState(() => _examFilter = v ?? 'All'),
         );
         if (constraints.maxWidth < 600) {
-          return Column(
-            children: [
-              search,
-              const SizedBox(height: AppSpace.md),
-              filter,
-            ],
-          );
+          return Column(children: [search, const SizedBox(height: 10), filter]);
         }
         return Row(
           children: [
             Expanded(flex: 2, child: search),
-            const SizedBox(width: AppSpace.lg),
+            const SizedBox(width: 12),
             Expanded(child: filter),
           ],
         );
@@ -239,11 +288,11 @@ class _GuidanceWebArchiveViewState extends State<GuidanceWebArchiveView> {
                 child: Column(
                   children: [
                     _headerRow(),
-                    const Divider(),
                     Expanded(
                       child: ListView.separated(
                         itemCount: rows.length,
-                        separatorBuilder: (_, _) => const Divider(),
+                        separatorBuilder: (_, _) =>
+                            const Divider(height: 1, color: _hairline),
                         itemBuilder: (_, i) => _row(rows[i]),
                       ),
                     ),
@@ -258,12 +307,18 @@ class _GuidanceWebArchiveViewState extends State<GuidanceWebArchiveView> {
   }
 
   Widget _headerRow() {
+    // A short green bar (matching the Results table header), white labels.
+    final style = AppTextStyles.label(color: Colors.white);
     Widget h(String text, int flex) => Expanded(
       flex: flex,
-      child: Text(text, style: AppTextStyles.label()),
+      child: Text(text, style: style),
     );
-    return Padding(
-      padding: const EdgeInsets.all(AppSpace.lg),
+    return Container(
+      color: ConsoleColors.railGreen,
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpace.lg,
+        vertical: AppSpace.md,
+      ),
       child: Row(
         children: [
           h('BATCH CODE', 2),
@@ -273,7 +328,7 @@ class _GuidanceWebArchiveViewState extends State<GuidanceWebArchiveView> {
           h('STATUS', 2),
           h('ARCHIVED', 2),
           h('ARCHIVED BY', 2),
-          const SizedBox(width: 80, child: Text('ACTION')),
+          SizedBox(width: 80, child: Text('ACTION', style: style)),
         ],
       ),
     );
@@ -301,6 +356,7 @@ class _GuidanceWebArchiveViewState extends State<GuidanceWebArchiveView> {
           overflow: TextOverflow.ellipsis,
           style: AppTextStyles.text(
             weight: strong ? FontWeight.w700 : FontWeight.w400,
+            color: ConsoleColors.ink,
           ),
         ),
       ),
@@ -308,7 +364,7 @@ class _GuidanceWebArchiveViewState extends State<GuidanceWebArchiveView> {
     return Padding(
       padding: const EdgeInsets.symmetric(
         horizontal: AppSpace.lg,
-        vertical: AppSpace.sm,
+        vertical: AppSpace.xs,
       ),
       child: Row(
         children: [

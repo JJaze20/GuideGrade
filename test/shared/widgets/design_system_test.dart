@@ -13,6 +13,7 @@ import 'package:guidegrade/features/admin/widgets/user_list_item.dart';
 import 'package:guidegrade/features/guidance/widgets/batch_list_item.dart';
 import 'package:guidegrade/models/local_batch.dart';
 import 'package:guidegrade/models/log_entry.dart';
+import 'package:guidegrade/models/omr_scan_result.dart';
 import 'package:guidegrade/models/user.dart';
 import 'package:guidegrade/shared/widgets/form_layout.dart';
 import 'package:guidegrade/shared/widgets/primary_button.dart';
@@ -284,7 +285,43 @@ void main() {
         textScale: 2,
       ));
       expect(tester.takeException(), isNull);
-      expect(find.byTooltip('Delete batch'), findsOneWidget);
+      // An empty, uncompleted batch still offers its actions menu (delete).
+      expect(find.byTooltip('Batch actions'), findsOneWidget);
+    });
+
+    testWidgets('BatchListItem offers no delete action once a sheet is scanned',
+        (tester) async {
+      _phone(tester);
+      await tester.pumpWidget(_app(
+        BatchListItem(
+          batch: LocalBatch(
+            id: 'b1',
+            batchCode: 'B-202608-123',
+            examCode: 'AT',
+            examTitle: 'Admission Test',
+            description: 'Morning session',
+            expectedCount: 40,
+            status: 'Active',
+            createdByUid: 'u',
+            createdByName: 'Officer',
+            createdAt: created,
+            updatedAt: created,
+            scans: [
+              LocalScan(
+                id: 's1',
+                imageFileName: 'images/s1.enc',
+                capturedAt: created,
+                decoded: const OmrScanResult(examCode: 'AT', items: []),
+              ),
+            ],
+          ),
+          onTap: () {},
+          onDelete: () {},
+        ),
+      ));
+      expect(tester.takeException(), isNull);
+      expect(find.byTooltip('Batch actions'), findsNothing);
+      expect(find.byTooltip('Delete batch'), findsNothing);
     });
   });
 }

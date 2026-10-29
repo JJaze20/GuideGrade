@@ -290,6 +290,27 @@ void main() {
     );
   });
 
+  group('readAllScanRowCounts', () {
+    test(
+      'counts EVERY scan row of the batch: soft-deleted rows are not filtered out',
+      () async {
+        final fake = _FakeHttp()
+          ..responseBody = '[{"id":"s1"}]'
+          ..extraHeaders = {'content-range': '0-0/4'};
+        final read = await (_client(fake) as BatchScanRowCountClient)
+            .readAllScanRowCounts(['b1']);
+
+        expect(read.isSuccess, isTrue);
+        expect(read.counts['b1'], 4);
+        final r = fake.requests.single;
+        expect(r.method, 'GET');
+        expect(r.url.path, '/rest/v1/scans');
+        expect(r.url.queryParameters['batch_id'], 'eq.b1');
+        expect(r.url.queryParameters.containsKey('deleted_at'), isFalse);
+      },
+    );
+  });
+
   // readCloudScans and readUnlinkedScans both go through the same fake
   // http.Client as every test above -- no real network socket or Supabase
   // project is ever reached, and no Supabase credentials beyond the

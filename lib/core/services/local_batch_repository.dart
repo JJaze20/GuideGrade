@@ -364,6 +364,9 @@ class LocalBatchRepository implements BatchRepository {
     if (batch?.isCompleted == true) {
       throw StateError('Completed batches cannot be deleted.');
     }
+    if (batch != null && batch.scans.isNotEmpty) {
+      throw StateError('Batches with scanned sheets cannot be deleted.');
+    }
     if (dir.existsSync()) dir.deleteSync(recursive: true);
   });
 
