@@ -1,8 +1,11 @@
+import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:guidegrade/core/omr/at_categories.dart';
 import 'package:guidegrade/core/sync/cloud_batch_mapper.dart';
 import 'package:guidegrade/core/sync/sync_client.dart';
 import 'package:guidegrade/core/sync/sync_job.dart';
 import 'package:guidegrade/core/sync/sync_outcome.dart';
+import 'package:guidegrade/features/guidance_web/export/guidance_web_export_pdf.dart';
 import 'package:guidegrade/features/guidance_web/export/guidance_web_export_service.dart';
 import 'package:guidegrade/features/guidance_web/services/guidance_web_analytics_service.dart';
 import 'package:guidegrade/features/guidance_web/services/guidance_web_results_service.dart';
@@ -44,7 +47,11 @@ class _FakeClient implements SyncClient {
     calls.add('readBatchArchives');
     return CloudBatchArchivesRead.found([
       for (final id in archivedIds)
-        CloudBatchArchiveRow(batchId: id, archivedAt: DateTime.utc(2026, 3, 1), archivedByUid: 'u'),
+        CloudBatchArchiveRow(
+          batchId: id,
+          archivedAt: DateTime.utc(2026, 3, 1),
+          archivedByUid: 'u',
+        ),
     ]);
   }
 
@@ -52,7 +59,8 @@ class _FakeClient implements SyncClient {
   Future<CloudScanCountsRead> readScanCounts(List<String> batchIds) async {
     calls.add('readScanCounts');
     return CloudScanCountsRead.found({
-      for (final id in batchIds) id: countsOverride[id] ?? (scansByBatch[id] ?? const []).length,
+      for (final id in batchIds)
+        id: countsOverride[id] ?? (scansByBatch[id] ?? const []).length,
     });
   }
 
@@ -72,22 +80,27 @@ class _FakeClient implements SyncClient {
   @override
   Future<SyncOutcome> pushBatch(String batchId) => _no('pushBatch');
   @override
-  Future<SyncOutcome> pushScan(String batchId, String scanId, {Map<String, String> meta = const {}}) =>
-      _no('pushScan');
+  Future<SyncOutcome> pushScan(
+    String batchId,
+    String scanId, {
+    Map<String, String> meta = const {},
+  }) => _no('pushScan');
   @override
   Future<SyncOutcome> uploadImage(SyncJob job) => _no('uploadImage');
   @override
-  Future<SyncOutcome> patchImageStatus(String batchId, String scanId) => _no('patchImageStatus');
+  Future<SyncOutcome> patchImageStatus(String batchId, String scanId) =>
+      _no('patchImageStatus');
   @override
-  Future<SyncOutcome> pushAnswerKey(String examCode, {Map<String, String> meta = const {}}) =>
-      _no('pushAnswerKey');
+  Future<SyncOutcome> pushAnswerKey(
+    String examCode, {
+    Map<String, String> meta = const {},
+  }) => _no('pushAnswerKey');
   @override
   Future<CloudImageRead> downloadScanImage({
     required String batchId,
     required String scanId,
     required bool rectified,
-  }) =>
-      _no('downloadScanImage');
+  }) => _no('downloadScanImage');
   @override
   Future<CloudImageRead> downloadNameCropImage({
     required String batchId,
@@ -97,16 +110,20 @@ class _FakeClient implements SyncClient {
   @override
   Future<SyncOutcome> deleteBatch(String batchId) => _no('deleteBatch');
   @override
-  Future<SyncOutcome> deleteScan(String batchId, String scanId) => _no('deleteScan');
+  Future<SyncOutcome> deleteScan(String batchId, String scanId) =>
+      _no('deleteScan');
   @override
-  Future<SyncOutcome> deleteStoragePrefix(String batchId) => _no('deleteStoragePrefix');
+  Future<SyncOutcome> deleteStoragePrefix(String batchId) =>
+      _no('deleteStoragePrefix');
   @override
   Future<CloudExamineesRead> readCloudExaminees() async {
     calls.add('readCloudExaminees');
     final ids = <String>{
       for (final scans in scansByBatch.values)
         for (final s in scans)
-          if (s.examineeId != null && !danglingExamineeIds.contains(s.examineeId)) s.examineeId!,
+          if (s.examineeId != null &&
+              !danglingExamineeIds.contains(s.examineeId))
+            s.examineeId!,
     };
     return CloudExamineesRead.found([
       for (final id in ids)
@@ -123,6 +140,7 @@ class _FakeClient implements SyncClient {
         ),
     ]);
   }
+
   @override
   Future<CloudExamineeWrite> createExamineeFromScan({
     required String batchId,
@@ -130,41 +148,41 @@ class _FakeClient implements SyncClient {
     required String firstName,
     String? middleName,
     required String lastName,
-  }) =>
-      _no('createExamineeFromScan');
+  }) => _no('createExamineeFromScan');
   @override
   Future<CloudExamineeWrite> updateCloudExaminee({
     required String id,
     required String firstName,
     String? middleName,
     required String lastName,
-  }) =>
-      _no('updateCloudExaminee');
+  }) => _no('updateCloudExaminee');
   @override
-  Future<CloudExamineeWrite> setExamineeArchived(String id, bool archived) => _no('setExamineeArchived');
+  Future<CloudExamineeWrite> setExamineeArchived(String id, bool archived) =>
+      _no('setExamineeArchived');
   @override
   Future<SyncOutcome> linkScanToExaminee({
     required String batchId,
     required String scanId,
     required String? examineeId,
-  }) =>
-      _no('linkScanToExaminee');
+  }) => _no('linkScanToExaminee');
   @override
   Future<SyncOutcome> unlinkScanFromExaminee({
     required String batchId,
     required String scanId,
     required String examineeId,
-  }) =>
-      _no('unlinkScanFromExaminee');
+  }) => _no('unlinkScanFromExaminee');
   @override
-  Future<CloudScansRead> readCloudScansForExaminee(String examineeId) => _no('readCloudScansForExaminee');
+  Future<CloudScansRead> readCloudScansForExaminee(String examineeId) =>
+      _no('readCloudScansForExaminee');
   @override
   Future<CloudScansRead> readUnlinkedScans() => _no('readUnlinkedScans');
   @override
-  Future<SyncOutcome> archiveBatch({required String batchId, String? reason}) => _no('archiveBatch');
+  Future<SyncOutcome> archiveBatch({required String batchId, String? reason}) =>
+      _no('archiveBatch');
 }
 
-CloudBatchRow _batch(String id, String examCode, {int expectedCount = 100}) => CloudBatchRow(
+CloudBatchRow _batch(String id, String examCode, {int expectedCount = 100}) =>
+    CloudBatchRow(
       id: id,
       batchCode: 'CODE-$id',
       examCode: examCode,
@@ -191,6 +209,7 @@ CloudScanRow _scan(
   String? lastName = 'Dela Cruz',
   String? examineeNumber = 'EX-1',
   int attemptNo = 1,
+  Map<String, dynamic>? decoded,
   String attemptStatus = 'active',
   // Official-result filter fixture: omitted (the default) auto-links this
   // scan to its own resolvable examinee (`examinee-<id>`), so every
@@ -199,29 +218,31 @@ CloudScanRow _scan(
   // [_FakeClient.danglingExamineeIds] for a dangling one) to test the
   // official-identity rule directly.
   Object? examineeId = _autoLink,
-}) =>
-    CloudScanRow(
-      id: id,
-      batchId: batchId,
-      examCode: examCode,
-      capturedAt: DateTime.utc(2026, 1, 1),
-      decoded: {'examCode': examCode, 'items': <dynamic>[]},
-      rawScore: rawScore,
-      totalGraded: examCode == 'AT' ? 72 : 10,
-      totalItems: examCode == 'AT' ? 72 : (examCode == 'QTM' ? 60 : 130),
-      resultStatus: 'Graded',
-      scannedAt: DateTime.utc(2026, 1, 1),
-      processedByUid: 'uid',
-      processedByName: 'Officer',
-      firstName: firstName,
-      lastName: lastName,
-      examineeNumber: examineeNumber,
-      attemptNo: attemptNo,
-      attemptStatus: attemptStatus,
-      examineeId: identical(examineeId, _autoLink) ? 'examinee-$id' : examineeId as String?,
-    );
+}) => CloudScanRow(
+  id: id,
+  batchId: batchId,
+  examCode: examCode,
+  capturedAt: DateTime.utc(2026, 1, 1),
+  decoded: decoded ?? {'examCode': examCode, 'items': <dynamic>[]},
+  rawScore: rawScore,
+  totalGraded: examCode == 'AT' ? 72 : 10,
+  totalItems: examCode == 'AT' ? 72 : (examCode == 'QTM' ? 60 : 130),
+  resultStatus: 'Graded',
+  scannedAt: DateTime.utc(2026, 1, 1),
+  processedByUid: 'uid',
+  processedByName: 'Officer',
+  firstName: firstName,
+  lastName: lastName,
+  examineeNumber: examineeNumber,
+  attemptNo: attemptNo,
+  attemptStatus: attemptStatus,
+  examineeId: identical(examineeId, _autoLink)
+      ? 'examinee-$id'
+      : examineeId as String?,
+);
 
-LocalBatch _batchLocal(String id, String examCode) => mapCloudBatch(_batch(id, examCode));
+LocalBatch _batchLocal(String id, String examCode) =>
+    mapCloudBatch(_batch(id, examCode));
 
 void main() {
   late _FakeClient client;
@@ -254,32 +275,182 @@ void main() {
     },
   );
 
-  test("buildDefaultExportDocument uses the Results service's official-linked scan set", () async {
-    client.batches.add(_batch('b1', 'AT'));
-    client.scansByBatch['b1'] = [
-      _scan('s-old', 'b1', 'AT', attemptNo: 1, attemptStatus: 'archived', examineeId: 'e-old'),
-      _scan('s-new', 'b1', 'AT', attemptNo: 2, attemptStatus: 'active', examineeId: 'e-new'),
-    ];
-    final batch = _batchLocal('b1', 'AT');
+  group('AT subtests in the export', () {
+    Map<String, dynamic> decodedRight(Set<AtCategory> right) => {
+      'examCode': 'AT',
+      'items': [
+        for (var n = 1; n <= 72; n++)
+          {
+            'sectionName': 'Answer Document',
+            'itemNumber': n,
+            'markedChoice': right.contains(officialAtCategories[n]) ? 'A' : 'B',
+          },
+      ],
+    };
 
-    final expected = await results.loadResultsForBatch(batch);
-    final document = await service.buildDefaultExportDocument(batch);
+    setUp(() {
+      client.keyRead = CloudAnswerKeyRead.found(
+        version: 1,
+        answers: {for (var n = 1; n <= 72; n++) 'Answer Document|$n': 'A'},
+        updatedByName: 'Officer',
+        updatedAt: '2026-01-01T00:00:00Z',
+      );
+      client.batches.add(_batch('b1', 'AT'));
+      client.scansByBatch['b1'] = [
+        _scan(
+          's1',
+          'b1',
+          'AT',
+          rawScore: 12,
+          decoded: decodedRight({AtCategory.vc}),
+        ),
+        _scan(
+          's2',
+          'b1',
+          'AT',
+          rawScore: 30,
+          decoded: decodedRight({AtCategory.vc, AtCategory.qr}),
+        ),
+      ];
+    });
 
-    expect(document.examinees.length, expected.scans.length);
-    expect(document.examinees.map((e) => e.examineeId), ['TMP-e-new']); // archived scan excluded
+    test(
+      'each examinee page counts the real subtests with no item numbers',
+      () async {
+        final doc = await service.buildDefaultExportDocument(
+          _batchLocal('b1', 'AT'),
+        );
+        final rows = {
+          for (final r in doc.examinees.first.clusterRows!) r.def.label: r,
+        };
+        expect(rows.keys, [
+          'Verbal',
+          'Verbal Comprehension',
+          'Verbal Reasoning',
+          'Non-Verbal',
+          'Figural Reasoning',
+          'Quantitative Reasoning',
+        ]);
+        expect(rows['Verbal Comprehension']!.total, 12);
+        expect(rows['Verbal Reasoning']!.total, 24);
+        expect(rows['Figural Reasoning']!.total, 18);
+        expect(rows['Quantitative Reasoning']!.total, 18);
+        expect(rows['Verbal Comprehension']!.right, 12);
+        expect(rows['Verbal Reasoning']!.right, 0);
+        expect(rows['Verbal']!.total, 36);
+        for (final r in rows.values) {
+          expect(r.def.displayLabel, r.def.label); // no "(1-18)" ranges
+        }
+      },
+    );
+
+    test('the batch summary carries the subtest averages', () async {
+      final doc = await service.buildDefaultExportDocument(
+        _batchLocal('b1', 'AT'),
+      );
+      final batch = doc.batch!;
+      expect(batch.subtestExamineeCount, 2);
+      expect(batch.subtestAverages!.map((a) => a.label), [
+        'Verbal Comprehension',
+        'Verbal Reasoning',
+        'Figural Reasoning',
+        'Quantitative Reasoning',
+      ]);
+      expect(batch.subtestAverages!.map((a) => a.average), [12, 0, 0, 9]);
+      expect(batch.subtestAverages!.map((a) => a.total), [12, 24, 18, 18]);
+    });
+
+    test(
+      'the PDF renders the batch page and examinee pages without error',
+      () async {
+        final doc = await service.buildDefaultExportDocument(
+          _batchLocal('b1', 'AT'),
+        );
+        final bytes = await buildExportPdf(
+          doc,
+          leftLogo: await File('assets/images/ndmu_logo.png').readAsBytes(),
+          rightLogo: await File(
+            'assets/images/guidance_council_logo.png',
+          ).readAsBytes(),
+        );
+        expect(bytes.length, greaterThan(1000));
+        expect(String.fromCharCodes(bytes.take(5)), '%PDF-');
+      },
+    );
+
+    test('without an answer key the subtest section is left out', () async {
+      client.keyRead = const CloudAnswerKeyRead.absent();
+      final doc = await service.buildDefaultExportDocument(
+        _batchLocal('b1', 'AT'),
+      );
+      expect(doc.batch!.subtestAverages, isNull);
+    });
   });
 
-  test('archived Attempt 1 is excluded; active Attempt 2 is included', () async {
-    client.batches.add(_batch('b1', 'AT'));
-    client.scansByBatch['b1'] = [
-      _scan('s-old', 'b1', 'AT', attemptNo: 1, attemptStatus: 'archived', examineeId: 'e-old'),
-      _scan('s-new', 'b1', 'AT', attemptNo: 2, attemptStatus: 'active', examineeId: 'e-new'),
-    ];
+  test(
+    "buildDefaultExportDocument uses the Results service's official-linked scan set",
+    () async {
+      client.batches.add(_batch('b1', 'AT'));
+      client.scansByBatch['b1'] = [
+        _scan(
+          's-old',
+          'b1',
+          'AT',
+          attemptNo: 1,
+          attemptStatus: 'archived',
+          examineeId: 'e-old',
+        ),
+        _scan(
+          's-new',
+          'b1',
+          'AT',
+          attemptNo: 2,
+          attemptStatus: 'active',
+          examineeId: 'e-new',
+        ),
+      ];
+      final batch = _batchLocal('b1', 'AT');
 
-    final document = await service.buildDefaultExportDocument(_batchLocal('b1', 'AT'));
+      final expected = await results.loadResultsForBatch(batch);
+      final document = await service.buildDefaultExportDocument(batch);
 
-    expect(document.examinees.map((e) => e.examineeId), ['TMP-e-new']);
-  });
+      expect(document.examinees.length, expected.scans.length);
+      expect(document.examinees.map((e) => e.examineeId), [
+        'TMP-e-new',
+      ]); // archived scan excluded
+    },
+  );
+
+  test(
+    'archived Attempt 1 is excluded; active Attempt 2 is included',
+    () async {
+      client.batches.add(_batch('b1', 'AT'));
+      client.scansByBatch['b1'] = [
+        _scan(
+          's-old',
+          'b1',
+          'AT',
+          attemptNo: 1,
+          attemptStatus: 'archived',
+          examineeId: 'e-old',
+        ),
+        _scan(
+          's-new',
+          'b1',
+          'AT',
+          attemptNo: 2,
+          attemptStatus: 'active',
+          examineeId: 'e-new',
+        ),
+      ];
+
+      final document = await service.buildDefaultExportDocument(
+        _batchLocal('b1', 'AT'),
+      );
+
+      expect(document.examinees.map((e) => e.examineeId), ['TMP-e-new']);
+    },
+  );
 
   test('a normal non-retake Attempt 1 remains included', () async {
     client.batches.add(_batch('b1', 'AT'));
@@ -287,81 +458,109 @@ void main() {
       _scan('s1', 'b1', 'AT', examineeId: 'e-1'), // default: attempt 1, active
     ];
 
-    final document = await service.buildDefaultExportDocument(_batchLocal('b1', 'AT'));
+    final document = await service.buildDefaultExportDocument(
+      _batchLocal('b1', 'AT'),
+    );
 
     expect(document.examinees.map((e) => e.examineeId), ['TMP-e-1']);
   });
 
   test('QTM behavior is unchanged', () async {
     client.batches.add(_batch('q1', 'QTM'));
-    client.scansByBatch['q1'] = [
-      _scan('s1', 'q1', 'QTM', examineeId: 'e-q1'),
-    ];
+    client.scansByBatch['q1'] = [_scan('s1', 'q1', 'QTM', examineeId: 'e-q1')];
 
-    final document = await service.buildDefaultExportDocument(_batchLocal('q1', 'QTM'));
+    final document = await service.buildDefaultExportDocument(
+      _batchLocal('q1', 'QTM'),
+    );
 
     expect(document.examinees.map((e) => e.examineeId), ['TMP-e-q1']);
     expect(document.examinees.single.examLabel, contains('QTM'));
   });
 
-  test('includeCertificates behavior is unchanged: off by default, on when requested', () async {
-    client.batches.add(_batch('b1', 'AT'));
-    final scan = _scan('s1', 'b1', 'AT', rawScore: 65);
-    client.scansByBatch['b1'] = [scan];
+  test(
+    'includeCertificates behavior is unchanged: off by default, on when requested',
+    () async {
+      client.batches.add(_batch('b1', 'AT'));
+      final scan = _scan('s1', 'b1', 'AT', rawScore: 65);
+      client.scansByBatch['b1'] = [scan];
 
-    final without = await service.buildDefaultExportDocument(_batchLocal('b1', 'AT'));
-    expect(without.examinees.single.certificate, isNull);
+      final without = await service.buildDefaultExportDocument(
+        _batchLocal('b1', 'AT'),
+      );
+      expect(without.examinees.single.certificate, isNull);
 
-    final with_ = await service.buildDefaultExportDocument(
-      _batchLocal('b1', 'AT'),
-      includeCertificates: true,
-    );
-    expect(with_.examinees.single.certificate, isNotNull);
-  });
+      final with_ = await service.buildDefaultExportDocument(
+        _batchLocal('b1', 'AT'),
+        includeCertificates: true,
+      );
+      expect(with_.examinees.single.certificate, isNotNull);
+    },
+  );
 
-  test('includeSummary behavior is unchanged: false omits the batch section, true includes it', () async {
-    client.batches.add(_batch('b1', 'AT'));
-    client.scansByBatch['b1'] = [_scan('s1', 'b1', 'AT')];
-    final scans = await results.loadScansForBatch(_batchLocal('b1', 'AT'));
+  test(
+    'includeSummary behavior is unchanged: false omits the batch section, true includes it',
+    () async {
+      client.batches.add(_batch('b1', 'AT'));
+      client.scansByBatch['b1'] = [_scan('s1', 'b1', 'AT')];
+      final scans = await results.loadScansForBatch(_batchLocal('b1', 'AT'));
 
-    final noSummary = await service.buildExportDocument(
-      batch: _batchLocal('b1', 'AT'),
-      includeSummary: false,
-      selected: scans,
-      allScans: scans,
-    );
-    expect(noSummary.batch, isNull);
+      final noSummary = await service.buildExportDocument(
+        batch: _batchLocal('b1', 'AT'),
+        includeSummary: false,
+        selected: scans,
+        allScans: scans,
+      );
+      expect(noSummary.batch, isNull);
 
-    final withSummary = await service.buildExportDocument(
-      batch: _batchLocal('b1', 'AT'),
-      includeSummary: true,
-      selected: scans,
-      allScans: scans,
-    );
-    expect(withSummary.batch, isNotNull);
-  });
+      final withSummary = await service.buildExportDocument(
+        batch: _batchLocal('b1', 'AT'),
+        includeSummary: true,
+        selected: scans,
+        allScans: scans,
+      );
+      expect(withSummary.batch, isNotNull);
+    },
+  );
 
   group('archived-only batch (physically complete, nothing active)', () {
-    test('the export clearly states no active attempts, instead of a misleading zero-stat page', () async {
-      client.batches.add(_batch('b1', 'AT', expectedCount: 1));
-      client.scansByBatch['b1'] = [
-        _scan('s-old', 'b1', 'AT', attemptNo: 1, attemptStatus: 'archived', examineeNumber: 'EX-OLD'),
-      ];
+    test(
+      'the export clearly states no active attempts, instead of a misleading zero-stat page',
+      () async {
+        client.batches.add(_batch('b1', 'AT', expectedCount: 1));
+        client.scansByBatch['b1'] = [
+          _scan(
+            's-old',
+            'b1',
+            'AT',
+            attemptNo: 1,
+            attemptStatus: 'archived',
+            examineeNumber: 'EX-OLD',
+          ),
+        ];
 
-      final document = await service.buildDefaultExportDocument(_batchLocal('b1', 'AT'));
+        final document = await service.buildDefaultExportDocument(
+          _batchLocal('b1', 'AT'),
+        );
 
-      expect(document.examinees, isEmpty); // the archived scan is not exported
-      expect(document.batch, isNotNull);
-      expect(
-        document.batch!.unavailableNote,
-        'All examination attempts in this batch are archived. '
-        'No active attempts are included in this export.',
-      );
-      expect(document.batch!.stats, isEmpty);
-      // Never the generic "could not be fully retrieved" message -- the
-      // batch WAS fully retrieved; it is simply all-archived.
-      expect(document.batch!.unavailableNote, isNot(contains('could not be fully retrieved')));
-    });
+        expect(
+          document.examinees,
+          isEmpty,
+        ); // the archived scan is not exported
+        expect(document.batch, isNotNull);
+        expect(
+          document.batch!.unavailableNote,
+          'All examination attempts in this batch are archived. '
+          'No active attempts are included in this export.',
+        );
+        expect(document.batch!.stats, isEmpty);
+        // Never the generic "could not be fully retrieved" message -- the
+        // batch WAS fully retrieved; it is simply all-archived.
+        expect(
+          document.batch!.unavailableNote,
+          isNot(contains('could not be fully retrieved')),
+        );
+      },
+    );
 
     test('QTM archived-only batch gets the same clear message', () async {
       client.batches.add(_batch('q1', 'QTM', expectedCount: 1));
@@ -369,7 +568,9 @@ void main() {
         _scan('s-old', 'q1', 'QTM', attemptNo: 1, attemptStatus: 'archived'),
       ];
 
-      final document = await service.buildDefaultExportDocument(_batchLocal('q1', 'QTM'));
+      final document = await service.buildDefaultExportDocument(
+        _batchLocal('q1', 'QTM'),
+      );
 
       expect(document.examinees, isEmpty);
       expect(
@@ -385,7 +586,9 @@ void main() {
       client.batches.add(_batch('b1', 'AT'));
       client.scansByBatch['b1'] = [_scan('s1', 'b1', 'AT', examineeId: 'e-1')];
 
-      final document = await service.buildDefaultExportDocument(_batchLocal('b1', 'AT'));
+      final document = await service.buildDefaultExportDocument(
+        _batchLocal('b1', 'AT'),
+      );
 
       expect(document.examinees, hasLength(1));
     });
@@ -397,168 +600,219 @@ void main() {
         _scan('unlinked', 'b1', 'AT', examineeId: null),
       ];
 
-      final document = await service.buildDefaultExportDocument(_batchLocal('b1', 'AT'));
-
-      expect(document.examinees, hasLength(1));
-      expect(document.examinees.single.examineeId, 'TMP-e-1');
-    });
-
-    test(
-        'regression: default Export still excludes an unlinked scan even though '
-        'GuidanceWebResultsService.loadResultsForBatch now returns it too -- Export narrows to the '
-        'official-linked subset itself, so Results now showing unlinked scans never leaks into Export',
-        () async {
-      client.batches.add(_batch('b1', 'AT'));
-      client.scansByBatch['b1'] = [
-        _scan('linked', 'b1', 'AT', examineeId: 'e-1'),
-        _scan('unlinked', 'b1', 'AT', examineeId: null),
-      ];
-
-      // Confirm the premise: Results itself now returns BOTH scans.
-      final allResults = await results.loadResultsForBatch(_batchLocal('b1', 'AT'));
-      expect(allResults.scans, hasLength(2));
-
-      // Export still only produces one examinee page.
-      final document = await service.buildDefaultExportDocument(_batchLocal('b1', 'AT'));
-      expect(document.examinees, hasLength(1));
-      expect(document.batch!.stats, contains(('Total', '1')));
-    });
-
-    test('a dangling examinee_id (row missing/RLS-hidden) is not exported', () async {
-      client.batches.add(_batch('b1', 'AT'));
-      client.scansByBatch['b1'] = [
-        _scan('linked', 'b1', 'AT', examineeId: 'e-1'),
-        _scan('dangling', 'b1', 'AT', examineeId: 'e-deleted'),
-      ];
-      client.danglingExamineeIds.add('e-deleted');
-
-      final document = await service.buildDefaultExportDocument(_batchLocal('b1', 'AT'));
-
-      expect(document.examinees, hasLength(1));
-      expect(document.examinees.single.examineeId, 'TMP-e-1');
-    });
-
-    test('the official ExamineeRecord is exported, never the scan\'s own OCR/staff-tagged name or number',
-        () async {
-      client.batches.add(_batch('b1', 'AT'));
-      client.scansByBatch['b1'] = [
-        _scan(
-          's1',
-          'b1',
-          'AT',
-          examineeId: 'e-1',
-          // The OCR/staff tag deliberately disagrees with the official
-          // record built by _FakeClient.readCloudExaminees (Official-e-1
-          // Record / TMP-e-1) -- the export must show the official values.
-          firstName: 'OcrFirst',
-          lastName: 'OcrLast',
-          examineeNumber: 'OCR-NUMBER',
-        ),
-      ];
-
-      final document = await service.buildDefaultExportDocument(_batchLocal('b1', 'AT'));
-
-      final e = document.examinees.single;
-      expect(e.examineeId, 'TMP-e-1');
-      expect(e.firstName, 'Official-e-1');
-      expect(e.lastName, 'Record');
-      expect(e.examineeId, isNot('OCR-NUMBER'));
-      expect(e.firstName, isNot('OcrFirst'));
-    });
-
-    test('the embedded Batch Analytics section counts only the same officially-linked scans as the exported pages',
-        () async {
-      client.batches.add(_batch('b1', 'AT'));
-      client.scansByBatch['b1'] = [
-        _scan('linked-1', 'b1', 'AT', rawScore: 60, examineeId: 'e-1'),
-        _scan('linked-2', 'b1', 'AT', rawScore: 70, examineeId: 'e-2'),
-        _scan('unlinked', 'b1', 'AT', rawScore: 10, examineeId: null),
-      ];
-
-      final document = await service.buildDefaultExportDocument(_batchLocal('b1', 'AT'));
-
-      expect(document.examinees, hasLength(2));
-      expect(document.batch!.stats, contains(('Total', '2')));
-    });
-
-    test('multiple exam types for the same official Examinee each resolve independently', () async {
-      client.batches.add(_batch('a1', 'AT'));
-      client.scansByBatch['a1'] = [_scan('a-scan', 'a1', 'AT', examineeId: 'shared')];
-      client.batches.add(_batch('q1', 'QTM'));
-      client.scansByBatch['q1'] = [_scan('q-scan', 'q1', 'QTM', examineeId: 'shared')];
-
-      final atDoc = await service.buildDefaultExportDocument(_batchLocal('a1', 'AT'));
-      final qtmDoc = await service.buildDefaultExportDocument(_batchLocal('q1', 'QTM'));
-
-      expect(atDoc.examinees.single.examineeId, 'TMP-shared');
-      expect(qtmDoc.examinees.single.examineeId, 'TMP-shared');
-    });
-
-    test(
-        'buildExportDocument drops an unlinked scan from `selected` even when the caller passes it in -- '
-        'enforced in the service itself, not merely by a caller pre-filtering, so a stale or hand-built '
-        'selection can never bypass the official-result rule', () async {
-      client.batches.add(_batch('b1', 'AT'));
-      client.scansByBatch['b1'] = [
-        _scan('linked', 'b1', 'AT', examineeId: 'e-1'),
-        _scan('unlinked', 'b1', 'AT', firstName: 'Ana', lastName: 'Lim', examineeId: null),
-      ];
-      final batch = _batchLocal('b1', 'AT');
-      final allResults = await results.loadResultsForBatch(batch);
-      expect(allResults.scans, hasLength(2)); // Results shows both.
-
-      // Deliberately pass the FULL, unfiltered scan list as `selected` --
-      // simulating a stale selection or a caller that didn't pre-filter.
-      final document = await service.buildExportDocument(
-        batch: batch,
-        includeSummary: false,
-        selected: allResults.scans,
-        allScans: allResults.scans,
-        linkedExamineeByScanId: allResults.linkedExamineeByScanId,
-      );
-
-      expect(document.examinees, hasLength(1));
-      expect(document.examinees.single.examineeId, 'TMP-e-1');
-      // The OCR name never appears anywhere in the output.
-      expect(document.examinees.any((e) => e.firstName == 'Ana'), isFalse);
-    });
-
-    test(
-        'buildExportDocument drops a dangling-examinee_id scan from `selected` the same way, even when the '
-        'caller passes it in', () async {
-      client.batches.add(_batch('b1', 'AT'));
-      client.scansByBatch['b1'] = [
-        _scan('linked', 'b1', 'AT', examineeId: 'e-1'),
-        _scan('dangling', 'b1', 'AT', examineeNumber: 'OLD-7', examineeId: 'e-deleted'),
-      ];
-      client.danglingExamineeIds.add('e-deleted');
-      final batch = _batchLocal('b1', 'AT');
-      final allResults = await results.loadResultsForBatch(batch);
-      expect(allResults.scans, hasLength(2));
-
-      final document = await service.buildExportDocument(
-        batch: batch,
-        includeSummary: false,
-        selected: allResults.scans,
-        allScans: allResults.scans,
-        linkedExamineeByScanId: allResults.linkedExamineeByScanId,
+      final document = await service.buildDefaultExportDocument(
+        _batchLocal('b1', 'AT'),
       );
 
       expect(document.examinees, hasLength(1));
       expect(document.examinees.single.examineeId, 'TMP-e-1');
     });
+
+    test(
+      'regression: default Export still excludes an unlinked scan even though '
+      'GuidanceWebResultsService.loadResultsForBatch now returns it too -- Export narrows to the '
+      'official-linked subset itself, so Results now showing unlinked scans never leaks into Export',
+      () async {
+        client.batches.add(_batch('b1', 'AT'));
+        client.scansByBatch['b1'] = [
+          _scan('linked', 'b1', 'AT', examineeId: 'e-1'),
+          _scan('unlinked', 'b1', 'AT', examineeId: null),
+        ];
+
+        // Confirm the premise: Results itself now returns BOTH scans.
+        final allResults = await results.loadResultsForBatch(
+          _batchLocal('b1', 'AT'),
+        );
+        expect(allResults.scans, hasLength(2));
+
+        // Export still only produces one examinee page.
+        final document = await service.buildDefaultExportDocument(
+          _batchLocal('b1', 'AT'),
+        );
+        expect(document.examinees, hasLength(1));
+        expect(document.batch!.stats, contains(('Total', '1')));
+      },
+    );
+
+    test(
+      'a dangling examinee_id (row missing/RLS-hidden) is not exported',
+      () async {
+        client.batches.add(_batch('b1', 'AT'));
+        client.scansByBatch['b1'] = [
+          _scan('linked', 'b1', 'AT', examineeId: 'e-1'),
+          _scan('dangling', 'b1', 'AT', examineeId: 'e-deleted'),
+        ];
+        client.danglingExamineeIds.add('e-deleted');
+
+        final document = await service.buildDefaultExportDocument(
+          _batchLocal('b1', 'AT'),
+        );
+
+        expect(document.examinees, hasLength(1));
+        expect(document.examinees.single.examineeId, 'TMP-e-1');
+      },
+    );
+
+    test(
+      'the official ExamineeRecord is exported, never the scan\'s own OCR/staff-tagged name or number',
+      () async {
+        client.batches.add(_batch('b1', 'AT'));
+        client.scansByBatch['b1'] = [
+          _scan(
+            's1',
+            'b1',
+            'AT',
+            examineeId: 'e-1',
+            // The OCR/staff tag deliberately disagrees with the official
+            // record built by _FakeClient.readCloudExaminees (Official-e-1
+            // Record / TMP-e-1) -- the export must show the official values.
+            firstName: 'OcrFirst',
+            lastName: 'OcrLast',
+            examineeNumber: 'OCR-NUMBER',
+          ),
+        ];
+
+        final document = await service.buildDefaultExportDocument(
+          _batchLocal('b1', 'AT'),
+        );
+
+        final e = document.examinees.single;
+        expect(e.examineeId, 'TMP-e-1');
+        expect(e.firstName, 'Official-e-1');
+        expect(e.lastName, 'Record');
+        expect(e.examineeId, isNot('OCR-NUMBER'));
+        expect(e.firstName, isNot('OcrFirst'));
+      },
+    );
+
+    test(
+      'the embedded Batch Analytics section counts only the same officially-linked scans as the exported pages',
+      () async {
+        client.batches.add(_batch('b1', 'AT'));
+        client.scansByBatch['b1'] = [
+          _scan('linked-1', 'b1', 'AT', rawScore: 60, examineeId: 'e-1'),
+          _scan('linked-2', 'b1', 'AT', rawScore: 70, examineeId: 'e-2'),
+          _scan('unlinked', 'b1', 'AT', rawScore: 10, examineeId: null),
+        ];
+
+        final document = await service.buildDefaultExportDocument(
+          _batchLocal('b1', 'AT'),
+        );
+
+        expect(document.examinees, hasLength(2));
+        expect(document.batch!.stats, contains(('Total', '2')));
+      },
+    );
+
+    test(
+      'multiple exam types for the same official Examinee each resolve independently',
+      () async {
+        client.batches.add(_batch('a1', 'AT'));
+        client.scansByBatch['a1'] = [
+          _scan('a-scan', 'a1', 'AT', examineeId: 'shared'),
+        ];
+        client.batches.add(_batch('q1', 'QTM'));
+        client.scansByBatch['q1'] = [
+          _scan('q-scan', 'q1', 'QTM', examineeId: 'shared'),
+        ];
+
+        final atDoc = await service.buildDefaultExportDocument(
+          _batchLocal('a1', 'AT'),
+        );
+        final qtmDoc = await service.buildDefaultExportDocument(
+          _batchLocal('q1', 'QTM'),
+        );
+
+        expect(atDoc.examinees.single.examineeId, 'TMP-shared');
+        expect(qtmDoc.examinees.single.examineeId, 'TMP-shared');
+      },
+    );
+
+    test(
+      'buildExportDocument drops an unlinked scan from `selected` even when the caller passes it in -- '
+      'enforced in the service itself, not merely by a caller pre-filtering, so a stale or hand-built '
+      'selection can never bypass the official-result rule',
+      () async {
+        client.batches.add(_batch('b1', 'AT'));
+        client.scansByBatch['b1'] = [
+          _scan('linked', 'b1', 'AT', examineeId: 'e-1'),
+          _scan(
+            'unlinked',
+            'b1',
+            'AT',
+            firstName: 'Ana',
+            lastName: 'Lim',
+            examineeId: null,
+          ),
+        ];
+        final batch = _batchLocal('b1', 'AT');
+        final allResults = await results.loadResultsForBatch(batch);
+        expect(allResults.scans, hasLength(2)); // Results shows both.
+
+        // Deliberately pass the FULL, unfiltered scan list as `selected` --
+        // simulating a stale selection or a caller that didn't pre-filter.
+        final document = await service.buildExportDocument(
+          batch: batch,
+          includeSummary: false,
+          selected: allResults.scans,
+          allScans: allResults.scans,
+          linkedExamineeByScanId: allResults.linkedExamineeByScanId,
+        );
+
+        expect(document.examinees, hasLength(1));
+        expect(document.examinees.single.examineeId, 'TMP-e-1');
+        // The OCR name never appears anywhere in the output.
+        expect(document.examinees.any((e) => e.firstName == 'Ana'), isFalse);
+      },
+    );
+
+    test(
+      'buildExportDocument drops a dangling-examinee_id scan from `selected` the same way, even when the '
+      'caller passes it in',
+      () async {
+        client.batches.add(_batch('b1', 'AT'));
+        client.scansByBatch['b1'] = [
+          _scan('linked', 'b1', 'AT', examineeId: 'e-1'),
+          _scan(
+            'dangling',
+            'b1',
+            'AT',
+            examineeNumber: 'OLD-7',
+            examineeId: 'e-deleted',
+          ),
+        ];
+        client.danglingExamineeIds.add('e-deleted');
+        final batch = _batchLocal('b1', 'AT');
+        final allResults = await results.loadResultsForBatch(batch);
+        expect(allResults.scans, hasLength(2));
+
+        final document = await service.buildExportDocument(
+          batch: batch,
+          includeSummary: false,
+          selected: allResults.scans,
+          allScans: allResults.scans,
+          linkedExamineeByScanId: allResults.linkedExamineeByScanId,
+        );
+
+        expect(document.examinees, hasLength(1));
+        expect(document.examinees.single.examineeId, 'TMP-e-1');
+      },
+    );
   });
 
-  test('never calls a push/upload/delete method while building an export document', () async {
-    client.batches.add(_batch('b1', 'AT'));
-    client.scansByBatch['b1'] = [_scan('s1', 'b1', 'AT')];
+  test(
+    'never calls a push/upload/delete method while building an export document',
+    () async {
+      client.batches.add(_batch('b1', 'AT'));
+      client.scansByBatch['b1'] = [_scan('s1', 'b1', 'AT')];
 
-    await service.buildDefaultExportDocument(_batchLocal('b1', 'AT'));
+      await service.buildDefaultExportDocument(_batchLocal('b1', 'AT'));
 
-    for (final call in client.calls) {
-      expect(call, isNot(startsWith('push')));
-      expect(call, isNot(startsWith('upload')));
-      expect(call, isNot(startsWith('delete')));
-    }
-  });
+      for (final call in client.calls) {
+        expect(call, isNot(startsWith('push')));
+        expect(call, isNot(startsWith('upload')));
+        expect(call, isNot(startsWith('delete')));
+      }
+    },
+  );
 }

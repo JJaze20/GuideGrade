@@ -120,7 +120,10 @@ class GuidanceWebExportService {
         : null;
     // Every examinee uses the same whole-batch baseline for this export.
     final scoredBatch = eligible.isNotEmpty && key != null
-        ? [for (final scan in allScans) scoreOmrResult(scan.decoded, key).items]
+        ? [
+            for (final scan in allScans)
+              scoreOmrResult(scan.effectiveDecoded, key).items,
+          ]
         : <List<ScoredItem>>[];
     final averages = batch.examCode == 'TAT'
         ? tatClusterAverages(scoredBatch)
@@ -288,6 +291,13 @@ class GuidanceWebExportService {
         stats: stats,
         scoreBars: bars,
         categoryBars: categoryBars,
+        subtestAverages: r.atCategoryAverages == null
+            ? null
+            : [
+                for (final a in r.atCategoryAverages!.byCategory)
+                  ExportSubtestAverage(a.category.label, a.average, a.total),
+              ],
+        subtestExamineeCount: r.atCategoryAverages?.examineeCount ?? 0,
       );
     } catch (_) {
       return ExportBatchSection(
@@ -468,13 +478,13 @@ class GuidanceWebExportService {
     List<ClusterRow>? clusterRows;
     if (batch.examCode == 'TAT') {
       clusterRows = tatClusterRows(
-        scoreOmrResult(scan.decoded, key).items,
+        scoreOmrResult(scan.effectiveDecoded, key).items,
         averages: averages,
       );
     } else if (clusterDefsFor(batch.examCode) != null) {
       clusterRows = computeClusterRows(
         batch.examCode,
-        scoreOmrResult(scan.decoded, key).items,
+        scoreOmrResult(scan.effectiveDecoded, key).items,
         averages: averages,
         key: key,
       );

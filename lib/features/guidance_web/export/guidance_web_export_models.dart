@@ -19,6 +19,15 @@ class ExportCategoryBand {
   final String? percentLabel;
 }
 
+/// One Admission Test subtest's batch average, as printed in the batch
+/// summary: [average] right out of [total] items.
+class ExportSubtestAverage {
+  const ExportSubtestAverage(this.label, this.average, this.total);
+  final String label;
+  final double average;
+  final int total;
+}
+
 /// Page 1: the batch's Batch Analytics.
 class ExportBatchSection {
   const ExportBatchSection({
@@ -29,7 +38,14 @@ class ExportBatchSection {
     required this.scoreBars,
     required this.categoryBars,
     this.unavailableNote,
+    this.subtestAverages,
+    this.subtestExamineeCount = 0,
   });
+
+  /// AT only: average per subtest, or null when the answer key or any
+  /// analyzable examinee is missing -- the section is then left out.
+  final List<ExportSubtestAverage>? subtestAverages;
+  final int subtestExamineeCount;
 
   final String examLabel;
   final String batchLabel;
