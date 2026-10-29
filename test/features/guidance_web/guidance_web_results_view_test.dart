@@ -5,6 +5,7 @@ import 'package:guidegrade/core/sync/sync_job.dart';
 import 'package:guidegrade/core/sync/sync_outcome.dart';
 import 'package:guidegrade/features/guidance_web/screens/guidance_web_results_view.dart';
 import 'package:guidegrade/features/guidance_web/services/guidance_web_results_service.dart';
+import 'package:guidegrade/features/guidance_web/widgets/console_style.dart';
 import 'package:guidegrade/models/local_batch.dart';
 
 /// Phase 3 — the Results table's View button.
@@ -639,6 +640,32 @@ void main() {
       // The identity field is still read internally (search still works).
       expect(find.text('EXAMINEE'), findsOneWidget);
       expect(find.text('SCORE'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    '19b. The table header is a short green bar and the rows are compact, so '
+    'more examinees fit on screen',
+    (tester) async {
+      await pumpResultsView(tester);
+      await selectTheOnlyBatch(tester);
+
+      final header = find
+          .ancestor(of: find.text('EXAMINEE'), matching: find.byType(Container))
+          .first;
+      expect(tester.widget<Container>(header).color, ConsoleColors.railGreen);
+      expect(tester.getSize(header).height, lessThanOrEqualTo(48));
+
+      // Each row uses 4 px of vertical padding (it was 10), so a row is the
+      // 44 px View button plus 8, not 64.
+      final compactRows = find.byWidgetPredicate(
+        (w) =>
+            w is Padding &&
+            w.padding ==
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      );
+      expect(compactRows, findsNWidgets(2));
+      expect(tester.takeException(), isNull);
     },
   );
 
