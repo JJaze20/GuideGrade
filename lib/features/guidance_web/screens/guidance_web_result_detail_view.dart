@@ -430,7 +430,11 @@ class _GuidanceWebResultDetailViewState
           );
           averages = widget.batch.examCode == 'TAT'
               ? tatClusterAverages(scoredScans)
-              : computeClusterAverages(widget.batch.examCode, scoredScans);
+              : computeClusterAverages(
+                  widget.batch.examCode,
+                  scoredScans,
+                  key: key,
+                );
         } catch (_) {
           // Averages are supplementary; the table still shows the counts.
         }
@@ -671,6 +675,7 @@ class _GuidanceWebResultDetailViewState
                     ),
                     _analyticsFact('Status', result?.status ?? 'Ungraded'),
                     _analyticsFact('Category', letter ?? '—'),
+                    ..._atAnalyticsFacts(),
                   ],
                 ),
               ]);
@@ -918,6 +923,33 @@ class _GuidanceWebResultDetailViewState
       ...scoreRows,
       ..._examSpecificRows(result),
     ]);
+  }
+
+  /// The AT subtest scores as compact facts for the Examinee Analytics
+  /// summary (same numbers as the Examinee Records Result Summary). Empty for
+  /// other exams or when there is no answer key to grade against.
+  List<Widget> _atAnalyticsFacts() {
+    if (widget.batch.examCode != 'AT' || widget.scan.result == null) {
+      return const [];
+    }
+    final scores = computeAtCategoryScores(_scored.items, _answerKey);
+    if (scores == null) return const [];
+    String of(int right, int total) => '$right / $total';
+    return [
+      for (final category in AtCategory.values)
+        _analyticsFact(
+          category.label,
+          of(scores.scoreOf(category).right, scores.scoreOf(category).total),
+        ),
+      _analyticsFact(
+        'Verbal (VC + VR)',
+        of(scores.verbalRight, scores.verbalTotal),
+      ),
+      _analyticsFact(
+        'Non-Verbal (FR + QR)',
+        of(scores.nonVerbalRight, scores.nonVerbalTotal),
+      ),
+    ];
   }
 
   /// AT Result Summary body: the ten rows split five and five into two
@@ -1268,6 +1300,7 @@ class _GuidanceWebResultDetailViewState
             widget.batch.examCode,
             _scored.items,
             averages: _clusterAverages,
+            key: _answerKey,
           )!;
     final headerStyle = AppTextStyles.body(
       size: 9.5,
@@ -1336,7 +1369,7 @@ class _GuidanceWebResultDetailViewState
                 child: Padding(
                   padding: EdgeInsets.only(left: r.def.isGroup ? 8 : 20),
                   child: Text(
-                    '${r.def.label} (${r.def.fromItem}–${r.def.toItem})',
+                    r.def.displayLabel,
                     style: AppTextStyles.body(
                       size: 11,
                       weight: r.def.isGroup ? FontWeight.w700 : FontWeight.w400,
@@ -1419,6 +1452,7 @@ class _GuidanceWebResultDetailViewState
             widget.batch.examCode,
             _scored.items,
             averages: _clusterAverages,
+            key: _answerKey,
           );
     // TAT cluster names are long; "Test 1: Core Learning Theories, ..." becomes
     // "T1: Core Learning Theories" on the radar axes.

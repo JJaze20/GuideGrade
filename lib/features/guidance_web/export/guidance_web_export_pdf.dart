@@ -319,7 +319,7 @@ pw.Widget _clusterTable(List<ClusterRow> rows) {
               pw.Padding(
                 padding: pw.EdgeInsets.only(left: r.def.isGroup ? 0 : 12),
                 child: pw.Text(
-                  _clean('${r.def.label} (${r.def.fromItem}-${r.def.toItem})'),
+                  _clean(r.def.displayLabel),
                   style: _s(9, bold: r.def.isGroup),
                 ),
               ),

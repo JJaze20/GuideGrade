@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../../../core/analytics/at_batch_analytics.dart';
+import '../../../core/analytics/at_category_averages.dart';
 import '../../../core/analytics/qtm_batch_analytics.dart';
 import '../../../core/analytics/tat_batch_analytics.dart';
 import '../../../core/omr/omr_templates.dart';
@@ -359,6 +360,7 @@ class AnalyticsResult {
     required this.incompleteBatches,
     this.distributionResults = const [],
     this.at,
+    this.atCategoryAverages,
     this.qtm,
     this.tatOverall,
     this.tatDetail,
@@ -458,6 +460,11 @@ class AnalyticsResult {
   );
 
   final AtBatchAnalytics? at;
+
+  /// AT only: average per subtest (Verbal Comprehension ... Quantitative
+  /// Reasoning). Null when the AT answer key could not be read or no
+  /// analyzable examinee exists -- the page then simply omits the chart.
+  final AtCategoryAverages? atCategoryAverages;
   final QtmBatchAnalytics? qtm;
   final TatOverallStats? tatOverall;
   final TatDetail? tatDetail;
@@ -710,13 +717,18 @@ class GuidanceWebAnalyticsService {
 
     switch (examCode) {
       case 'AT':
+        final atScans = [for (final r in rows) mapCloudScan(r)];
         return AnalyticsResult(
           examCode: examCode,
           selectedBatches: selected,
           analyzedBatches: complete,
           incompleteBatches: incomplete,
           distributionResults: distributionResults,
-          at: AtBatchAnalytics.fromScans(rows.map((r) => mapCloudScan(r))),
+          at: AtBatchAnalytics.fromScans(atScans),
+          atCategoryAverages: computeAtCategoryAverages(
+            atScans,
+            await _loadAtAnswerKey(),
+          ),
         );
       case 'QTM':
         return AnalyticsResult(
@@ -821,6 +833,19 @@ class GuidanceWebAnalyticsService {
       ],
       records,
     );
+  }
+
+  /// The AT answer key (one read per load) for the per-subtest averages, or
+  /// null when it is missing or cannot be read -- the averages are
+  /// supplementary, so a failure never fails the rest of the analytics.
+  Future<AnswerKey?> _loadAtAnswerKey() async {
+    try {
+      final read = await _client.readAnswerKey('AT');
+      if (read.error != null || !read.exists) return null;
+      return AnswerKey.fromCloudAnswers('AT', read.answers ?? const {});
+    } catch (_) {
+      return null;
+    }
   }
 
   /// TAT: overall statistics from stored `raw_score` (always), plus the

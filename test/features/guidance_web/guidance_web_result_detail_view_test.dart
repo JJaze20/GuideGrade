@@ -910,6 +910,114 @@ void main() {
         expect(tester.takeException(), isNull);
       });
 
+      testWidgets('Examinee Analytics summary also lists the subtests', (
+        tester,
+      ) async {
+        tester.view.physicalSize = const Size(1400, 2400);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        client.answerKeyToReturn = CloudAnswerKeyRead.found(
+          version: 1,
+          answers: {for (var n = 1; n <= 72; n++) '$atSection|$n': 'A'},
+          updatedByName: 'Officer',
+          updatedAt: '2026-01-01T00:00:00Z',
+        );
+        await pump(
+          tester,
+          analytics: true,
+          batch: _batch(),
+          scan: _scan(
+            result: _storedResult(raw: 12, graded: 72),
+            items: [
+              for (var n = 1; n <= 72; n++)
+                OmrItemResult(
+                  sectionName: atSection,
+                  itemNumber: n,
+                  markedChoice: officialAtCategories[n] == AtCategory.vc
+                      ? 'A'
+                      : 'B',
+                ),
+            ],
+          ),
+        );
+        expect(find.text('Verbal Comprehension'), findsOneWidget);
+        expect(find.text('12 / 12'), findsOneWidget);
+        expect(find.text('Quantitative Reasoning'), findsOneWidget);
+        expect(find.text('Verbal (VC + VR)'), findsOneWidget);
+        expect(find.text('Non-Verbal (FR + QR)'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      });
+
+      testWidgets('AT cluster analysis counts the real subtests and prints no '
+          'item range', (tester) async {
+        tester.view.physicalSize = const Size(1400, 2400);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        client.answerKeyToReturn = CloudAnswerKeyRead.found(
+          version: 1,
+          answers: {for (var n = 1; n <= 72; n++) '$atSection|$n': 'A'},
+          updatedByName: 'Officer',
+          updatedAt: '2026-01-01T00:00:00Z',
+        );
+        await pump(
+          tester,
+          analytics: true,
+          batch: _batch(),
+          scan: _scan(
+            result: _storedResult(raw: 12, graded: 72),
+            items: [
+              for (var n = 1; n <= 72; n++)
+                OmrItemResult(
+                  sectionName: atSection,
+                  itemNumber: n,
+                  markedChoice: officialAtCategories[n] == AtCategory.vc
+                      ? 'A'
+                      : 'B',
+                ),
+            ],
+          ),
+        );
+        await tester.tap(find.text('Cluster analysis'));
+        await tester.pumpAndSettle();
+
+        // Labels carry no item numbers (the subtests are interleaved).
+        for (final label in [
+          'Verbal',
+          'Verbal Comprehension',
+          'Verbal Reasoning',
+          'Non-Verbal',
+          'Figural Reasoning',
+          'Quantitative Reasoning',
+        ]) {
+          final row = find.byKey(Key('clusterRow_$label'));
+          expect(row, findsOneWidget);
+          expect(
+            find.descendant(of: row, matching: find.text(label)),
+            findsOneWidget,
+          );
+        }
+        // Items counted per real subtest: 12 / 24 / 18 / 18 items, VC all
+        // right.
+        expect(
+          find.descendant(
+            of: find.byKey(const Key('clusterRow_Verbal Comprehension')),
+            matching: find.text('12'),
+          ),
+          findsNWidgets(2), // 12 items, 12 right
+        );
+        expect(
+          find.descendant(
+            of: find.byKey(const Key('clusterRow_Verbal Reasoning')),
+            matching: find.text('24'),
+          ),
+          findsOneWidget,
+        );
+        expect(find.textContaining('(1–'), findsNothing);
+        expect(tester.takeException(), isNull);
+      });
+
       testWidgets('a category saved in the answer key wins over the official '
           'mapping', (tester) async {
         // Item 2 is Verbal Reasoning officially; the key re-files it to VC.

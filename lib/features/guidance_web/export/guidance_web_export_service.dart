@@ -124,7 +124,7 @@ class GuidanceWebExportService {
         : <List<ScoredItem>>[];
     final averages = batch.examCode == 'TAT'
         ? tatClusterAverages(scoredBatch)
-        : computeClusterAverages(batch.examCode, scoredBatch);
+        : computeClusterAverages(batch.examCode, scoredBatch, key: key);
     final examinees = [
       for (final s in eligible)
         _examineeSection(
@@ -476,6 +476,7 @@ class GuidanceWebExportService {
         batch.examCode,
         scoreOmrResult(scan.decoded, key).items,
         averages: averages,
+        key: key,
       );
     }
 
