@@ -25,6 +25,8 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:vector_math/vector_math_64.dart' show Matrix4;
 
+import 'sample_shading.dart';
+
 // ---------------------------------------------------------------------------
 // Page geometry. Paper size is per-exam (see ExamSpec.pageWidthPt/
 // pageHeightPt below) — AT prints on A4; QTM/TAT print on "long" bond
@@ -1508,6 +1510,47 @@ void _paintAtGridPage(PdfGraphics canvas, ExamSpec exam, ExamLayout layout, PdfF
   }
 }
 
+/// The shading sample for the top-right of the header: a "Correct shading"
+/// caption and a row of four bubbles, A B C D, with D fully shaded (shapes and
+/// sizes in sample_shading.dart, shared with the TAT patcher and the clearance
+/// check). Right-aligned to [rightX] on the pencil-instruction row
+/// ([baselineY] is that row's text baseline, top-left coordinates).
+///
+/// Purely printed guidance -- it sits in blank header space (right of the
+/// pencil instruction, clear of the name fields, the title, every marker and
+/// the answer grid) and changes nothing the decoder reads; the template data
+/// is not regenerated for it. The shaded bubble is a disc and the others
+/// hollow rings with their letter, like the sheet's own bubbles: the decoder's
+/// fiducial search scores both low on squareness (see `_squarenessOf` in
+/// omr_decoder_native.dart).
+void _paintSampleShading(
+  PdfGraphics canvas,
+  PdfFont regular,
+  PdfFont bold,
+  double Function(double) flip, {
+  required SampleShadingStyle style,
+  required double rightX,
+  required double baselineY,
+}) {
+  double measure(String text, double size, bool isBold) => ((isBold ? bold : regular).stringMetrics(text) * size).advanceWidth;
+  final leftX = rightX - sampleShadingWidth(style, measure);
+  for (final shape in buildSampleShading(style, leftX, baselineY, measure)) {
+    if (shape is ShadeText) {
+      canvas.setColor(shape.gray ? kGray : kBlack);
+      canvas.drawString(shape.bold ? bold : regular, shape.size, shape.text, shape.x, flip(shape.baselineY));
+    } else if (shape is ShadeEllipse) {
+      canvas.setColor(kBlack);
+      canvas.drawEllipse(shape.cx, flip(shape.cy), shape.rx, shape.ry);
+      if (shape.filled) {
+        canvas.fillPath();
+      } else {
+        canvas.setLineWidth(shape.lineWidth);
+        canvas.strokePath();
+      }
+    }
+  }
+}
+
 /// Paints the title in the blank space below the name row and above the pencil
 /// instruction, without changing bubble, name-field, or marker positions.
 void _paintNameRowTitle(PdfGraphics canvas, ExamSpec exam, double width, PdfFont bold) {
@@ -1615,6 +1658,8 @@ void _paintQtmHeader(
 
   canvas.setColor(kGray);
   canvas.drawString(regular, 7, 'Use a No. 2 pencil. Fill the circle completely.', exam.contentLeft, flip(y + 9));
+  _paintSampleShading(canvas, regular, bold, flip,
+      style: SampleShadingStyle.qtm, rightX: exam.contentLeft + width, baselineY: y + 9);
 }
 
 /// Paints QTM's combined 3x2-section-grid page: corner markers, the
@@ -2319,6 +2364,8 @@ void _paintSimpleHeader(
   // titleInRightMargin moves the title itself into the margin.
   canvas.setColor(kGray);
   canvas.drawString(regular, 8, 'Use a No. 2 pencil. Fill the circle completely.', kContentLeft, flip(y + 9));
+  _paintSampleShading(canvas, regular, bold, flip,
+      style: SampleShadingStyle.at, rightX: kContentLeft + tableWidth, baselineY: y + 9);
 }
 
 /// NDMU's own official letterhead header (QTM/TAT) — institutional heading,
