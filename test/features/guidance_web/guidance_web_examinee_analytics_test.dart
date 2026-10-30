@@ -6,6 +6,7 @@ import 'package:guidegrade/core/sync/sync_outcome.dart';
 import 'package:guidegrade/features/guidance_web/services/guidance_web_examinee_records_service.dart';
 import 'package:guidegrade/features/guidance_web/screens/guidance_web_examinee_analytics_view.dart';
 import 'package:guidegrade/features/guidance_web/services/guidance_web_results_service.dart';
+import 'package:guidegrade/shared/widgets/surface_card.dart';
 
 final date = DateTime.utc(2026, 1, 1);
 CloudExamineeRow person(String id) => CloudExamineeRow(
@@ -231,6 +232,144 @@ void main() {
       expect(client.calls.where((c) => c == 'people').length, 2);
     },
   );
+
+  group('examinee cards and compact filter panel', () {
+    Future<void> pumpTwo(WidgetTester tester) async {
+      tester.view.physicalSize = const Size(1280, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      client.scans.addAll([scan('s1', 'a'), scan('s2', 'without-link')]);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: GuidanceWebExamineeAnalyticsView(
+              recordsService: service,
+              resultsService: GuidanceWebResultsService(client: client),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets(
+      'each examinee is its own light card: name above the ID, a gap between '
+      'cards, a chevron at the right',
+      (tester) async {
+        await pumpTwo(tester);
+        final a = find.byKey(const Key('examineeAnalyticsRow_a'));
+        final b = find.byKey(const Key('examineeAnalyticsRow_without-link'));
+        expect(a, findsOneWidget);
+        expect(b, findsOneWidget);
+
+        // A rounded, softly bordered card (not a plain row).
+        final shape =
+            tester.widget<Material>(a).shape as RoundedRectangleBorder;
+        expect(shape.borderRadius, BorderRadius.circular(12));
+        expect(shape.side.color, const Color(0xFFCADBD0));
+
+        // Separate cards, 8 px apart.
+        final ra = tester.getRect(a);
+        final rb = tester.getRect(b);
+        final gap = rb.top > ra.top ? rb.top - ra.bottom : ra.top - rb.bottom;
+        expect(gap, closeTo(8, 0.5));
+
+        // The name first, the ID beneath it in smaller text.
+        final texts = find.descendant(of: a, matching: find.byType(Text));
+        expect(tester.widget<Text>(texts.at(1)).data, 'TMP-a');
+        expect(
+          tester.getTopLeft(texts.at(0)).dy,
+          lessThan(tester.getTopLeft(texts.at(1)).dy),
+        );
+        expect(
+          tester.widget<Text>(texts.at(0)).style!.fontSize!,
+          greaterThan(tester.widget<Text>(texts.at(1)).style!.fontSize!),
+        );
+
+        // The chevron sits at the right edge of the card.
+        final chevron = tester.getRect(
+          find.descendant(of: a, matching: find.byIcon(Icons.chevron_right)),
+        );
+        expect(ra.right - chevron.right, lessThan(24));
+        expect(tester.takeException(), isNull);
+      },
+    );
+
+    testWidgets('the search field and filter chips are compact', (
+      tester,
+    ) async {
+      await pumpTwo(tester);
+      expect(
+        tester.getSize(find.byKey(const Key('examineeAnalyticsSearch'))).height,
+        lessThanOrEqualTo(44),
+      );
+      for (final label in ['Examinee', 'Unlinked Examinee', 'All']) {
+        expect(
+          tester.getSize(find.widgetWithText(ChoiceChip, label)).height,
+          lessThanOrEqualTo(40),
+        );
+      }
+      final panel = find
+          .ancestor(
+            of: find.byKey(const Key('examineeAnalyticsSearch')),
+            matching: find.byType(SurfaceCard),
+          )
+          .first;
+      expect(tester.getSize(panel).height, lessThanOrEqualTo(72));
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('the active filter is distinct and the counts stay correct', (
+      tester,
+    ) async {
+      await pumpTwo(tester);
+      ChoiceChip chip(String label) =>
+          tester.widget<ChoiceChip>(find.widgetWithText(ChoiceChip, label));
+      expect(chip('Examinee').selected, isTrue);
+      expect(chip('Unlinked Examinee').selected, isFalse);
+      expect(
+        chip('Examinee').selectedColor,
+        isNot(chip('Examinee').backgroundColor),
+      );
+
+      await tester.tap(find.text('Unlinked Examinee'));
+      await tester.pumpAndSettle();
+      expect(chip('Unlinked Examinee').selected, isTrue);
+      expect(chip('Examinee').selected, isFalse);
+      expect(
+        tester
+            .widget<Text>(find.byKey(const Key('analytics.examineeCount')))
+            .data,
+        '2',
+      );
+
+      await tester.tap(find.text('All'));
+      await tester.pumpAndSettle();
+      expect(chip('All').selected, isTrue);
+    });
+
+    testWidgets('searching still narrows the cards, and a card still opens', (
+      tester,
+    ) async {
+      await pumpTwo(tester);
+      await tester.enterText(
+        find.byKey(const Key('examineeAnalyticsSearch')),
+        'TMP-a',
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('examineeAnalyticsRow_a')), findsOneWidget);
+      expect(
+        find.byKey(const Key('examineeAnalyticsRow_without-link')),
+        findsNothing,
+      );
+
+      await tester.tap(find.byKey(const Key('examineeAnalyticsRow_a')));
+      await tester.pumpAndSettle();
+      expect(find.text('Back to Examinees'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  });
 
   test('production scan read retains soft-delete exclusion', () {
     final source = File(

@@ -3,9 +3,11 @@ import 'package:flutter/material.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
 import '../../../shared/widgets/state_views.dart';
+import '../../../shared/widgets/surface_card.dart';
 import '../../../models/examinee_record.dart';
 import '../services/guidance_web_examinee_records_service.dart';
 import '../services/guidance_web_results_service.dart';
+import '../widgets/console_style.dart';
 import 'guidance_web_result_detail_view.dart';
 
 /// Analytics → Examinee Analytics: pick one examinee, then open any of their
@@ -183,10 +185,73 @@ class _GuidanceWebExamineeAnalyticsViewState
     return selected == null ? _buildPicker() : _buildExamineeResults(selected);
   }
 
+  // The same soft green panel tint and green-gray hairline as Batch Analytics,
+  // so both Analytics tabs read as one family with the green console.
+  static const Color _panelTint = Color(0xFFEAF3EE);
+  static const Color _hairline = Color(0xFFCADBD0);
+
   BoxDecoration get _cardDecoration => BoxDecoration(
     color: Colors.white,
     borderRadius: BorderRadius.circular(12),
-    border: Border.all(color: AppColors.cardBorder),
+    border: Border.all(color: _hairline),
+  );
+
+  /// One examinee (or one result) as its own light card: the name in bold, the
+  /// ID or score beneath it in smaller muted text, and a chevron at the right.
+  /// The whole card is the click target, with a soft green hover.
+  Widget _entryCard({
+    required Key? key,
+    required String title,
+    required String subtitle,
+    required VoidCallback onTap,
+  }) => Material(
+    key: key,
+    color: Colors.white,
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(12),
+      side: const BorderSide(color: _hairline),
+    ),
+    clipBehavior: Clip.antiAlias,
+    child: InkWell(
+      onTap: onTap,
+      hoverColor: _panelTint,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: AppTextStyles.body(
+                      size: 14.5,
+                      weight: FontWeight.w700,
+                      color: ConsoleColors.ink,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: AppTextStyles.body(
+                      size: 12.5,
+                      color: ConsoleColors.muted,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            const Icon(
+              Icons.chevron_right,
+              size: 20,
+              color: ConsoleColors.muted,
+            ),
+          ],
+        ),
+      ),
+    ),
   );
 
   Widget _message(String text, {bool isError = false}) {
@@ -208,60 +273,88 @@ class _GuidanceWebExamineeAnalyticsViewState
     );
   }
 
+  /// The Examinee / Unlinked Examinee / All filter: three compact chips (the
+  /// same kind of filter chips the Results page uses). Each shows its label and,
+  /// for the first two, its count in a small pill. They wrap onto a second line
+  /// on a narrow window instead of overflowing.
   Widget _modeSwitch(bool narrow) {
-    return SegmentedButton<_ListMode>(
+    Widget chip(_ListMode mode, String label, {Key? countKey, String? count}) {
+      final selected = _mode == mode;
+      return ChoiceChip(
+        selected: selected,
+        onSelected: (_) => setState(() => _mode = mode),
+        showCheckmark: false,
+        visualDensity: VisualDensity.compact,
+        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        backgroundColor: Colors.white,
+        selectedColor: const Color(0xFFDCEBE2),
+        side: BorderSide(
+          color: selected ? ConsoleColors.railSelected : _hairline,
+        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        label: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: AppTextStyles.body(
+                  size: 13.5,
+                  weight: selected ? FontWeight.w700 : FontWeight.w600,
+                  color: selected
+                      ? ConsoleColors.railSelected
+                      : ConsoleColors.ink,
+                ),
+              ),
+            ),
+            if (countKey != null) ...[
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
+                decoration: BoxDecoration(
+                  color: selected ? Colors.white : _panelTint,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  count!,
+                  key: countKey,
+                  style: AppTextStyles.body(
+                    size: 12,
+                    weight: FontWeight.w700,
+                    color: ConsoleColors.railSelected,
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      );
+    }
+
+    return Wrap(
       key: const Key('examineeModeSwitch'),
-      showSelectedIcon: false,
-      style: ButtonStyle(
-        minimumSize: const WidgetStatePropertyAll(Size(44, 44)),
-        textStyle: WidgetStatePropertyAll(
-          AppTextStyles.body(size: 14, weight: FontWeight.w700),
+      spacing: 8,
+      runSpacing: 8,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        chip(
+          _ListMode.linked,
+          'Examinee',
+          countKey: const Key('analytics.examineeCount'),
+          count: _loading || _error != null ? '—' : '${_filtered.length}',
         ),
-        backgroundColor: WidgetStateProperty.resolveWith(
-          (states) => states.contains(WidgetState.selected)
-              ? AppColors.emerald100
-              : Colors.white,
+        chip(
+          _ListMode.unlinked,
+          'Unlinked Examinee',
+          countKey: const Key('analytics.unlinkedCount'),
+          count: _loading || _error != null
+              ? '—'
+              : '${_filteredUnlinked.length}',
         ),
-        foregroundColor: WidgetStateProperty.resolveWith(
-          (states) => states.contains(WidgetState.selected)
-              ? AppColors.primaryGreen
-              : AppColors.textDark,
-        ),
-      ),
-      direction: narrow ? Axis.vertical : Axis.horizontal,
-      segments: [
-        ButtonSegment(
-          value: _ListMode.linked,
-          label: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text('Examinee'),
-              Text(
-                _loading || _error != null ? '—' : '${_filtered.length}',
-                key: const Key('analytics.examineeCount'),
-              ),
-            ],
-          ),
-        ),
-        ButtonSegment(
-          value: _ListMode.unlinked,
-          label: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text('Unlinked Examinee'),
-              Text(
-                _loading || _error != null
-                    ? '—'
-                    : '${_filteredUnlinked.length}',
-                key: const Key('analytics.unlinkedCount'),
-              ),
-            ],
-          ),
-        ),
-        const ButtonSegment(value: _ListMode.all, label: Text('All')),
+        chip(_ListMode.all, 'All'),
       ],
-      selected: {_mode},
-      onSelectionChanged: (v) => setState(() => _mode = v.first),
     );
   }
 
@@ -276,24 +369,29 @@ class _GuidanceWebExamineeAnalyticsViewState
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: _cardDecoration,
+        SurfaceCard(
+          color: _panelTint,
+          padding: const EdgeInsets.all(12),
           child: LayoutBuilder(
             builder: (context, constraints) => Wrap(
-              spacing: 16,
-              runSpacing: 12,
+              spacing: 12,
+              runSpacing: 10,
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 SizedBox(
-                  width: constraints.maxWidth < 380
+                  width: constraints.maxWidth < 360
                       ? constraints.maxWidth
-                      : 380,
+                      : 360,
                   child: TextField(
                     key: const Key('examineeAnalyticsSearch'),
                     controller: _search,
+                    style: AppTextStyles.body(size: 14),
                     decoration: InputDecoration(
                       hintText: 'Search name or ID...',
+                      hintStyle: AppTextStyles.body(
+                        size: 14,
+                        color: ConsoleColors.muted,
+                      ),
                       suffixIcon: _search.text.isEmpty
                           ? null
                           : IconButton(
@@ -302,19 +400,46 @@ class _GuidanceWebExamineeAnalyticsViewState
                               icon: const Icon(Icons.close, size: 18),
                             ),
                       isDense: true,
+                      filled: true,
+                      fillColor: Colors.white,
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
                       prefixIcon: const Icon(Icons.search, size: 18),
+                      // Keep the icon slots slim so the field stays ~42 px.
+                      prefixIconConstraints: const BoxConstraints(
+                        minWidth: 38,
+                        minHeight: 36,
+                      ),
+                      suffixIconConstraints: const BoxConstraints(
+                        minWidth: 38,
+                        minHeight: 36,
+                      ),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(10),
+                        borderSide: const BorderSide(color: _hairline),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: const BorderSide(color: _hairline),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: const BorderSide(
+                          color: ConsoleColors.railSelected,
+                          width: 1.5,
+                        ),
                       ),
                     ),
                   ),
                 ),
-                _modeSwitch(constraints.maxWidth < 500),
+                _modeSwitch(constraints.maxWidth < 560),
               ],
             ),
           ),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
         Expanded(
           child: _loading
               ? _message('Loading examinees...')
@@ -326,58 +451,37 @@ class _GuidanceWebExamineeAnalyticsViewState
                       ? 'No unlinked examinees.'
                       : 'No examinees found.',
                 )
-              : Container(
-                  decoration: _cardDecoration,
-                  child: Material(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    clipBehavior: Clip.antiAlias,
-                    child: ListView(
-                      children: [
-                        for (final e in linked) ...[
-                          _linkedRow(e),
-                          const Divider(height: 1, color: AppColors.cardBorder),
-                        ],
-                        for (final h in unlinked) ...[
-                          _unlinkedRow(h),
-                          const Divider(height: 1, color: AppColors.cardBorder),
-                        ],
-                      ],
-                    ),
-                  ),
+              // One separate card per examinee, with a gap between cards.
+              : ListView(
+                  children: [
+                    for (final e in linked)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: _linkedRow(e),
+                      ),
+                    for (final h in unlinked)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: _unlinkedRow(h),
+                      ),
+                  ],
                 ),
         ),
       ],
     );
   }
 
-  Widget _linkedRow(ExamineeRecord e) => ListTile(
+  Widget _linkedRow(ExamineeRecord e) => _entryCard(
     key: Key('examineeAnalyticsRow_${e.id}'),
-    dense: false,
-    title: Text(
-      e.displayName,
-      style: AppTextStyles.body(size: 14, weight: FontWeight.w700),
-    ),
-    subtitle: Text(
-      e.temporaryExamineeId,
-      style: AppTextStyles.body(size: 13, color: AppColors.textGray),
-    ),
-    trailing: const Icon(Icons.chevron_right, size: 18),
+    title: e.displayName,
+    subtitle: e.temporaryExamineeId,
     onTap: () => _select(e),
   );
 
-  Widget _unlinkedRow(ExamineeHistoryItem item) => ListTile(
+  Widget _unlinkedRow(ExamineeHistoryItem item) => _entryCard(
     key: Key('unlinkedAnalyticsRow_${item.scan.id}'),
-    dense: false,
-    title: Text(
-      'Unlinked Examinee — ${item.examCode} · ${item.batch.batchCode}',
-      style: AppTextStyles.body(size: 14, weight: FontWeight.w700),
-    ),
-    subtitle: Text(
-      _scoreText(item),
-      style: AppTextStyles.body(size: 13, color: AppColors.textGray),
-    ),
-    trailing: const Icon(Icons.chevron_right, size: 18),
+    title: 'Unlinked Examinee — ${item.examCode} · ${item.batch.batchCode}',
+    subtitle: _scoreText(item),
     onTap: () => setState(() {
       _selected = null;
       _viewing = item;
@@ -431,43 +535,20 @@ class _GuidanceWebExamineeAnalyticsViewState
               ? _message(_historyError!, isError: true)
               : _history.isEmpty
               ? _message('No results for this examinee yet.')
-              : Material(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(12),
-                  clipBehavior: Clip.antiAlias,
-                  child: ListView.separated(
-                    itemCount: _history.length,
-                    separatorBuilder: (_, _) =>
-                        const Divider(height: 1, color: AppColors.cardBorder),
-                    itemBuilder: (_, i) => _historyRow(_history[i]),
-                  ),
+              : ListView.separated(
+                  itemCount: _history.length,
+                  separatorBuilder: (_, _) => const SizedBox(height: 8),
+                  itemBuilder: (_, i) => _historyRow(_history[i]),
                 ),
         ),
       ],
     );
   }
 
-  Widget _historyRow(ExamineeHistoryItem item) {
-    final score = _scoreText(item);
-    return ListTile(
-      dense: false,
-      title: Text(
-        '${item.examCode} — ${item.batch.batchCode}',
-        style: AppTextStyles.body(size: 14, weight: FontWeight.w700),
-      ),
-      subtitle: Text(
-        score,
-        style: AppTextStyles.body(size: 13, color: AppColors.textGray),
-      ),
-      trailing: Text(
-        'View',
-        style: AppTextStyles.body(
-          size: 11,
-          weight: FontWeight.w700,
-          color: AppColors.primaryGreen,
-        ),
-      ),
-      onTap: () => setState(() => _viewing = item),
-    );
-  }
+  Widget _historyRow(ExamineeHistoryItem item) => _entryCard(
+    key: null,
+    title: '${item.examCode} — ${item.batch.batchCode}',
+    subtitle: _scoreText(item),
+    onTap: () => setState(() => _viewing = item),
+  );
 }

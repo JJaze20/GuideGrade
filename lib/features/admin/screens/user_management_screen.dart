@@ -40,7 +40,8 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
   // That's what made typing feel like the screen kept "refreshing" and
   // losing focus: the fix is simply to never call usersStream() more than
   // once.
-  late final Stream<List<UserModel>> _usersStream = _firestoreService.usersStream();
+  late final Stream<List<UserModel>> _usersStream = _firestoreService
+      .usersStream();
 
   final TextEditingController _searchController = TextEditingController();
 
@@ -62,13 +63,16 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
   List<UserModel> _applyFilters(List<UserModel> users) {
     final term = _searchController.text.trim().toLowerCase();
     return users.where((user) {
-      if (_roleFilter == 'System Admin' && user.role != 'system_admin') return false;
-      if (_roleFilter == 'Guidance Council' && user.role != 'guidance_council') return false;
+      if (_roleFilter == 'System Admin' && user.role != 'system_admin')
+        return false;
+      if (_roleFilter == 'Guidance Council' && user.role != 'guidance_council')
+        return false;
       if (_statusFilter == 'Active' && !user.isActive) return false;
       if (_statusFilter == 'Inactive' && user.isActive) return false;
 
       if (term.isNotEmpty) {
-        return user.displayName.toLowerCase().contains(term) || user.email.toLowerCase().contains(term);
+        return user.displayName.toLowerCase().contains(term) ||
+            user.email.toLowerCase().contains(term);
       }
       return true;
     }).toList();
@@ -83,7 +87,9 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
   }
 
   bool get _filtersActive =>
-      _searchController.text.isNotEmpty || _roleFilter != 'All' || _statusFilter != 'All';
+      _searchController.text.isNotEmpty ||
+      _roleFilter != 'All' ||
+      _statusFilter != 'All';
 
   void _clearFilters() {
     setState(() {
@@ -95,20 +101,26 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
 
   /// Keeps the toolbar and list readable on wide desktop windows.
   Widget _centered(Widget child) => Align(
-        alignment: Alignment.topCenter,
-        child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 960), child: child),
-      );
+    alignment: Alignment.topCenter,
+    child: ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 960),
+      child: child,
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.lightBg,
+      backgroundColor: const Color(0xFFEAF0F7),
       appBar: AppBar(
-        backgroundColor: Colors.white,
-        foregroundColor: AppColors.textDark,
+        backgroundColor: const Color(0xFF14243D),
+        foregroundColor: Colors.white,
         elevation: 0,
         shape: const Border(bottom: BorderSide(color: AppColors.border)),
-        title: Text('User Management', style: AppTextStyles.heading(size: 17)),
+        title: Text(
+          'User Management',
+          style: AppTextStyles.heading(size: 17, color: Colors.white),
+        ),
       ),
       body: SafeArea(
         child: StreamBuilder<List<UserModel>>(
@@ -131,7 +143,9 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
               children: [
                 _buildSearchAndFilterBar(),
                 Expanded(
-                  child: users.isEmpty ? _buildEmptyState() : _buildUserList(users),
+                  child: users.isEmpty
+                      ? _buildEmptyState()
+                      : _buildUserList(users),
                 ),
               ],
             );
@@ -143,7 +157,14 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
         backgroundColor: AppColors.primaryGreen,
         foregroundColor: Colors.white,
         icon: const Icon(Icons.person_add_alt_1_rounded, size: 20),
-        label: Text('Create User', style: AppTextStyles.body(size: 13, weight: FontWeight.w700, color: Colors.white)),
+        label: Text(
+          'Create User',
+          style: AppTextStyles.body(
+            size: 13,
+            weight: FontWeight.w700,
+            color: Colors.white,
+          ),
+        ),
       ),
     );
   }
@@ -152,7 +173,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     return Container(
       width: double.infinity,
       decoration: const BoxDecoration(
-        color: AppColors.surface,
+        color: const Color(0xFFDDE7F3),
         border: Border(bottom: BorderSide(color: AppColors.border)),
       ),
       padding: const EdgeInsets.all(AppSpace.lg),
@@ -163,6 +184,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
             TextField(
               controller: _searchController,
               decoration: FormFieldStyle.outlined(
+                fillColor: const Color(0xFFF0F5FC),
                 hint: 'Search by name or email',
                 prefixIcon: const Icon(Icons.search, size: 20),
                 suffixIcon: _searchController.text.isNotEmpty
@@ -175,11 +197,17 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
               ),
             ),
             const SizedBox(height: AppSpace.md),
-            _filterGroup('Role', _roleFilter, const ['All', 'System Admin', 'Guidance Council'],
-                (v) => setState(() => _roleFilter = v)),
+            _filterGroup('Role', _roleFilter, const [
+              'All',
+              'System Admin',
+              'Guidance Council',
+            ], (v) => setState(() => _roleFilter = v)),
             const SizedBox(height: AppSpace.sm),
-            _filterGroup('Status', _statusFilter, const ['All', 'Active', 'Inactive'],
-                (v) => setState(() => _statusFilter = v)),
+            _filterGroup('Status', _statusFilter, const [
+              'All',
+              'Active',
+              'Inactive',
+            ], (v) => setState(() => _statusFilter = v)),
           ],
         ),
       ),
@@ -200,12 +228,17 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
       runSpacing: AppSpace.xs,
       children: [
         SizedBox(width: 52, child: Text(label, style: AppTextStyles.label())),
-        for (final option in options) _buildFilterChip(current, option, onSelect),
+        for (final option in options)
+          _buildFilterChip(current, option, onSelect),
       ],
     );
   }
 
-  Widget _buildFilterChip(String currentValue, String label, void Function(String) onSelect) {
+  Widget _buildFilterChip(
+    String currentValue,
+    String label,
+    void Function(String) onSelect,
+  ) {
     final isSelected = currentValue == label;
     return FilterChip(
       label: Text(label),
@@ -214,7 +247,9 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
       showCheckmark: false,
       selectedColor: AppColors.successBg,
       backgroundColor: AppColors.surface,
-      side: BorderSide(color: isSelected ? AppColors.successBorder : AppColors.borderStrong),
+      side: BorderSide(
+        color: isSelected ? AppColors.successBorder : AppColors.borderStrong,
+      ),
       labelStyle: AppTextStyles.body(
         size: 12.5,
         weight: isSelected ? FontWeight.w800 : FontWeight.w600,
@@ -232,7 +267,10 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
         separatorBuilder: (_, _) => const SizedBox(height: AppSpace.md),
         itemBuilder: (context, index) {
           final user = users[index];
-          return UserListItem(user: user, onTap: () => _navigateToEditUser(user));
+          return UserListItem(
+            user: user,
+            onTap: () => _navigateToEditUser(user),
+          );
         },
       ),
     );
@@ -242,9 +280,14 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     return EmptyState(
       icon: Icons.group_outlined,
       title: 'No users found',
-      message: _filtersActive ? 'Try adjusting your search or filters' : 'Create a user to get started',
+      message: _filtersActive
+          ? 'Try adjusting your search or filters'
+          : 'Create a user to get started',
       action: _filtersActive
-          ? OutlinedButton(onPressed: _clearFilters, child: const Text('Clear filters'))
+          ? OutlinedButton(
+              onPressed: _clearFilters,
+              child: const Text('Clear filters'),
+            )
           : null,
     );
   }

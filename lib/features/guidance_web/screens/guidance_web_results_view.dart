@@ -14,6 +14,7 @@ import '../../../models/examinee_record.dart';
 import '../../../models/local_batch.dart';
 import '../services/guidance_web_archive_service.dart';
 import '../services/guidance_web_results_service.dart';
+import '../widgets/console_style.dart';
 import 'guidance_web_result_detail_view.dart';
 
 /// The Guidance Council Web Console's Results page — a READ-ONLY viewer
@@ -422,7 +423,7 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
                     ),
                     child: SingleChildScrollView(child: _buildControls()),
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 12),
                   Expanded(child: _buildBody()),
                 ],
               ),
@@ -432,7 +433,8 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
 
   Widget _buildControls() {
     return SurfaceCard(
-      padding: const EdgeInsets.all(16),
+      color: const Color(0xFFE9F2EC),
+      padding: const EdgeInsets.all(12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -443,7 +445,7 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _buildExamTabs(),
-                const SizedBox(height: 14),
+                const SizedBox(height: 8),
                 _buildExamDropdown(
                   _selectedExam,
                   _examGroups.firstWhere((g) => g.$1 == _selectedExam).$2,
@@ -452,14 +454,15 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
             ),
           if (_activeBatch != null) ...[
             if (!_loadingScans && _scansError == null) ...[
-              const SizedBox(height: 14),
+              const SizedBox(height: 8),
               _buildIdentityFilter(),
             ],
-            if (_activeBatch!.description.trim().isNotEmpty) ...[
-              const SizedBox(height: 14),
+            if (widget.archivedBatch != null &&
+                _activeBatch!.description.trim().isNotEmpty) ...[
+              const SizedBox(height: 8),
               _buildBatchDescription(_activeBatch!),
             ],
-            const SizedBox(height: 14),
+            const SizedBox(height: 8),
             LayoutBuilder(
               builder: (context, constraints) {
                 final archive = OutlinedButton.icon(
@@ -657,41 +660,17 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
   /// Capped at three lines; the full text is in the tooltip.
   Widget _buildBatchDescription(LocalBatch batch) {
     final description = batch.description.trim();
-    return Container(
-      key: const Key('batchDescription'),
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        color: AppColors.lightBg,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppColors.cardBorder),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Batch Description',
-            style: AppTextStyles.body(
-              size: 12,
-              weight: FontWeight.w600,
-              color: AppColors.textGray,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Tooltip(
-            message: description,
-            child: Text(
-              description,
-              style: AppTextStyles.heading(size: _descriptionHeadingSize),
-              maxLines: 3,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-        ],
+    return Tooltip(
+      message: description,
+      child: Text(
+        description,
+        key: const Key('batchDescription'),
+        style: AppTextStyles.heading(size: _descriptionHeadingSize),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
       ),
     );
   }
-
   /// One exam-specific batch dropdown, populated ONLY with [_batchesFor]
   /// that [examCode] — never batches from another exam type. Shows a
   /// harmless disabled placeholder instead of an empty dropdown when this
@@ -815,7 +794,11 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
       spacing: 8,
       runSpacing: 8,
       children: [
-        for (final group in ['All', 'Examinee', 'Unlinked Examinee'])
+        for (final group in [
+          'All',
+          'Examinee',
+          if (widget.archivedBatch == null) 'Unlinked Examinee',
+        ])
           ChoiceChip(
             key: Key('resultsIdentity$group'),
             label: Text(
@@ -889,6 +872,8 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
   InputDecoration _fieldDecoration({String? hint}) {
     return InputDecoration(
       hintText: hint,
+      filled: true,
+      fillColor: const Color(0xFFF7FAFE),
       isDense: true,
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(10),
@@ -902,7 +887,7 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
         borderRadius: BorderRadius.circular(10),
         borderSide: const BorderSide(color: AppColors.primaryGreen),
       ),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
     );
   }
 
@@ -1013,7 +998,7 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Padding(
-              padding: const EdgeInsets.only(bottom: 12),
+              padding: const EdgeInsets.only(bottom: 6),
               child: Wrap(
                 spacing: 16,
                 crossAxisAlignment: WrapCrossAlignment.center,
@@ -1131,10 +1116,11 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
     TextStyle style = AppTextStyles.body(
       size: 11.5,
       weight: FontWeight.w800,
-      color: AppColors.textGray,
+      color: Colors.white,
     );
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+    return Container(
+      color: ConsoleColors.railGreen,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
       child: Row(
         children: [
           SizedBox(width: 28, child: Text('#', style: style)),
@@ -1170,7 +1156,7 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
           key: const Key('scoreSortHeader'),
           onTap: _cycleScoreSort,
           child: ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: 44),
+            constraints: const BoxConstraints(minHeight: 40),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -1215,7 +1201,7 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
     final isGraded = status == 'Graded';
 
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       child: Row(
         children: [
           SizedBox(
@@ -1380,12 +1366,12 @@ class _ExamTab extends StatelessWidget {
           onTap: onTap,
           borderRadius: BorderRadius.circular(10),
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
             decoration: BoxDecoration(
-              color: selected ? const Color(0xFFD1FAE5) : Colors.white,
+              color: selected ? ConsoleColors.railSelected : const Color(0xFFF7FAF8),
               borderRadius: BorderRadius.circular(10),
               border: Border.all(
-                color: selected ? AppColors.primaryGreen : AppColors.cardBorder,
+                color: selected ? ConsoleColors.railSelected : const Color(0xFFCADBD0),
                 width: selected ? 1.5 : 1,
               ),
             ),
@@ -1399,7 +1385,7 @@ class _ExamTab extends StatelessWidget {
                       size: 12,
                       weight: selected ? FontWeight.w700 : FontWeight.w600,
                       color: selected
-                          ? AppColors.primaryGreen
+                          ? const Color(0xFFB3EDC5)
                           : AppColors.textDark,
                     ),
                   ),
@@ -1414,7 +1400,7 @@ class _ExamTab extends StatelessWidget {
                         size: 13,
                         weight: FontWeight.w800,
                         color: selected
-                            ? AppColors.primaryGreen
+                            ? const Color(0xFFB3EDC5)
                             : AppColors.textDark,
                       ),
                     ),

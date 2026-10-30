@@ -227,6 +227,23 @@ void main() {
     },
   );
 
+  test('a batch holding a scanned sheet cannot be deleted; an empty one can',
+      () async {
+    final withScan = await newBatch();
+    await scan(withScan.id, score: 40);
+    final dir = Directory(
+      '${tempDir.path}/batches/guidegrade_batches/${withScan.id}',
+    );
+
+    await expectLater(repo.deleteBatch(withScan.id), throwsStateError);
+    expect(dir.existsSync(), isTrue); // nothing was removed
+    expect((await repo.getBatchById(withScan.id))!.scans, hasLength(1));
+
+    final empty = await newBatch();
+    await repo.deleteBatch(empty.id);
+    expect(await repo.getBatchById(empty.id), isNull);
+  });
+
   test('deleting a duplicate leaves its twin untouched', () async {
     final b = await newBatch();
     await scan(b.id, score: 50);

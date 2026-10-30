@@ -15,11 +15,7 @@ class LogListItem extends StatelessWidget {
   final LogEntry log;
   final VoidCallback onTap;
 
-  const LogListItem({
-    super.key,
-    required this.log,
-    required this.onTap,
-  });
+  const LogListItem({super.key, required this.log, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -28,9 +24,12 @@ class LogListItem extends StatelessWidget {
       decoration: BoxDecoration(
         borderRadius: AppRadius.lgAll,
         // A warning gets a visible amber outline in addition to its badge.
-        border: isWarning ? Border.all(color: AppColors.warningBorder, width: 1.5) : null,
+        border: isWarning
+            ? Border.all(color: AppColors.warningBorder, width: 1.5)
+            : null,
       ),
       child: SurfaceCard(
+        color: const Color(0xFFE2F1EC),
         onTap: onTap,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -60,7 +59,10 @@ class LogListItem extends StatelessWidget {
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 StatusBadge(label: log.category, tone: StatusTone.neutral),
-                Text(_formatTimestamp(log.timestamp), style: AppTextStyles.caption()),
+                Text(
+                  _formatTimestamp(log.timestamp),
+                  style: AppTextStyles.caption(),
+                ),
               ],
             ),
             const SizedBox(height: AppSpace.sm),

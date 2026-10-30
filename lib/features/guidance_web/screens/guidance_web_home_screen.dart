@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
-import '../../../core/constants/app_colors.dart';
-import '../../../core/constants/app_text_styles.dart';
 import '../../../core/state/app_state.dart';
+import '../../../shared/utils/logout_helper.dart';
 import '../../home/screens/profile_screen.dart';
 import '../services/guidance_web_dashboard_service.dart';
+import '../widgets/console_clock.dart';
+import '../widgets/console_page_header.dart';
+import '../widgets/console_style.dart';
 import 'guidance_web_dashboard_view.dart';
 import 'guidance_web_analytics_view.dart';
 import 'guidance_web_export_view.dart';
@@ -13,7 +15,8 @@ import 'guidance_web_archive_view.dart';
 import 'guidance_web_examinee_records_view.dart';
 import 'guidance_web_results_view.dart';
 
-/// The Guidance Council Web Console's persistent shell: header, sidebar,
+/// The Guidance Council Web Console's persistent shell: a green top bar, a
+/// slim icon sidebar that slides open over the page when the mouse touches it,
 /// and a body that swaps per sidebar selection.
 ///
 /// This is intentionally a SEPARATE console from the System Administrator's
@@ -38,9 +41,16 @@ import 'guidance_web_results_view.dart';
 /// ([GuidanceWebAnalyticsView]) are built; Export ([GuidanceWebExportView]) lists
 /// batches, with its `export` and `view` actions still to come.
 class GuidanceWebHomeScreen extends StatefulWidget {
-  const GuidanceWebHomeScreen({super.key, this.dashboardService});
+  const GuidanceWebHomeScreen({
+    super.key,
+    this.dashboardService,
+    this.clock = DateTime.now,
+  });
 
   final GuidanceWebDashboardService? dashboardService;
+
+  /// The time shown in the top bar; only replaced in tests.
+  final DateTime Function() clock;
 
   @override
   State<GuidanceWebHomeScreen> createState() => _GuidanceWebHomeScreenState();
@@ -64,14 +74,27 @@ enum _GuidanceWebDestination {
 }
 
 class _GuidanceWebHomeScreenState extends State<GuidanceWebHomeScreen> {
+  static const double _railClosedWidth = 76;
+  static const double _railOpenWidth = 280;
+  static const Duration _slide = Duration(milliseconds: 180);
+
   _GuidanceWebDestination _selected = _GuidanceWebDestination.dashboard;
+
+  /// The mouse is over the sidebar: it slides open over the page.
+  bool _hovering = false;
+
+  /// The menu button keeps the sidebar open and moves the page aside (also
+  /// how a touch screen, which has no hover, opens it).
+  bool _pinned = false;
 
   @override
   Widget build(BuildContext context) {
     final user = AppStateScope.of(context).currentUser;
-
     final compact = MediaQuery.sizeOf(context).width < 900;
-    Widget sidebar({bool inDrawer = false}) => _Sidebar(
+
+    Widget rail({required bool open, bool inDrawer = false}) => _SideRail(
+      open: open,
+      expandToFit: inDrawer,
       selected: _selected,
       onSelect: (destination) {
         setState(() => _selected = destination);
@@ -79,36 +102,86 @@ class _GuidanceWebHomeScreenState extends State<GuidanceWebHomeScreen> {
       },
       userDisplayName: user?.displayName,
       userEmail: user?.email,
+      onProfile: () {
+        if (inDrawer) Navigator.of(context).pop();
+        Navigator.of(
+          context,
+        ).push(MaterialPageRoute<void>(builder: (_) => const ProfileScreen()));
+      },
+      onLogout: () => confirmLogout(context),
     );
+
+    final page = DecoratedBox(
+      decoration: consolePageBackground,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          ConsolePageHeader(
+            eyebrow: 'GUIDANCE WORKSPACE',
+            title: _selected.label,
+            trail: ['GuideGrade', 'Guidance Council', _selected.label],
+          ),
+          Expanded(child: _buildBody()),
+        ],
+      ),
+    );
+
+    if (compact) {
+      return Scaffold(
+        backgroundColor: ConsoleColors.pageTop,
+        drawer: Drawer(
+          backgroundColor: ConsoleColors.railGreen,
+          child: SafeArea(child: rail(open: true, inDrawer: true)),
+        ),
+        appBar: AppBar(
+          backgroundColor: ConsoleColors.headerGreen,
+          foregroundColor: ConsoleColors.onGreen,
+          title: Text(
+            _selected.label,
+            style: ConsoleText.body(
+              size: 18,
+              weight: FontWeight.w700,
+              color: ConsoleColors.onGreen,
+            ),
+          ),
+        ),
+        body: SafeArea(child: page),
+      );
+    }
+
     return Scaffold(
-      backgroundColor: AppColors.lightBg,
-      drawer: compact
-          ? Drawer(child: SafeArea(child: sidebar(inDrawer: true)))
-          : null,
-      appBar: compact
-          ? AppBar(
-              backgroundColor: Colors.white,
-              foregroundColor: AppColors.textDark,
-              title: Text(
-                _selected.label,
-                style: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            )
-          : null,
+      backgroundColor: ConsoleColors.pageTop,
       body: SafeArea(
-        child: Row(
+        child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            if (!compact) sidebar(),
+            _ConsoleHeader(
+              clock: widget.clock,
+              pinned: _pinned,
+              onToggleRail: () => setState(() => _pinned = !_pinned),
+            ),
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
+              child: Stack(
                 children: [
-                  if (!compact) _Header(title: _selected.label),
-                  Expanded(child: _buildBody()),
+                  AnimatedPositioned(
+                    duration: _slide,
+                    curve: Curves.easeOut,
+                    left: _pinned ? _railOpenWidth : _railClosedWidth,
+                    top: 0,
+                    bottom: 0,
+                    right: 0,
+                    child: page,
+                  ),
+                  Positioned(
+                    left: 0,
+                    top: 0,
+                    bottom: 0,
+                    child: MouseRegion(
+                      onEnter: (_) => setState(() => _hovering = true),
+                      onExit: (_) => setState(() => _hovering = false),
+                      child: rail(open: _pinned || _hovering),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -136,128 +209,103 @@ class _GuidanceWebHomeScreenState extends State<GuidanceWebHomeScreen> {
   }
 }
 
-class _Sidebar extends StatelessWidget {
-  final _GuidanceWebDestination selected;
-  final ValueChanged<_GuidanceWebDestination> onSelect;
-  final String? userDisplayName;
-  final String? userEmail;
-
-  const _Sidebar({
-    required this.selected,
-    required this.onSelect,
-    required this.userDisplayName,
-    required this.userEmail,
+/// Dark green top bar: menu button, university crest and name, and the
+/// current time and date on the right.
+class _ConsoleHeader extends StatelessWidget {
+  const _ConsoleHeader({
+    required this.clock,
+    required this.pinned,
+    required this.onToggleRail,
   });
+
+  final DateTime Function() clock;
+  final bool pinned;
+  final VoidCallback onToggleRail;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 240,
-      color: Colors.white,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+      height: 84,
+      color: ConsoleColors.headerGreen,
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      child: Row(
         children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Image.asset(
-                      'assets/images/guidegrade logo1 trimmed.png',
-                      height: 30,
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      'Guide',
-                      style: AppTextStyles.logo(
-                        size: 20,
-                        color: AppColors.warmRedOrange,
-                      ),
-                    ),
-                    Text(
-                      'Grade',
-                      style: AppTextStyles.logo(
-                        size: 20,
-                        color: AppColors.primaryGreen,
-                      ),
-                    ),
-                  ],
+          Tooltip(
+            message: pinned ? 'Collapse navigation' : 'Keep navigation open',
+            child: Material(
+              color: Colors.white.withValues(alpha: 0.08),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+                side: BorderSide(color: Colors.white.withValues(alpha: 0.18)),
+              ),
+              child: InkWell(
+                key: const Key('consoleMenuButton'),
+                borderRadius: BorderRadius.circular(12),
+                onTap: onToggleRail,
+                child: const SizedBox(
+                  width: 52,
+                  height: 52,
+                  child: Icon(Icons.menu, color: ConsoleColors.onGreen),
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  'GUIDANCE COUNCIL',
-                  style: AppTextStyles.body(
-                    size: 12,
-                    weight: FontWeight.w800,
-                    color: AppColors.textGray,
-                  ).copyWith(letterSpacing: 1.0),
-                ),
-              ],
+              ),
             ),
           ),
-          const Divider(height: 1, color: AppColors.cardBorder),
-          Expanded(
-            child: ListView(
-              padding: const EdgeInsets.symmetric(vertical: 12),
-              children: _GuidanceWebDestination.values
-                  .map(
-                    (d) => _SidebarItem(
-                      destination: d,
-                      isSelected: d == selected,
-                      onTap: () => onSelect(d),
-                    ),
-                  )
-                  .toList(),
-            ),
+          const SizedBox(width: 16),
+          Image.asset(
+            'assets/images/ndmu_logo.png',
+            height: 48,
+            errorBuilder: (_, _, _) => const SizedBox(width: 48, height: 48),
           ),
-          const Divider(height: 1, color: AppColors.cardBorder),
-          Padding(
-            padding: const EdgeInsets.all(16),
+          const SizedBox(width: 14),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 420),
             child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  userDisplayName ?? 'Account',
-                  style: AppTextStyles.body(size: 14, weight: FontWeight.w700),
+                  'Notre Dame of Marbel University',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                ),
-                if (userEmail != null) ...[
-                  const SizedBox(height: 2),
-                  Text(
-                    userEmail!,
-                    style: AppTextStyles.body(
-                      size: 12,
-                      color: AppColors.textGray,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                  style: ConsoleText.body(
+                    size: 18,
+                    weight: FontWeight.w700,
+                    color: ConsoleColors.onGreen,
                   ),
-                ],
-                const SizedBox(height: 10),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: () => Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => const ProfileScreen(),
-                      ),
-                    ),
-                    icon: const FaIcon(FontAwesomeIcons.user, size: 12),
-                    label: const Text(
-                      'Profile',
-                      style: TextStyle(fontSize: 14),
-                    ),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: AppColors.textDark,
-                      side: const BorderSide(color: AppColors.cardBorder),
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                    ),
+                ),
+                Text(
+                  'Guidance and Testing Center',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: ConsoleText.body(
+                    size: 12.5,
+                    color: ConsoleColors.onGreenMuted,
                   ),
                 ),
               ],
+            ),
+          ),
+          // The date and the time sit together, close, with a thin divider,
+          // flush with the right edge of the bar.
+          Expanded(
+            child: ConsoleClock(
+              clock: clock,
+              layout: (context, date, time) => Align(
+                alignment: Alignment.centerRight,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Flexible(child: date),
+                    Container(
+                      width: 1,
+                      height: 30,
+                      margin: const EdgeInsets.symmetric(horizontal: 18),
+                      color: Colors.white.withValues(alpha: 0.25),
+                    ),
+                    time,
+                  ],
+                ),
+              ),
             ),
           ),
         ],
@@ -266,65 +314,285 @@ class _Sidebar extends StatelessWidget {
   }
 }
 
-class _SidebarItem extends StatelessWidget {
-  final _GuidanceWebDestination destination;
-  final bool isSelected;
-  final VoidCallback onTap;
-
-  const _SidebarItem({
-    required this.destination,
-    required this.isSelected,
-    required this.onTap,
+/// The sidebar: icons only when closed, icons + labels + account when open.
+/// It slides open over the page; the page does not move unless pinned.
+class _SideRail extends StatelessWidget {
+  const _SideRail({
+    required this.open,
+    required this.expandToFit,
+    required this.selected,
+    required this.onSelect,
+    required this.userDisplayName,
+    required this.userEmail,
+    required this.onProfile,
+    required this.onLogout,
   });
+
+  /// Whether the rail is (sliding) open. Ignored when [expandToFit].
+  final bool open;
+
+  /// Fill the available width (the narrow-window drawer) instead of sliding.
+  final bool expandToFit;
+  final _GuidanceWebDestination selected;
+  final ValueChanged<_GuidanceWebDestination> onSelect;
+  final String? userDisplayName;
+  final String? userEmail;
+  final VoidCallback onProfile;
+  final VoidCallback onLogout;
+
+  static const double _closedWidth = 76;
+  static const double _openWidth = 280;
+  // Below this width the account details are replaced by the initials badge.
+  static const double _showDetailsAt = 200;
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
-        decoration: BoxDecoration(
-          color: isSelected ? AppColors.emerald100 : Colors.transparent,
-          borderRadius: BorderRadius.circular(10),
+    return AnimatedContainer(
+      key: const Key('consoleRail'),
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOut,
+      width: expandToFit ? null : (open ? _openWidth : _closedWidth),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [ConsoleColors.railGreen, ConsoleColors.railGreenDeep],
         ),
-        child: Row(
-          children: [
-            FaIcon(
-              destination.icon,
-              size: 14,
-              color: isSelected ? AppColors.primaryGreen : AppColors.textGray,
-            ),
-            const SizedBox(width: 12),
-            Text(
-              destination.label,
-              style: AppTextStyles.body(
-                size: 14,
-                weight: isSelected ? FontWeight.w700 : FontWeight.w600,
-                color: isSelected ? AppColors.primaryGreen : AppColors.textDark,
-              ),
-            ),
-          ],
+        boxShadow: open && !expandToFit
+            ? const [
+                BoxShadow(
+                  color: Color(0x33000000),
+                  blurRadius: 18,
+                  offset: Offset(4, 0),
+                ),
+              ]
+            : const [],
+      ),
+      child: ClipRect(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final showDetails = constraints.maxWidth >= _showDetailsAt;
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const SizedBox(height: 18),
+                Expanded(
+                  child: ListView(
+                    children: [
+                      for (final destination in _GuidanceWebDestination.values)
+                        _RailItem(
+                          destination: destination,
+                          isSelected: destination == selected,
+                          showLabel: showDetails,
+                          onTap: () => onSelect(destination),
+                        ),
+                    ],
+                  ),
+                ),
+                Divider(height: 1, color: Colors.white.withValues(alpha: 0.14)),
+                _RailAccount(
+                  showDetails: showDetails,
+                  displayName: userDisplayName,
+                  email: userEmail,
+                  onProfile: onProfile,
+                  onLogout: onLogout,
+                ),
+              ],
+            );
+          },
         ),
       ),
     );
   }
 }
 
-class _Header extends StatelessWidget {
-  final String title;
+class _RailItem extends StatelessWidget {
+  const _RailItem({
+    required this.destination,
+    required this.isSelected,
+    required this.showLabel,
+    required this.onTap,
+  });
 
-  const _Header({required this.title});
+  final _GuidanceWebDestination destination;
+  final bool isSelected;
+  final bool showLabel;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        border: Border(bottom: BorderSide(color: AppColors.cardBorder)),
+    final icon = FaIcon(
+      destination.icon,
+      size: 16,
+      color: isSelected ? ConsoleColors.gold : ConsoleColors.onGreenMuted,
+    );
+    final item = Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
+      child: Material(
+        color: isSelected ? ConsoleColors.railSelected : Colors.transparent,
+        borderRadius: BorderRadius.circular(12),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          hoverColor: Colors.white.withValues(alpha: 0.07),
+          onTap: onTap,
+          child: Container(
+            height: 52,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              border: Border(
+                left: BorderSide(
+                  color: isSelected ? ConsoleColors.gold : Colors.transparent,
+                  width: 3,
+                ),
+              ),
+            ),
+            child: Row(
+              children: [
+                // Open: the icon sits in a fixed cell with the label beside it.
+                // Closed: the icon alone, centered -- no label is built, so no
+                // sliver of its first letter peeks out of the narrow rail.
+                if (showLabel)
+                  SizedBox(width: 46, child: Center(child: icon))
+                else
+                  Expanded(child: Center(child: icon)),
+                if (showLabel)
+                  Expanded(
+                    child: Text(
+                      destination.label,
+                      maxLines: 1,
+                      softWrap: false,
+                      overflow: TextOverflow.clip,
+                      style: ConsoleText.body(
+                        size: 14,
+                        weight: isSelected ? FontWeight.w700 : FontWeight.w600,
+                        color: ConsoleColors.onGreen,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
       ),
-      child: Text(title, style: AppTextStyles.heading(size: 22)),
+    );
+    // Closed: the icon alone needs its name on hover.
+    return showLabel ? item : Tooltip(message: destination.label, child: item);
+  }
+}
+
+class _RailAccount extends StatelessWidget {
+  const _RailAccount({
+    required this.showDetails,
+    required this.displayName,
+    required this.email,
+    required this.onProfile,
+    required this.onLogout,
+  });
+
+  final bool showDetails;
+  final String? displayName;
+  final String? email;
+  final VoidCallback onProfile;
+  final VoidCallback onLogout;
+
+  String get _initials {
+    final parts = (displayName ?? '')
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((p) => p.isNotEmpty)
+        .toList();
+    if (parts.isEmpty) return 'GC';
+    if (parts.length == 1) return parts.first.substring(0, 1).toUpperCase();
+    return (parts.first.substring(0, 1) + parts.last.substring(0, 1))
+        .toUpperCase();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final badge = CircleAvatar(
+      radius: 21,
+      backgroundColor: ConsoleColors.railSelected,
+      child: Text(
+        _initials,
+        style: ConsoleText.body(
+          size: 13,
+          weight: FontWeight.w800,
+          color: ConsoleColors.onGreen,
+        ),
+      ),
+    );
+    if (!showDetails) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        child: Center(
+          child: Tooltip(message: displayName ?? 'Account', child: badge),
+        ),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              badge,
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      displayName ?? 'Account',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: ConsoleText.body(
+                        size: 13.5,
+                        weight: FontWeight.w700,
+                        color: ConsoleColors.onGreen,
+                      ),
+                    ),
+                    if (email != null)
+                      Text(
+                        email!,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: ConsoleText.body(
+                          size: 11.5,
+                          color: ConsoleColors.onGreenMuted,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          OutlinedButton.icon(
+            onPressed: onProfile,
+            icon: const FaIcon(FontAwesomeIcons.user, size: 12),
+            label: const Text('Profile', style: TextStyle(fontSize: 13.5)),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: ConsoleColors.onGreen,
+              side: BorderSide(color: Colors.white.withValues(alpha: 0.25)),
+              padding: const EdgeInsets.symmetric(vertical: 12),
+            ),
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            key: const Key('consoleSignOut'),
+            onPressed: onLogout,
+            icon: const FaIcon(FontAwesomeIcons.rightFromBracket, size: 12),
+            label: const Text('Sign out', style: TextStyle(fontSize: 13.5)),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: ConsoleColors.onGreen,
+              side: BorderSide(color: Colors.white.withValues(alpha: 0.25)),
+              padding: const EdgeInsets.symmetric(vertical: 12),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

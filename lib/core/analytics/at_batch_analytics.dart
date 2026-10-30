@@ -379,6 +379,8 @@ class AtBatchAnalytics {
   /// A scan feeds the statistics only when it is graded **and** the answer
   /// key covered the whole 72-item sheet. No score is recomputed, clamped
   /// or repaired.
+  static bool isAnalyzable(LocalScan scan) => _isAnalyzable(scan);
+
   static bool _isAnalyzable(LocalScan scan) {
     final result = scan.result;
     return result != null &&

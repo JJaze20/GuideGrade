@@ -284,6 +284,29 @@ class SyncManager extends ChangeNotifier {
             scanId: scan.id,
           );
         }
+
+        // Handwritten-name crops (optional, one Storage object each). Queued
+        // at scan time, but that enqueue is fire-and-forget, so a job lost to
+        // an app kill or a queue write error used to leave the crop on the
+        // phone forever. Re-derive it here from local truth: a crop the scan
+        // actually has, whose upload was never recorded. They never touch the
+        // `scans` row, so no patchImageStatus.
+        for (final crop in <(String, String?)>[
+          ('name_last', scan.nameCropLastFileName),
+          ('name_first', scan.nameCropFirstFileName),
+          ('name_mi', scan.nameCropMiddleFileName),
+        ]) {
+          final (variant, localFile) = crop;
+          if (localFile == null) continue;
+          if (state.scanNameCropUploaded(batch.id, scan.id, variant)) continue;
+          await _enqueueIfAbsent(
+            type: SyncJobType.uploadImage,
+            entityId: scan.id,
+            batchId: batch.id,
+            scanId: scan.id,
+            variant: variant,
+          );
+        }
       }
     }
 

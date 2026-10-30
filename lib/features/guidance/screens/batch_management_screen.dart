@@ -122,6 +122,7 @@ class _BatchManagementScreenState extends State<BatchManagementScreen> {
   }
 
   Future<void> _confirmDeleteBatch(LocalBatch batch) async {
+    if (batch.isCompleted || batch.scanCount > 0) return;
     final repo = AppStateScope.of(context).batchRepository;
     final confirmed = await showDialog<bool>(
       context: context,

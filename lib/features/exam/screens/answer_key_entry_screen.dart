@@ -3,6 +3,7 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
+import '../../../core/omr/at_categories.dart';
 import '../../../core/omr/omr_templates.dart';
 import '../../../core/state/app_state.dart';
 import '../../../core/sync/sync_client.dart';
@@ -32,7 +33,55 @@ class AnswerKeyEntryScreen extends StatefulWidget {
 
 class _AnswerKeyEntryScreenState extends State<AnswerKeyEntryScreen> {
   final Map<String, String> _selections = {};
+
+  /// Admission Test only: `"Section|Item"` -> subtest code (VC/VR/FR/QR).
+  final Map<String, String> _categories = {};
   bool _loadedExisting = false;
+
+  bool _isAt(AppState appState) => appState.activeExamCode == 'AT';
+
+  /// Admission Test only: the category the next answers tapped are assigned
+  /// to (a "brush"). Switch it from the header to move on to the next
+  /// category; items already assigned to another category lock until their
+  /// own category is selected again.
+  AtCategory _brush = AtCategory.vc;
+
+  /// Colour of each category: on its selected answers, on the header pill and
+  /// on its counter chip. Each has its own so assigned items stand out.
+  static const Map<AtCategory, Color> _categoryColors = {
+    AtCategory.vc: Color(0xFFEA580C), // orange
+    AtCategory.vr: Color(0xFF3B82F6), // blue
+    AtCategory.fr: Color(0xFF8B5CF6), // violet
+    AtCategory.qr: Color(0xFF0D9488), // teal
+  };
+
+  Color _colorOf(AtCategory c) => _categoryColors[c]!;
+
+  /// How many items are currently assigned to [c].
+  int _assignedTo(AtCategory c) => _categories.values.where((code) => code == c.code).length;
+
+  /// Tapping answer [choice] on item [key]. A tap that picks an answer also
+  /// assigns the item to the selected category (AT); tapping the picked answer
+  /// again clears the answer and releases the item.
+  void _tapChoice(String key, String choice, {required bool isAt}) {
+    setState(() {
+      if (_selections[key] == choice) {
+        _selections.remove(key);
+        if (isAt) _categories.remove(key);
+      } else {
+        _selections[key] = choice;
+        if (isAt) _categories[key] = _brush.code;
+      }
+    });
+  }
+
+  /// Long-press on an item's number: release it from its category (the answer
+  /// stays), so it can be assigned elsewhere. Only items of the selected
+  /// category can be released; others are locked.
+  void _releaseItem(String key) {
+    if (_categories[key] != _brush.code) return;
+    setState(() => _categories.remove(key));
+  }
 
   /// True while a cloud read is in flight — disables the banner actions and
   /// shows a thin progress line. No cloud data is ever persisted.
@@ -45,7 +94,10 @@ class _AnswerKeyEntryScreenState extends State<AnswerKeyEntryScreen> {
 
     if (!_loadedExisting) {
       final existing = appState.answerKeys[appState.activeExamCode];
-      if (existing != null) _selections.addAll(existing.correctChoices);
+      if (existing != null) {
+        _selections.addAll(existing.correctChoices);
+        _categories.addAll(existing.itemCategories);
+      }
       _loadedExisting = true;
     }
 
@@ -68,7 +120,9 @@ class _AnswerKeyEntryScreenState extends State<AnswerKeyEntryScreen> {
         backgroundColor: Colors.white,
         foregroundColor: AppColors.textDark,
         elevation: 0.5,
-        title: Text('Answer Key — ${appState.activeExamCode}', style: AppTextStyles.heading(size: 13)),
+        title: _isAt(appState)
+            ? _buildCategoryPill()
+            : Text('Answer Key — ${appState.activeExamCode}', style: AppTextStyles.heading(size: 13)),
         actions: [
           if (appState.syncManager != null) _buildLoadFromCloudButton(appState),
         ],
@@ -100,6 +154,7 @@ class _AnswerKeyEntryScreenState extends State<AnswerKeyEntryScreen> {
                 ],
               ),
             ),
+            if (_isAt(appState)) _buildCategoryCounts(),
             Expanded(
               child: ListView.builder(
                 padding: const EdgeInsets.all(16),
@@ -120,6 +175,9 @@ class _AnswerKeyEntryScreenState extends State<AnswerKeyEntryScreen> {
                       AnswerKey(
                         examCode: appState.activeExamCode,
                         correctChoices: Map.of(_selections),
+                        itemCategories: _isAt(appState)
+                            ? Map.of(_categories)
+                            : const {},
                       ),
                     );
                   } catch (_) {
@@ -394,11 +452,14 @@ class _AnswerKeyEntryScreenState extends State<AnswerKeyEntryScreen> {
           DateTime.now().toUtc(),
     );
     if (!mounted) return;
+    final adopted = appState.answerKeys[appState.activeExamCode];
     setState(() {
       _selections
         ..clear()
-        ..addAll(appState.answerKeys[appState.activeExamCode]?.correctChoices ??
-            const {});
+        ..addAll(adopted?.correctChoices ?? const {});
+      _categories
+        ..clear()
+        ..addAll(adopted?.itemCategories ?? const {});
     });
     _snack('Using the cloud answer key.');
   }
@@ -490,7 +551,13 @@ class _AnswerKeyEntryScreenState extends State<AnswerKeyEntryScreen> {
   /// Opening or closing it never mutates local or cloud data; it only
   /// forwards the user to Keep cloud / Replace cloud / Cancel.
   Widget _buildReviewDialog(BuildContext ctx, CloudAnswerKeyRead cloud) {
-    final local = Map<String, String>.of(_selections);
+    // Same flat shape the cloud stores (answers + "category|..." entries),
+    // so a category-only difference shows up here too.
+    final local = AnswerKey(
+      examCode: '',
+      correctChoices: _selections,
+      itemCategories: _categories,
+    ).toCloudAnswers();
     final cloudAnswers = cloud.answers ?? const <String, String>{};
     final keys = <String>{...local.keys, ...cloudAnswers.keys}.toList()..sort();
     final headerStyle = AppTextStyles.body(
@@ -651,6 +718,16 @@ class _AnswerKeyEntryScreenState extends State<AnswerKeyEntryScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(section.name, style: AppTextStyles.body(size: 11, weight: FontWeight.w700)),
+          if (_isAt(AppStateScope.of(context)))
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(
+                'Tap answers to assign them to the selected category. '
+                'Long-press an item number to release it.',
+                key: const ValueKey('category-hint'),
+                style: AppTextStyles.body(size: 9, color: AppColors.textGray),
+              ),
+            ),
           const SizedBox(height: 10),
           ...itemNumbers.map((itemNumber) => _buildQuestionRow(section, itemNumber)),
         ],
@@ -662,46 +739,191 @@ class _AnswerKeyEntryScreenState extends State<AnswerKeyEntryScreen> {
     final choices = section.items[itemNumber]!;
     final key = AnswerKey.keyFor(section.name, itemNumber);
     final selected = _selections[key];
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          SizedBox(
+    final isAt = _isAt(AppStateScope.of(context));
+    // The category this item belongs to, and whether the selected category
+    // is allowed to touch it: items assigned to another category are locked.
+    final assigned = isAt ? AtCategory.fromCode(_categories[key]) : null;
+    final locked = assigned != null && assigned != _brush;
+    final accent = assigned == null ? AppColors.primaryGreen : _colorOf(assigned);
+
+    final row = Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onLongPress: isAt ? () => _releaseItem(key) : null,
+          child: SizedBox(
             width: 30,
-            child: Text('$itemNumber.', style: AppTextStyles.body(size: 10, color: AppColors.textGray)),
-          ),
-          Expanded(
-            child: Wrap(
-              spacing: 6,
-              runSpacing: 6,
-              children: choices.map((bubble) => _buildChoiceBubble(key, bubble.choice, selected)).toList(),
+            child: Text(
+              '$itemNumber.',
+              style: AppTextStyles.body(
+                size: 10,
+                weight: assigned == null ? FontWeight.w400 : FontWeight.w800,
+                color: assigned == null ? AppColors.textGray : accent,
+              ),
             ),
           ),
+        ),
+        Expanded(
+          child: Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: choices
+                .map((bubble) => _buildChoiceBubble(key, bubble.choice, selected, accent: accent, isAt: isAt))
+                .toList(),
+          ),
+        ),
+        if (assigned != null) ...[
+          const SizedBox(width: 6),
+          // The code as text too, so the category isn't conveyed by colour alone.
+          Container(
+            key: ValueKey('assigned-$key'),
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: accent.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              assigned.code,
+              style: AppTextStyles.body(size: 9, weight: FontWeight.w800, color: accent),
+            ),
+          ),
+        ],
+      ],
+    );
+
+    return Padding(
+      key: ValueKey('row-$key'),
+      padding: const EdgeInsets.only(bottom: 8),
+      // Locked rows stay visible in their own colour but can't be tapped.
+      child: locked ? Opacity(opacity: 0.55, child: IgnorePointer(child: row)) : row,
+    );
+  }
+
+  /// The header control: pick which category the answers you tap next belong
+  /// to. Shown in the selected category's colour.
+  Widget _buildCategoryPill() {
+    final color = _colorOf(_brush);
+    return LayoutBuilder(
+      // A fixed width (capped to what the header offers): the menu below is as
+      // wide as this pill, and has to fit "Quantitative Reasoning · 18".
+      builder: (context, box) => Align(
+        alignment: Alignment.centerLeft,
+        child: Container(
+          key: const ValueKey('category-brush'),
+          width: box.maxWidth < 250 ? box.maxWidth : 250,
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(24)),
+          child: DropdownButtonHideUnderline(
+            child: DropdownButton<AtCategory>(
+              value: _brush,
+              isExpanded: true,
+              isDense: true,
+              dropdownColor: Colors.white,
+              borderRadius: BorderRadius.circular(14),
+              icon: const Icon(Icons.keyboard_arrow_down_rounded, color: Colors.white),
+              selectedItemBuilder: (_) => [
+                for (final c in AtCategory.values)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      c.label,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTextStyles.heading(size: 12.5, color: Colors.white, weight: FontWeight.w700),
+                    ),
+                  ),
+              ],
+              items: [
+                for (final c in AtCategory.values)
+                  DropdownMenuItem(
+                    value: c,
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 10,
+                          height: 10,
+                          decoration: BoxDecoration(color: _colorOf(c), shape: BoxShape.circle),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            '${c.label} · ${_assignedTo(c)}',
+                            overflow: TextOverflow.ellipsis,
+                            style: AppTextStyles.body(size: 12, weight: FontWeight.w600),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+              onChanged: (c) {
+                if (c != null) setState(() => _brush = c);
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// How many items are assigned to each category, in each category's colour
+  /// (official: VC 12, VR 24, FR 18, QR 18). Tapping a chip switches the
+  /// selected category, same as the header control.
+  Widget _buildCategoryCounts() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+      child: Wrap(
+        spacing: 6,
+        runSpacing: 4,
+        children: [
+          for (final c in AtCategory.values)
+            Tooltip(
+              message: c.label,
+              child: InkWell(
+                key: ValueKey('chip-${c.code}'),
+                borderRadius: BorderRadius.circular(10),
+                onTap: () => setState(() => _brush = c),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: _brush == c ? _colorOf(c) : _colorOf(c).withValues(alpha: 0.14),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    '${c.code} ${_assignedTo(c)}',
+                    style: AppTextStyles.body(
+                      size: 9,
+                      weight: FontWeight.w800,
+                      color: _brush == c ? Colors.white : _colorOf(c),
+                    ),
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
     );
   }
 
-  Widget _buildChoiceBubble(String key, String choice, String? selected) {
+  Widget _buildChoiceBubble(
+    String key,
+    String choice,
+    String? selected, {
+    required Color accent,
+    required bool isAt,
+  }) {
     final isSelected = choice == selected;
     return InkWell(
       borderRadius: BorderRadius.circular(16),
-      onTap: () => setState(() {
-        if (isSelected) {
-          _selections.remove(key);
-        } else {
-          _selections[key] = choice;
-        }
-      }),
+      onTap: () => _tapChoice(key, choice, isAt: isAt),
       child: Container(
         width: 30,
         height: 30,
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: isSelected ? AppColors.primaryGreen : AppColors.lightBg,
+          color: isSelected ? accent : AppColors.lightBg,
           shape: BoxShape.circle,
-          border: Border.all(color: isSelected ? AppColors.primaryGreen : const Color(0xFFCBD5E1)),
+          border: Border.all(color: isSelected ? accent : const Color(0xFFCBD5E1)),
         ),
         child: Text(
           choice,

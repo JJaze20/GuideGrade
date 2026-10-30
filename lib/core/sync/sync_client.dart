@@ -554,3 +554,12 @@ abstract class SyncClient {
 abstract class BatchCompletionClient {
   Future<SyncOutcome> completeBatchForArchive(CloudBatchRow expected);
 }
+
+/// Optional capability used only to decide whether a batch may be deleted:
+/// the number of `scans` rows for each batch INCLUDING soft-deleted ones
+/// (unlike [SyncClient.readScanCounts], which counts active scans only). A
+/// soft-deleted scan is still a row in the batch, so a batch that ever held
+/// scans is never "empty" for deletion purposes.
+abstract class BatchScanRowCountClient {
+  Future<CloudScanCountsRead> readAllScanRowCounts(List<String> batchIds);
+}

@@ -5,6 +5,7 @@ import 'package:guidegrade/core/sync/sync_job.dart';
 import 'package:guidegrade/core/sync/sync_outcome.dart';
 import 'package:guidegrade/features/guidance_web/screens/guidance_web_results_view.dart';
 import 'package:guidegrade/features/guidance_web/services/guidance_web_results_service.dart';
+import 'package:guidegrade/features/guidance_web/widgets/console_style.dart';
 import 'package:guidegrade/models/local_batch.dart';
 
 /// Phase 3 — the Results table's View button.
@@ -409,7 +410,7 @@ void main() {
     }
 
     testWidgets(
-      'a selected batch shows its own description under the dropdowns, results unaffected',
+      'a selected batch keeps its description in the selector without a duplicate panel',
       (tester) async {
         seedBatchWith(description);
         await pumpResultsView(tester);
@@ -421,9 +422,12 @@ void main() {
 
         await selectTheOnlyBatch(tester);
 
-        expect(find.byKey(const Key('batchDescription')), findsOneWidget);
-        expect(find.text('Batch Description'), findsOneWidget);
-        expect(find.text(description), findsOneWidget);
+        expect(find.byKey(const Key('batchDescription')), findsNothing);
+        expect(find.text('Batch Description'), findsNothing);
+        expect(
+          find.textContaining(description, findRichText: true),
+          findsOneWidget,
+        );
         // The existing table, search and filter are all still there.
         expect(find.widgetWithText(TextButton, 'View'), findsNWidgets(2));
         expect(find.byKey(const Key('archiveBatchButton')), findsOneWidget);
@@ -453,7 +457,7 @@ void main() {
 
     testWidgets(
       'the description is the visual focus: larger and bolder than the batch name, in the open menu, '
-      'the closed field and the strip',
+      'the closed field without a duplicate strip',
       (tester) async {
         seedBatchWith(description);
         await pumpResultsView(tester);
@@ -502,28 +506,7 @@ void main() {
           reason: 'the batch name is still shown',
         );
 
-        // Strip under the dropdowns: the largest, boldest text in the batch area.
-        final strip = find.byKey(const Key('batchDescription'));
-        final stripDescription = tester
-            .widget<Text>(
-              find.descendant(of: strip, matching: find.text(description)),
-            )
-            .style!;
-        expect(stripDescription.fontWeight, FontWeight.w800);
-        expect(stripDescription.fontSize!, greaterThanOrEqualTo(16));
-        expect(
-          stripDescription.fontSize!,
-          greaterThan(menuDescription.fontSize!),
-        );
-        final caption = tester
-            .widget<Text>(
-              find.descendant(
-                of: strip,
-                matching: find.text('Batch Description'),
-              ),
-            )
-            .style!;
-        expect(stripDescription.fontSize!, greaterThan(caption.fontSize!));
+        expect(find.byKey(const Key('batchDescription')), findsNothing);
       },
     );
 
@@ -657,6 +640,32 @@ void main() {
       // The identity field is still read internally (search still works).
       expect(find.text('EXAMINEE'), findsOneWidget);
       expect(find.text('SCORE'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    '19b. The table header is a short green bar and the rows are compact, so '
+    'more examinees fit on screen',
+    (tester) async {
+      await pumpResultsView(tester);
+      await selectTheOnlyBatch(tester);
+
+      final header = find
+          .ancestor(of: find.text('EXAMINEE'), matching: find.byType(Container))
+          .first;
+      expect(tester.widget<Container>(header).color, ConsoleColors.railGreen);
+      expect(tester.getSize(header).height, lessThanOrEqualTo(48));
+
+      // Each row uses 4 px of vertical padding (it was 10), so a row is the
+      // 44 px View button plus 8, not 64.
+      final compactRows = find.byWidgetPredicate(
+        (w) =>
+            w is Padding &&
+            w.padding ==
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      );
+      expect(compactRows, findsNWidgets(2));
+      expect(tester.takeException(), isNull);
     },
   );
 
@@ -1160,6 +1169,11 @@ void main() {
 
       await pumpArchivedBatch(tester);
 
+      expect(
+        find.byKey(const Key('resultsIdentityUnlinked Examinee')),
+        findsNothing,
+      );
+      expect(find.byKey(const Key('resultsIdentityExaminee')), findsOneWidget);
       expect(find.text('Andulana, Merch'), findsOneWidget);
       expect(find.text('Lim, Ana'), findsOneWidget);
       expect(find.byKey(const Key('notLinkedBadge')), findsOneWidget);

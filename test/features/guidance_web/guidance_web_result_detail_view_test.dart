@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:guidegrade/core/omr/at_categories.dart';
 import 'package:guidegrade/core/omr/omr_scorer.dart';
 import 'package:guidegrade/core/omr/omr_templates.dart';
 import 'package:guidegrade/core/omr/tat_cluster_analysis.dart';
@@ -807,6 +808,254 @@ void main() {
         expect(tester.takeException(), isNull);
       });
     }
+
+    group('AT subtest breakdown in the Result Summary', () {
+      const atSection = 'Answer Document';
+
+      Future<void> pumpAt(
+        WidgetTester tester, {
+        required Set<AtCategory> answeredRight,
+        Map<String, String> extraAnswers = const {},
+        bool withKey = true,
+      }) async {
+        tester.view.physicalSize = const Size(1400, 2400);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        if (withKey) {
+          client.answerKeyToReturn = CloudAnswerKeyRead.found(
+            version: 1,
+            answers: {
+              for (var n = 1; n <= 72; n++) '$atSection|$n': 'A',
+              ...extraAnswers,
+            },
+            updatedByName: 'Officer',
+            updatedAt: '2026-01-01T00:00:00Z',
+          );
+        }
+        await pump(
+          tester,
+          batch: _batch(),
+          scan: _scan(
+            result: _storedResult(raw: 34, graded: 72),
+            items: [
+              for (var n = 1; n <= 72; n++)
+                OmrItemResult(
+                  sectionName: atSection,
+                  itemNumber: n,
+                  markedChoice: answeredRight.contains(officialAtCategories[n])
+                      ? 'A'
+                      : 'B',
+                ),
+            ],
+          ),
+        );
+      }
+
+      testWidgets('shows each subtest, the Verbal / Non-Verbal subtotals and '
+          'the total', (tester) async {
+        await pumpAt(tester, answeredRight: {AtCategory.vc, AtCategory.qr});
+        expect(find.text('RESULT SUMMARY'), findsOneWidget);
+        // Official mapping: VC 12, VR 24, FR 18, QR 18 items.
+        expect(find.text('Verbal Comprehension'), findsOneWidget);
+        expect(find.text('12 / 12'), findsOneWidget);
+        expect(find.text('Verbal Reasoning'), findsOneWidget);
+        expect(find.text('0 / 24'), findsOneWidget);
+        expect(find.text('Figural Reasoning'), findsOneWidget);
+        expect(find.text('0 / 18'), findsOneWidget);
+        expect(find.text('Quantitative Reasoning'), findsOneWidget);
+        expect(find.text('18 / 18'), findsOneWidget);
+        expect(find.text('Verbal (VC + VR)'), findsOneWidget);
+        expect(find.text('12 / 36'), findsOneWidget);
+        expect(find.text('Non-Verbal (FR + QR)'), findsOneWidget);
+        expect(find.text('18 / 36'), findsOneWidget);
+        expect(find.text('30 / 72'), findsOneWidget);
+        // The recorded headline result above is untouched.
+        expect(find.text('34 / 72'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      });
+
+      testWidgets('wide screens split the rows five and five with Total '
+          'centred to their right', (tester) async {
+        await pumpAt(tester, answeredRight: {AtCategory.vc});
+        expect(find.byKey(const Key('atSummaryColumns')), findsOneWidget);
+        final score = tester.getTopLeft(find.text('Score'));
+        final verbalReasoning = tester.getTopLeft(
+          find.text('Verbal Reasoning'),
+        );
+        final total = tester.getCenter(find.text('Total'));
+        // Left column starts at Score, right column at Verbal Reasoning.
+        expect(verbalReasoning.dx, closeTo(score.dx + 324, 2));
+        expect(verbalReasoning.dy, closeTo(score.dy, 1));
+        // Total sits to the right of both columns.
+        expect(total.dx, greaterThan(verbalReasoning.dx + 300));
+        // ... and vertically in the middle of the five lines.
+        final block = tester.getRect(find.byKey(const Key('atSummaryColumns')));
+        expect(total.dy, closeTo(block.center.dy, 24));
+        expect(tester.takeException(), isNull);
+      });
+
+      testWidgets('narrow screens keep one column with Total last', (
+        tester,
+      ) async {
+        await pumpAt(tester, answeredRight: {AtCategory.vc});
+        tester.view.physicalSize = const Size(600, 2400);
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('atSummaryColumns')), findsNothing);
+        expect(find.text('Total'), findsOneWidget);
+        expect(
+          tester.getTopLeft(find.text('Total')).dy,
+          greaterThan(tester.getTopLeft(find.text('Non-Verbal (FR + QR)')).dy),
+        );
+        expect(tester.takeException(), isNull);
+      });
+
+      testWidgets('Examinee Analytics summary also lists the subtests', (
+        tester,
+      ) async {
+        tester.view.physicalSize = const Size(1400, 2400);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        client.answerKeyToReturn = CloudAnswerKeyRead.found(
+          version: 1,
+          answers: {for (var n = 1; n <= 72; n++) '$atSection|$n': 'A'},
+          updatedByName: 'Officer',
+          updatedAt: '2026-01-01T00:00:00Z',
+        );
+        await pump(
+          tester,
+          analytics: true,
+          batch: _batch(),
+          scan: _scan(
+            result: _storedResult(raw: 12, graded: 72),
+            items: [
+              for (var n = 1; n <= 72; n++)
+                OmrItemResult(
+                  sectionName: atSection,
+                  itemNumber: n,
+                  markedChoice: officialAtCategories[n] == AtCategory.vc
+                      ? 'A'
+                      : 'B',
+                ),
+            ],
+          ),
+        );
+        expect(find.text('Verbal Comprehension'), findsOneWidget);
+        expect(find.text('12 / 12'), findsOneWidget);
+        expect(find.text('Quantitative Reasoning'), findsOneWidget);
+        expect(find.text('Verbal (VC + VR)'), findsOneWidget);
+        expect(find.text('Non-Verbal (FR + QR)'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      });
+
+      testWidgets('AT cluster analysis counts the real subtests and prints no '
+          'item range', (tester) async {
+        tester.view.physicalSize = const Size(1400, 2400);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        client.answerKeyToReturn = CloudAnswerKeyRead.found(
+          version: 1,
+          answers: {for (var n = 1; n <= 72; n++) '$atSection|$n': 'A'},
+          updatedByName: 'Officer',
+          updatedAt: '2026-01-01T00:00:00Z',
+        );
+        await pump(
+          tester,
+          analytics: true,
+          batch: _batch(),
+          scan: _scan(
+            result: _storedResult(raw: 12, graded: 72),
+            items: [
+              for (var n = 1; n <= 72; n++)
+                OmrItemResult(
+                  sectionName: atSection,
+                  itemNumber: n,
+                  markedChoice: officialAtCategories[n] == AtCategory.vc
+                      ? 'A'
+                      : 'B',
+                ),
+            ],
+          ),
+        );
+        await tester.tap(find.text('Cluster analysis'));
+        await tester.pumpAndSettle();
+
+        // Labels carry no item numbers (the subtests are interleaved).
+        for (final label in [
+          'Verbal',
+          'Verbal Comprehension',
+          'Verbal Reasoning',
+          'Non-Verbal',
+          'Figural Reasoning',
+          'Quantitative Reasoning',
+        ]) {
+          final row = find.byKey(Key('clusterRow_$label'));
+          expect(row, findsOneWidget);
+          expect(
+            find.descendant(of: row, matching: find.text(label)),
+            findsOneWidget,
+          );
+        }
+        // Items counted per real subtest: 12 / 24 / 18 / 18 items, VC all
+        // right.
+        expect(
+          find.descendant(
+            of: find.byKey(const Key('clusterRow_Verbal Comprehension')),
+            matching: find.text('12'),
+          ),
+          findsNWidgets(2), // 12 items, 12 right
+        );
+        expect(
+          find.descendant(
+            of: find.byKey(const Key('clusterRow_Verbal Reasoning')),
+            matching: find.text('24'),
+          ),
+          findsOneWidget,
+        );
+        expect(find.textContaining('(1–'), findsNothing);
+        expect(tester.takeException(), isNull);
+      });
+
+      testWidgets('a category saved in the answer key wins over the official '
+          'mapping', (tester) async {
+        // Item 2 is Verbal Reasoning officially; the key re-files it to VC.
+        await pumpAt(
+          tester,
+          answeredRight: {AtCategory.vc},
+          extraAnswers: {'category|$atSection|2': 'VC'},
+        );
+        // 13 VC items now (the re-filed item 2 was marked wrong here).
+        expect(find.text('12 / 13'), findsOneWidget);
+        expect(find.text('0 / 23'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      });
+
+      testWidgets('without an answer key the breakdown is unavailable, not '
+          'zeros', (tester) async {
+        await pumpAt(tester, answeredRight: const {}, withKey: false);
+        expect(find.text('Subtests'), findsOneWidget);
+        expect(find.text('Unavailable for this result'), findsOneWidget);
+        expect(find.text('Verbal Comprehension'), findsNothing);
+        expect(tester.takeException(), isNull);
+      });
+
+      testWidgets('QTM and TAT summaries do not get the AT breakdown', (
+        tester,
+      ) async {
+        await pump(
+          tester,
+          batch: _batch(examCode: 'QTM', examTitle: 'Quantitative Math Test'),
+          scan: _scan(
+            examCode: 'QTM',
+            result: _storedResult(raw: 40, graded: 60, total: 60),
+          ),
+        );
+        expect(find.text('Verbal Comprehension'), findsNothing);
+        expect(find.text('Verbal (VC + VR)'), findsNothing);
+      });
+    });
 
     testWidgets(
       'analytics keeps essentials visible and expands details on demand',
@@ -1795,7 +2044,8 @@ void main() {
           findsOneWidget,
         );
         // Result Summary and Answer Details still rendered normally.
-        expect(find.text('1 / 1'), findsOneWidget);
+        // (The AT subtest rows below the Score also read "1 / 1" here.)
+        expect(find.text('1 / 1'), findsWidgets);
         expect(find.text('100.00%'), findsOneWidget);
         expect(find.text('Correct'), findsOneWidget);
       },

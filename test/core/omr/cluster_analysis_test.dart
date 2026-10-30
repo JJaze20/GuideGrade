@@ -1,6 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:guidegrade/core/omr/at_categories.dart';
 import 'package:guidegrade/core/omr/cluster_analysis.dart';
 import 'package:guidegrade/core/omr/omr_scorer.dart';
+import 'package:guidegrade/models/answer_key.dart';
 
 ScoredItem item(int n, {required bool right, bool graded = true}) => ScoredItem(
   sectionName: 'S',
@@ -20,18 +22,82 @@ void main() {
     final clusters = atClusterDefs.where((d) => !d.isGroup);
     expect(clusters.fold<int>(0, (a, d) => a + d.totalItems), 72);
     final verbal = atClusterDefs.first;
-    expect([verbal.fromItem, verbal.toItem], [1, 36]);
+    expect(verbal.totalItems, 36);
+    expect(atClusterDefs[3].totalItems, 36);
+    // The four subtests are interleaved, so none is an item range.
+    expect(atClusterDefs.every((d) => d.categories != null), isTrue);
+    expect(atClusterDefs.every((d) => !d.displayLabel.contains('(')), isTrue);
+    expect(qtmClusterDefs.first.displayLabel, 'Algebra & Functions (1–10)');
+  });
+
+  test('AT clusters count the items of each real subtest, not item ranges', () {
+    // Every item of the official Verbal Comprehension subtest is right.
+    final items = [
+      for (var n = 1; n <= 72; n++)
+        ScoredItem(
+          sectionName: 'Answer Document',
+          itemNumber: n,
+          markedChoice: officialAtCategories[n] == AtCategory.vc ? 'A' : 'B',
+          isAmbiguous: false,
+          correctChoice: 'A',
+          // (right when the item is Verbal Comprehension)
+        ),
+    ];
+    final rows = {
+      for (final r in computeClusterRows('AT', items)!) r.def.label: r,
+    };
+    expect(rows['Verbal Comprehension']!.right, 12);
+    expect(rows['Verbal Comprehension']!.total, 12);
+    expect(rows['Verbal Reasoning']!.right, 0);
+    expect(rows['Verbal Reasoning']!.total, 24);
+    expect(rows['Figural Reasoning']!.total, 18);
+    expect(rows['Quantitative Reasoning']!.total, 18);
+    expect(rows['Verbal']!.right, 12);
+    expect(rows['Verbal']!.total, 36);
+    expect(rows['Non-Verbal']!.right, 0);
+  });
+
+  test('AT clusters follow a category saved in the answer key', () {
+    final key = AnswerKey(
+      examCode: 'AT',
+      correctChoices: const {},
+      itemCategories: {AnswerKey.keyFor('Answer Document', 2): 'VC'},
+    );
+    final items = [
+      for (var n = 1; n <= 72; n++)
+        ScoredItem(
+          sectionName: 'Answer Document',
+          itemNumber: n,
+          markedChoice: n == 2 ? 'A' : 'B',
+          isAmbiguous: false,
+          correctChoice: 'A',
+          // (only item 2 is right)
+        ),
+    ];
+    final rows = {
+      for (final r in computeClusterRows('AT', items, key: key)!)
+        r.def.label: r,
+    };
+    // Item 2 is Verbal Reasoning officially; the key re-files it to VC.
+    expect(rows['Verbal Comprehension']!.right, 1);
+    expect(rows['Verbal Comprehension']!.total, 13);
+    expect(rows['Verbal Reasoning']!.total, 23);
   });
 
   test('rates each cluster against the batch average', () {
     // Algebra (1-10): 4 right; Word Problems (11-13): 3 right.
     final mine = [
-      for (var i = 1; i <= 60; i++) item(i, right: i >= 11 && i <= 13 || i <= 4),
+      for (var i = 1; i <= 60; i++)
+        item(i, right: i >= 11 && i <= 13 || i <= 4),
     ];
     final rows = computeClusterRows(
       'QTM',
       mine,
-      averages: {'Algebra & Functions': 6.0, 'Word Problems': 2.0, 'Trigonometry': 0.0},
+      averages: {
+        'Algebra & Functions': 6.0,
+        'Word Problems': 2.0,
+        'Trigonometry': 0.0,
+      },
     )!;
     expect(rows[0].right, 4);
     expect(rows[0].band, ClusterBand.below); // 4 < 6
@@ -49,8 +115,12 @@ void main() {
   });
 
   test('computes the average right count per cluster across scans', () {
-    final a = [for (var i = 1; i <= 60; i++) item(i, right: i <= 10)]; // 10 in Algebra
-    final b = [for (var i = 1; i <= 60; i++) item(i, right: i <= 4)]; // 4 in Algebra
+    final a = [
+      for (var i = 1; i <= 60; i++) item(i, right: i <= 10),
+    ]; // 10 in Algebra
+    final b = [
+      for (var i = 1; i <= 60; i++) item(i, right: i <= 4),
+    ]; // 4 in Algebra
     final avgs = computeClusterAverages('QTM', [a, b]);
     expect(avgs['Algebra & Functions'], 7.0);
     expect(avgs['Word Problems'], 0.0);
@@ -58,15 +128,23 @@ void main() {
 
   test('ungraded scans are skipped in averages, not counted as zero', () {
     final graded = [for (var i = 1; i <= 60; i++) item(i, right: i <= 10)];
-    final ungraded = [for (var i = 1; i <= 60; i++) item(i, right: false, graded: false)];
-    expect(computeClusterAverages('QTM', [graded, ungraded])['Algebra & Functions'], 10.0);
+    final ungraded = [
+      for (var i = 1; i <= 60; i++) item(i, right: false, graded: false),
+    ];
+    expect(
+      computeClusterAverages('QTM', [graded, ungraded])['Algebra & Functions'],
+      10.0,
+    );
   });
 
   test('no answer key -> unrated, never zero', () {
     final rows = computeClusterRows('AT', [
       for (var i = 1; i <= 72; i++) item(i, right: false, graded: false),
     ])!;
-    expect(rows.every((r) => r.right == null && r.band == ClusterBand.unrated), isTrue);
+    expect(
+      rows.every((r) => r.right == null && r.band == ClusterBand.unrated),
+      isTrue,
+    );
   });
 
   test('TAT has no cluster analysis', () {

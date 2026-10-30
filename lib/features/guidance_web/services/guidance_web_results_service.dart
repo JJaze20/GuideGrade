@@ -243,7 +243,7 @@ class GuidanceWebResultsService {
       throw GuidanceWebResultsException(_messageFor(read.error));
     }
     if (!read.exists) return null;
-    return AnswerKey(examCode: examCode, correctChoices: read.answers ?? const {});
+    return AnswerKey.fromCloudAnswers(examCode, read.answers ?? const {});
   }
 
   /// One scan's image bytes straight from the private `scanned-sheets`

@@ -255,6 +255,7 @@ class _ExamResultsScreenState extends State<ExamResultsScreen> {
           meshInteriorMeasuredFrac: scored.meshInteriorMeasuredFrac,
           geometryWarning: scored.geometryWarning,
           editing: (fresh != null && batch != null) ? scanEditingFor(appState, batch.id, fresh) : null,
+          answerKey: appState.answerKeys[result.examCode],
         ),
       ),
     );

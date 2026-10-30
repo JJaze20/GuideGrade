@@ -2089,4 +2089,96 @@ void main() {
       },
     );
   });
+
+  group('name-crop upload reconcile', () {
+    /// A batch with one scan that has the given crops on disk.
+    Future<LocalBatch> seedWithCrops({
+      bool last = false,
+      bool first = false,
+      bool mi = false,
+    }) async {
+      final created = await batchRepo.createBatch(
+        batchCode: 'B-1',
+        examCode: 'AT',
+        examTitle: 'Aptitude',
+        description: 'd',
+        expectedCount: 100,
+        createdByUid: 'uid',
+        createdByName: 'Officer',
+      );
+      File crop(String name) =>
+          File('${tempDir.path}/crop_${created.id}_$name.jpg')..writeAsBytesSync(const [9, 9, 9]);
+      return batchRepo.addScan(
+        batchId: created.id,
+        decoded: const OmrScanResult(examCode: 'AT', items: []),
+        sourceImage: File('${tempDir.path}/src_${created.id}.jpg')..writeAsBytesSync(const [1, 2, 3]),
+        nameCropLastImage: last ? crop('last') : null,
+        nameCropFirstImage: first ? crop('first') : null,
+        nameCropMiddleImage: mi ? crop('mi') : null,
+      );
+    }
+
+    List<String> cropJobs() => queue.jobs
+        .where((j) => j.type == SyncJobType.uploadImage && (j.meta['variant'] ?? '').startsWith('name_'))
+        .map((j) => j.meta['variant']!)
+        .toList()
+      ..sort();
+
+    test('N1. startup re-queues every crop the scan has that was never recorded as uploaded', () async {
+      await seedWithCrops(last: true, first: true);
+
+      await manager.restore();
+
+      // MI was never produced for this sheet, so no job for it.
+      expect(cropJobs(), ['name_first', 'name_last']);
+    });
+
+    test('N2. a crop already recorded as uploaded is not queued again', () async {
+      final batch = await seedWithCrops(last: true, first: true, mi: true);
+      final scanId = batch.scans.single.id;
+      queue.state.setScanNameCropUploaded(batch.id, scanId, 'name_last', true);
+      queue.state.setScanNameCropUploaded(batch.id, scanId, 'name_mi', true);
+      await queue.saveState();
+
+      await manager.restore();
+
+      expect(cropJobs(), ['name_first']);
+    });
+
+    test('N3. a scan with no crops queues no crop jobs', () async {
+      await seedWithCrops();
+
+      await manager.restore();
+
+      expect(cropJobs(), isEmpty);
+    });
+
+    test('N4. restoring twice does not create duplicate crop jobs', () async {
+      await seedWithCrops(last: true);
+
+      await manager.restore();
+      await manager.restore();
+
+      expect(cropJobs(), ['name_last']);
+    });
+
+    test('N5. a crop job that was lost (never queued) is repaired on the next startup', () async {
+      final batch = await seedWithCrops(last: true, first: true, mi: true);
+      // Simulate the app being killed after only the first crop job was
+      // persisted: that one ran and was recorded; the other two jobs were lost.
+      queue.state.setScanNameCropUploaded(batch.id, batch.scans.single.id, 'name_last', true);
+      await queue.saveState();
+
+      await manager.restore();
+      await manager.start();
+
+      expect(
+        client.calls.where((c) => c.startsWith('uploadImage:') && c.contains('name_')),
+        containsAll([
+          'uploadImage:${batch.id}/${batch.scans.single.id}/name_first',
+          'uploadImage:${batch.id}/${batch.scans.single.id}/name_mi',
+        ]),
+      );
+    });
+  });
 }

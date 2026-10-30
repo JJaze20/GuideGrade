@@ -16,6 +16,8 @@ import 'package:guidegrade/core/sync/sync_outcome.dart';
 import 'package:guidegrade/features/guidance_web/screens/guidance_web_examinee_records_view.dart';
 import 'package:guidegrade/features/guidance_web/services/guidance_web_examinee_records_service.dart';
 import 'package:guidegrade/features/guidance_web/services/guidance_web_results_service.dart';
+import 'package:guidegrade/features/guidance_web/widgets/console_style.dart';
+import 'package:guidegrade/shared/widgets/surface_card.dart';
 
 class _FakeSyncClient
     implements SyncClient, ScanDeleteClient, ScanRestoreClient {
@@ -605,6 +607,57 @@ void main() {
     expect(find.text('Dela Cruz, Juan'), findsNothing);
   });
 
+  testWidgets(
+    'the Records filter panel is compact and the table header is a short '
+    'green bar',
+    (tester) async {
+      client.examineesToReturn = CloudExamineesRead.found([
+        _row(
+          id: 'e1',
+          temporaryExamineeId: 'EX-1',
+          firstName: 'Juan',
+          lastName: 'Dela Cruz',
+        ),
+      ]);
+      await pumpView(tester);
+      tester.view.physicalSize = const Size(1440, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpAndSettle();
+
+      // A slim search field in a slim light-green panel.
+      expect(
+        tester.getSize(find.byKey(const Key('recordsSearch'))).height,
+        lessThanOrEqualTo(48),
+      );
+      final panel = find
+          .ancestor(
+            of: find.byKey(const Key('recordsSearch')),
+            matching: find.byType(SurfaceCard),
+          )
+          .first;
+      expect(tester.getSize(panel).height, lessThanOrEqualTo(100));
+      expect(tester.widget<SurfaceCard>(panel).color, const Color(0xFFEAF3EE));
+
+      // A short green header bar over the table ...
+      final header = find
+          .ancestor(of: find.text('NAME'), matching: find.byType(Container))
+          .first;
+      expect(tester.widget<Container>(header).color, ConsoleColors.railGreen);
+      expect(tester.getSize(header).height, lessThanOrEqualTo(40));
+
+      // ... and compact rows (4 px of vertical padding, was 10).
+      final compactRow = find.byWidgetPredicate(
+        (w) =>
+            w is Padding &&
+            w.padding ==
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      );
+      expect(compactRow, findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
   testWidgets('search filters by Temporary Examinee ID', (tester) async {
     client.examineesToReturn = CloudExamineesRead.found([
       _row(

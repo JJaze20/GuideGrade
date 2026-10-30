@@ -3,11 +3,13 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
+import '../../../core/omr/at_categories.dart';
 import '../../../core/omr/exam_score.dart';
 import '../../../core/omr/omr_mesh_correction.dart';
 import '../../../core/omr/omr_scorer.dart';
 import '../../../core/omr/omr_templates.dart';
 import '../../../models/answer_correction.dart';
+import '../../../models/answer_key.dart';
 import '../../../models/local_batch.dart';
 import '../widgets/answer_correction_sheet.dart';
 
@@ -73,6 +75,11 @@ class ScannedImageViewerScreen extends StatefulWidget {
   /// every change ([scoredItems] is only the starting point). Null = view-only.
   final ScanEditing? editing;
 
+  /// The exam's answer key, used here only to place each Admission Test
+  /// item in its subtest (VC / VR / FR / QR) for the per-category banner.
+  /// Falls back to [editing]'s key, then to the official mapping.
+  final AnswerKey? answerKey;
+
   const ScannedImageViewerScreen({
     super.key,
     this.imagePath,
@@ -86,6 +93,7 @@ class ScannedImageViewerScreen extends StatefulWidget {
     this.meshInteriorMeasuredFrac,
     this.geometryWarning,
     this.editing,
+    this.answerKey,
   }) : assert(
          imagePath != null || imageBytes != null,
          'ScannedImageViewerScreen needs either imagePath or imageBytes.',
@@ -129,6 +137,14 @@ class _ScannedImageViewerScreenState extends State<ScannedImageViewerScreen> {
     final examCode = template?.examCode ?? _scan?.decoded.examCode;
     if (examCode == null) return null;
     return computeExamScoreForCode(ScoredResult(examCode: examCode, items: items));
+  }
+
+  /// Admission Test only: raw score per subtest for the sheet as it reads
+  /// NOW (so a correction updates it too). Null for other exams / ungraded.
+  AtCategoryScores? _currentCategoryScores(List<ScoredItem> items) {
+    final examCode = template?.examCode ?? _scan?.decoded.examCode;
+    if (examCode != 'AT') return null;
+    return computeAtCategoryScores(items, widget.answerKey ?? editing?.answerKey);
   }
 
   /// A correction never moves the bubbles, so the mesh readings the scan was
@@ -263,6 +279,8 @@ class _ScannedImageViewerScreenState extends State<ScannedImageViewerScreen> {
             if (geometryWarning != null)
               _GeometryWarningBanner(message: geometryWarning!),
             if (_currentScore(items) != null) _ScoreBanner(score: _currentScore(items)!),
+            if (_currentCategoryScores(items) != null)
+              _CategoryScoreBanner(scores: _currentCategoryScores(items)!),
             if (_hasOverlay) _GradedOverlayLegend(editable: _canEdit),
             Expanded(
               child: InteractiveViewer(
@@ -380,6 +398,76 @@ class _ScoreBanner extends StatelessWidget {
                 style: const TextStyle(color: Colors.white70, fontSize: 10.5, fontWeight: FontWeight.w600),
                 overflow: TextOverflow.ellipsis),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Admission Test subtest raw scores under the total, laid out like the
+/// paper answer document: VC and VR add up to Verbal, FR and QR to
+/// Non-Verbal, and the two subtotals to the total.
+class _CategoryScoreBanner extends StatelessWidget {
+  final AtCategoryScores scores;
+  const _CategoryScoreBanner({required this.scores});
+
+  @override
+  Widget build(BuildContext context) {
+    Widget cell(String code, String label, int right, int total, {bool strong = false}) {
+      return Expanded(
+        child: Tooltip(
+          message: label,
+          child: Column(
+            children: [
+              FittedBox(fit: BoxFit.scaleDown, child: Text(code,
+                  style: TextStyle(
+                      color: strong ? const Color(0xFFFCD34D) : Colors.white54,
+                      fontSize: 9.5,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 0.4))),
+              const SizedBox(height: 2),
+              FittedBox(fit: BoxFit.scaleDown, child: Text('$right / $total',
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: strong ? 14 : 13,
+                      fontWeight: FontWeight.w800,
+                      fontFamily: 'monospace'))),
+            ],
+          ),
+        ),
+      );
+    }
+
+    AtCategoryScore s(AtCategory c) => scores.scoreOf(c);
+    Widget group(AtCategory a, AtCategory b, String name, int right, int total) {
+      return Expanded(
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          decoration: BoxDecoration(
+            color: const Color(0xFF16213A),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(
+            children: [
+              cell(a.code, a.label, s(a).right, s(a).total),
+              cell(b.code, b.label, s(b).right, s(b).total),
+              cell(name, '$name = ${a.code} + ${b.code}', right, total, strong: true),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      key: const ValueKey('viewer-category-scores'),
+      width: double.infinity,
+      color: const Color(0xFF0B1220),
+      padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+      child: Row(
+        children: [
+          group(AtCategory.vc, AtCategory.vr, 'VERBAL', scores.verbalRight, scores.verbalTotal),
+          const SizedBox(width: 6),
+          group(AtCategory.fr, AtCategory.qr, 'NON-VERBAL', scores.nonVerbalRight, scores.nonVerbalTotal),
         ],
       ),
     );

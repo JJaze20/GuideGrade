@@ -243,9 +243,69 @@ pw.Widget _batchPage(
       _h1('Category Distribution:'),
       pw.SizedBox(height: 8),
       _bars(s.categoryBars),
+      if (s.subtestAverages != null) ...[
+        _hr(),
+        _h1('Subtest Averages:'),
+        pw.SizedBox(height: 4),
+        pw.Text(
+          'Average score of ${s.subtestExamineeCount} '
+          '${s.subtestExamineeCount == 1 ? 'examinee' : 'examinees'}',
+          style: _s(8.5, color: _muted),
+        ),
+        pw.SizedBox(height: 6),
+        _subtestBars(s.subtestAverages!),
+      ],
     ],
   );
 }
+
+/// One bar per subtest, each scaled to that subtest's own item count so a
+/// full bar is a perfect average.
+pw.Widget _subtestBars(List<ExportSubtestAverage> averages) => pw.Column(
+  children: [
+    for (final a in averages)
+      pw.Padding(
+        padding: const pw.EdgeInsets.symmetric(vertical: 3),
+        child: pw.Row(
+          children: [
+            pw.SizedBox(
+              width: 150,
+              child: pw.Text(_clean(a.label), style: _s(9.5)),
+            ),
+            pw.Expanded(
+              child: pw.Row(
+                children: [
+                  if (a.total > 0 && a.average > 0)
+                    pw.Expanded(
+                      flex: (a.average * 1000).round().clamp(1, 1 << 30),
+                      child: pw.Container(height: 9, color: _bar),
+                    ),
+                  if (a.total > 0 && a.total - a.average > 0)
+                    pw.Expanded(
+                      flex: ((a.total - a.average) * 1000).round().clamp(
+                        1,
+                        1 << 30,
+                      ),
+                      child: pw.Container(height: 9, color: _track),
+                    ),
+                  if (a.total == 0)
+                    pw.Expanded(child: pw.Container(height: 9, color: _track)),
+                ],
+              ),
+            ),
+            pw.SizedBox(
+              width: 70,
+              child: pw.Text(
+                '${_fmt(a.average)} / ${a.total}',
+                style: _s(9.5, bold: true),
+                textAlign: pw.TextAlign.right,
+              ),
+            ),
+          ],
+        ),
+      ),
+  ],
+);
 
 // --- per-examinee page: Examinee Analytics ---------------------------------
 
@@ -319,7 +379,7 @@ pw.Widget _clusterTable(List<ClusterRow> rows) {
               pw.Padding(
                 padding: pw.EdgeInsets.only(left: r.def.isGroup ? 0 : 12),
                 child: pw.Text(
-                  _clean('${r.def.label} (${r.def.fromItem}-${r.def.toItem})'),
+                  _clean(r.def.displayLabel),
                   style: _s(9, bold: r.def.isGroup),
                 ),
               ),

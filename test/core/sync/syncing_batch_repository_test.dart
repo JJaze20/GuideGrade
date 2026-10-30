@@ -326,12 +326,26 @@ class _FakeLocal implements LocalBatchRepository {
 }
 
 /// Only deletion-protection reads are allowed; mutations remain queued.
-class _NeverSyncClient implements SyncClient {
+class _NeverSyncClient implements SyncClient, BatchScanRowCountClient {
   final List<String> calls = [];
   CloudBatchesRead deletionBatches = CloudBatchesRead.found(const []);
   CloudBatchArchivesRead deletionArchives = CloudBatchArchivesRead.found(
     const [],
   );
+
+  /// Every cloud scan row per batch (soft-deleted included) as the batch
+  /// deletion check sees it. Empty map = no scan rows anywhere.
+  CloudScanCountsRead deletionScanRowCounts = CloudScanCountsRead.found(
+    const {},
+  );
+
+  @override
+  Future<CloudScanCountsRead> readAllScanRowCounts(
+    List<String> batchIds,
+  ) async {
+    calls.add('readAllScanRowCounts');
+    return deletionScanRowCounts;
+  }
 
   Future<SyncOutcome> _rec(String method) async {
     calls.add(method);
@@ -611,7 +625,10 @@ void main() {
   void expectNoNetworkOrDrain() {
     expect(
       neverClient.calls.where(
-        (call) => call != 'readCloudBatches' && call != 'readBatchArchives',
+        (call) =>
+            call != 'readCloudBatches' &&
+            call != 'readBatchArchives' &&
+            call != 'readAllScanRowCounts',
       ),
       isEmpty,
     );
@@ -1126,6 +1143,72 @@ void main() {
     expectNoNetworkOrDrain();
   });
 
+  test('11a. a batch holding a local scanned sheet is never deleted', () async {
+    fakeLocal.batchResult = _batch(scans: [_scan('s1')]);
+    await queue.enqueue(
+      SyncJob.create(
+        type: SyncJobType.pushBatch,
+        entityId: 'b1',
+        batchId: 'b1',
+      ),
+    );
+
+    await expectLater(repo.deleteBatch('b1'), throwsStateError);
+
+    expect(
+      fakeLocal.calls.where((call) => call.startsWith('deleteBatch:')),
+      isEmpty,
+    );
+    expect(jobLabels(), ['pushBatch']); // no deletion jobs, push kept
+  });
+
+  test('11a-2. cloud scan rows, soft-deleted included, block batch deletion '
+      'even when the device copy is empty', () async {
+    neverClient.deletionScanRowCounts = CloudScanCountsRead.found(const {
+      'b1': 1,
+    });
+
+    await expectLater(repo.deleteBatch('b1'), throwsStateError);
+
+    expect(
+      fakeLocal.calls.where((call) => call.startsWith('deleteBatch:')),
+      isEmpty,
+    );
+    expect(queue.jobs, isEmpty);
+    expect(neverClient.calls, contains('readAllScanRowCounts'));
+  });
+
+  test('11a-3. an unverifiable cloud scan count blocks batch deletion '
+      '(fail closed)', () async {
+    neverClient.deletionScanRowCounts = const CloudScanCountsRead.failed(
+      SyncOutcome.transient('offline'),
+    );
+
+    await expectLater(repo.deleteBatch('b1'), throwsStateError);
+
+    expect(
+      fakeLocal.calls.where((call) => call.startsWith('deleteBatch:')),
+      isEmpty,
+    );
+    expect(queue.jobs, isEmpty);
+  });
+
+  test('11a-4. deleting one scan inside a batch is NOT blocked by the '
+      'batch-is-empty rule', () async {
+    neverClient.deletionScanRowCounts = CloudScanCountsRead.found(const {
+      'b1': 3,
+    });
+    fakeLocal.batchResult = _batch(scans: [_scan('s1')]);
+
+    await repo.deleteScan(batchId: 'b1', scanId: 's1', reason: 'test');
+
+    expect(
+      fakeLocal.calls.where((call) => call.startsWith('deleteScan:')),
+      hasLength(1),
+    );
+    expect(neverClient.calls, isNot(contains('readAllScanRowCounts')));
+  });
+
   test('11b. deleteScan success cancels that scan\'s pending pushes and '
       'enqueues DELETE_SCAN then PUSH_BATCH', () async {
     await queue.enqueue(
@@ -1265,6 +1348,8 @@ void main() {
     );
     await repo.attachResult(batchId: 'b1', scanId: 's1', result: _result);
     await repo.setScanExaminee(batchId: 'b1', scanId: 's1');
+    // Only an empty batch can be deleted (a batch holding a scan is refused).
+    fakeLocal.batchResult = _batch();
     await repo.deleteBatch('b1');
     // Let every fire-and-forget enqueue land before tearDown removes tempDir.
     await waitForJobs(3);
@@ -1490,6 +1575,8 @@ void main() {
       );
       await repo.attachResult(batchId: 'b1', scanId: 's1', result: _result);
       await repo.setScanExaminee(batchId: 'b1', scanId: 's1');
+      // Only an empty batch can be deleted (a batch holding a scan is refused).
+      fakeLocal.batchResult = _batch();
       await repo.deleteBatch('b1');
       await waitForWake();
       await settle();
@@ -1499,7 +1586,10 @@ void main() {
       expect(spyManager.syncNowCalls, 0);
       expect(
         neverClient.calls.where(
-          (call) => call != 'readCloudBatches' && call != 'readBatchArchives',
+          (call) =>
+              call != 'readCloudBatches' &&
+              call != 'readBatchArchives' &&
+              call != 'readAllScanRowCounts',
         ),
         isEmpty,
       );
@@ -1524,7 +1614,10 @@ void main() {
     expect(fakeLocal.calls, contains('addScan:b1'));
     expect(
       neverClient.calls.where(
-        (call) => call != 'readCloudBatches' && call != 'readBatchArchives',
+        (call) =>
+            call != 'readCloudBatches' &&
+            call != 'readBatchArchives' &&
+            call != 'readAllScanRowCounts',
       ),
       isEmpty,
     ); // no Supabase from the scanner path
@@ -1773,6 +1866,41 @@ void main() {
       expect(queue.jobs, isEmpty);
       expect(spyManager.wakeCalls, 0);
       expectNoNetworkOrDrain();
+    },
+  );
+
+  test(
+    'a rescan clears the recorded "crop uploaded" flags so the new crops are '
+    're-uploaded even if their jobs are lost',
+    () async {
+      queue.state
+        ..setScanNameCropUploaded('b1', 's1', 'name_last', true)
+        ..setScanNameCropUploaded('b1', 's1', 'name_first', true)
+        ..setScanNameCropUploaded('b1', 's1', 'name_mi', true)
+        ..setScanNameCropUploaded('b1', 's2', 'name_last', true); // another scan: untouched
+      fakeLocal.batchResult = _batch(scans: [_scanWithCrops('s1', last: true)]);
+
+      await repo.replaceScan(
+        batchId: 'b1',
+        scanId: 's1',
+        decoded: _decoded,
+        sourceImage: File('src.jpg'),
+      );
+
+      for (final v in ['name_last', 'name_first', 'name_mi']) {
+        expect(queue.state.scanNameCropUploaded('b1', 's1', v), isFalse, reason: v);
+      }
+      expect(queue.state.scanNameCropUploaded('b1', 's2', 'name_last'), isTrue);
+      // Let the fire-and-forget enqueue finish writing queue.json before a second
+      // SyncQueue opens the same folder (Windows will not rename over a file that
+      // is mid-write).
+      await waitForJobs(6);
+      await settle();
+      // The cleared state was persisted, not only changed in memory.
+      final reloaded = SyncQueue(rootOverride: Directory('${tempDir.path}/queue'));
+      await reloaded.restore();
+      expect(reloaded.state.scanNameCropUploaded('b1', 's1', 'name_last'), isFalse);
+      expect(reloaded.state.scanNameCropUploaded('b1', 's2', 'name_last'), isTrue);
     },
   );
 }

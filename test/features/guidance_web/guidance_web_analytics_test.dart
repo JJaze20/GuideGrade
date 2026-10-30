@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:guidegrade/core/analytics/at_batch_analytics.dart';
 import 'package:guidegrade/core/analytics/tat_batch_analytics.dart';
 import 'package:guidegrade/core/omr/admission_category.dart';
+import 'package:guidegrade/core/omr/at_categories.dart';
 import 'package:guidegrade/core/omr/omr_templates.dart';
 import 'package:guidegrade/core/omr/qtm_result.dart';
 import 'package:guidegrade/core/omr/tat_result.dart';
@@ -15,6 +16,7 @@ import 'package:guidegrade/core/sync/sync_outcome.dart';
 import 'package:guidegrade/features/guidance_web/screens/guidance_web_analytics_view.dart';
 import 'package:guidegrade/features/guidance_web/services/guidance_web_analytics_service.dart';
 import 'package:guidegrade/models/answer_key.dart';
+import 'package:guidegrade/shared/widgets/surface_card.dart';
 
 /// Read-only stand-in for Supabase. ANY write (or an unrelated read) is
 /// recorded in [forbidden] and throws, so a test can prove Analytics never
@@ -212,12 +214,13 @@ CloudBatchRow _batch(
   String examCode, {
   String status = 'Completed',
   int day = 1,
+  String description = '',
 }) => CloudBatchRow(
   id: id,
   batchCode: 'CODE-$id',
   examCode: examCode,
   examTitle: 'Title $examCode',
-  description: '',
+  description: description,
   expectedCount: 100,
   status: status,
   createdByUid: 'uid',
@@ -315,6 +318,26 @@ CloudAnswerKeyRead _foundKey(Map<String, String> answers) =>
       updatedByName: 'Ms. Cruz',
       updatedAt: '2026-09-19T08:00:00Z',
     );
+
+/// An AT answer key answering 'A' to every one of the 72 items.
+Map<String, String> _atKeyAnswers() => {
+  for (var n = 1; n <= 72; n++) 'Answer Document|$n': 'A',
+};
+
+/// A decoded AT sheet where only items of the [right] subtests are marked 'A'
+/// (correct); every other item is marked 'B'. Subtests follow the official
+/// item mapping.
+Map<String, dynamic> _atDecoded(Set<AtCategory> right) => {
+  'examCode': 'AT',
+  'items': [
+    for (var n = 1; n <= 72; n++)
+      {
+        'sectionName': 'Answer Document',
+        'itemNumber': n,
+        'markedChoice': right.contains(officialAtCategories[n]) ? 'A' : 'B',
+      },
+  ],
+};
 
 void main() {
   late _FakeClient client;
@@ -905,7 +928,47 @@ void main() {
         expect(at.categoryDistribution[AdmissionCategory.d], 1);
         expect(at.unclassifiedCount, 0);
         expect(at.scoreDistribution[AtScoreBand.b], 2);
-        expect(client.keyReads, isEmpty); // no Answer Key read for AT
+        // Headline stats still use stored scores; the AT key is read once, only
+        // for the supplementary per-subtest averages.
+        expect(client.keyReads, {'AT': 1});
+      });
+
+      test(
+        'AT: subtest averages come from the answer key, read once',
+        () async {
+          client.keyRead = _foundKey(_atKeyAnswers());
+          client.batches.add(_batch('a1', 'AT'));
+          client.scansByBatch['a1'] = [
+            _scan('1', 'a1', 'AT', 12, decoded: _atDecoded({AtCategory.vc})),
+            _scan(
+              '2',
+              'a1',
+              'AT',
+              30,
+              decoded: _atDecoded({AtCategory.vc, AtCategory.qr}),
+            ),
+          ];
+          final r = await run('AT');
+          final averages = r.atCategoryAverages!;
+          expect(averages.examineeCount, 2);
+          expect(averages.of(AtCategory.vc).average, 12);
+          expect(averages.of(AtCategory.qr).average, 9);
+          expect(averages.of(AtCategory.vr).total, 24);
+          expect(client.keyReads, {'AT': 1});
+          // The headline statistics still use the stored raw scores.
+          expect(r.at!.averageRawScore, 21);
+        },
+      );
+
+      test('AT: no answer key means no subtest averages, nothing else '
+          'changes', () async {
+        client.batches.add(_batch('a1', 'AT'));
+        client.scansByBatch['a1'] = [
+          _scan('1', 'a1', 'AT', 50, decoded: _atDecoded({AtCategory.vc})),
+        ];
+        final r = await run('AT');
+        expect(r.atCategoryAverages, isNull);
+        expect(r.at!.averageRawScore, 50);
       });
 
       test('QTM: stored raw_score, existing eligibility and bands', () async {
@@ -1473,6 +1536,107 @@ void main() {
       });
     }
 
+    testWidgets(
+      'the batch picker shows the description first with the batch name '
+      'stuck close beside it',
+      (tester) async {
+        client.batches.add(
+          _batch('a1', 'AT', description: 'Admission Test Transferees'),
+        );
+        client.scansByBatch['a1'] = [_scan('1', 'a1', 'AT', 56)];
+        await pump(tester);
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byKey(const Key('batchFilter')));
+        await tester.pumpAndSettle();
+        final name = find.byKey(const Key('batchOptionName_a1')).last;
+        final description = find
+            .byKey(const Key('batchOptionDescription_a1'))
+            .last;
+        expect(find.text('CODE-a1 — Title AT'), findsWidgets);
+        expect(find.text('Admission Test Transferees'), findsWidgets);
+        // The description is first (left), the batch name after it (right) ...
+        final descRect = tester.getRect(description);
+        final nameRect = tester.getRect(name);
+        expect(descRect.right, lessThan(nameRect.left));
+        // ... the description starts at the left edge of the picker ...
+        final picker = tester.getRect(find.byKey(const Key('batchFilter')));
+        expect(descRect.left - picker.left, lessThan(40));
+        // ... and the two are stuck together, not pushed far apart.
+        expect(nameRect.left - descRect.right, lessThan(40));
+
+        // Choosing it: the closed field shows the same two parts.
+        await tester.tap(description);
+        await tester.pumpAndSettle();
+        expect(
+          find.descendant(
+            of: find.byKey(const Key('batchFilter')),
+            matching: find.byKey(const Key('batchOptionDescription_a1')),
+          ),
+          findsOneWidget,
+        );
+        expect(tester.takeException(), isNull);
+      },
+    );
+
+    testWidgets('a batch without a description still shows its batch name', (
+      tester,
+    ) async {
+      client.batches.add(_batch('a2', 'AT'));
+      client.scansByBatch['a2'] = [_scan('1', 'a2', 'AT', 56)];
+      await pump(tester);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('batchFilter')));
+      await tester.pumpAndSettle();
+      expect(find.text('CODE-a2 — Title AT'), findsWidgets);
+      expect(find.byKey(const Key('batchOptionDescription_a2')), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets(
+      'the filter panel is one compact row with a small refresh button',
+      (tester) async {
+        client.batches.add(_batch('a1', 'AT'));
+        client.scansByBatch['a1'] = [_scan('1', 'a1', 'AT', 56)];
+        await pump(tester);
+        tester.view.physicalSize = const Size(1440, 900);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.reset);
+        await tester.pumpAndSettle();
+
+        final exam = tester.getRect(find.byKey(const Key('examTypeFilter')));
+        final status = tester.getRect(
+          find.byKey(const Key('batchStatusFilter')),
+        );
+        final batch = tester.getRect(find.byKey(const Key('batchFilter')));
+        final refresh = tester.getRect(
+          find.byKey(const Key('analyticsRefresh')),
+        );
+
+        // Exam type, status, batch and refresh share one row ...
+        expect(status.top, closeTo(exam.top, 1));
+        expect(batch.top, closeTo(exam.top, 1));
+        expect((refresh.center.dy - exam.center.dy).abs(), lessThan(4));
+        // ... the batch field is twice as wide as the others ...
+        expect(batch.width, closeTo(exam.width * 2, 1));
+        // ... the fields are short ...
+        expect(exam.height, lessThanOrEqualTo(52));
+        // ... the refresh control is a small icon button, not a big one ...
+        expect(refresh.width, lessThanOrEqualTo(40));
+        expect(refresh.height, lessThanOrEqualTo(40));
+        // ... and the whole panel is slim.
+        final panel = find
+            .ancestor(
+              of: find.byKey(const Key('examTypeFilter')),
+              matching: find.byType(SurfaceCard),
+            )
+            .first;
+        expect(tester.getSize(panel).height, lessThanOrEqualTo(80));
+        expect(tester.takeException(), isNull);
+      },
+    );
+
     testWidgets('loading state, then AT results', (tester) async {
       client.batches.add(_batch('a1', 'AT'));
       client.scansByBatch['a1'] = [
@@ -1490,7 +1654,50 @@ void main() {
       expect(find.textContaining('Unclassified'), findsNothing);
       expect(find.text('TOTAL'), findsOneWidget);
       expect(find.text('MEDIAN'), findsOneWidget);
-      expect(client.keyReads, isEmpty);
+      expect(client.keyReads, {'AT': 1}); // supplementary subtest averages
+    });
+
+    testWidgets('AT shows a Subtest Averages chart, one bar per subtest', (
+      tester,
+    ) async {
+      client.keyRead = _foundKey(_atKeyAnswers());
+      client.batches.add(_batch('a1', 'AT'));
+      client.scansByBatch['a1'] = [
+        _scan('1', 'a1', 'AT', 12, decoded: _atDecoded({AtCategory.vc})),
+        _scan(
+          '2',
+          'a1',
+          'AT',
+          30,
+          decoded: _atDecoded({AtCategory.vc, AtCategory.qr}),
+        ),
+      ];
+      await pump(tester);
+      await tester.pumpAndSettle();
+      expect(find.text('Subtest Averages'), findsOneWidget);
+      expect(find.textContaining('Average score of 2 examinees'), findsOne);
+      for (final label in [
+        'Verbal Comprehension',
+        'Verbal Reasoning',
+        'Figural Reasoning',
+        'Quantitative Reasoning',
+      ]) {
+        expect(find.text(label), findsOneWidget);
+      }
+      expect(find.text('12.0 / 12 (100.0%)'), findsOneWidget);
+      expect(find.text('9.0 / 18 (50.0%)'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('AT without an answer key omits the Subtest Averages chart', (
+      tester,
+    ) async {
+      client.batches.add(_batch('a1', 'AT'));
+      client.scansByBatch['a1'] = [_scan('1', 'a1', 'AT', 50)];
+      await pump(tester);
+      await tester.pumpAndSettle();
+      expect(find.text('Score Distribution'), findsOneWidget);
+      expect(find.text('Subtest Averages'), findsNothing);
     });
 
     testWidgets('empty state when no batch matches', (tester) async {

@@ -8,6 +8,8 @@ import 'package:guidegrade/models/local_batch.dart';
 import 'package:guidegrade/models/batch_archive.dart';
 import 'package:guidegrade/features/guidance_web/screens/guidance_web_archive_view.dart';
 import 'package:guidegrade/features/guidance_web/services/guidance_web_archive_service.dart';
+import 'package:guidegrade/features/guidance_web/widgets/console_style.dart';
+import 'package:guidegrade/shared/widgets/surface_card.dart';
 
 class _Client implements SyncClient {
   @override
@@ -141,6 +143,56 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   }
+  testWidgets(
+    'the exam type filter shows full exam names and still filters by code',
+    (tester) async {
+      final service = _Service()
+        ..response = () async => [_entry('B-AT'), _entry('B-TAT', exam: 'TAT')];
+      await pump(tester, service);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('archiveExamFilter')));
+      await tester.pumpAndSettle();
+      expect(find.text('All Exam Types'), findsWidgets);
+      expect(find.text('Admission Test (AT)'), findsWidgets);
+      expect(find.text('Teaching Aptitude Test (TAT)'), findsWidgets);
+      expect(find.text('Qualifying Test for Mathematics (QTM)'), findsWidgets);
+
+      await tester.tap(find.text('Teaching Aptitude Test (TAT)').last);
+      await tester.pumpAndSettle();
+      expect(find.text('B-TAT'), findsOneWidget);
+      expect(find.text('B-AT'), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+  testWidgets('the filter panel is compact and the table header is green', (
+    tester,
+  ) async {
+    final service = _Service()..response = () async => [_entry('B-MORNING')];
+    await pump(tester, service);
+    await tester.pumpAndSettle();
+
+    final search = tester.getRect(find.byKey(const Key('archiveSearch')));
+    final exam = tester.getRect(find.byKey(const Key('archiveExamFilter')));
+    expect(search.height, lessThanOrEqualTo(48));
+    expect(exam.height, lessThanOrEqualTo(48));
+    expect(exam.center.dy, closeTo(search.center.dy, 2));
+    final panel = find
+        .ancestor(
+          of: find.byKey(const Key('archiveSearch')),
+          matching: find.byType(SurfaceCard),
+        )
+        .first;
+    expect(tester.getSize(panel).height, lessThanOrEqualTo(72));
+
+    // A short green header bar over the table.
+    final header = find
+        .ancestor(of: find.text('BATCH CODE'), matching: find.byType(Container))
+        .first;
+    expect(tester.widget<Container>(header).color, ConsoleColors.railGreen);
+    expect(tester.getSize(header).height, lessThanOrEqualTo(48));
+    expect(tester.takeException(), isNull);
+  });
   testWidgets('search no-match can clear filters and recover records', (
     tester,
   ) async {
