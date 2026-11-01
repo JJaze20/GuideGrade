@@ -59,6 +59,47 @@ AtCategory? atCategoryFor(AnswerKey? key, String sectionName, int itemNumber) =>
     AtCategory.fromCode(key?.categoryFor(sectionName, itemNumber)) ??
     officialAtCategories[itemNumber];
 
+/// How an Admission Test key splits the 72 items between the four subtests,
+/// counting an item with no category recorded the way scoring does: by the
+/// official mapping. The Verbal and Nonverbal totals are what the scaled score
+/// and SAI need to be right: 36 and 36.
+class AtKeySplit {
+  const AtKeySplit(this.counts);
+  final Map<AtCategory, int> counts;
+
+  int of(AtCategory c) => counts[c] ?? 0;
+  int get verbal => of(AtCategory.vc) + of(AtCategory.vr);
+  int get nonVerbal => of(AtCategory.fr) + of(AtCategory.qr);
+
+  /// Verbal 36 and Nonverbal 36.
+  bool get isBalanced => verbal == 36 && nonVerbal == 36;
+}
+
+/// The split [key] gives the sheet's 72 items. [sectionName] is the AT
+/// template's section the key's item entries are filed under.
+AtKeySplit atKeySplit(AnswerKey key, {required String sectionName}) {
+  final counts = {for (final c in AtCategory.values) c: 0};
+  for (var n = 1; n <= 72; n++) {
+    final c = atCategoryFor(key, sectionName, n);
+    if (c != null) counts[c] = counts[c]! + 1;
+  }
+  return AtKeySplit(counts);
+}
+
+/// A plain-language warning when [key] does not split the items 36 Verbal / 36
+/// Nonverbal, or null when it does. The key can still be saved: the warning is
+/// advice, because a half-finished key is a normal thing to save.
+String? atKeySplitWarning(AnswerKey key, {required String sectionName}) {
+  final split = atKeySplit(key, sectionName: sectionName);
+  if (split.isBalanced) return null;
+  return 'This key has ${split.verbal} Verbal items '
+      '(VC ${split.of(AtCategory.vc)} + VR ${split.of(AtCategory.vr)}) and '
+      '${split.nonVerbal} Nonverbal items '
+      '(FR ${split.of(AtCategory.fr)} + QR ${split.of(AtCategory.qr)}). '
+      'The Admission Test has 36 Verbal and 36 Nonverbal items. Until it is '
+      'fixed, results scored with it will not get a scaled score or SAI.';
+}
+
 class AtCategoryScore {
   final AtCategory category;
   final int right;

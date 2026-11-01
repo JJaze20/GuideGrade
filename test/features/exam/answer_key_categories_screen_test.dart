@@ -224,6 +224,61 @@ void main() {
       expect(saved.itemCategories, {'Section 1|1': 'VC', 'Section 1|2': 'VR'});
     });
 
+    testWidgets('a key that is not 36 Verbal / 36 Nonverbal warns before saving, and Go back does not save', (tester) async {
+      await open(tester, 'AT');
+      // Item 1 is Verbal Comprehension officially: file it under Figural.
+      await selectCategory(tester, 'Figural Reasoning');
+      await tester.tap(bubble(1, 'D'));
+      await tester.pump();
+
+      await tester.tap(find.text('SAVE ANSWER KEY'));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('unbalancedKeyDialog')), findsOneWidget);
+      expect(find.textContaining('35 Verbal items'), findsOneWidget);
+      expect(find.textContaining('37 Nonverbal items'), findsOneWidget);
+
+      await tester.tap(find.text('Go back'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('unbalancedKeyDialog')), findsNothing);
+      expect(find.text('SAVE ANSWER KEY'), findsOneWidget); // still editing
+      expect(appState.answerKeys['AT'], isNull);
+    });
+
+    testWidgets('Save anyway still saves the key', (tester) async {
+      await open(tester, 'AT');
+      await selectCategory(tester, 'Figural Reasoning');
+      await tester.tap(bubble(1, 'D'));
+      await tester.pump();
+
+      await tester.tap(find.text('SAVE ANSWER KEY'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Save anyway'));
+      await tester.pumpAndSettle();
+
+      final saved = appState.answerKeys['AT']!;
+      expect(saved.correctChoices, {'Section 1|1': 'D'});
+      expect(saved.itemCategories, {'Section 1|1': 'FR'});
+      expect(find.text('SAVE ANSWER KEY'), findsNothing); // screen closed
+    });
+
+    testWidgets('a balanced key saves with no warning', (tester) async {
+      await open(tester, 'AT');
+      await tester.tap(bubble(1, 'D')); // VC, its official subtest
+      await tester.pump();
+      await tester.tap(find.text('SAVE ANSWER KEY'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('unbalancedKeyDialog')), findsNothing);
+      expect(appState.answerKeys['AT'], isNotNull);
+    });
+
+    testWidgets('other exams never get the warning', (tester) async {
+      await open(tester, 'TAT');
+      await tester.tap(find.text('SAVE ANSWER KEY'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('unbalancedKeyDialog')), findsNothing);
+    });
+
     testWidgets('a saved key reopens with its assignments, locked against the selected category', (tester) async {
       await open(
         tester,

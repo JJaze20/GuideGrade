@@ -127,4 +127,57 @@ void main() {
       expect(plain.toJson().containsKey('itemCategories'), isFalse);
     });
   });
+
+  group('atKeySplit / atKeySplitWarning (Verbal 36 / Nonverbal 36)', () {
+    const section = 'Answer Document';
+
+    test('a key with no categories follows the official mapping: 36 and 36', () {
+      const key = AnswerKey(examCode: 'AT', correctChoices: {});
+      final split = atKeySplit(key, sectionName: section);
+      expect([split.of(AtCategory.vc), split.of(AtCategory.vr)], [12, 24]);
+      expect([split.of(AtCategory.fr), split.of(AtCategory.qr)], [18, 18]);
+      expect([split.verbal, split.nonVerbal], [36, 36]);
+      expect(split.isBalanced, isTrue);
+      expect(atKeySplitWarning(key, sectionName: section), isNull);
+    });
+
+    test('moving an item between the two Verbal subtests keeps 36 / 36', () {
+      // Item 2 is Verbal Reasoning officially; filing it under Verbal
+      // Comprehension changes VC / VR but not the Verbal total.
+      final key = AnswerKey(
+        examCode: 'AT',
+        correctChoices: const {},
+        itemCategories: {AnswerKey.keyFor(section, 2): 'VC'},
+      );
+      final split = atKeySplit(key, sectionName: section);
+      expect([split.of(AtCategory.vc), split.of(AtCategory.vr)], [13, 23]);
+      expect(split.isBalanced, isTrue);
+      expect(atKeySplitWarning(key, sectionName: section), isNull);
+    });
+
+    test('moving an item across Verbal / Nonverbal gives 35 / 37 and a warning', () {
+      // Item 1 is Verbal Comprehension officially; file it under Figural.
+      final key = AnswerKey(
+        examCode: 'AT',
+        correctChoices: const {},
+        itemCategories: {AnswerKey.keyFor(section, 1): 'FR'},
+      );
+      final split = atKeySplit(key, sectionName: section);
+      expect([split.verbal, split.nonVerbal], [35, 37]);
+      expect(split.isBalanced, isFalse);
+      final warning = atKeySplitWarning(key, sectionName: section)!;
+      expect(warning, contains('35 Verbal items'));
+      expect(warning, contains('37 Nonverbal items'));
+      expect(warning, contains('36 Verbal and 36 Nonverbal'));
+    });
+
+    test('entries filed under another section name are not counted', () {
+      final key = AnswerKey(
+        examCode: 'AT',
+        correctChoices: const {},
+        itemCategories: {AnswerKey.keyFor('Other Section', 1): 'FR'},
+      );
+      expect(atKeySplit(key, sectionName: section).isBalanced, isTrue);
+    });
+  });
 }

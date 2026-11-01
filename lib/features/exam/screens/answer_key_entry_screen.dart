@@ -57,6 +57,28 @@ class _AnswerKeyEntryScreenState extends State<AnswerKeyEntryScreen> {
 
   Color _colorOf(AtCategory c) => _categoryColors[c]!;
 
+  /// Warns that the categories do not split the items 36 Verbal / 36
+  /// Nonverbal. Saving is still allowed (a half-finished key is normal); true
+  /// means "save anyway".
+  Future<bool?> _confirmUnbalancedKey(String warning) => showDialog<bool>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      key: const Key('unbalancedKeyDialog'),
+      title: const Text('Check the categories'),
+      content: Text(warning),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(dialogContext, false),
+          child: const Text('Go back'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(dialogContext, true),
+          child: const Text('Save anyway'),
+        ),
+      ],
+    ),
+  );
+
   /// How many items are currently assigned to [c].
   int _assignedTo(AtCategory c) => _categories.values.where((code) => code == c.code).length;
 
@@ -170,16 +192,26 @@ class _AnswerKeyEntryScreenState extends State<AnswerKeyEntryScreen> {
                   final navigator = Navigator.of(context);
                   final messenger = ScaffoldMessenger.of(context);
 
-                  try {
-                    await appState.setAnswerKey(
-                      AnswerKey(
-                        examCode: appState.activeExamCode,
-                        correctChoices: Map.of(_selections),
-                        itemCategories: _isAt(appState)
-                            ? Map.of(_categories)
-                            : const {},
-                      ),
+                  final key = AnswerKey(
+                    examCode: appState.activeExamCode,
+                    correctChoices: Map.of(_selections),
+                    itemCategories: _isAt(appState)
+                        ? Map.of(_categories)
+                        : const {},
+                  );
+                  if (_isAt(appState)) {
+                    final warning = atKeySplitWarning(
+                      key,
+                      sectionName: template.sections.first.name,
                     );
+                    if (warning != null) {
+                      final saveAnyway = await _confirmUnbalancedKey(warning);
+                      if (saveAnyway != true) return;
+                    }
+                  }
+
+                  try {
+                    await appState.setAnswerKey(key);
                   } catch (_) {
                     messenger.showSnackBar(
                       const SnackBar(
