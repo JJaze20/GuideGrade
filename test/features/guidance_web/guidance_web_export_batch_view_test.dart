@@ -137,6 +137,7 @@ class _FakeExportService implements GuidanceWebExportService {
     required List<LocalScan> allScans,
     bool includeCertificates = false,
     Map<String, ExamineeRecord> linkedExamineeByScanId = const {},
+    Map<String, DateTime> examDateByScanId = const {},
   }) async {
     buildPdfCalls++;
     lastSelected = selected;

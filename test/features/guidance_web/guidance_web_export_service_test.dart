@@ -5,6 +5,7 @@ import 'package:guidegrade/core/sync/cloud_batch_mapper.dart';
 import 'package:guidegrade/core/sync/sync_client.dart';
 import 'package:guidegrade/core/sync/sync_job.dart';
 import 'package:guidegrade/core/sync/sync_outcome.dart';
+import 'package:guidegrade/features/guidance_web/export/guidance_web_export_models.dart';
 import 'package:guidegrade/features/guidance_web/export/guidance_web_export_pdf.dart';
 import 'package:guidegrade/features/guidance_web/export/guidance_web_export_service.dart';
 import 'package:guidegrade/features/guidance_web/services/guidance_web_analytics_service.dart';
@@ -28,6 +29,10 @@ class _FakeClient implements SyncClient {
   /// across [scansByBatch] resolves automatically, so existing tests that
   /// never mention linkage keep working unchanged.
   final Set<String> danglingExamineeIds = {};
+
+  /// Birth date / sex / last school for an examinee id, when a test wants them.
+  final Map<String, ({DateTime? birth, String? gender, String? school})>
+  examineeDetails = {};
 
   final List<String> calls = [];
 
@@ -132,6 +137,9 @@ class _FakeClient implements SyncClient {
           temporaryExamineeId: 'TMP-$id',
           firstName: 'Official-$id',
           lastName: 'Record',
+          birthDate: examineeDetails[id]?.birth,
+          gender: examineeDetails[id]?.gender,
+          lastAttendedSchool: examineeDetails[id]?.school,
           status: 'active',
           createdAt: DateTime.utc(2026, 1, 1),
           createdByUid: 'uid',
@@ -210,6 +218,7 @@ CloudScanRow _scan(
   String? examineeNumber = 'EX-1',
   int attemptNo = 1,
   Map<String, dynamic>? decoded,
+  DateTime? examDate,
   String attemptStatus = 'active',
   // Official-result filter fixture: omitted (the default) auto-links this
   // scan to its own resolvable examinee (`examinee-<id>`), so every
@@ -236,6 +245,7 @@ CloudScanRow _scan(
   examineeNumber: examineeNumber,
   attemptNo: attemptNo,
   attemptStatus: attemptStatus,
+  examDate: examDate,
   examineeId: identical(examineeId, _autoLink)
       ? 'examinee-$id'
       : examineeId as String?,
@@ -274,6 +284,67 @@ void main() {
       expect(examinee.clusterNote, contains('160 points'));
     },
   );
+
+  group('Age, sex and last school attended in the export', () {
+    setUp(() {
+      client.batches.add(_batch('b1', 'AT'));
+      client.scansByBatch['b1'] = [
+        _scan('s1', 'b1', 'AT', examDate: DateTime(2026, 11, 1)),
+        _scan('s2', 'b1', 'AT'),
+        _scan('s3', 'b1', 'AT', examDate: DateTime(2026, 11, 1)),
+      ];
+      client.examineeDetails['examinee-s1'] = (
+        birth: DateTime(2008, 2, 5),
+        gender: 'Male',
+        school: 'Marbel National High School',
+      );
+      // s2 has a birth date but its scan has no exam date.
+      client.examineeDetails['examinee-s2'] = (
+        birth: DateTime(2008, 2, 5),
+        gender: 'Female',
+        school: null,
+      );
+      // s3: nothing entered at all.
+    });
+
+    Future<Map<String, ExportExamineeSection>> sections() async {
+      final doc = await service.buildDefaultExportDocument(
+        _batchLocal('b1', 'AT'),
+      );
+      return {for (final e in doc.examinees) e.examineeId: e};
+    }
+
+    test('age is counted on the exam date; sex and school come from the record', () async {
+      final s1 = (await sections())['TMP-examinee-s1']!;
+      expect(s1.age, '18 years');
+      expect(s1.sex, 'Male');
+      expect(s1.lastSchool, 'Marbel National High School');
+    });
+
+    test('with no exam date the age is counted on the scan date and says so', () async {
+      final s2 = (await sections())['TMP-examinee-s2']!;
+      expect(s2.age, '17 years (on scan date)'); // scanned January 1, 2026
+      expect(s2.sex, 'Female');
+      expect(s2.lastSchool, '-');
+    });
+
+    test('details never entered print as a dash', () async {
+      final s3 = (await sections())['TMP-examinee-s3']!;
+      expect([s3.age, s3.sex, s3.lastSchool], ['-', '-', '-']);
+    });
+
+    test('the PDF with these fields renders', () async {
+      final doc = await service.buildDefaultExportDocument(
+        _batchLocal('b1', 'AT'),
+      );
+      final bytes = await buildExportPdf(
+        doc,
+        leftLogo: await File('assets/images/ndmu_logo.png').readAsBytes(),
+        rightLogo: await File('assets/images/guidance_council_logo.png').readAsBytes(),
+      );
+      expect(String.fromCharCodes(bytes.take(5)), '%PDF-');
+    });
+  });
 
   group('AT subtests in the export', () {
     Map<String, dynamic> decodedRight(Set<AtCategory> right) => {

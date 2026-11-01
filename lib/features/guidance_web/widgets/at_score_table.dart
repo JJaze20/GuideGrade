@@ -152,18 +152,22 @@ class AtScoreTable extends StatelessWidget {
         Table(
           key: const Key('atScoreTable'),
           columnWidths: const {
-            0: FlexColumnWidth(2.2),
-            1: FlexColumnWidth(1.4),
-            2: FlexColumnWidth(1.2),
-            3: FlexColumnWidth(1),
+            0: FlexColumnWidth(1.6),
+            1: FlexColumnWidth(1.1),
+            2: FlexColumnWidth(1.1),
+            3: FlexColumnWidth(1.6),
           },
           children: [
             TableRow(
               children: [
                 _cell('', header: true),
                 _cell('RAW SCORE', header: true, align: TextAlign.center),
-                _cell('SCALED', header: true, align: TextAlign.center),
-                _cell('SAI', header: true, align: TextAlign.center),
+                _cell('SCALED SCORE', header: true, align: TextAlign.center),
+                _cell(
+                  'SCHOOL ABILITY INDEX (SAI)',
+                  header: true,
+                  align: TextAlign.center,
+                ),
               ],
             ),
             _row('total', 'Total', profile.total),

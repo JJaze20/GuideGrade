@@ -74,6 +74,8 @@ class ExportExamineeSection {
     required this.middleName,
     required this.lastName,
     required this.age,
+    this.sex = '-',
+    this.lastSchool = '-',
     required this.scanDate,
     required this.score,
     required this.percentage,
@@ -91,6 +93,10 @@ class ExportExamineeSection {
   final String middleName;
   final String lastName;
   final String age;
+
+  /// Sex and last school attended as entered on the Examinee Record, or '-'.
+  final String sex;
+  final String lastSchool;
   final String scanDate;
   final String score;
   final String percentage;

@@ -200,6 +200,7 @@ class _GuidanceWebExportBatchViewState
   /// default (whole-batch) export already does, never the scan's own
   /// OCR/staff tag for a scan that IS linked.
   Map<String, ExamineeRecord> _linkedExaminees = {};
+  Map<String, DateTime> _examDates = {};
 
   bool _includeSummary = true;
   late bool _includeCertificates = widget.initialIncludeCertificates;
@@ -234,6 +235,7 @@ class _GuidanceWebExportBatchViewState
       setState(() {
         _scans = scans;
         _linkedExaminees = results.linkedExamineeByScanId;
+        _examDates = results.examDateByScanId;
         // Tagged scans start checked; untagged ones start unchecked — except
         // when opened from the list's "View output", which previews the
         // whole-batch export (every examinee).
@@ -288,6 +290,7 @@ class _GuidanceWebExportBatchViewState
     allScans: _officialScans,
     includeCertificates: _includeCertificates,
     linkedExamineeByScanId: _linkedExaminees,
+    examDateByScanId: _examDates,
   );
 
   void _openPreview(_Preview p) {

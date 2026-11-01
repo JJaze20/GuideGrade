@@ -809,6 +809,221 @@ void main() {
       });
     }
 
+    group('Age, sex and last school attended', () {
+      ExamineeRecord withDetails({
+        DateTime? birthDate,
+        String? gender,
+        String? school,
+      }) => ExamineeRecord(
+        id: 'e1',
+        temporaryExamineeId: 'EX-000045',
+        firstName: 'Juan',
+        lastName: 'Dela Cruz',
+        birthDate: birthDate,
+        lastAttendedSchool: school,
+        gender: gender,
+        status: 'active',
+        createdAt: DateTime.utc(2026, 1, 1),
+        createdByUid: 'uid',
+        updatedAt: DateTime.utc(2026, 1, 1),
+        updatedByUid: 'uid',
+      );
+
+      Future<void> pumpInfo(
+        WidgetTester tester, {
+        ExamineeRecord? linked,
+        DateTime? examDate,
+        bool analytics = false,
+      }) async {
+        tester.view.physicalSize = const Size(1400, 2600);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: GuidanceWebResultDetailView(
+                scan: _scan(result: _storedResult(raw: 34, graded: 72)),
+                batch: _batch(),
+                service: service,
+                onBack: () {},
+                linkedExaminee: linked,
+                examDate: examDate,
+                showClusterAnalysis: analytics,
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+      }
+
+      Finder row(String label, String value) => find.byWidgetPredicate(
+        (w) =>
+            w is Row &&
+            w.children.length == 2 &&
+            w.children.first is SizedBox &&
+            ((w.children.first as SizedBox).child is Text) &&
+            ((w.children.first as SizedBox).child as Text).data == label &&
+            (w.children.last is Expanded) &&
+            (((w.children.last as Expanded).child) is Text) &&
+            (((w.children.last as Expanded).child) as Text).data == value,
+      );
+
+      testWidgets('Examinee Information shows age on the exam date, sex and '
+          'last school', (tester) async {
+        await pumpInfo(
+          tester,
+          linked: withDetails(
+            birthDate: DateTime(2008, 2, 5),
+            gender: 'Male',
+            school: 'Marbel National High School',
+          ),
+          examDate: DateTime(2026, 11, 1),
+        );
+        expect(row('Age', '18 years'), findsOneWidget);
+        expect(row('Sex', 'Male'), findsOneWidget);
+        expect(
+          row('Last School Attended', 'Marbel National High School'),
+          findsOneWidget,
+        );
+      });
+
+      testWidgets('without an exam date the age is counted on the scan date '
+          'and says so', (tester) async {
+        await pumpInfo(
+          tester,
+          linked: withDetails(birthDate: DateTime(2008, 2, 5)),
+        );
+        expect(row('Age', '17 years (on scan date)'), findsOneWidget);
+      });
+
+      testWidgets('fields never entered show a dash, not a made-up value', (
+        tester,
+      ) async {
+        await pumpInfo(tester, linked: withDetails());
+        expect(row('Age', '—'), findsOneWidget);
+        expect(row('Sex', '—'), findsOneWidget);
+        expect(row('Last School Attended', '—'), findsOneWidget);
+      });
+
+      List<int> columnRowCounts(WidgetTester tester) {
+        final row = tester.widget<Row>(
+          find.byKey(const Key('examineeInfoColumns')),
+        );
+        return [
+          for (final child in row.children)
+            if (child is SizedBox && child.child is Column)
+              ((child.child as Column).children.length),
+        ];
+      }
+
+      testWidgets('a wide card splits Examinee Information into two columns', (
+        tester,
+      ) async {
+        await pumpInfo(
+          tester,
+          linked: withDetails(
+            birthDate: DateTime(2008, 2, 5),
+            gender: 'Male',
+            school: 'KNCHS',
+          ),
+          examDate: DateTime(2026, 11, 1),
+        );
+        // Twelve rows (with the Exam Date): six down each column.
+        expect(columnRowCounts(tester), [6, 6]);
+        expect(find.text('Exam Date'), findsOneWidget);
+        expect(find.text('Nov 1, 2026'), findsOneWidget);
+        // Reading order: down the left column, then down the right.
+        final examineeId = tester.getTopLeft(find.text('Examinee ID'));
+        final sex = tester.getTopLeft(find.text('Sex'));
+        final school = tester.getTopLeft(find.text('Last School Attended'));
+        final scanDate = tester.getTopLeft(find.text('Scan Date'));
+        expect(sex.dx, examineeId.dx); // Sex is still in the left column
+        // The columns sit close together, like the Result Summary's: the
+        // right column starts less than 450 px from the left one.
+        expect(school.dx, greaterThan(examineeId.dx + 300));
+        expect(school.dx, lessThan(examineeId.dx + 450));
+        expect(school.dy, examineeId.dy); // right column starts at the top
+        expect(scanDate.dx, school.dx);
+        expect(tester.takeException(), isNull);
+      });
+
+      testWidgets('an unlinked scan has fewer rows, still split in two', (
+        tester,
+      ) async {
+        await pumpInfo(tester);
+        // Examinee ID, three names, Exam Type, Batch, Scan Date: 4 + 3.
+        expect(columnRowCounts(tester), [4, 3]);
+      });
+
+      testWidgets('Exam Date shows a dash until it is entered', (tester) async {
+        await pumpInfo(tester, linked: withDetails());
+        expect(row('Exam Date', '—'), findsOneWidget);
+      });
+
+      testWidgets('Exam Date is only for the Admission Test', (tester) async {
+        tester.view.physicalSize = const Size(1400, 2600);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: GuidanceWebResultDetailView(
+                scan: _scan(
+                  examCode: 'QTM',
+                  result: _storedResult(raw: 40, graded: 60, total: 60),
+                ),
+                batch: _batch(examCode: 'QTM'),
+                service: service,
+                onBack: () {},
+                linkedExaminee: withDetails(),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('Exam Date'), findsNothing);
+        expect(columnRowCounts(tester), [6, 5]);
+      });
+
+      testWidgets('a narrow card keeps a single column', (tester) async {
+        await pumpInfo(tester, linked: withDetails());
+        tester.view.physicalSize = const Size(600, 2600);
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('examineeInfoColumns')), findsNothing);
+        expect(find.text('Last School Attended'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      });
+
+      testWidgets('an unlinked scan has no such rows', (tester) async {
+        await pumpInfo(tester);
+        expect(find.text('Sex'), findsNothing);
+        expect(find.text('Last School Attended'), findsNothing);
+      });
+
+      testWidgets('Examinee Analytics shows them in the examinee card', (
+        tester,
+      ) async {
+        await pumpInfo(
+          tester,
+          analytics: true,
+          linked: withDetails(
+            birthDate: DateTime(2008, 2, 5),
+            gender: 'Female',
+            school: 'Marbel NHS',
+          ),
+          examDate: DateTime(2026, 11, 1),
+        );
+        expect(find.text('Age'), findsOneWidget);
+        expect(find.text('18 years'), findsOneWidget);
+        expect(find.text('Sex'), findsOneWidget);
+        expect(find.text('Female'), findsOneWidget);
+        expect(find.text('Last School Attended'), findsOneWidget);
+        expect(find.text('Marbel NHS'), findsOneWidget);
+      });
+    });
+
     group('Scaled score and SAI card (Admission Test)', () {
       const atSection = 'Answer Document';
 
@@ -913,7 +1128,11 @@ void main() {
           linked: examinee(birthDate: DateTime(2008, 2, 5)),
           examDate: DateTime(2026, 11, 1),
         );
-        expect(find.text('SCALED SCORE AND SAI'), findsOneWidget);
+        expect(find.text('SCALED SCORE AND SCHOOL ABILITY INDEX (SAI)'), findsOneWidget);
+        // Column headings spell the names out in full.
+        expect(find.text('RAW SCORE'), findsOneWidget);
+        expect(find.text('SCALED SCORE'), findsOneWidget);
+        expect(find.text('SCHOOL ABILITY INDEX (SAI)'), findsOneWidget);
         expect(cell('total', 'raw', '34 / 72'), findsOneWidget);
         expect(cell('total', 'scaled', '637'), findsOneWidget);
         expect(cell('total', 'sai', '89'), findsOneWidget);
@@ -1012,7 +1231,7 @@ void main() {
 
       testWidgets('other exams do not get the card', (tester) async {
         await pumpCard(tester, examCode: 'QTM', linked: examinee());
-        expect(find.text('SCALED SCORE AND SAI'), findsNothing);
+        expect(find.text('SCALED SCORE AND SCHOOL ABILITY INDEX (SAI)'), findsNothing);
       });
 
       testWidgets('Examinee Analytics shows the same card', (tester) async {
@@ -1022,7 +1241,7 @@ void main() {
           linked: examinee(birthDate: DateTime(2008, 2, 5)),
           examDate: DateTime(2026, 11, 1),
         );
-        expect(find.text('SCALED SCORE AND SAI'), findsOneWidget);
+        expect(find.text('SCALED SCORE AND SCHOOL ABILITY INDEX (SAI)'), findsOneWidget);
         expect(cell('total', 'sai', '89'), findsOneWidget);
       });
     });

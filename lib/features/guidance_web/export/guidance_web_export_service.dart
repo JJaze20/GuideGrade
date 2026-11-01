@@ -13,6 +13,7 @@ import '../../../core/omr/tat_category.dart';
 import '../../../models/answer_key.dart';
 import '../../../models/examinee_record.dart';
 import '../../../models/local_batch.dart';
+import '../services/applicant_info.dart';
 import '../services/guidance_web_analytics_service.dart';
 import '../services/guidance_web_results_service.dart';
 import 'guidance_web_certificate.dart';
@@ -98,6 +99,7 @@ class GuidanceWebExportService {
     required List<LocalScan> allScans,
     bool includeCertificates = false,
     Map<String, ExamineeRecord> linkedExamineeByScanId = const {},
+    Map<String, DateTime> examDateByScanId = const {},
   }) async {
     AnswerKey? key;
     try {
@@ -137,6 +139,7 @@ class GuidanceWebExportService {
           key,
           includeCertificates,
           linkedExamineeByScanId[s.id]!,
+          examDateByScanId[s.id],
         ),
     ];
     return ExportDocument(batch: section, examinees: examinees);
@@ -151,6 +154,7 @@ class GuidanceWebExportService {
     required List<LocalScan> allScans,
     bool includeCertificates = false,
     Map<String, ExamineeRecord> linkedExamineeByScanId = const {},
+    Map<String, DateTime> examDateByScanId = const {},
   }) async {
     final document = await buildExportDocument(
       batch: batch,
@@ -159,6 +163,7 @@ class GuidanceWebExportService {
       allScans: allScans,
       includeCertificates: includeCertificates,
       linkedExamineeByScanId: linkedExamineeByScanId,
+      examDateByScanId: examDateByScanId,
     );
 
     final left = (await rootBundle.load(
@@ -207,6 +212,7 @@ class GuidanceWebExportService {
       allScans: officialScans,
       includeCertificates: includeCertificates,
       linkedExamineeByScanId: results.linkedExamineeByScanId,
+      examDateByScanId: results.examDateByScanId,
     );
   }
 
@@ -468,8 +474,8 @@ class GuidanceWebExportService {
     AnswerKey? key,
     bool includeCertificates,
     ExamineeRecord linked,
+    DateTime? examDate,
   ) {
-    final e = scan.examinee;
     final result = scan.result;
     final denominator = batch.examCode == 'TAT'
         ? 160
@@ -491,16 +497,14 @@ class GuidanceWebExportService {
     }
 
     String dash(String? v) => (v == null || v.trim().isEmpty) ? '-' : v.trim();
-    final examDate = ExamineeInfo.examDateFor(
-      scanCapturedAt: scan.capturedAt,
-      batchCreatedAt: batch.createdAt,
+    // Age, sex and last school come from the official Examinee Record
+    // (entered on the Web Console), never from the OCR/staff tag. The age is
+    // counted on the exam date, or on the scan date when none was entered.
+    final applicant = applicantInfoFor(
+      examinee: linked,
+      examDate: examDate,
+      scanDate: scan.capturedAt,
     );
-    // Age has no established official-record input source yet (see
-    // ExamineeRecord's own class doc comment) -- kept from the OCR/staff tag.
-    // This is demographic data, not identity, and is unaffected by the
-    // official-identity rule: the examinee ID/name/certificate name below
-    // never do this.
-    final age = e?.ageOn(examDate);
 
     return ExportExamineeSection(
       examLabel: examTypeDisplayLabel(batch.examCode),
@@ -509,7 +513,9 @@ class GuidanceWebExportService {
       firstName: dash(linked.firstName),
       middleName: dash(linked.middleName),
       lastName: dash(linked.lastName),
-      age: age == null ? '-' : '$age',
+      age: dash(applicant.ageText),
+      sex: dash(applicant.sex),
+      lastSchool: dash(applicant.school),
       scanDate: _date(scan.capturedAt),
       score: result == null ? '-' : '${result.rawScore} / $denominator',
       percentage: result == null

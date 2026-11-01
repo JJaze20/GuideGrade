@@ -22,8 +22,10 @@ import '../../../core/omr/tat_result.dart';
 import '../../../models/answer_key.dart';
 import '../../../models/examinee_record.dart';
 import '../../../models/local_batch.dart';
+import '../services/applicant_info.dart';
 import '../services/guidance_web_results_service.dart';
 import '../widgets/at_score_table.dart';
+import '../widgets/examinee_details_fields.dart' show formatDetailDate;
 import 'guidance_web_cluster_radar.dart';
 
 /// Which outcome an [ScoredItem] should be rendered as in the Answer
@@ -663,6 +665,14 @@ class _GuidanceWebResultDetailViewState
                 _analyticsFact('Name', _dash(name)),
                 _analyticsFact('Exam', _examTitle()),
                 _analyticsFact('Batch', widget.batch.batchCode),
+                if (widget.linkedExaminee != null) ...[
+                  _analyticsFact('Age', _dash(_applicant.ageText)),
+                  _analyticsFact('Sex', _dash(_applicant.sex)),
+                  _analyticsFact(
+                    'Last School Attended',
+                    _dash(_applicant.school),
+                  ),
+                ],
               ]);
               final summaryCard = _card('RESULT SUMMARY', [
                 Wrap(
@@ -857,20 +867,84 @@ class _GuidanceWebResultDetailViewState
       scan: widget.scan,
       linkedExaminee: widget.linkedExaminee,
     );
-    return _card('EXAMINEE INFORMATION', [
-      if (!identity.fromCanonicalExaminee) _unverifiedIdentityNotice(),
+    final rows = [
       _infoRow('Examinee ID', _dash(identity.examineeId)),
       _infoRow('First Name', _dash(identity.firstName)),
       _infoRow('Middle Name', _dash(identity.middleName)),
       _infoRow('Last Name', _dash(identity.lastName)),
+      // Age, sex and last school come from the examinee's own record, so they
+      // only exist for a linked scan.
+      if (identity.fromCanonicalExaminee) ..._applicantInfoRows(),
       // The scan's own generated number, kept apart from the canonical
       // Examinee ID above (only shown when the canonical record is the source).
       if (identity.fromCanonicalExaminee)
         _infoRow('Scan ID', _dash(identity.scanId)),
       _infoRow('Exam Type', _examTitle()),
       _infoRow('Batch', widget.batch.batchCode),
+      // The day this Admission Test sitting was taken (entered on the Web
+      // Console, saved on the scan) -- distinct from the scan date below.
+      if (identity.fromCanonicalExaminee && widget.batch.examCode == 'AT')
+        _infoRow(
+          'Exam Date',
+          widget.examDate == null ? '—' : formatDetailDate(widget.examDate!),
+        ),
       _infoRow('Scan Date', _fmtDateTime(widget.scan.capturedAt)),
+    ];
+    return _card('EXAMINEE INFORMATION', [
+      if (!identity.fromCanonicalExaminee) _unverifiedIdentityNotice(),
+      _twoColumns(rows),
     ]);
+  }
+
+  /// [rows] in two columns (the first gets the extra row when the count is
+  /// odd) on a wide card, one column on a narrow one. Reading order is kept:
+  /// down the left column, then down the right. The columns sit close
+  /// together at the left, like the Result Summary's, instead of being
+  /// stretched across the card.
+  static const double _infoColumnWidth = 380;
+  static const double _infoColumnGap = 24;
+
+  Widget _twoColumns(List<Widget> rows) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < _infoColumnWidth * 2 + _infoColumnGap ||
+            rows.length < 2) {
+          return Column(children: rows);
+        }
+        final split = (rows.length + 1) ~/ 2;
+        return Row(
+          key: const Key('examineeInfoColumns'),
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: _infoColumnWidth,
+              child: Column(children: rows.sublist(0, split)),
+            ),
+            const SizedBox(width: _infoColumnGap),
+            SizedBox(
+              width: _infoColumnWidth,
+              child: Column(children: rows.sublist(split)),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  ApplicantInfo get _applicant => applicantInfoFor(
+    examinee: widget.linkedExaminee,
+    examDate: widget.examDate,
+    scanDate: widget.scan.capturedAt,
+  );
+
+  /// Age, Sex and Last School Attended for the Examinee Information card.
+  List<Widget> _applicantInfoRows() {
+    final info = _applicant;
+    return [
+      _infoRow('Age', _dash(info.ageText)),
+      _infoRow('Sex', _dash(info.sex)),
+      _infoRow('Last School Attended', _dash(info.school)),
+    ];
   }
 
   /// Shown whenever [WebExamineeIdentity.fromCanonicalExaminee] is false.
@@ -930,7 +1004,7 @@ class _GuidanceWebResultDetailViewState
     );
     return [
       const SizedBox(height: 16),
-      _card('SCALED SCORE AND SAI', [
+      _card('SCALED SCORE AND SCHOOL ABILITY INDEX (SAI)', [
         AtScoreTable(
           profile: profile,
           hasLinkedExaminee: widget.linkedExaminee != null,

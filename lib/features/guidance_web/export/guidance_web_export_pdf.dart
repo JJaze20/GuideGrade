@@ -492,6 +492,9 @@ pw.Widget _examineePage(
                   ('First Name', s.firstName),
                   ('Middle Name', s.middleName),
                   ('Last Name', s.lastName),
+                  ('Age', s.age),
+                  ('Sex', s.sex),
+                  ('Last School Attended', s.lastSchool),
                   ('Scan Date', s.scanDate),
                 ])
                   pw.Padding(
