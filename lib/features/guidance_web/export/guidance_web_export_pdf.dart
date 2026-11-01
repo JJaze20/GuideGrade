@@ -119,6 +119,11 @@ pw.Widget _hr() => pw.Padding(
   child: pw.Container(height: 1.5, color: _rule),
 );
 
+pw.Widget _hrTight() => pw.Padding(
+  padding: const pw.EdgeInsets.symmetric(vertical: 5),
+  child: pw.Container(height: 1.5, color: _rule),
+);
+
 pw.Widget _h1(String t) => pw.Text(t, style: _s(15, bold: true));
 
 pw.Widget _labelValue(String label, String value) => pw.RichText(
@@ -329,7 +334,7 @@ pw.Widget _check(PdfColor color) => pw.SizedBox(
 pw.Widget _cell(pw.Widget child, {pw.Alignment align = pw.Alignment.center}) =>
     pw.Container(
       alignment: align,
-      padding: const pw.EdgeInsets.symmetric(vertical: 4, horizontal: 3),
+      padding: const pw.EdgeInsets.symmetric(vertical: 2.5, horizontal: 3),
       child: child,
     );
 
@@ -413,14 +418,77 @@ pw.Widget _clusterTable(List<ClusterRow> rows) {
   );
 }
 
+pw.Widget _scaledScoreTable(ExportScaledScores scores) {
+  pw.Widget head(String t, {pw.Alignment a = pw.Alignment.center}) => _cell(
+    pw.Text(t, style: _s(8.5, bold: true, color: _muted)),
+    align: a,
+  );
+  return pw.Column(
+    crossAxisAlignment: pw.CrossAxisAlignment.start,
+    children: [
+      pw.Table(
+        columnWidths: const {
+          0: pw.FlexColumnWidth(2),
+          1: pw.FlexColumnWidth(1.5),
+          2: pw.FlexColumnWidth(1.5),
+          3: pw.FlexColumnWidth(2.6),
+        },
+        border: const pw.TableBorder(
+          horizontalInside: pw.BorderSide(color: _rule, width: 0.5),
+          bottom: pw.BorderSide(color: _rule, width: 0.5),
+        ),
+        children: [
+          pw.TableRow(
+            decoration: const pw.BoxDecoration(
+              border: pw.Border(
+                bottom: pw.BorderSide(color: _rule, width: 0.8),
+              ),
+            ),
+            children: [
+              head('', a: pw.Alignment.centerLeft),
+              head('RAW SCORE'),
+              head('SCALED SCORE'),
+              head('SCHOOL ABILITY INDEX (SAI)'),
+            ],
+          ),
+          for (final r in scores.rows)
+            pw.TableRow(
+              children: [
+                _cell(
+                  pw.Text(r.label, style: _s(9.5, bold: true)),
+                  align: pw.Alignment.centerLeft,
+                ),
+                _cell(pw.Text(_clean(r.raw), style: _s(9.5))),
+                _cell(pw.Text(_clean(r.scaled), style: _s(9.5))),
+                _cell(pw.Text(_clean(r.sai), style: _s(9.5, bold: true))),
+              ],
+            ),
+        ],
+      ),
+      if (scores.basis != null) ...[
+        pw.SizedBox(height: 5),
+        pw.Text(_clean(scores.basis!), style: _s(8.5, color: _muted)),
+      ],
+      if (scores.dates != null) ...[
+        pw.SizedBox(height: 2),
+        pw.Text(_clean(scores.dates!), style: _s(8.5, color: _muted)),
+      ],
+      if (scores.note != null) ...[
+        pw.SizedBox(height: 4),
+        pw.Text(_clean(scores.note!), style: _s(8.5, bold: true)),
+      ],
+    ],
+  );
+}
+
 pw.Widget _categoryList(ExportExamineeSection s) {
   return pw.Column(
     crossAxisAlignment: pw.CrossAxisAlignment.start,
     children: [
       for (final b in s.categoryBands)
         pw.Container(
-          margin: const pw.EdgeInsets.symmetric(vertical: 3),
-          padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+          margin: const pw.EdgeInsets.symmetric(vertical: 2),
+          padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 3.5),
           decoration: b.letter == s.categoryLetter
               ? pw.BoxDecoration(
                   color: const PdfColor.fromInt(0xFFE8F5E9),
@@ -459,6 +527,41 @@ pw.Widget _categoryList(ExportExamineeSection s) {
   );
 }
 
+/// The examinee's details in two columns (the first takes the extra field),
+/// so the page leaves room for the score tables and the category list.
+pw.Widget _examineeFields(ExportExamineeSection s) {
+  final fields = [
+    ('Examinee Id', s.examineeId),
+    ('First Name', s.firstName),
+    ('Middle Name', s.middleName),
+    ('Last Name', s.lastName),
+    ('Age', s.age),
+    ('Sex', s.sex),
+    ('Last School Attended', s.lastSchool),
+    if (s.examDate != null) ('Exam Date', s.examDate!),
+    ('Scan Date', s.scanDate),
+  ];
+  final split = (fields.length + 1) ~/ 2;
+  pw.Widget column(List<(String, String)> items) => pw.Column(
+    crossAxisAlignment: pw.CrossAxisAlignment.start,
+    children: [
+      for (final f in items)
+        pw.Padding(
+          padding: const pw.EdgeInsets.symmetric(vertical: 2),
+          child: _field(f.$1, f.$2),
+        ),
+    ],
+  );
+  return pw.Row(
+    crossAxisAlignment: pw.CrossAxisAlignment.start,
+    children: [
+      pw.Expanded(child: column(fields.sublist(0, split))),
+      pw.SizedBox(width: 12),
+      pw.Expanded(child: column(fields.sublist(split))),
+    ],
+  );
+}
+
 pw.Widget _examineePage(
   ExportExamineeSection s,
   pw.ImageProvider left,
@@ -478,53 +581,29 @@ pw.Widget _examineePage(
         ],
       ),
       pw.SizedBox(height: 16),
+      pw.Text('Examinee Information', style: _s(11, bold: true)),
+      pw.SizedBox(height: 6),
+      _examineeFields(s),
+      pw.SizedBox(height: 8),
       pw.Row(
         crossAxisAlignment: pw.CrossAxisAlignment.start,
         children: [
           pw.Expanded(
-            child: pw.Column(
-              crossAxisAlignment: pw.CrossAxisAlignment.start,
-              children: [
-                pw.Text('Examinee Information', style: _s(11, bold: true)),
-                pw.SizedBox(height: 6),
-                for (final f in [
-                  ('Examinee Id', s.examineeId),
-                  ('First Name', s.firstName),
-                  ('Middle Name', s.middleName),
-                  ('Last Name', s.lastName),
-                  ('Age', s.age),
-                  ('Sex', s.sex),
-                  ('Last School Attended', s.lastSchool),
-                  ('Scan Date', s.scanDate),
-                ])
-                  pw.Padding(
-                    padding: const pw.EdgeInsets.symmetric(vertical: 2.5),
-                    child: _field(f.$1, f.$2),
-                  ),
-              ],
-            ),
+            flex: 3,
+            child: pw.Text('Result Summary', style: _s(11, bold: true)),
           ),
-          pw.Expanded(
-            child: pw.Column(
-              crossAxisAlignment: pw.CrossAxisAlignment.start,
-              children: [
-                pw.Text('Result Summary', style: _s(11, bold: true)),
-                pw.SizedBox(height: 6),
-                pw.Padding(
-                  padding: const pw.EdgeInsets.symmetric(vertical: 2.5),
-                  child: _field('Score', s.score),
-                ),
-                pw.Padding(
-                  padding: const pw.EdgeInsets.symmetric(vertical: 2.5),
-                  child: _field('Percentage', s.percentage),
-                ),
-              ],
-            ),
-          ),
+          pw.Expanded(flex: 3, child: _field('Score', s.score)),
+          pw.Expanded(flex: 4, child: _field('Percentage', s.percentage)),
         ],
       ),
+      if (s.scaledScores != null) ...[
+        _hrTight(),
+        _h1('Scaled Score and School Ability Index (SAI):'),
+        pw.SizedBox(height: 8),
+        _scaledScoreTable(s.scaledScores!),
+      ],
       if (s.clusterRows != null) ...[
-        _hr(),
+        _hrTight(),
         _h1('Cluster Analysis:'),
         pw.SizedBox(height: 8),
         _clusterTable(s.clusterRows!),
@@ -533,7 +612,7 @@ pw.Widget _examineePage(
           pw.Text(_clean(s.clusterNote!), style: _s(8, color: _muted)),
         ],
       ],
-      _hr(),
+      _hrTight(),
       _h1('Category:'),
       pw.SizedBox(height: 6),
       _categoryList(s),

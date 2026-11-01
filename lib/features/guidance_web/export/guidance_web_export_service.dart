@@ -5,6 +5,8 @@ import 'package:flutter/services.dart' show rootBundle;
 
 import '../../../core/constants/exam_catalog.dart';
 import '../../../core/omr/admission_category.dart';
+import '../../../core/omr/at_categories.dart';
+import '../../../core/omr/at_sai.dart';
 import '../../../core/omr/cluster_analysis.dart';
 import '../../../core/omr/omr_scorer.dart';
 import '../../../core/omr/qtm_category.dart';
@@ -18,6 +20,7 @@ import '../services/guidance_web_analytics_service.dart';
 import '../services/guidance_web_results_service.dart';
 import 'guidance_web_certificate.dart';
 import 'guidance_web_export_models.dart';
+import 'at_score_export.dart';
 import 'guidance_web_export_pdf.dart';
 import 'tat_export_clusters.dart';
 
@@ -506,6 +509,28 @@ class GuidanceWebExportService {
       scanDate: scan.capturedAt,
     );
 
+    // Admission Test: raw -> scaled -> SAI for Total / Verbal / Nonverbal from
+    // the same sheet answers the rest of this page is scored from.
+    ExportScaledScores? scaledScores;
+    if (batch.examCode == 'AT' && key != null && result != null) {
+      final categoryScores = computeAtCategoryScores(
+        scoreOmrResult(scan.effectiveDecoded, key).items,
+        key,
+      );
+      if (categoryScores != null) {
+        scaledScores = buildExportScaledScores(
+          computeAtScoreProfile(
+            categoryScores,
+            birthDate: linked.birthDate,
+            examDate: examDate,
+          ),
+          birthDate: linked.birthDate,
+          examDate: examDate,
+          formatDate: _date,
+        );
+      }
+    }
+
     return ExportExamineeSection(
       examLabel: examTypeDisplayLabel(batch.examCode),
       batchLabel: _batchLabel(batch),
@@ -516,6 +541,10 @@ class GuidanceWebExportService {
       age: dash(applicant.ageText),
       sex: dash(applicant.sex),
       lastSchool: dash(applicant.school),
+      examDate: batch.examCode == 'AT'
+          ? (examDate == null ? '-' : _date(examDate))
+          : null,
+      scaledScores: scaledScores,
       scanDate: _date(scan.capturedAt),
       score: result == null ? '-' : '${result.rawScore} / $denominator',
       percentage: result == null

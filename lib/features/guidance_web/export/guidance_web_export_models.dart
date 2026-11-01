@@ -64,6 +64,44 @@ class ExportBatchSection {
   final String? unavailableNote;
 }
 
+/// One printed row of the scaled-score table: raw score, scaled score and SAI
+/// for one of Total / Verbal / Nonverbal, already formatted ('-' when not
+/// given).
+class ExportScoreRow {
+  const ExportScoreRow({
+    required this.label,
+    required this.raw,
+    required this.scaled,
+    required this.sai,
+  });
+  final String label;
+  final String raw;
+  final String scaled;
+  final String sai;
+}
+
+/// The Admission Test "Scaled Score and School Ability Index (SAI)" block of
+/// an examinee page: the three rows plus the lines that say how they were
+/// reached or why the SAI is missing.
+class ExportScaledScores {
+  const ExportScaledScores({
+    required this.rows,
+    this.basis,
+    this.dates,
+    this.note,
+  });
+  final List<ExportScoreRow> rows;
+
+  /// "Age on the exam date: 18 years 8 months - Table 24, 6-8 months".
+  final String? basis;
+
+  /// "Born February 5, 2008 - Exam November 1, 2026".
+  final String? dates;
+
+  /// Why the SAI is not given, or the raw-score-0 remark.
+  final String? note;
+}
+
 /// One page per examinee: Examinee Analytics.
 class ExportExamineeSection {
   const ExportExamineeSection({
@@ -76,6 +114,8 @@ class ExportExamineeSection {
     required this.age,
     this.sex = '-',
     this.lastSchool = '-',
+    this.examDate,
+    this.scaledScores,
     required this.scanDate,
     required this.score,
     required this.percentage,
@@ -97,6 +137,13 @@ class ExportExamineeSection {
   /// Sex and last school attended as entered on the Examinee Record, or '-'.
   final String sex;
   final String lastSchool;
+
+  /// The day this Admission Test sitting was taken, or '-' when not entered;
+  /// null for other exams (the row is then not printed).
+  final String? examDate;
+
+  /// Admission Test only; null for other exams or when nothing was graded.
+  final ExportScaledScores? scaledScores;
   final String scanDate;
   final String score;
   final String percentage;

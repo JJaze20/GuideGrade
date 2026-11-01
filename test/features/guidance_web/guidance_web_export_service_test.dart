@@ -251,6 +251,35 @@ CloudScanRow _scan(
       : examineeId as String?,
 );
 
+/// Juan Dela Cruz's sheet: VC 6, VR 11, FR 7, QR 10 right (official item
+/// mapping), every answer key entry being 'A'.
+Map<String, dynamic> _juanSheet() {
+  final budget = {
+    AtCategory.vc: 6,
+    AtCategory.vr: 11,
+    AtCategory.fr: 7,
+    AtCategory.qr: 10,
+  };
+  return {
+    'examCode': 'AT',
+    'items': [
+      for (var n = 1; n <= 72; n++)
+        {
+          'sectionName': 'Answer Document',
+          'itemNumber': n,
+          'markedChoice': () {
+            final c = officialAtCategories[n]!;
+            if (budget[c]! > 0) {
+              budget[c] = budget[c]! - 1;
+              return 'A';
+            }
+            return 'B';
+          }(),
+        },
+    ],
+  };
+}
+
 LocalBatch _batchLocal(String id, String examCode) =>
     mapCloudBatch(_batch(id, examCode));
 
@@ -287,11 +316,29 @@ void main() {
 
   group('Age, sex and last school attended in the export', () {
     setUp(() {
+      client.keyRead = CloudAnswerKeyRead.found(
+        version: 1,
+        answers: {for (var n = 1; n <= 72; n++) 'Answer Document|$n': 'A'},
+        updatedByName: 'Officer',
+        updatedAt: '2026-01-01T00:00:00Z',
+      );
       client.batches.add(_batch('b1', 'AT'));
       client.scansByBatch['b1'] = [
-        _scan('s1', 'b1', 'AT', examDate: DateTime(2026, 11, 1)),
-        _scan('s2', 'b1', 'AT'),
-        _scan('s3', 'b1', 'AT', examDate: DateTime(2026, 11, 1)),
+        _scan(
+          's1',
+          'b1',
+          'AT',
+          examDate: DateTime(2026, 11, 1),
+          decoded: _juanSheet(),
+        ),
+        _scan('s2', 'b1', 'AT', decoded: _juanSheet()),
+        _scan(
+          's3',
+          'b1',
+          'AT',
+          examDate: DateTime(2026, 11, 1),
+          decoded: _juanSheet(),
+        ),
       ];
       client.examineeDetails['examinee-s1'] = (
         birth: DateTime(2008, 2, 5),
@@ -331,6 +378,50 @@ void main() {
     test('details never entered print as a dash', () async {
       final s3 = (await sections())['TMP-examinee-s3']!;
       expect([s3.age, s3.sex, s3.lastSchool], ['-', '-', '-']);
+    });
+
+    test('Exam Date is printed for the Admission Test, a dash when not entered', () async {
+      final all = await sections();
+      expect(all['TMP-examinee-s1']!.examDate, 'November 1, 2026');
+      expect(all['TMP-examinee-s2']!.examDate, '-');
+    });
+
+    test('the scaled score and SAI table is filled in for Juan (specification example)', () async {
+      final scores = (await sections())['TMP-examinee-s1']!.scaledScores!;
+      expect(scores.rows.map((r) => r.label), ['Total', 'Verbal', 'Nonverbal']);
+      expect(scores.rows.map((r) => r.raw), ['34 / 72', '17 / 36', '17 / 36']);
+      expect(scores.rows.map((r) => r.scaled), ['637', '645', '630']);
+      expect(scores.rows.map((r) => r.sai), ['89', '92', '89']);
+      expect(
+        scores.basis,
+        'Age on the exam date: 18 years 8 months - Table 24, 6-8 months',
+      );
+      expect(scores.dates, 'Born February 5, 2008 - Exam November 1, 2026');
+      expect(scores.note, isNull);
+    });
+
+    test('without an exam date the scaled scores print but the SAI says why not', () async {
+      final scores = (await sections())['TMP-examinee-s2']!.scaledScores!;
+      expect(scores.rows.map((r) => r.scaled), ['637', '645', '630']);
+      expect(scores.rows.map((r) => r.sai), ['-', '-', '-']);
+      expect(scores.basis, isNull);
+      expect(scores.note, 'SAI not given: the exam date has not been entered.');
+    });
+
+    test('without a birth date the note says so and the exam date is still shown', () async {
+      final scores = (await sections())['TMP-examinee-s3']!.scaledScores!;
+      expect(scores.note, 'SAI not given: the birth date has not been entered.');
+      expect(scores.dates, 'Exam November 1, 2026');
+      expect(scores.rows.map((r) => r.sai), ['-', '-', '-']);
+    });
+
+    test('other exams get no scaled score block and no exam date row', () async {
+      client.batches.add(_batch('q1', 'QTM'));
+      client.scansByBatch['q1'] = [_scan('q-s1', 'q1', 'QTM')];
+      final doc = await service.buildDefaultExportDocument(_batchLocal('q1', 'QTM'));
+      final section = doc.examinees.single;
+      expect(section.scaledScores, isNull);
+      expect(section.examDate, isNull);
     });
 
     test('the PDF with these fields renders', () async {
