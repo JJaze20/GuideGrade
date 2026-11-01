@@ -7,6 +7,7 @@ import '../../../models/examinee_record.dart';
 import '../../../models/local_batch.dart';
 import '../services/guidance_web_examinee_records_service.dart';
 import '../services/guidance_web_results_service.dart';
+import '../widgets/examinee_details_fields.dart';
 import 'guidance_web_result_detail_view.dart';
 
 /// The checklist/history exam types, in the order the spec's own example
@@ -140,11 +141,27 @@ class _GuidanceWebExamineeDetailViewState extends State<GuidanceWebExamineeDetai
   Future<void> _openEditDialog() async {
     final updated = await showDialog<ExamineeRecord>(
       context: context,
-      builder: (_) => _ExamineeNameEditDialog(service: widget.service, examinee: _examinee),
+      builder: (_) => _ExamineeNameEditDialog(
+        service: widget.service,
+        examinee: _examinee,
+        atItem: _activeAtItem,
+      ),
     );
     if (updated == null || !mounted) return;
     setState(() => _examinee = updated);
     widget.onExamineeUpdated(updated);
+    // The exam date lives on the scan: reload so the history shows it.
+    _loadHistory();
+  }
+
+  /// The examinee's current (not archived) Admission Test sitting, whose exam
+  /// date the edit dialog can correct; null when there is none. A retake's
+  /// earlier attempt is archived and keeps the date it was taken on.
+  ExamineeHistoryItem? get _activeAtItem {
+    for (final item in _history) {
+      if (item.examCode == 'AT' && !item.isArchivedAttempt) return item;
+    }
+    return null;
   }
 
   Future<void> _toggleArchive() async {
@@ -688,15 +705,28 @@ class _GuidanceWebExamineeDetailViewState extends State<GuidanceWebExamineeDetai
   String _formatDate(DateTime d) => '${_months[d.month - 1]} ${d.day}, ${d.year}';
 }
 
-/// Name-only correction (OCR misread fix) — the only kind of edit Guidance
-/// Council can make. The Temporary Examinee ID is shown but not editable;
-/// there is no Birth Date, Last Attended School, or Official Student ID
-/// field here at all (none has an established source yet).
+/// Edit Examinee: the name correction (OCR misread fix) plus the applicant
+/// details the Guidance Council enters -- birth date, last school attended and
+/// gender, and, for the current Admission Test sitting, its exam date. The
+/// Temporary Examinee ID is shown but never editable.
+///
+/// The exam date belongs to the scan (this sitting), so a retake keeps its
+/// own date: only the current, non-archived Admission Test attempt
+/// ([atItem]) is offered here.
+///
+/// Three small writes in order -- name, then details, then the exam date.
+/// The exam date is only written when it changed. If a later one fails the
+/// earlier ones are already saved, and the message says so.
 class _ExamineeNameEditDialog extends StatefulWidget {
-  const _ExamineeNameEditDialog({required this.service, required this.examinee});
+  const _ExamineeNameEditDialog({
+    required this.service,
+    required this.examinee,
+    this.atItem,
+  });
 
   final GuidanceWebExamineeRecordsService service;
   final ExamineeRecord examinee;
+  final ExamineeHistoryItem? atItem;
 
   @override
   State<_ExamineeNameEditDialog> createState() => _ExamineeNameEditDialogState();
@@ -707,6 +737,12 @@ class _ExamineeNameEditDialogState extends State<_ExamineeNameEditDialog> {
   late final TextEditingController _firstName = TextEditingController(text: widget.examinee.firstName);
   late final TextEditingController _middleName = TextEditingController(text: widget.examinee.middleName ?? '');
   late final TextEditingController _lastName = TextEditingController(text: widget.examinee.lastName);
+  late final ExamineeDetailsController _details = ExamineeDetailsController(
+    birthDate: widget.examinee.birthDate,
+    examDate: widget.atItem?.examDate,
+    lastSchool: widget.examinee.lastAttendedSchool,
+    gender: widget.examinee.gender,
+  );
   bool _saving = false;
   String? _error;
 
@@ -715,32 +751,66 @@ class _ExamineeNameEditDialogState extends State<_ExamineeNameEditDialog> {
     _firstName.dispose();
     _middleName.dispose();
     _lastName.dispose();
+    _details.dispose();
     super.dispose();
   }
 
+  static bool _sameDay(DateTime? a, DateTime? b) =>
+      a == null || b == null ? a == b : a.year == b.year && a.month == b.month && a.day == b.day;
+
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
+    final invalid = _details.validate();
+    if (invalid != null) {
+      setState(() => _error = invalid);
+      return;
+    }
     setState(() {
       _saving = true;
       _error = null;
     });
+    var step = 'name';
     try {
-      final updated = await widget.service.updateExamineeProfile(
+      var updated = await widget.service.updateExamineeProfile(
         widget.examinee,
         firstName: _firstName.text.trim(),
         middleName: _middleName.text.trim().isEmpty ? null : _middleName.text.trim(),
         lastName: _lastName.text.trim(),
       );
+      final detailsChanged =
+          !_sameDay(_details.birthDate, widget.examinee.birthDate) ||
+          (_details.lastSchoolOrNull ?? '') != (widget.examinee.lastAttendedSchool ?? '').trim() ||
+          (_details.gender ?? '') != (widget.examinee.gender ?? '').trim();
+      if (detailsChanged) {
+        step = 'details';
+        updated = await widget.service.updateExamineeDetails(
+          updated,
+          birthDate: _details.birthDate,
+          lastAttendedSchool: _details.lastSchoolOrNull,
+          gender: _details.gender,
+        );
+      }
+      final item = widget.atItem;
+      if (item != null && !_sameDay(_details.examDate, item.examDate)) {
+        step = 'exam date';
+        await widget.service.setScanExamDate(
+          batchId: item.batch.id,
+          scanId: item.scan.id,
+          examDate: _details.examDate,
+        );
+      }
       if (!mounted) return;
       Navigator.pop(context, updated);
     } on GuidanceWebExamineeRecordsException catch (e) {
       setState(() {
-        _error = e.message;
+        _error = step == 'name' ? e.message : 'Saved the name, but the $step could not be saved. ${e.message}';
         _saving = false;
       });
     } catch (_) {
       setState(() {
-        _error = 'Could not save this examinee. Please try again.';
+        _error = step == 'name'
+            ? 'Could not save this examinee. Please try again.'
+            : 'Saved the name, but the $step could not be saved. Please try again.';
         _saving = false;
       });
     }
@@ -749,7 +819,8 @@ class _ExamineeNameEditDialogState extends State<_ExamineeNameEditDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Edit Examinee Name'),
+      scrollable: true,
+      title: const Text('Edit Examinee'),
       content: SizedBox(
         width: 420,
         child: Form(
@@ -778,6 +849,20 @@ class _ExamineeNameEditDialogState extends State<_ExamineeNameEditDialog> {
                 controller: _lastName,
                 decoration: const InputDecoration(labelText: 'Last name'),
                 validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null,
+              ),
+              const SizedBox(height: 14),
+              Text(
+                'APPLICANT DETAILS',
+                style: AppTextStyles.body(size: 10, weight: FontWeight.w800, color: AppColors.textGray),
+              ),
+              const SizedBox(height: 8),
+              ExamineeDetailsFields(
+                controller: _details,
+                showExamDate: widget.atItem != null,
+                examDateLabel: widget.atItem != null && widget.atItem!.attemptNo > 1
+                    ? 'Exam date (Admission Test, retake)'
+                    : 'Exam date (Admission Test)',
+                enabled: !_saving,
               ),
               if (_error != null) ...[
                 const SizedBox(height: 10),

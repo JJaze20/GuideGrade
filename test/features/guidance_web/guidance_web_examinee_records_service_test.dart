@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:guidegrade/core/sync/examinee_details_client.dart';
 import 'package:guidegrade/core/sync/retake_client.dart';
 import 'package:guidegrade/core/sync/scan_delete_client.dart';
 import 'package:guidegrade/core/sync/scan_restore_client.dart';
@@ -10,6 +11,66 @@ import 'package:guidegrade/features/guidance_web/services/guidance_web_examinee_
 import 'package:guidegrade/models/examinee_record.dart';
 import 'package:guidegrade/models/local_batch.dart';
 import 'package:guidegrade/models/omr_scan_result.dart';
+
+class _FakeDetails implements ExamineeDetailsClient {
+  final List<String> calls = [];
+  CloudExamineeWrite? createResult;
+  SyncOutcome examDateResult = const SyncOutcome.success();
+
+  CloudExamineeRow _row(String id, String first, String last, DateTime? birth, String? school, String? gender) =>
+      CloudExamineeRow(
+        id: id,
+        temporaryExamineeId: 'EX-000009',
+        firstName: first,
+        lastName: last,
+        birthDate: birth,
+        lastAttendedSchool: school,
+        gender: gender,
+        status: 'active',
+        createdAt: DateTime.utc(2026, 1, 1),
+        createdByUid: 'uid1',
+        updatedAt: DateTime.utc(2026, 1, 1),
+        updatedByUid: 'uid1',
+      );
+
+  @override
+  Future<CloudExamineeWrite> createExamineeFromScanWithDetails({
+    required String batchId,
+    required String scanId,
+    required String firstName,
+    String? middleName,
+    required String lastName,
+    DateTime? birthDate,
+    String? lastAttendedSchool,
+    String? gender,
+    DateTime? examDate,
+  }) async {
+    calls.add('create:$batchId/$scanId|$birthDate|$lastAttendedSchool|$gender|$examDate');
+    return createResult ??
+        CloudExamineeWrite.success(_row('new-1', firstName, lastName, birthDate, lastAttendedSchool, gender));
+  }
+
+  @override
+  Future<CloudExamineeWrite> updateExamineeDetails({
+    required String id,
+    DateTime? birthDate,
+    String? lastAttendedSchool,
+    String? gender,
+  }) async {
+    calls.add('update:$id|$birthDate|$lastAttendedSchool|$gender');
+    return CloudExamineeWrite.success(_row(id, 'Juan', 'Dela Cruz', birthDate, lastAttendedSchool, gender));
+  }
+
+  @override
+  Future<SyncOutcome> setScanExamDate({
+    required String batchId,
+    required String scanId,
+    DateTime? examDate,
+  }) async {
+    calls.add('examDate:$batchId/$scanId/$examDate');
+    return examDateResult;
+  }
+}
 
 class _FakeSyncClient implements SyncClient, RetakeClient, ScanDeleteClient, ScanRestoreClient {
   /// When set, [deleteUnlinkedScan] returns it verbatim.
@@ -636,6 +697,117 @@ void main() {
     test('throws a sanitized exception on failure', () async {
       client.unlinkedScansToReturn = const CloudScansRead.failed(SyncOutcome.permanent('rls_denied'));
       expect(() => service.loadUnlinkedScans(), throwsA(isA<GuidanceWebExamineeRecordsException>()));
+    });
+  });
+
+  group('applicant details and the exam date (migration 0013)', () {
+    late _FakeDetails details;
+    late GuidanceWebExamineeRecordsService detailed;
+
+    setUp(() {
+      details = _FakeDetails();
+      detailed = GuidanceWebExamineeRecordsService(
+        client: client,
+        identity: _Identity(),
+        detailsClient: details,
+      );
+    });
+
+    test('create without any details keeps using the original function', () async {
+      await detailed.createExamineeFromScan(
+        batchId: 'b1',
+        scan: _localScan(id: 's1'),
+        firstName: 'Juan',
+        lastName: 'Dela Cruz',
+      );
+      expect(client.calls, contains('createExamineeFromScan:b1/s1'));
+      expect(details.calls, isEmpty);
+    });
+
+    test('a blank school and gender count as no details', () async {
+      await detailed.createExamineeFromScan(
+        batchId: 'b1',
+        scan: _localScan(id: 's1'),
+        firstName: 'Juan',
+        lastName: 'Dela Cruz',
+        lastAttendedSchool: '   ',
+        gender: '',
+      );
+      expect(client.calls, contains('createExamineeFromScan:b1/s1'));
+      expect(details.calls, isEmpty);
+    });
+
+    test('create with details sends them all in the one new call', () async {
+      final created = await detailed.createExamineeFromScan(
+        batchId: 'b1',
+        scan: _localScan(id: 's1'),
+        firstName: 'Juan',
+        lastName: 'Dela Cruz',
+        birthDate: DateTime(2008, 2, 5),
+        lastAttendedSchool: 'Marbel NHS',
+        gender: 'Male',
+        examDate: DateTime(2026, 10, 5),
+      );
+      expect(details.calls, [
+        'create:b1/s1|${DateTime(2008, 2, 5)}|Marbel NHS|Male|${DateTime(2026, 10, 5)}',
+      ]);
+      expect(client.calls, isNot(contains('createExamineeFromScan:b1/s1')));
+      expect(created.firstName, 'Juan');
+      expect(created.birthDate, DateTime(2008, 2, 5));
+      expect(created.gender, 'Male');
+    });
+
+    test('updateExamineeDetails returns the saved record with gender', () async {
+      final saved = await detailed.updateExamineeDetails(
+        ExamineeRecord(
+          id: 'e1',
+          temporaryExamineeId: 'EX-1',
+          firstName: 'Juan',
+          lastName: 'Dela Cruz',
+          status: 'active',
+          createdAt: DateTime.utc(2026, 1, 1),
+          createdByUid: 'u',
+          updatedAt: DateTime.utc(2026, 1, 1),
+          updatedByUid: 'u',
+        ),
+        birthDate: DateTime(2008, 2, 5),
+        lastAttendedSchool: 'Marbel NHS',
+        gender: 'Female',
+      );
+      expect(details.calls, ['update:e1|${DateTime(2008, 2, 5)}|Marbel NHS|Female']);
+      expect(saved.gender, 'Female');
+      expect(saved.lastAttendedSchool, 'Marbel NHS');
+    });
+
+    test('setScanExamDate sets and clears the date on exactly that scan', () async {
+      await detailed.setScanExamDate(batchId: 'b1', scanId: 's1', examDate: DateTime(2026, 10, 5));
+      await detailed.setScanExamDate(batchId: 'b1', scanId: 's1', examDate: null);
+      expect(details.calls, [
+        'examDate:b1/s1/${DateTime(2026, 10, 5)}',
+        'examDate:b1/s1/null',
+      ]);
+    });
+
+    test('a failed exam date write is reported, never swallowed', () async {
+      details.examDateResult = const SyncOutcome.transient('network');
+      expect(
+        () => detailed.setScanExamDate(batchId: 'b1', scanId: 's1', examDate: DateTime(2026, 10, 5)),
+        throwsA(isA<GuidanceWebExamineeRecordsException>()),
+      );
+    });
+
+    test('a failed create is reported as an error', () async {
+      details.createResult = const CloudExamineeWrite.failed(SyncOutcome.permanent('42501'));
+      expect(
+        () => detailed.createExamineeFromScan(
+          batchId: 'b1',
+          scan: _localScan(id: 's1'),
+          firstName: 'Juan',
+          lastName: 'Dela Cruz',
+          birthDate: DateTime(2008, 2, 5),
+        ),
+        throwsA(isA<GuidanceWebExamineeRecordsException>()),
+      );
     });
   });
 

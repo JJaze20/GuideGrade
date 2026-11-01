@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:guidegrade/core/sync/examinee_details_client.dart';
 import 'package:guidegrade/core/sync/scan_delete_client.dart';
 import 'package:guidegrade/core/sync/scan_restore_client.dart';
 import 'package:guidegrade/core/sync/supabase_sync_client.dart'
@@ -20,7 +21,53 @@ import 'package:guidegrade/features/guidance_web/widgets/console_style.dart';
 import 'package:guidegrade/shared/widgets/surface_card.dart';
 
 class _FakeSyncClient
-    implements SyncClient, ScanDeleteClient, ScanRestoreClient {
+    implements SyncClient, ScanDeleteClient, ScanRestoreClient, ExamineeDetailsClient {
+  final List<Map<String, Object?>> detailsCreates = [];
+
+  @override
+  Future<CloudExamineeWrite> createExamineeFromScanWithDetails({
+    required String batchId,
+    required String scanId,
+    required String firstName,
+    String? middleName,
+    required String lastName,
+    DateTime? birthDate,
+    String? lastAttendedSchool,
+    String? gender,
+    DateTime? examDate,
+  }) async {
+    detailsCreates.add({
+      'batchId': batchId,
+      'scanId': scanId,
+      'birthDate': birthDate,
+      'school': lastAttendedSchool,
+      'gender': gender,
+      'examDate': examDate,
+    });
+    return createExamineeFromScan(
+      batchId: batchId,
+      scanId: scanId,
+      firstName: firstName,
+      middleName: middleName,
+      lastName: lastName,
+    );
+  }
+
+  @override
+  Future<CloudExamineeWrite> updateExamineeDetails({
+    required String id,
+    DateTime? birthDate,
+    String? lastAttendedSchool,
+    String? gender,
+  }) => _no('updateExamineeDetails');
+
+  @override
+  Future<SyncOutcome> setScanExamDate({
+    required String batchId,
+    required String scanId,
+    DateTime? examDate,
+  }) => _no('setScanExamDate');
+
   /// When set, [deleteUnlinkedScan] returns it verbatim.
   SyncOutcome? deleteUnlinkedScanResult;
   final List<Map<String, String>> deleteUnlinkedScanCalls = [];
@@ -854,6 +901,83 @@ void main() {
         expect(client.calls, isNot(contains(startsWith('linkScanToExaminee'))));
       },
     );
+  });
+
+  group('2b. Applicant details on Create Examinee Record', () {
+    Future<void> openCreate(WidgetTester tester, String examCode) async {
+      client.batchesToReturn = CloudBatchesRead.found([
+        _batchRow(id: 'b1', examCode: examCode),
+      ]);
+      client.unlinkedScansToReturn = CloudScansRead.found([
+        _scanRow(
+          id: 's1',
+          batchId: 'b1',
+          examCode: examCode,
+          firstName: 'Juan',
+          lastName: 'Dela Cruz',
+        ),
+      ]);
+      await pumpView(tester);
+      await tester.tap(find.textContaining('Unlinked Scans'));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.widgetWithText(TextButton, 'Confirm and Create Examinee'),
+      );
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('an Admission Test scan asks for the exam date as well', (tester) async {
+      await openCreate(tester, 'AT');
+      expect(find.widgetWithText(TextFormField, 'Birth date (optional)'), findsOneWidget);
+      expect(find.widgetWithText(TextFormField, 'Exam date (Admission Test)'), findsOneWidget);
+      expect(find.widgetWithText(TextFormField, 'Last school attended (optional)'), findsOneWidget);
+      expect(find.byKey(const Key('detailsGender')), findsOneWidget);
+    });
+
+    testWidgets('other exams have no exam date field', (tester) async {
+      await openCreate(tester, 'QTM');
+      expect(find.widgetWithText(TextFormField, 'Birth date (optional)'), findsOneWidget);
+      expect(find.widgetWithText(TextFormField, 'Exam date (Admission Test)'), findsNothing);
+    });
+
+    testWidgets('the entered details are saved with the new record', (tester) async {
+      await openCreate(tester, 'AT');
+      final today = DateTime.now();
+
+      await tester.tap(find.widgetWithText(TextFormField, 'Birth date (optional)'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('OK')); // the picker opens on Jan 1, 18 years ago
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(TextFormField, 'Exam date (Admission Test)'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('OK')); // the picker opens on today
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const Key('detailsSchool')), '  Marbel NHS ');
+      await tester.tap(find.byKey(const Key('detailsGender')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Male').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Create Examinee Record'));
+      await tester.pumpAndSettle();
+
+      expect(client.detailsCreates, hasLength(1));
+      final saved = client.detailsCreates.single;
+      expect(saved['batchId'], 'b1');
+      expect(saved['scanId'], 's1');
+      expect(saved['birthDate'], DateTime(today.year - 18, 1, 1));
+      expect(saved['examDate'], DateTime(today.year, today.month, today.day));
+      expect(saved['school'], 'Marbel NHS'); // trimmed
+      expect(saved['gender'], 'Male');
+      expect(find.text('Dela Cruz, Juan'), findsOneWidget);
+    });
+
+    testWidgets('saving with no details still uses the original create', (tester) async {
+      await openCreate(tester, 'AT');
+      await tester.tap(find.widgetWithText(FilledButton, 'Create Examinee Record'));
+      await tester.pumpAndSettle();
+      expect(client.detailsCreates, isEmpty);
+      expect(client.calls, contains('createExamineeFromScan:b1/s1'));
+    });
   });
 
   group('2. Create Examinee Record from this Scan', () {

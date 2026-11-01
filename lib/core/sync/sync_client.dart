@@ -128,6 +128,7 @@ class CloudScanRow {
     this.archivedByUid,
     this.archivedByName,
     this.archiveReason,
+    this.examDate,
   });
 
   final String id;
@@ -189,6 +190,11 @@ class CloudScanRow {
   final String? archivedByUid;
   final String? archivedByName;
   final String? archiveReason;
+
+  /// `scans.exam_date` (migration 0013): the calendar day this sitting was
+  /// taken, entered on the Web Console. Null until entered; only populated by
+  /// reads that select it.
+  final DateTime? examDate;
 
   /// Whether this attempt has been archived as part of an approved retake --
   /// the previous attempt in the Maria-style example. An archived attempt is
@@ -292,6 +298,7 @@ class CloudExamineeRow {
     required this.lastName,
     this.birthDate,
     this.lastAttendedSchool,
+    this.gender,
     required this.status,
     this.archivedAt,
     this.archivedByUid,
@@ -309,6 +316,9 @@ class CloudExamineeRow {
   final String lastName;
   final DateTime? birthDate;
   final String? lastAttendedSchool;
+
+  /// `examinees.gender` (migration 0013); null until entered.
+  final String? gender;
 
   /// `'active'` | `'archived'`.
   final String status;

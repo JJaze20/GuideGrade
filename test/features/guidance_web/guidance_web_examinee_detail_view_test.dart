@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:guidegrade/core/sync/examinee_details_client.dart';
 import 'package:guidegrade/core/sync/retake_client.dart';
 import 'package:guidegrade/core/sync/sync_client.dart';
 import 'package:guidegrade/core/sync/sync_job.dart';
@@ -9,7 +10,58 @@ import 'package:guidegrade/features/guidance_web/services/guidance_web_examinee_
 import 'package:guidegrade/features/guidance_web/services/guidance_web_results_service.dart';
 import 'package:guidegrade/models/examinee_record.dart';
 
-class _FakeSyncClient implements SyncClient, RetakeClient {
+class _FakeSyncClient implements SyncClient, RetakeClient, ExamineeDetailsClient {
+  final List<String> detailsCalls = [];
+  SyncOutcome setExamDateResult = const SyncOutcome.success();
+
+  @override
+  Future<CloudExamineeWrite> createExamineeFromScanWithDetails({
+    required String batchId,
+    required String scanId,
+    required String firstName,
+    String? middleName,
+    required String lastName,
+    DateTime? birthDate,
+    String? lastAttendedSchool,
+    String? gender,
+    DateTime? examDate,
+  }) => _no('createExamineeFromScanWithDetails');
+
+  @override
+  Future<CloudExamineeWrite> updateExamineeDetails({
+    required String id,
+    DateTime? birthDate,
+    String? lastAttendedSchool,
+    String? gender,
+  }) async {
+    detailsCalls.add('updateExamineeDetails:$id|$birthDate|$lastAttendedSchool|$gender');
+    final base = updateResultToReturn.examinee;
+    return CloudExamineeWrite.success(CloudExamineeRow(
+      id: id,
+      temporaryExamineeId: 'EX-00025',
+      firstName: base?.firstName ?? 'Juan',
+      lastName: base?.lastName ?? 'Dela Cruz',
+      birthDate: birthDate,
+      lastAttendedSchool: lastAttendedSchool,
+      gender: gender,
+      status: 'active',
+      createdAt: DateTime.utc(2026, 1, 1),
+      createdByUid: 'uid1',
+      updatedAt: DateTime.utc(2026, 2, 1),
+      updatedByUid: 'uid2',
+    ));
+  }
+
+  @override
+  Future<SyncOutcome> setScanExamDate({
+    required String batchId,
+    required String scanId,
+    DateTime? examDate,
+  }) async {
+    detailsCalls.add('setScanExamDate:$batchId/$scanId/$examDate');
+    return setExamDateResult;
+  }
+
   final Map<String, List<CloudRetakeRequestRow>> retakeRequestsByKey = {};
   SyncOutcome createRetakeResult = const SyncOutcome.success();
   SyncOutcome reviewRetakeResult = const SyncOutcome.success();
@@ -264,6 +316,7 @@ CloudScanRow _scanRow({
   int attemptNo = 1,
   String attemptStatus = 'active',
   String? archiveReason,
+  DateTime? examDate,
 }) =>
     CloudScanRow(
       id: id,
@@ -284,6 +337,7 @@ CloudScanRow _scanRow({
       attemptNo: attemptNo,
       attemptStatus: attemptStatus,
       archiveReason: archiveReason,
+      examDate: examDate,
     );
 
 ExamineeRecord _examinee({String status = 'active'}) => ExamineeRecord(
@@ -462,6 +516,101 @@ void main() {
 
     expect(find.text('Dela Cruz, Juanito'), findsOneWidget);
     expect(find.text('EX-00025'), findsOneWidget);
+  });
+
+  group('Edit Examinee: applicant details and the Admission Test exam date', () {
+    Future<void> openEdit(WidgetTester tester) async {
+      client.updateResultToReturn = CloudExamineeWrite.success(CloudExamineeRow(
+        id: 'e1',
+        temporaryExamineeId: 'EX-00025',
+        firstName: 'Juan',
+        lastName: 'Dela Cruz',
+        status: 'active',
+        createdAt: DateTime.utc(2026, 1, 1),
+        createdByUid: 'uid1',
+        updatedAt: DateTime.utc(2026, 2, 1),
+        updatedByUid: 'uid2',
+      ));
+      await tester.tap(find.widgetWithText(TextButton, 'Edit'));
+      await tester.pumpAndSettle();
+    }
+
+    void addAtSitting({DateTime? examDate}) {
+      client.batchesToReturn = CloudBatchesRead.found([_batchRow(id: 'b-at', examCode: 'AT')]);
+      client.scansByExamineeId['e1'] = CloudScansRead.found([
+        _scanRow(id: 's-at', batchId: 'b-at', examCode: 'AT', examDate: examDate),
+      ]);
+    }
+
+    testWidgets('shows the four fields, with the current exam date filled in', (tester) async {
+      addAtSitting(examDate: DateTime(2026, 10, 5));
+      await pumpDetail(tester);
+      await openEdit(tester);
+
+      expect(find.widgetWithText(TextFormField, 'Birth date (optional)'), findsOneWidget);
+      expect(find.widgetWithText(TextFormField, 'Exam date (Admission Test)'), findsOneWidget);
+      expect(find.text('Oct 5, 2026'), findsOneWidget);
+      expect(find.widgetWithText(TextFormField, 'Last school attended (optional)'), findsOneWidget);
+      expect(find.byKey(const Key('detailsGender')), findsOneWidget);
+    });
+
+    testWidgets('without an Admission Test sitting there is no exam date field', (tester) async {
+      await pumpDetail(tester);
+      await openEdit(tester);
+
+      expect(find.widgetWithText(TextFormField, 'Birth date (optional)'), findsOneWidget);
+      expect(find.widgetWithText(TextFormField, 'Exam date (Admission Test)'), findsNothing);
+    });
+
+    testWidgets('saving the school and gender writes only the details, not the exam date', (tester) async {
+      addAtSitting(examDate: DateTime(2026, 10, 5));
+      await pumpDetail(tester);
+      await openEdit(tester);
+
+      await tester.enterText(find.byKey(const Key('detailsSchool')), 'Marbel NHS');
+      await tester.tap(find.byKey(const Key('detailsGender')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Female').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+      await tester.pumpAndSettle();
+
+      expect(client.detailsCalls, ['updateExamineeDetails:e1|null|Marbel NHS|Female']);
+    });
+
+    testWidgets('changing the exam date writes it to that scan only', (tester) async {
+      addAtSitting(examDate: DateTime(2026, 10, 5));
+      await pumpDetail(tester);
+      await openEdit(tester);
+
+      await tester.tap(find.widgetWithText(TextFormField, 'Exam date (Admission Test)'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('12'));
+      await tester.tap(find.text('OK'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+      await tester.pumpAndSettle();
+
+      expect(client.detailsCalls, ['setScanExamDate:b-at/s-at/${DateTime(2026, 10, 12)}']);
+    });
+
+    testWidgets('a failed exam date save keeps the dialog open and says the name was saved', (tester) async {
+      addAtSitting(examDate: DateTime(2026, 10, 5));
+      client.setExamDateResult = const SyncOutcome.transient('network');
+      await pumpDetail(tester);
+      await openEdit(tester);
+
+      await tester.tap(find.widgetWithText(TextFormField, 'Exam date (Admission Test)'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('12'));
+      await tester.tap(find.text('OK'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Saved the name, but the exam date could not be saved'), findsOneWidget);
+      expect(find.text('Edit Examinee'), findsOneWidget);
+    });
   });
 
   testWidgets('13. Archiving from the detail page does not touch examination history', (tester) async {

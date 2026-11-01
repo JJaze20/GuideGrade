@@ -82,6 +82,7 @@ ExamineeRecord _toExamineeRecord(CloudExamineeRow row) => ExamineeRecord(
       middleName: row.middleName,
       lastName: row.lastName,
       birthDate: row.birthDate,
+      gender: row.gender,
       lastAttendedSchool: row.lastAttendedSchool,
       status: row.status,
       archivedAt: row.archivedAt,

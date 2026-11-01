@@ -8,6 +8,7 @@ import '../../models/local_batch.dart';
 import '../services/local_batch_repository.dart';
 import '../services/local_storage_service.dart';
 import 'admin_scan_restore_client.dart';
+import 'examinee_details_client.dart';
 import 'retake_client.dart';
 import 'scan_cloud_extensions.dart';
 import 'scan_delete_client.dart';
@@ -115,7 +116,8 @@ class SupabaseSyncClient
         ScanDeleteClient,
         ScanRestoreClient,
         AdminScanRestoreClient,
-        BatchScanRowCountClient {
+        BatchScanRowCountClient,
+        ExamineeDetailsClient {
   SupabaseSyncClient({
     required this.batches,
     required this.localStorage,
@@ -1081,6 +1083,7 @@ class SupabaseSyncClient
         archivedByUid: row['archived_by_uid'] as String?,
         archivedByName: row['archived_by_name'] as String?,
         archiveReason: row['archive_reason'] as String?,
+        examDate: ExamineeInfo.birthDateFromText(row['exam_date'] as String?),
       );
 
   /// Read-only, metadata-only fetch of every cloud `batches` row visible
@@ -1136,7 +1139,7 @@ class SupabaseSyncClient
               'middle_name, examinee_number, examinee_id, image_path, '
               'image_uploaded, rectified_image_path, rectified_image_uploaded, '
               'attempt_no, attempt_status, archived_at, archived_by_uid, '
-              'archived_by_name, archive_reason',
+              'archived_by_name, archive_reason, exam_date',
             )
             .eq('batch_id', batchId)
             .isFilter('deleted_at', null);
@@ -1177,6 +1180,7 @@ class SupabaseSyncClient
     'last_name',
     'birth_date',
     'last_attended_school',
+    'gender',
     'status',
     'archived_at',
     'archived_by_uid',
@@ -1196,8 +1200,9 @@ class SupabaseSyncClient
         firstName: row['first_name'] as String? ?? '',
         middleName: row['middle_name'] as String?,
         lastName: row['last_name'] as String? ?? '',
-        birthDate: _dateOrNull(row['birth_date']),
+        birthDate: ExamineeInfo.birthDateFromText(row['birth_date'] as String?),
         lastAttendedSchool: row['last_attended_school'] as String?,
+        gender: row['gender'] as String?,
         status: row['status'] as String? ?? 'active',
         archivedAt: _dateOrNull(row['archived_at']),
         archivedByUid: row['archived_by_uid'] as String?,
@@ -1258,7 +1263,7 @@ class SupabaseSyncClient
               'middle_name, examinee_number, image_path, image_uploaded, '
               'rectified_image_path, rectified_image_uploaded, attempt_no, '
               'attempt_status, archived_at, archived_by_uid, archived_by_name, '
-              'archive_reason',
+              'archive_reason, exam_date',
             )
             .eq('examinee_id', examineeId);
         return CloudScansRead.found(
@@ -1300,7 +1305,7 @@ class SupabaseSyncClient
               'middle_name, examinee_number, image_path, image_uploaded, '
               'rectified_image_path, rectified_image_uploaded, attempt_no, '
               'attempt_status, archived_at, archived_by_uid, archived_by_name, '
-              'archive_reason',
+              'archive_reason, exam_date',
             )
             .isFilter('examinee_id', null)
             .isFilter('deleted_at', null);
@@ -1438,6 +1443,142 @@ class SupabaseSyncClient
         return CloudExamineeWrite.failed(classifyUnexpectedError(e));
       }
     }
+  }
+
+  // --- Examinee details + exam date (migration 0013) ------------------------
+
+  /// `YYYY-MM-DD` for a date column, or null.
+  static String? _dateText(DateTime? d) =>
+      d == null ? null : ExamineeInfo.birthDateToText(d);
+
+  static String? _trimmedOrNull(String? s) {
+    final t = s?.trim() ?? '';
+    return t.isEmpty ? null : t;
+  }
+
+  @override
+  Future<CloudExamineeWrite> createExamineeFromScanWithDetails({
+    required String batchId,
+    required String scanId,
+    required String firstName,
+    String? middleName,
+    required String lastName,
+    DateTime? birthDate,
+    String? lastAttendedSchool,
+    String? gender,
+    DateTime? examDate,
+  }) async {
+    var refreshed = false;
+    while (true) {
+      try {
+        final result = await _client.rpc(
+          'create_examinee_from_scan_with_details',
+          params: {
+            'p_batch_id': batchId,
+            'p_scan_id': scanId,
+            'p_first_name': firstName,
+            'p_middle_name': middleName ?? '',
+            'p_last_name': lastName,
+            'p_birth_date': _dateText(birthDate),
+            'p_last_attended_school': _trimmedOrNull(lastAttendedSchool),
+            'p_gender': _trimmedOrNull(gender),
+            'p_exam_date': _dateText(examDate),
+          },
+        );
+        final row = result is List
+            ? Map<String, dynamic>.from(result.first as Map)
+            : Map<String, dynamic>.from(result as Map);
+        return CloudExamineeWrite.success(parseCloudExamineeRow(row));
+      } on PostgrestException catch (e) {
+        final code = _sanitizeCode(e.code);
+        if ((code == '401' || code == 'PGRST301') && !refreshed) {
+          refreshed = true;
+          if (await _safeRefresh()) continue;
+        }
+        return CloudExamineeWrite.failed(classifyPostgrestCode(code));
+      } on TimeoutException {
+        return const CloudExamineeWrite.failed(
+          SyncOutcome.transient('network'),
+        );
+      } on SocketException {
+        return const CloudExamineeWrite.failed(
+          SyncOutcome.transient('network'),
+        );
+      } catch (e) {
+        _logUnclassified(e);
+        return CloudExamineeWrite.failed(classifyUnexpectedError(e));
+      }
+    }
+  }
+
+  /// Updates only `birth_date`, `last_attended_school` and `gender` (plus the
+  /// usual `updated_at`/`updated_by_uid`). Names, the Temporary Examinee ID,
+  /// status and every other column are absent from the map, so Postgres
+  /// leaves them untouched.
+  @override
+  Future<CloudExamineeWrite> updateExamineeDetails({
+    required String id,
+    DateTime? birthDate,
+    String? lastAttendedSchool,
+    String? gender,
+  }) async {
+    var refreshed = false;
+    while (true) {
+      try {
+        final updated = await _client
+            .from('examinees')
+            .update({
+              'birth_date': _dateText(birthDate),
+              'last_attended_school': _trimmedOrNull(lastAttendedSchool),
+              'gender': _trimmedOrNull(gender),
+              'updated_at': isoUtc(DateTime.now()),
+              'updated_by_uid': identity.uid ?? '',
+            })
+            .eq('id', id)
+            .select(_examineeColumns.join(', '))
+            .single();
+        return CloudExamineeWrite.success(parseCloudExamineeRow(updated));
+      } on PostgrestException catch (e) {
+        final code = _sanitizeCode(e.code);
+        if ((code == '401' || code == 'PGRST301') && !refreshed) {
+          refreshed = true;
+          if (await _safeRefresh()) continue;
+        }
+        return CloudExamineeWrite.failed(classifyPostgrestCode(code));
+      } on TimeoutException {
+        return const CloudExamineeWrite.failed(
+          SyncOutcome.transient('network'),
+        );
+      } on SocketException {
+        return const CloudExamineeWrite.failed(
+          SyncOutcome.transient('network'),
+        );
+      } catch (e) {
+        _logUnclassified(e);
+        return CloudExamineeWrite.failed(classifyUnexpectedError(e));
+      }
+    }
+  }
+
+  /// Sets or clears one scan's exam date through `set_scan_exam_date`, which
+  /// changes only `scans.exam_date`.
+  @override
+  Future<SyncOutcome> setScanExamDate({
+    required String batchId,
+    required String scanId,
+    DateTime? examDate,
+  }) {
+    return _guardPostgrest(() async {
+      await _client.rpc(
+        'set_scan_exam_date',
+        params: {
+          'p_batch_id': batchId,
+          'p_scan_id': scanId,
+          'p_exam_date': _dateText(examDate),
+        },
+      );
+      return const SyncOutcome.success();
+    });
   }
 
   /// Archives ([archived] = true) or restores ([archived] = false) an

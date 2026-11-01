@@ -17,6 +17,7 @@ import '../../../models/local_batch.dart';
 import '../services/guidance_web_examinee_records_service.dart';
 import '../services/guidance_web_results_service.dart';
 import '../widgets/console_style.dart';
+import '../widgets/examinee_details_fields.dart';
 import 'guidance_web_examinee_detail_view.dart';
 
 const List<String> _statusFilterOptions = ['All', 'Active', 'Archived'];
@@ -1547,6 +1548,10 @@ class _CreateExamineeFromScanDialogState
   late final TextEditingController _lastName = TextEditingController(
     text: widget.item.scan.examinee?.lastName ?? '',
   );
+  late final ExamineeDetailsController _details = ExamineeDetailsController(
+    birthDate: widget.item.scan.examinee?.birthDate,
+    examDate: widget.item.examDate,
+  );
   bool _saving = false;
   String? _error;
 
@@ -1555,10 +1560,16 @@ class _CreateExamineeFromScanDialogState
     _firstName.dispose();
     _middleName.dispose();
     _lastName.dispose();
+    _details.dispose();
     super.dispose();
   }
 
   Future<void> _save() async {
+    final invalid = _details.validate();
+    if (invalid != null) {
+      setState(() => _error = invalid);
+      return;
+    }
     setState(() {
       _saving = true;
       _error = null;
@@ -1572,6 +1583,10 @@ class _CreateExamineeFromScanDialogState
             ? null
             : _middleName.text.trim(),
         lastName: _lastName.text.trim(),
+        birthDate: _details.birthDate,
+        lastAttendedSchool: _details.lastSchoolOrNull,
+        gender: _details.gender,
+        examDate: widget.item.examCode == 'AT' ? _details.examDate : null,
       );
       if (!mounted) return;
       Navigator.pop(context, created);
@@ -1591,6 +1606,7 @@ class _CreateExamineeFromScanDialogState
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
+      scrollable: true,
       title: const Text('Create Examinee Record from this Scan'),
       content: SizedBox(
         width: 420,
@@ -1624,6 +1640,29 @@ class _CreateExamineeFromScanDialogState
             TextFormField(
               controller: _lastName,
               decoration: const InputDecoration(labelText: 'Last name'),
+            ),
+            const SizedBox(height: 14),
+            Text(
+              'APPLICANT DETAILS',
+              style: AppTextStyles.body(
+                size: 10,
+                weight: FontWeight.w800,
+                color: AppColors.textGray,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              widget.item.examCode == 'AT'
+                  ? 'Birth date and exam date give the Admission Test SAI. '
+                        'School and gender are for the record only.'
+                  : 'Optional. These are for the record only.',
+              style: AppTextStyles.body(size: 10.5, color: AppColors.textGray),
+            ),
+            const SizedBox(height: 8),
+            ExamineeDetailsFields(
+              controller: _details,
+              showExamDate: widget.item.examCode == 'AT',
+              enabled: !_saving,
             ),
             if (_error != null) ...[
               const SizedBox(height: 10),

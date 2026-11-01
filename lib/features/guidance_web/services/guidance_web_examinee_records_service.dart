@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../../../core/services/local_batch_repository.dart';
 import '../../../core/services/local_storage_service.dart';
 import '../../../core/sync/cloud_batch_mapper.dart';
+import '../../../core/sync/examinee_details_client.dart';
 import '../../../core/sync/supabase_sync_client.dart';
 import '../../../core/sync/sync_client.dart';
 import '../../../core/sync/retake_client.dart';
@@ -87,17 +88,20 @@ class GuidanceWebExamineeRecordsService {
     RetakeClient? retakeClient,
     ScanDeleteClient? scanDeleteClient,
     ScanRestoreClient? scanRestoreClient,
+    ExamineeDetailsClient? detailsClient,
     SyncIdentity? identity,
   }) : _client = client ?? _buildDefaultClient(),
        _explicitRetakeClient = retakeClient,
        _explicitScanDeleteClient = scanDeleteClient,
        _explicitScanRestoreClient = scanRestoreClient,
+       _explicitDetailsClient = detailsClient,
        _explicitIdentity = identity;
 
   final SyncClient _client;
   final RetakeClient? _explicitRetakeClient;
   final ScanDeleteClient? _explicitScanDeleteClient;
   final ScanRestoreClient? _explicitScanRestoreClient;
+  final ExamineeDetailsClient? _explicitDetailsClient;
   final SyncIdentity? _explicitIdentity;
 
   /// Same lazy-resolution reasoning as [_retakeClient]/[_scanDeleteClient]:
@@ -141,6 +145,16 @@ class GuidanceWebExamineeRecordsService {
       _explicitScanRestoreClient ??
       (_client is ScanRestoreClient
           ? _client as ScanRestoreClient
+          : _buildDefaultClient());
+
+  /// Birth date / school / gender / exam date writes. Same lazy-resolution
+  /// reasoning as [_retakeClient]: only built when one of these writes is
+  /// actually used, and taken from [_client] when it implements the
+  /// interface (always, in production).
+  late final ExamineeDetailsClient _detailsClient =
+      _explicitDetailsClient ??
+      (_client is ExamineeDetailsClient
+          ? _client as ExamineeDetailsClient
           : _buildDefaultClient());
 
   /// See `GuidanceWebResultsService._buildDefaultClient`'s doc comment —
@@ -272,6 +286,7 @@ class GuidanceWebExamineeRecordsService {
           archivedAt: row.archivedAt,
           archivedByName: row.archivedByName,
           archiveReason: row.archiveReason,
+          examDate: row.examDate,
         ),
       );
     }
@@ -287,24 +302,89 @@ class GuidanceWebExamineeRecordsService {
   /// blank-record creation path. [ExamineeRecord.temporaryExamineeId] is
   /// never generated or influenced here — it comes back already assigned by
   /// the database's sequence-backed `DEFAULT`.
+  ///
+  /// With any of [birthDate], [lastAttendedSchool], [gender] or [examDate]
+  /// given, the details are saved in the same all-or-nothing database
+  /// transaction (`create_examinee_from_scan_with_details`, migration 0013);
+  /// with none of them the original `create_examinee_from_scan` is used
+  /// unchanged. [examDate] belongs to [scan] (this sitting), the rest to the
+  /// new examinee.
   Future<ExamineeRecord> createExamineeFromScan({
     required String batchId,
     required LocalScan scan,
     required String firstName,
     String? middleName,
     required String lastName,
+    DateTime? birthDate,
+    String? lastAttendedSchool,
+    String? gender,
+    DateTime? examDate,
   }) async {
-    final write = await _client.createExamineeFromScan(
-      batchId: batchId,
-      scanId: scan.id,
-      firstName: firstName,
-      middleName: middleName,
-      lastName: lastName,
+    final hasDetails =
+        birthDate != null ||
+        (lastAttendedSchool ?? '').trim().isNotEmpty ||
+        (gender ?? '').trim().isNotEmpty ||
+        examDate != null;
+    final write = hasDetails
+        ? await _detailsClient.createExamineeFromScanWithDetails(
+            batchId: batchId,
+            scanId: scan.id,
+            firstName: firstName,
+            middleName: middleName,
+            lastName: lastName,
+            birthDate: birthDate,
+            lastAttendedSchool: lastAttendedSchool,
+            gender: gender,
+            examDate: examDate,
+          )
+        : await _client.createExamineeFromScan(
+            batchId: batchId,
+            scanId: scan.id,
+            firstName: firstName,
+            middleName: middleName,
+            lastName: lastName,
+          );
+    if (!write.isSuccess) {
+      throw GuidanceWebExamineeRecordsException(_messageFor(write.error));
+    }
+    return _toExamineeRecord(write.examinee!);
+  }
+
+  /// Saves birth date, last school attended and gender on [examinee] (a null
+  /// value clears that field). Names and every other field are untouched.
+  Future<ExamineeRecord> updateExamineeDetails(
+    ExamineeRecord examinee, {
+    DateTime? birthDate,
+    String? lastAttendedSchool,
+    String? gender,
+  }) async {
+    final write = await _detailsClient.updateExamineeDetails(
+      id: examinee.id,
+      birthDate: birthDate,
+      lastAttendedSchool: lastAttendedSchool,
+      gender: gender,
     );
     if (!write.isSuccess) {
       throw GuidanceWebExamineeRecordsException(_messageFor(write.error));
     }
     return _toExamineeRecord(write.examinee!);
+  }
+
+  /// Sets (or clears, with null) the exam date of one scan -- this sitting
+  /// only, so a retake keeps its own date.
+  Future<void> setScanExamDate({
+    required String batchId,
+    required String scanId,
+    DateTime? examDate,
+  }) async {
+    final outcome = await _detailsClient.setScanExamDate(
+      batchId: batchId,
+      scanId: scanId,
+      examDate: examDate,
+    );
+    if (!outcome.isSuccess) {
+      throw GuidanceWebExamineeRecordsException(_messageFor(outcome));
+    }
   }
 
   /// Applies a name-only correction (OCR misread fix) — never changes
@@ -849,6 +929,7 @@ ExamineeRecord examineeRecordFromCloudRow(CloudExamineeRow row) =>
       middleName: row.middleName,
       lastName: row.lastName,
       birthDate: row.birthDate,
+      gender: row.gender,
       lastAttendedSchool: row.lastAttendedSchool,
       status: row.status,
       archivedAt: row.archivedAt,

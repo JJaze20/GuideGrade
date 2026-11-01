@@ -33,6 +33,7 @@ class ExamineeRecord {
     required this.lastName,
     this.birthDate,
     this.lastAttendedSchool,
+    this.gender,
     required this.status,
     this.archivedAt,
     this.archivedByUid,
@@ -50,6 +51,10 @@ class ExamineeRecord {
   final String lastName;
   final DateTime? birthDate;
   final String? lastAttendedSchool;
+
+  /// Information only (never part of any score). Entered on the Guidance
+  /// Council Web Console; null for every record created before it existed.
+  final String? gender;
 
   /// `'active'` | `'archived'` — see [isActive]/[isArchived].
   final String status;
@@ -70,7 +75,8 @@ class ExamineeRecord {
     final first = firstName.trim();
     final middle = (middleName ?? '').trim();
     final middleInitial = middle.isEmpty ? '' : ' ${middle[0].toUpperCase()}.';
-    if (last.isNotEmpty && first.isNotEmpty) return '$last, $first$middleInitial';
+    if (last.isNotEmpty && first.isNotEmpty)
+      return '$last, $first$middleInitial';
     if (last.isNotEmpty) return last;
     if (first.isNotEmpty) return '$first$middleInitial';
     return 'Unnamed';
@@ -100,6 +106,38 @@ class ExamineeRecord {
       lastName: lastName,
       birthDate: birthDate,
       lastAttendedSchool: lastAttendedSchool,
+      gender: gender,
+      status: status,
+      archivedAt: archivedAt,
+      archivedByUid: archivedByUid,
+      createdAt: createdAt,
+      createdByUid: createdByUid,
+      updatedAt: updatedAt,
+      updatedByUid: updatedByUid,
+    );
+  }
+
+  /// Applies the optional applicant details entered on the Web Console
+  /// (birth date, last school attended, gender) -- name, status and
+  /// [temporaryExamineeId] are carried over unchanged. A null value clears
+  /// that field.
+  ExamineeRecord withDetails({
+    DateTime? birthDate,
+    String? lastAttendedSchool,
+    String? gender,
+    required DateTime updatedAt,
+    required String updatedByUid,
+  }) {
+    return ExamineeRecord(
+      id: id,
+      temporaryExamineeId: temporaryExamineeId,
+      officialStudentId: officialStudentId,
+      firstName: firstName,
+      middleName: middleName,
+      lastName: lastName,
+      birthDate: birthDate,
+      lastAttendedSchool: lastAttendedSchool,
+      gender: gender,
       status: status,
       archivedAt: archivedAt,
       archivedByUid: archivedByUid,
@@ -122,6 +160,7 @@ class ExamineeRecord {
       lastName: lastName,
       birthDate: birthDate,
       lastAttendedSchool: lastAttendedSchool,
+      gender: gender,
       status: 'archived',
       archivedAt: at,
       archivedByUid: byUid,
@@ -143,6 +182,7 @@ class ExamineeRecord {
       lastName: lastName,
       birthDate: birthDate,
       lastAttendedSchool: lastAttendedSchool,
+      gender: gender,
       status: 'active',
       archivedAt: null,
       archivedByUid: null,
@@ -170,6 +210,7 @@ class ExamineeHistoryItem {
     this.archivedAt,
     this.archivedByName,
     this.archiveReason,
+    this.examDate,
   });
 
   final LocalBatch batch;
@@ -188,6 +229,10 @@ class ExamineeHistoryItem {
   final DateTime? archivedAt;
   final String? archivedByName;
   final String? archiveReason;
+
+  /// `scans.exam_date` -- the day this sitting was taken (Web Console entry),
+  /// or null until entered.
+  final DateTime? examDate;
 
   String get examCode => batch.examCode;
   LocalScanResult? get result => scan.result;
