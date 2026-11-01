@@ -176,6 +176,7 @@ class _GuidanceWebExamineeAnalyticsViewState
         batch: viewing.batch,
         service: _results,
         linkedExaminee: _selected,
+        examDate: viewing.examDate,
         showClusterAnalysis: true,
         backLabel: _selected != null ? 'Back to Examinee' : 'Back to List',
         onBack: () => setState(() => _viewing = null),

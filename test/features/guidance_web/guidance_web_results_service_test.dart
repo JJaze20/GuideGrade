@@ -325,11 +325,13 @@ CloudScanRow _scanRow({
   String? examineeId,
   int attemptNo = 1,
   String attemptStatus = 'active',
+  DateTime? examDate,
 }) =>
     CloudScanRow(
       id: id,
       batchId: batchId,
       examCode: examCode,
+      examDate: examDate,
       capturedAt: DateTime.utc(2026, 1, 1),
       decoded: {'examCode': examCode, 'items': <dynamic>[]},
       rawScore: rawScore,
@@ -584,6 +586,17 @@ void main() {
   });
   group('loadResultsForBatch -- resolves each scan\'s examinee through scans.examinee_id', () {
     final batch = mapCloudBatch(_batchRow());
+
+    test('examDateByScanId has an entry only for a scan that has an exam date', () async {
+      client.scansByBatchId['b1'] = CloudScansRead.found([
+        _scanRow(id: 's_dated', batchId: 'b1', examDate: DateTime(2026, 10, 5)),
+        _scanRow(id: 's_undated', batchId: 'b1'),
+      ]);
+
+      final results = await service.loadResultsForBatch(batch);
+
+      expect(results.examDateByScanId, {'s_dated': DateTime(2026, 10, 5)});
+    });
 
     test('every scan is returned (linked, confirm-and-created, and genuinely unlinked alike); '
         'linkedExamineeByScanId has an entry ONLY for a resolvable link; the scan itself is '

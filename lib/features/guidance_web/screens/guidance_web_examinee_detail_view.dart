@@ -275,6 +275,7 @@ class _GuidanceWebExamineeDetailViewState extends State<GuidanceWebExamineeDetai
         scan: viewing.scan,
         batch: viewing.batch,
         linkedExaminee: _examinee,
+        examDate: viewing.examDate,
         service: _resultsService,
         onBack: () => setState(() => _viewingHistoryItem = null),
       );

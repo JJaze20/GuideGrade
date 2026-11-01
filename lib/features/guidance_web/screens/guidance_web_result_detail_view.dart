@@ -8,6 +8,7 @@ import '../../../core/constants/app_text_styles.dart';
 import '../../../core/constants/exam_catalog.dart';
 import '../../../core/omr/admission_category.dart';
 import '../../../core/omr/at_categories.dart';
+import '../../../core/omr/at_sai.dart';
 import '../../../core/omr/cluster_analysis.dart';
 import '../../../core/omr/tat_cluster_analysis.dart';
 import '../../../core/omr/exam_score.dart';
@@ -22,6 +23,7 @@ import '../../../models/answer_key.dart';
 import '../../../models/examinee_record.dart';
 import '../../../models/local_batch.dart';
 import '../services/guidance_web_results_service.dart';
+import '../widgets/at_score_table.dart';
 import 'guidance_web_cluster_radar.dart';
 
 /// Which outcome an [ScoredItem] should be rendered as in the Answer
@@ -349,6 +351,7 @@ class GuidanceWebResultDetailView extends StatefulWidget {
     required this.service,
     required this.onBack,
     this.linkedExaminee,
+    this.examDate,
     this.showClusterAnalysis = false,
     this.backLabel = 'Back to Results',
   });
@@ -363,6 +366,10 @@ class GuidanceWebResultDetailView extends StatefulWidget {
   /// page and for legacy/unlinked scans, which keep showing the scan's own
   /// tag -- see [resolveWebExamineeIdentity].
   final ExamineeRecord? linkedExaminee;
+
+  /// The day this sitting was taken (scans.exam_date), when known. With the
+  /// linked examinee's birth date it gives the Admission Test SAI.
+  final DateTime? examDate;
 
   /// Analytics mode: for exams that have cluster definitions (AT, QTM) the
   /// Answer Details card is replaced by a Cluster Analysis table. Every other
@@ -613,6 +620,7 @@ class _GuidanceWebResultDetailViewState
           _buildExamineeCard(),
           const SizedBox(height: 16),
           _buildResultSummaryCard(),
+          ..._scaledScoreSection(),
           const SizedBox(height: 16),
           _buildScannedSheetCard(),
           const SizedBox(height: 16),
@@ -699,6 +707,7 @@ class _GuidanceWebResultDetailViewState
               );
             },
           ),
+          ..._scaledScoreSection(),
           const SizedBox(height: 16),
           _analyticsExpansion(
             id: 'identity',
@@ -901,6 +910,37 @@ class _GuidanceWebResultDetailViewState
 
   // --- Result Summary ---------------------------------------------------
 
+  /// Admission Test only: raw score, scaled score and SAI for Total, Verbal
+  /// and Nonverbal (Tables 10, 23 and 24), from the same per-subtest raw
+  /// scores the Result Summary shows plus the examinee's birth date and this
+  /// sitting's exam date. Empty for other exams, ungraded scans, or when there
+  /// is no answer key to score against. Recomputed on every build; nothing is
+  /// stored.
+  List<Widget> _scaledScoreSection() {
+    if (widget.batch.examCode != 'AT' || widget.scan.result == null) {
+      return const [];
+    }
+    final scores = computeAtCategoryScores(_scored.items, _answerKey);
+    if (scores == null) return const [];
+    final birthDate = widget.linkedExaminee?.birthDate;
+    final profile = computeAtScoreProfile(
+      scores,
+      birthDate: birthDate,
+      examDate: widget.examDate,
+    );
+    return [
+      const SizedBox(height: 16),
+      _card('SCALED SCORE AND SAI', [
+        AtScoreTable(
+          profile: profile,
+          hasLinkedExaminee: widget.linkedExaminee != null,
+          birthDate: birthDate,
+          examDate: widget.examDate,
+        ),
+      ]),
+    ];
+  }
+
   Widget _buildResultSummaryCard() {
     final result = widget.scan.result;
     if (result == null) {
@@ -981,7 +1021,10 @@ class _GuidanceWebResultDetailViewState
     return LayoutBuilder(
       builder: (context, constraints) {
         if (constraints.maxWidth < 800) {
-          return Column(children: [...rows, row('Total', total)]);
+          return Column(
+            key: const Key('atSummaryColumn'),
+            children: [...rows, row('Total', total)],
+          );
         }
         return IntrinsicHeight(
           child: Row(

@@ -809,6 +809,224 @@ void main() {
       });
     }
 
+    group('Scaled score and SAI card (Admission Test)', () {
+      const atSection = 'Answer Document';
+
+      ExamineeRecord examinee({DateTime? birthDate}) => ExamineeRecord(
+        id: 'e1',
+        temporaryExamineeId: 'EX-000045',
+        firstName: 'Juan',
+        lastName: 'Dela Cruz',
+        birthDate: birthDate,
+        status: 'active',
+        createdAt: DateTime.utc(2026, 1, 1),
+        createdByUid: 'uid',
+        updatedAt: DateTime.utc(2026, 1, 1),
+        updatedByUid: 'uid',
+      );
+
+      /// Marks the first N items of each subtest correct ('A') and the rest
+      /// wrong, by the official item mapping.
+      List<OmrItemResult> sheet({
+        int vc = 6,
+        int vr = 11,
+        int fr = 7,
+        int qr = 10,
+      }) {
+        final budget = {
+          AtCategory.vc: vc,
+          AtCategory.vr: vr,
+          AtCategory.fr: fr,
+          AtCategory.qr: qr,
+        };
+        return [
+          for (var n = 1; n <= 72; n++)
+            OmrItemResult(
+              sectionName: atSection,
+              itemNumber: n,
+              markedChoice: () {
+                final c = officialAtCategories[n]!;
+                if (budget[c]! > 0) {
+                  budget[c] = budget[c]! - 1;
+                  return 'A';
+                }
+                return 'B';
+              }(),
+            ),
+        ];
+      }
+
+      Future<void> pumpCard(
+        WidgetTester tester, {
+        ExamineeRecord? linked,
+        DateTime? examDate,
+        bool analytics = false,
+        String examCode = 'AT',
+        List<OmrItemResult>? items,
+      }) async {
+        tester.view.physicalSize = const Size(1400, 2600);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        client.answerKeyToReturn = CloudAnswerKeyRead.found(
+          version: 1,
+          answers: {for (var n = 1; n <= 72; n++) '$atSection|$n': 'A'},
+          updatedByName: 'Officer',
+          updatedAt: '2026-01-01T00:00:00Z',
+        );
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: GuidanceWebResultDetailView(
+                scan: _scan(
+                  examCode: examCode,
+                  result: _storedResult(raw: 34, graded: 72),
+                  items: items ?? sheet(),
+                ),
+                batch: _batch(examCode: examCode),
+                service: service,
+                onBack: () {},
+                linkedExaminee: linked,
+                examDate: examDate,
+                showClusterAnalysis: analytics,
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+      }
+
+      /// The text shown in one cell of the card: [row] is total / verbal /
+      /// nonverbal, [column] is raw / scaled / sai.
+      Finder cell(String row, String column, String text) => find.byWidgetPredicate(
+        (w) =>
+            w is Text &&
+            w.key == ValueKey('atScore_${row}_$column') &&
+            w.data == text,
+      );
+
+      testWidgets('shows raw, scaled and SAI for Total, Verbal and Nonverbal', (
+        tester,
+      ) async {
+        await pumpCard(
+          tester,
+          linked: examinee(birthDate: DateTime(2008, 2, 5)),
+          examDate: DateTime(2026, 11, 1),
+        );
+        expect(find.text('SCALED SCORE AND SAI'), findsOneWidget);
+        expect(cell('total', 'raw', '34 / 72'), findsOneWidget);
+        expect(cell('total', 'scaled', '637'), findsOneWidget);
+        expect(cell('total', 'sai', '89'), findsOneWidget);
+        expect(cell('verbal', 'raw', '17 / 36'), findsOneWidget);
+        expect(cell('verbal', 'scaled', '645'), findsOneWidget);
+        expect(cell('verbal', 'sai', '92'), findsOneWidget);
+        expect(cell('nonverbal', 'raw', '17 / 36'), findsOneWidget);
+        expect(cell('nonverbal', 'scaled', '630'), findsOneWidget);
+        expect(cell('nonverbal', 'sai', '89'), findsOneWidget);
+        expect(
+          find.text(
+            'Age on the exam date: 18 years 8 months · Table 24, 6-8 months',
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.text('Born Feb 5, 2008 · Exam Nov 1, 2026'),
+          findsOneWidget,
+        );
+        expect(find.byKey(const Key('atScoreNote')), findsNothing);
+        expect(tester.takeException(), isNull);
+      });
+
+      testWidgets(
+        'without dates the raw and scaled scores show but the SAI asks for '
+        'the dates',
+        (tester) async {
+          await pumpCard(tester, linked: examinee());
+          expect(cell('total', 'scaled', '637'), findsOneWidget);
+          expect(cell('verbal', 'scaled', '645'), findsOneWidget);
+          expect(cell('total', 'sai', 'Not given'), findsOneWidget); // the SAI
+          expect(
+            find.text(
+              'Add the birth date and the exam date (Edit Examinee) to see the SAI.',
+            ),
+            findsOneWidget,
+          );
+          expect(find.byKey(const Key('atScoreBasis')), findsNothing);
+        },
+      );
+
+      testWidgets(
+        'with a birth date but no exam date it asks only for the exam date',
+        (tester) async {
+          await pumpCard(
+            tester,
+            linked: examinee(birthDate: DateTime(2008, 2, 5)),
+          );
+          expect(
+            find.text('Add the exam date (Edit Examinee) to see the SAI.'),
+            findsOneWidget,
+          );
+        },
+      );
+
+      testWidgets('an unlinked scan is told to link it first', (tester) async {
+        await pumpCard(tester, examDate: DateTime(2026, 11, 1));
+        expect(
+          find.textContaining('Link this scan to an examinee record'),
+          findsOneWidget,
+        );
+      });
+
+      testWidgets('an examinee under 17 gets a clear message and no SAI', (
+        tester,
+      ) async {
+        await pumpCard(
+          tester,
+          linked: examinee(birthDate: DateTime(2010, 6, 1)),
+          examDate: DateTime(2026, 11, 1),
+        );
+        expect(
+          find.textContaining('The SAI tables start at age 17'),
+          findsOneWidget,
+        );
+        expect(cell('total', 'scaled', '637'), findsOneWidget);
+      });
+
+      testWidgets('a raw score of 0 has no scaled score and an SAI of 50', (
+        tester,
+      ) async {
+        await pumpCard(
+          tester,
+          linked: examinee(birthDate: DateTime(2008, 2, 5)),
+          examDate: DateTime(2026, 11, 1),
+          items: sheet(vc: 0, vr: 0, fr: 7, qr: 10),
+        );
+        expect(cell('verbal', 'raw', '0 / 36'), findsOneWidget);
+        expect(cell('verbal', 'scaled', 'Not given'), findsOneWidget); // the scaled score
+        expect(cell('verbal', 'sai', '50'), findsOneWidget);
+        expect(
+          find.text('A raw score of 0 has no scaled score; its SAI is 50.'),
+          findsOneWidget,
+        );
+      });
+
+      testWidgets('other exams do not get the card', (tester) async {
+        await pumpCard(tester, examCode: 'QTM', linked: examinee());
+        expect(find.text('SCALED SCORE AND SAI'), findsNothing);
+      });
+
+      testWidgets('Examinee Analytics shows the same card', (tester) async {
+        await pumpCard(
+          tester,
+          analytics: true,
+          linked: examinee(birthDate: DateTime(2008, 2, 5)),
+          examDate: DateTime(2026, 11, 1),
+        );
+        expect(find.text('SCALED SCORE AND SAI'), findsOneWidget);
+        expect(cell('total', 'sai', '89'), findsOneWidget);
+      });
+    });
+
     group('AT subtest breakdown in the Result Summary', () {
       const atSection = 'Answer Document';
 
@@ -856,6 +1074,12 @@ void main() {
           'the total', (tester) async {
         await pumpAt(tester, answeredRight: {AtCategory.vc, AtCategory.qr});
         expect(find.text('RESULT SUMMARY'), findsOneWidget);
+        // The scaled-score card below repeats some of these numbers, so look
+        // only inside the Result Summary columns.
+        Finder inSummary(String text) => find.descendant(
+          of: find.byKey(const Key('atSummaryColumns')),
+          matching: find.text(text),
+        );
         // Official mapping: VC 12, VR 24, FR 18, QR 18 items.
         expect(find.text('Verbal Comprehension'), findsOneWidget);
         expect(find.text('12 / 12'), findsOneWidget);
@@ -866,10 +1090,10 @@ void main() {
         expect(find.text('Quantitative Reasoning'), findsOneWidget);
         expect(find.text('18 / 18'), findsOneWidget);
         expect(find.text('Verbal (VC + VR)'), findsOneWidget);
-        expect(find.text('12 / 36'), findsOneWidget);
+        expect(inSummary('12 / 36'), findsOneWidget);
         expect(find.text('Non-Verbal (FR + QR)'), findsOneWidget);
-        expect(find.text('18 / 36'), findsOneWidget);
-        expect(find.text('30 / 72'), findsOneWidget);
+        expect(inSummary('18 / 36'), findsOneWidget);
+        expect(inSummary('30 / 72'), findsOneWidget);
         // The recorded headline result above is untouched.
         expect(find.text('34 / 72'), findsOneWidget);
         expect(tester.takeException(), isNull);
@@ -883,7 +1107,12 @@ void main() {
         final verbalReasoning = tester.getTopLeft(
           find.text('Verbal Reasoning'),
         );
-        final total = tester.getCenter(find.text('Total'));
+        final total = tester.getCenter(
+          find.descendant(
+            of: find.byKey(const Key('atSummaryColumns')),
+            matching: find.text('Total'),
+          ),
+        );
         // Left column starts at Score, right column at Verbal Reasoning.
         expect(verbalReasoning.dx, closeTo(score.dx + 324, 2));
         expect(verbalReasoning.dy, closeTo(score.dy, 1));
@@ -902,9 +1131,13 @@ void main() {
         tester.view.physicalSize = const Size(600, 2400);
         await tester.pumpAndSettle();
         expect(find.byKey(const Key('atSummaryColumns')), findsNothing);
-        expect(find.text('Total'), findsOneWidget);
+        final totalRow = find.descendant(
+          of: find.byKey(const Key('atSummaryColumn')),
+          matching: find.text('Total'),
+        );
+        expect(totalRow, findsOneWidget);
         expect(
-          tester.getTopLeft(find.text('Total')).dy,
+          tester.getTopLeft(totalRow).dy,
           greaterThan(tester.getTopLeft(find.text('Non-Verbal (FR + QR)')).dy),
         );
         expect(tester.takeException(), isNull);
@@ -1158,8 +1391,17 @@ void main() {
         expect(find.text('60 / 72'), findsOneWidget);
         expect(find.text('83.33%'), findsOneWidget);
         expect(find.text('Graded'), findsOneWidget);
-        // The recomputed-against-current-key result (0 correct) is never shown.
-        expect(find.text('0 / 72'), findsNothing);
+        // The recomputed-against-current-key result (0 correct) is never the
+        // headline: it only appears as the raw score in the separate scaled
+        // score card, which is always derived from the current key.
+        expect(
+          find.descendant(
+            of: find.byKey(const Key('atScoreTable')),
+            matching: find.text('0 / 72'),
+          ),
+          findsOneWidget,
+        );
+        expect(find.text('0 / 72'), findsOneWidget);
       },
     );
 

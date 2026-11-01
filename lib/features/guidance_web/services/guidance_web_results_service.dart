@@ -27,10 +27,15 @@ class WebBatchResults {
   const WebBatchResults({
     required this.scans,
     this.linkedExamineeByScanId = const {},
+    this.examDateByScanId = const {},
   });
 
   final List<LocalScan> scans;
   final Map<String, ExamineeRecord> linkedExamineeByScanId;
+
+  /// scans.exam_date for each scan that has one -- the day that sitting was
+  /// taken (entered on the Web Console). Only scans with a date appear.
+  final Map<String, DateTime> examDateByScanId;
 }
 
 /// Thrown by [GuidanceWebResultsService] on any read failure. Carries only
@@ -228,6 +233,10 @@ class GuidanceWebResultsService {
     return WebBatchResults(
       scans: rows.map(mapCloudScan).toList(),
       linkedExamineeByScanId: linkedExamineeByScanId,
+      examDateByScanId: {
+        for (final row in rows)
+          if (row.examDate != null) row.id: row.examDate!,
+      },
     );
   }
 

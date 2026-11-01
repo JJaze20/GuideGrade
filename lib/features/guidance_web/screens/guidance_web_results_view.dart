@@ -148,6 +148,7 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
   /// a scan whose `examinee_id` resolves to a real `examinees` row (see
   /// [GuidanceWebResultsService.loadResultsForBatch]'s own doc comment).
   Map<String, ExamineeRecord> _linkedExaminees = {};
+  Map<String, DateTime> _examDates = {};
 
   String _statusFilter = 'All';
   String _identityFilter = 'All';
@@ -329,6 +330,7 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
       _activeBatch = batch;
       _scans = [];
       _linkedExaminees = {};
+      _examDates = {};
       _scansError = null;
       _loadingScans = true;
       _statusFilter = 'All';
@@ -341,6 +343,7 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
       setState(() {
         _scans = results.scans;
         _linkedExaminees = results.linkedExamineeByScanId;
+        _examDates = results.examDateByScanId;
         _loadingScans = false;
       });
     } on GuidanceWebResultsException catch (e) {
@@ -410,6 +413,7 @@ class _GuidanceWebResultsViewState extends State<GuidanceWebResultsView> {
               scan: viewing,
               batch: batch,
               linkedExaminee: _linkedExaminees[viewing.id],
+              examDate: _examDates[viewing.id],
               service: _service,
               onBack: () => setState(() => _viewingScan = null),
             )
