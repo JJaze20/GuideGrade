@@ -422,7 +422,15 @@ class _GuidanceWebExportBatchViewState
   String _categoryOf(LocalScan scan) {
     final result = scan.result;
     if (result == null || result.status != 'Graded') return '—';
-    return exportCategoryLetter(widget.batch.examCode, result.rawScore) ?? '—';
+    // The Admission Test category comes from the Total SAI, which needs the
+    // linked examinee's birth date and this sitting's exam date.
+    return exportCategoryLetter(
+          widget.batch.examCode,
+          result.rawScore,
+          birthDate: _linkedExaminees[scan.id]?.birthDate,
+          examDate: _examDates[scan.id],
+        ) ??
+        '—';
   }
 
   static const _months = [

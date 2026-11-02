@@ -60,7 +60,7 @@ const Map<String, CertificateSpec> certificateSpecs = {
         ],
       ),
       'C': CertificateCategory(
-        range: '(85% – 89%)',
+        range: '(85 - 89)',
         columns: [
           [
             CertEntry('BSBA – FINANCIAL MANAGEMENT'),
@@ -95,7 +95,7 @@ const Map<String, CertificateSpec> certificateSpecs = {
         ],
       ),
       'B': CertificateCategory(
-        range: '(80% - 84%)',
+        range: '(77 - 84)',
         columns: [
           [
             CertEntry('AB – COMMUNICATION'),
@@ -111,7 +111,7 @@ const Map<String, CertificateSpec> certificateSpecs = {
         ],
       ),
       'A': CertificateCategory(
-        range: '(0 – 76%)',
+        range: '(76 and below)',
         columns: [
           [
             CertEntry('AB – POLITICAL SCIENCE'),

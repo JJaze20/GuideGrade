@@ -49,10 +49,19 @@ LocalScan _scan(
   );
 }
 
-class _Identity implements ExamineeRecord {
-  @override
-  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
-}
+/// A linked examinee born February 5, 2008 (18 years 8 months on Nov 1, 2026).
+ExamineeRecord _identity() => ExamineeRecord(
+  id: 'e',
+  temporaryExamineeId: 'EX-1',
+  firstName: 'Juan',
+  lastName: 'Dela Cruz',
+  birthDate: DateTime(2008, 2, 5),
+  status: 'active',
+  createdAt: _date,
+  createdByUid: 'u',
+  updatedAt: _date,
+  updatedByUid: 'u',
+);
 
 class _Results implements GuidanceWebResultsService {
   final calls = <String>[];
@@ -76,6 +85,8 @@ class _Results implements GuidanceWebResultsService {
         : 160;
     final scans = [
       _scan('valid', batch.examCode, score),
+      // Linked Admission Test sitting with no exam date entered yet.
+      if (batch.examCode == 'AT') _scan('undated', batch.examCode, score),
       _scan('unlinked', batch.examCode, score),
       _scan('ungraded', batch.examCode, score, status: 'Ungraded'),
       if (batch.examCode != 'TAT')
@@ -86,7 +97,12 @@ class _Results implements GuidanceWebResultsService {
       scans: scans,
       linkedExamineeByScanId: {
         for (final scan in scans)
-          if (scan.id != 'unlinked') scan.id: _Identity(),
+          if (scan.id != 'unlinked') scan.id: _identity(),
+      },
+      // Only the sitting that has an exam date can be given a Total SAI.
+      examDateByScanId: {
+        for (final scan in scans)
+          if (scan.id != 'undated') scan.id: DateTime(2026, 11, 1),
       },
     );
   }
@@ -102,7 +118,11 @@ void main() {
       final results = _Results();
       final data = await GuidanceWebDashboardService(results: results).load();
       expect(results.calls, ['AT', 'QTM', 'TAT']);
-      expect(data.charts[0].counts, [0, 1, 0, 0]);
+      // 'valid' (raw 55 -> Total SAI 109 -> D) is counted; 'undated' has no
+      // SAI yet so it is "Not classified"; unlinked, ungraded, partial and
+      // out-of-range results are left out.
+      expect(data.charts[0].labels, ['A', 'B', 'C', 'D', 'Not classified']);
+      expect(data.charts[0].counts, [0, 0, 0, 1, 1]);
       expect(data.charts[1].counts, [0, 0, 0, 0, 0, 1]);
       expect(data.charts[2].counts, [0, 0, 0, 0, 0, 0, 0, 1]);
     },

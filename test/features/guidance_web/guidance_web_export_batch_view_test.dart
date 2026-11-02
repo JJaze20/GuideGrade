@@ -450,9 +450,11 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.byKey(const Key('exportScanRow_s_linked')), findsNothing);
         expect(find.text('No matching examinees.'), findsOneWidget);
+        // The seeded examinee has no birth date / exam date, so the Total SAI
+        // (and the Admission Test category) cannot be worked out yet.
         await tester.tap(find.byKey(const Key('exportCategoryFilter')));
         await tester.pumpAndSettle();
-        await tester.tap(find.text('A').last);
+        await tester.tap(find.text('Not categorized').last);
         await tester.pumpAndSettle();
         expect(find.byKey(const Key('exportScanRow_s_linked')), findsOneWidget);
         await tester.tap(find.byKey(const Key('exportUnlinkedFilter')));

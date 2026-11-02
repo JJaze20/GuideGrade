@@ -118,51 +118,35 @@ Future<void> _pump(WidgetTester tester, Widget child) => tester.pumpWidget(
 
 void main() {
   group('1. Admission Test — normal score', () {
-    testWidgets('rawScore 60 -> "60 / 72", "83%", category "B"', (tester) async {
-      // NOTE: the task brief's illustrative test #1 shows category "D" for a
-      // raw score of 60, but that contradicts the authoritative band table
-      // (58–60 -> B) and the task's own boundary list (test #2: "60 -> B").
-      // Stage 1 is authoritative: admissionCategory(60) == B, so the widget
-      // shows "B". A "D" case is exercised separately below.
+    // The A-D category comes from the Total SAI (birth date + exam date, both
+    // entered on the web console), so mobile shows the score and percentage
+    // only.
+    testWidgets('rawScore 60 -> "60 / 72", "83%", no category', (tester) async {
       await _pump(
         tester,
         ScanResultSummary(examCode: 'AT', result: _atResult(rawScore: 60, percentage: 83.33)),
       );
       expect(find.text('60 / 72'), findsOneWidget);
       expect(find.text('83%'), findsOneWidget);
-      expect(find.text('B'), findsOneWidget);
-      expect(find.text('D'), findsNothing);
+      expect(find.text('Category'), findsNothing);
+      expect(find.text('B'), findsNothing);
     });
 
-    testWidgets('rawScore 68 -> "68 / 72", "94%", category "D"', (tester) async {
+    testWidgets('rawScore 68 -> "68 / 72", "94%", no category', (tester) async {
       await _pump(
         tester,
         ScanResultSummary(examCode: 'AT', result: _atResult(rawScore: 68, percentage: 68 / 72 * 100)),
       );
       expect(find.text('68 / 72'), findsOneWidget);
       expect(find.text('94%'), findsOneWidget);
-      expect(find.text('D'), findsOneWidget);
+      expect(find.text('Category'), findsNothing);
+      expect(find.text('D'), findsNothing);
     });
   });
 
-  group('2. Admission Test — category boundaries', () {
-    // Raw score bands: 0-54 A, 55-60 B, 61-64 C, 65-72 D (confirmed rule;
-    // see lib/core/omr/admission_category.dart). "Not classified" now only
-    // appears for a score outside 0-72.
-    const cases = <int, String>{
-      54: 'A',
-      55: 'B',
-      56: 'B',
-      57: 'B',
-      58: 'B',
-      60: 'B',
-      61: 'C',
-      64: 'C',
-      65: 'D',
-      72: 'D',
-    };
-    cases.forEach((score, label) {
-      testWidgets('rawScore $score -> "$label"', (tester) async {
+  group('2. Admission Test — never shows an A-D category on mobile', () {
+    for (final score in [0, 54, 55, 60, 61, 64, 65, 72]) {
+      testWidgets('rawScore $score shows the score but no category', (tester) async {
         await _pump(
           tester,
           ScanResultSummary(
@@ -170,16 +154,13 @@ void main() {
             result: _atResult(rawScore: score, percentage: score / 72 * 100),
           ),
         );
-        expect(find.text('Category'), findsOneWidget);
-        expect(find.text(label), findsOneWidget);
-        if (label == 'Not classified') {
-          expect(find.text('A'), findsNothing);
-          expect(find.text('B'), findsNothing);
-          expect(find.text('C'), findsNothing);
-          expect(find.text('D'), findsNothing);
+        expect(find.text('$score / 72'), findsOneWidget);
+        expect(find.text('Category'), findsNothing);
+        for (final letter in ['A', 'B', 'C', 'D', 'Not classified']) {
+          expect(find.text(letter), findsNothing, reason: 'rawScore $score');
         }
       });
-    });
+    }
   });
 
   group('3. Admission Test — ungraded', () {
@@ -413,7 +394,7 @@ void main() {
       );
       expect(find.text('60 / 72'), findsOneWidget);
       expect(find.text('83%'), findsOneWidget);
-      expect(find.text('B'), findsOneWidget);
+      expect(find.text('B'), findsNothing); // no A-D category on mobile
       expect(tester.takeException(), isNull);
     });
 

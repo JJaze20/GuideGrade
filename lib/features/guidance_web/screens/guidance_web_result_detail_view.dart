@@ -692,7 +692,13 @@ class _GuidanceWebResultDetailViewState
                           : '${result.percentage.toStringAsFixed(2)}%',
                     ),
                     _analyticsFact('Status', result?.status ?? 'Ungraded'),
-                    _analyticsFact('Category', letter ?? '—'),
+                    _analyticsFact(
+                      'Category',
+                      letter ??
+                          (widget.batch.examCode == 'AT'
+                              ? 'Not classified'
+                              : '—'),
+                    ),
                     ..._atAnalyticsFacts(),
                   ],
                 ),
@@ -937,6 +943,19 @@ class _GuidanceWebResultDetailViewState
     scanDate: widget.scan.capturedAt,
   );
 
+  /// The Admission Test category (A-D), decided by the Total SAI worked out
+  /// from the recorded raw score, the linked examinee's birth date and this
+  /// sitting's exam date. Null ("Not classified") when the SAI cannot be given.
+  AdmissionCategory? get _atCategory {
+    final raw = widget.scan.result?.rawScore;
+    if (raw == null) return null;
+    return atAdmissionCategory(
+      rawScore: raw,
+      birthDate: widget.linkedExaminee?.birthDate,
+      examDate: widget.examDate,
+    );
+  }
+
   /// Age, Sex and Last School Attended for the Examinee Information card.
   List<Widget> _applicantInfoRows() {
     final info = _applicant;
@@ -1079,7 +1098,7 @@ class _GuidanceWebResultDetailViewState
     String of(int right, int total) => '$right / $total';
     final rows = [
       ...scoreRows,
-      row('Category', _categoryLabel(admissionCategory(result.rawScore))),
+      row('Category', _categoryLabel(_atCategory)),
       for (final category in AtCategory.values)
         row(
           category.label,
@@ -1164,7 +1183,7 @@ class _GuidanceWebResultDetailViewState
   List<Widget> _examSpecificRows(LocalScanResult result) {
     switch (widget.batch.examCode) {
       case 'AT':
-        final category = admissionCategory(result.rawScore);
+        final category = _atCategory;
         return [
           _infoRow('Category', _categoryLabel(category)),
           ..._atSubtestRows(),
@@ -1534,11 +1553,14 @@ class _GuidanceWebResultDetailViewState
           ('C', _catC, '51 – 53', '85% – 89%'),
           ('D', _catD, '54 – 60', '90% and above'),
         ]
-      : const [
-          ('A', _catA, '0 – 54', null),
-          ('B', _catB, '58 – 60', null),
-          ('C', _catC, '61 – 64', null),
-          ('D', _catD, '65 – 72', null),
+      : [
+          for (final c in AdmissionCategory.values)
+            (
+              c.name.toUpperCase(),
+              [_catA, _catB, _catC, _catD][c.index],
+              admissionSaiRange(c),
+              null,
+            ),
         ];
 
   String? _examineeLetter() {
@@ -1550,7 +1572,7 @@ class _GuidanceWebResultDetailViewState
     if (widget.batch.examCode == 'TAT') {
       return tatCategory(raw)?.name.toUpperCase();
     }
-    return admissionCategory(raw)?.name.toUpperCase();
+    return _atCategory?.name.toUpperCase();
   }
 
   Widget _buildCategoryCard() {
@@ -1658,6 +1680,8 @@ class _GuidanceWebResultDetailViewState
                   Text(
                     raw == null
                         ? 'No recorded score.'
+                        : widget.batch.examCode == 'AT'
+                        ? 'Not classified: the category comes from the Total SAI, which needs the birth date and the exam date.'
                         : 'Unclassified for this score.',
                     style: AppTextStyles.body(
                       size: 11,
@@ -1754,7 +1778,9 @@ class _GuidanceWebResultDetailViewState
     bool tatMeets,
   ) {
     final isTat = widget.batch.examCode == 'TAT';
-    final title = examTypeDisplayLabel(widget.batch.examCode);
+    final title = widget.batch.examCode == 'AT'
+        ? '${examTypeDisplayLabel(widget.batch.examCode)} - Total SAI'
+        : examTypeDisplayLabel(widget.batch.examCode);
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(

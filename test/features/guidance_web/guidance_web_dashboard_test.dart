@@ -43,15 +43,37 @@ void main() {
     await tester.pump(const Duration(seconds: 2));
     expect(calls, 2);
   });
-  test('Admission boundaries use four categories with B 55–60', () {
+  test('Admission categories follow the Total SAI cut-offs (B is 77–84)', () {
+    // The first argument is each classified examinee's Total SAI.
     final data = GuidanceDashboardData(
-      [0, 54, 55, 56, 57, 60, 61, 64, 65, 72, -1, 73],
+      [50, 76, 77, 79, 80, 84, 85, 89, 90, 150],
       [],
       [],
     );
     expect(data.charts.map((c) => c.title), ['Admission Test', 'QTM', 'TAT']);
     expect(data.charts.first.labels, ['A', 'B', 'C', 'D']);
     expect(data.charts.first.counts, [2, 4, 2, 2]);
+  });
+  test('examinees whose SAI cannot be given are shown as Not classified', () {
+    final data = GuidanceDashboardData(
+      [85],
+      [],
+      [],
+      admissionNotClassified: 3,
+    );
+    expect(data.charts.first.labels, [
+      'A',
+      'B',
+      'C',
+      'D',
+      'Not classified',
+    ]);
+    expect(data.charts.first.counts, [0, 0, 1, 0, 3]);
+    expect(data.charts.first.total, 4);
+  });
+  test('no Not classified bar when every examinee is classified', () {
+    final data = GuidanceDashboardData([85], [], []);
+    expect(data.charts.first.labels, ['A', 'B', 'C', 'D']);
   });
   test(
     'QTM includes every boundary, including 60, and rejects invalid scores',

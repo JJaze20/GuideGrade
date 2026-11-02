@@ -424,6 +424,51 @@ void main() {
       expect(section.examDate, isNull);
     });
 
+    test('the category comes from the Total SAI (raw 65 at 18 y 8 m is D)', () async {
+      final all = await sections();
+      expect(all['TMP-examinee-s1']!.categoryLetter, 'D');
+      expect(all['TMP-examinee-s1']!.categoryNote, isNull);
+    });
+
+    test('without the dates the examinee is Not classified, with a note', () async {
+      final all = await sections();
+      for (final id in ['TMP-examinee-s2', 'TMP-examinee-s3']) {
+        expect(all[id]!.categoryLetter, isNull, reason: id);
+        expect(
+          all[id]!.categoryNote,
+          'Not classified: the category comes from the Total SAI, which needs '
+          'the birth date and the exam date (and an age of 17 or more).',
+        );
+      }
+    });
+
+    test('the printed Admission Test bands are Total SAI ranges, B is 77 - 84', () {
+      final bands = exportCategoryBands('AT');
+      expect(bands.map((b) => b.letter), ['D', 'C', 'B', 'A']);
+      expect(bands.map((b) => b.range), [
+        '90 and above',
+        '85 - 89',
+        '77 - 84',
+        '76 and below',
+      ]);
+      expect(bands.every((b) => b.percentLabel == 'Total SAI'), isTrue);
+    });
+
+    test('the batch summary counts follow the Total SAI categories', () async {
+      final doc = await service.buildDefaultExportDocument(_batchLocal('b1', 'AT'));
+      final batch = doc.batch!;
+      expect(batch.categoryBars.map((b) => b.label), ['A', 'B', 'C', 'D', 'Not classified']);
+      expect(batch.categoryBars.map((b) => b.count), [0, 0, 0, 1, 2]);
+      expect(batch.scoreBars.map((b) => b.label), [
+        'A (76 and below)',
+        'B (77 - 84)',
+        'C (85 - 89)',
+        'D (90 and above)',
+        'Not classified',
+      ]);
+      expect(batch.scoreBars.map((b) => b.count), [0, 0, 0, 1, 2]);
+    });
+
     test('the PDF with these fields renders', () async {
       final doc = await service.buildDefaultExportDocument(
         _batchLocal('b1', 'AT'),
@@ -643,7 +688,19 @@ void main() {
     'includeCertificates behavior is unchanged: off by default, on when requested',
     () async {
       client.batches.add(_batch('b1', 'AT'));
-      final scan = _scan('s1', 'b1', 'AT', rawScore: 65);
+      // 18 years 8 months on the exam date: raw 65 -> Total SAI 125 -> D.
+      client.examineeDetails['examinee-s1'] = (
+        birth: DateTime(2008, 2, 5),
+        gender: null,
+        school: null,
+      );
+      final scan = _scan(
+        's1',
+        'b1',
+        'AT',
+        rawScore: 65,
+        examDate: DateTime(2026, 11, 1),
+      );
       client.scansByBatch['b1'] = [scan];
 
       final without = await service.buildDefaultExportDocument(
@@ -656,6 +713,8 @@ void main() {
         includeCertificates: true,
       );
       expect(with_.examinees.single.certificate, isNotNull);
+      expect(with_.examinees.single.certificate!.letter, 'D');
+      expect(with_.examinees.single.certificate!.rangeLabel, '(90 and above)');
     },
   );
 

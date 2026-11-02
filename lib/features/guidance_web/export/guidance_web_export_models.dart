@@ -116,6 +116,7 @@ class ExportExamineeSection {
     this.lastSchool = '-',
     this.examDate,
     this.scaledScores,
+    this.categoryNote,
     required this.scanDate,
     required this.score,
     required this.percentage,
@@ -144,6 +145,10 @@ class ExportExamineeSection {
 
   /// Admission Test only; null for other exams or when nothing was graded.
   final ExportScaledScores? scaledScores;
+
+  /// Printed under the category list, e.g. why an Admission Test examinee is
+  /// not classified yet.
+  final String? categoryNote;
   final String scanDate;
   final String score;
   final String percentage;

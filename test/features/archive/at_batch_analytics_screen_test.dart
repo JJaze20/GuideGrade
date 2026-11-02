@@ -188,9 +188,10 @@ void main() {
       ]) {
         expect(_valueOf(key), containsText('—'));
       }
+      // The A-D category is shown on the web console only (Total SAI).
       expect(
           find.byKey(const Key('atAnalytics.categoryDistribution.empty')),
-          findsOneWidget);
+          findsNothing);
       expect(find.byKey(const Key('atAnalytics.scoreDistribution.empty')),
           findsOneWidget);
       expect(find.byKey(const Key('atAnalytics.topScorers.empty')),
@@ -215,9 +216,10 @@ void main() {
       expect(find.byKey(const Key('atAnalytics.excludedWarning')), findsNothing);
       expect(_valueOf(const Key('atAnalytics.averageScore')),
           containsText('—'));
+      // The A-D category is shown on the web console only (Total SAI).
       expect(
           find.byKey(const Key('atAnalytics.categoryDistribution.empty')),
-          findsOneWidget);
+          findsNothing);
       expect(find.byKey(const Key('atAnalytics.topScorers.empty')),
           findsOneWidget);
     });
@@ -313,74 +315,57 @@ void main() {
     });
   });
 
-  group('7–11. Category distribution rows + rates', () {
-    testWidgets('A / B / C / D rows with counts and rates',
+  group('7–11. No A-D category on mobile (the category comes from the Total SAI)', () {
+    testWidgets('no category chart, rows or heading, even with graded results',
         (tester) async {
-      await _pump(tester, batch: _validBatch()); // 5 analyzable, 1 in each
-      for (final name in ['a', 'b', 'c', 'd']) {
-        expect(find.byKey(Key('atAnalytics.category.$name')), findsOneWidget);
-      }
-      expect(_inKey(const Key('atAnalytics.category.a'), 'A'), findsOneWidget);
-      expect(find.byKey(const Key('atAnalytics.category.unclassified')), findsNothing);
-      expect(_inKey(const Key('atAnalytics.category.b'), 'B'), findsOneWidget);
-      expect(_inKey(const Key('atAnalytics.category.c'), 'C'), findsOneWidget);
-      expect(_inKey(const Key('atAnalytics.category.d'), 'D'), findsOneWidget);
-      // B holds two scans; the other categories hold one each.
-      for (final name in ['a', 'b', 'c', 'd']) {
-        expect(_inKey(Key('atAnalytics.category.$name'), name == 'b' ? '2' : '1'), findsOneWidget);
-        expect(_inKey(Key('atAnalytics.category.$name'), name == 'b' ? '40.0%' : '20.0%'),
-            findsOneWidget); // 1 / 5 = 20.0%
-      }
-    });
-
-    testWidgets('empty-state line when nothing is analyzable', (tester) async {
-      await _pump(tester, batch: _batch(scans: [_ungraded(), _partial(50)]));
+      await _pump(tester, batch: _validBatch());
+      expect(find.text('Admission Category Distribution'), findsNothing);
       expect(
           find.byKey(const Key('atAnalytics.categoryDistribution.empty')),
-          findsOneWidget);
-      expect(find.byKey(const Key('atAnalytics.category.a')), findsNothing);
+          findsNothing);
+      for (final name in ['a', 'b', 'c', 'd', 'unclassified']) {
+        expect(find.byKey(Key('atAnalytics.category.$name')), findsNothing);
+      }
+      // The raw-score distribution is still there.
+      expect(find.text('Score Distribution'), findsOneWidget);
     });
   });
 
   group('12–21. Boundary scores', () {
+    // Raw-score bands only; the A-D letter is not shown on mobile.
     const cases = <int, String>{
-      0: 'A',
-      54: 'A',
-      55: 'B',
-      57: 'B',
-      58: 'B',
-      60: 'B',
-      61: 'C',
-      64: 'C',
-      65: 'D',
-      72: 'D',
+      0: 'a',
+      54: 'a',
+      55: 'b',
+      57: 'b',
+      58: 'b',
+      60: 'b',
+      61: 'c',
+      64: 'c',
+      65: 'd',
+      72: 'd',
     };
-    const bandKeyForCategory = <String, String>{
-      'A': 'a',
-      'Unclassified': 'unclassified',
-      'B': 'b',
-      'C': 'c',
-      'D': 'd',
-    };
-    cases.forEach((raw, category) {
-      testWidgets('raw $raw -> $category', (tester) async {
+    cases.forEach((raw, bandKey) {
+      testWidgets('raw $raw -> raw-score band $bandKey', (tester) async {
         await _pump(
           tester,
           batch: _batch(scans: [_graded(raw, id: 'only')]),
         );
-        final bandKey = bandKeyForCategory[category]!;
-        // category distribution row
-        expect(_inKey(Key('atAnalytics.category.$bandKey'), '1'),
-            findsOneWidget);
         // score distribution band
         expect(_inKey(Key('atAnalytics.scoreBand.$bandKey'), '1'),
             findsOneWidget);
-        // top scorer row: score, percentage, category label
+        // top scorer row: score and percentage, no category letter
         final row = _valueOf(const Key('atAnalytics.topScorer.only'));
         expect(row, containsText('$raw / 72'));
         expect(row, containsText('${_pctOf(raw).toStringAsFixed(2)}%'));
-        expect(row, containsText(category));
       });
+    });
+
+    testWidgets('score bands are labelled by raw-score range, not by letter',
+        (tester) async {
+      await _pump(tester, batch: _batch(scans: [_graded(60, id: 'only')]));
+      expect(find.text('Raw score 55–60'), findsOneWidget);
+      expect(find.textContaining(' · '), findsNothing);
     });
   });
 
@@ -411,10 +396,8 @@ void main() {
       expect(first, containsText('#1'));
       expect(first, containsText('70 / 72'));
       expect(first, containsText('${_pctOf(70).toStringAsFixed(2)}%'));
-      expect(first, containsText('D'));
       final unclassified = _valueOf(const Key('atAnalytics.topScorer.u'));
       expect(unclassified, containsText('#4'));
-      expect(unclassified, containsText('B'));
       final last = _valueOf(const Key('atAnalytics.topScorer.a'));
       expect(last, containsText('#5'));
       expect(last, containsText('20 / 72'));

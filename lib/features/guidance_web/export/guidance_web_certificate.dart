@@ -1,4 +1,3 @@
-import '../../../core/omr/admission_category.dart';
 import '../../../core/omr/qtm_category.dart';
 import '../../../core/omr/qtm_result.dart';
 import '../../../core/omr/tat_category.dart';
@@ -72,7 +71,9 @@ class ExportCertificate {
 }
 
 String? _letterFor(String examCode, int raw) => switch (examCode) {
-  'AT' => admissionCategory(raw)?.name.toUpperCase(),
+  // The Admission Test category comes from the Total SAI, not the raw score:
+  // the caller passes it as [buildCertificate]'s `categoryLetter`.
+  'AT' => null,
   'QTM' => qtmCategory(raw)?.name.toUpperCase(),
   'TAT' => tatCategory(raw)?.name.toUpperCase(),
   _ => null,
@@ -134,13 +135,14 @@ ExportCertificate? buildCertificate({
   required int? rawScore,
   required String? status,
   required String? name,
+  String? categoryLetter,
 }) {
   final trimmed = name?.trim() ?? '';
   final printedName = trimmed == 'Unnamed' ? '' : trimmed;
   if (rawScore == null || status != 'Graded') return null;
   final spec = certificateSpecs[examCode];
   if (spec == null) return null;
-  final letter = _letterFor(examCode, rawScore);
+  final letter = categoryLetter ?? _letterFor(examCode, rawScore);
   if (letter == null) return null;
   final category = spec.categories[letter];
   if (category == null) return null;

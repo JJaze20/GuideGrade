@@ -160,6 +160,7 @@ class _FakeClient implements SyncClient {
           temporaryExamineeId: 'TMP-$id',
           firstName: 'Official-$id',
           lastName: 'Record',
+          birthDate: DateTime(2008, 2, 5),
           status: 'active',
           createdAt: DateTime.utc(2026, 1, 1),
           createdByUid: 'uid',
@@ -239,6 +240,7 @@ CloudScanRow _scan(
   String examCode,
   int? raw, {
   Map<String, dynamic>? decoded,
+  bool dated = true,
   int? gradedItems,
   int attemptNo = 1,
   String attemptStatus = 'active',
@@ -255,6 +257,7 @@ CloudScanRow _scan(
   examCode: examCode,
   capturedAt: DateTime.utc(2026, 1, 1),
   decoded: decoded ?? {'examCode': examCode, 'items': <dynamic>[]},
+  examDate: dated ? DateTime(2026, 11, 1) : null,
   rawScore: raw,
   // AT's existing analyzable rule needs the key to cover all 72 items.
   totalGraded: raw == null
@@ -486,7 +489,7 @@ void main() {
 
   group('Distribution examinee search', () {
     for (final (exam, scores) in [
-      ('AT', [0, 54, 55, 60, 61, 64, 65, 72]),
+      ('AT', [0, 21, 22, 28, 29, 34, 35, 72]),
       ('QTM', [0, 9, 10, 19, 20, 29, 30, 39, 40, 49, 50, 60]),
       (
         'TAT',
@@ -517,7 +520,8 @@ void main() {
           final result = await run(exam);
           final groups = result.distributionGroups('Score Distribution');
           final expected = switch (exam) {
-            'AT' => result.at!.scoreDistribution.values.toList(),
+            // A / B / C / D by Total SAI, two examinees each.
+            'AT' => [2, 2, 2, 2],
             'QTM' => result.qtm!.scoreDistribution.values.toList(),
             _ => result.tatOverall!.totalScoreDistribution.values.toList(),
           };
@@ -532,7 +536,7 @@ void main() {
               result
                   .distributionGroups('Category Distribution')
                   .map((g) => g.results.length),
-              result.at!.categoryDistribution.values,
+              [2, 2, 2, 2],
             );
           }
           final before = List.of(client.calls);
@@ -548,6 +552,39 @@ void main() {
       );
     }
 
+    test('AT: examinees whose SAI cannot be given are "Not classified", not guessed', () async {
+      client.batches.add(_batch('b', 'AT'));
+      client.scansByBatch['b'] = [
+        _scan('dated', 'b', 'AT', 50), // Total SAI 104 -> D
+        _scan('undated', 'b', 'AT', 50, dated: false),
+        _scan('invalid', 'b', 'AT', 999), // out of range: in no group at all
+      ];
+      final result = await run('AT');
+      for (final section in ['Score Distribution', 'Category Distribution']) {
+        final groups = result.distributionGroups(section);
+        final counts = {for (final g in groups) g.label.split(' ').first: g.results.length};
+        expect(counts, {'A': 0, 'B': 0, 'C': 0, 'D': 1, 'Not': 1}, reason: section);
+        expect(groups.last.label, 'Not classified');
+        expect(groups.last.results.single.scan.id, 'undated');
+      }
+      // Both are still ranked among the top scorers.
+      expect(result.topScorers.map((s) => s.result.scan.id).toSet(), {'dated', 'undated'});
+    });
+
+    test('AT: the Score Distribution labels carry the Total SAI ranges', () async {
+      client.batches.add(_batch('b', 'AT'));
+      client.scansByBatch['b'] = [_scan('one', 'b', 'AT', 50)];
+      final result = await run('AT');
+      expect(
+        result.distributionGroups('Score Distribution').map((g) => g.label),
+        ['A (76 and below)', 'B (77 - 84)', 'C (85 - 89)', 'D (90 and above)'],
+      );
+      expect(
+        result.distributionGroups('Category Distribution').map((g) => g.label),
+        ['A', 'B', 'C', 'D'],
+      );
+    });
+
     testWidgets('Admission category actions show the exact A/B/C/D examinees', (
       tester,
     ) async {
@@ -555,10 +592,10 @@ void main() {
       addTearDown(() => tester.binding.setSurfaceSize(null));
       client.batches.add(_batch('b', 'AT'));
       client.scansByBatch['b'] = [
-        _scan('a', 'b', 'AT', 54),
-        _scan('b', 'b', 'AT', 60),
-        _scan('c', 'b', 'AT', 64),
-        _scan('d', 'b', 'AT', 72),
+        _scan('a', 'b', 'AT', 21), // SAI 76
+        _scan('b', 'b', 'AT', 25), // SAI 81
+        _scan('c', 'b', 'AT', 31), // SAI 87
+        _scan('d', 'b', 'AT', 60), // SAI 116
       ];
       await tester.pumpWidget(
         MaterialApp(
@@ -592,7 +629,7 @@ void main() {
     });
 
     for (final (exam, score, label) in [
-      ('AT', 55, 'B (55–60)'),
+      ('AT', 25, 'B (77 - 84)'),
       ('QTM', 60, '50–60'),
       ('TAT', 79, '60–79'),
     ]) {
@@ -654,7 +691,7 @@ void main() {
             await tester.tap(find.text('Close'));
             await tester.pumpAndSettle();
             final emptyLabel = exam == 'AT'
-                ? 'A (0–54)'
+                ? 'A (76 and below)'
                 : exam == 'QTM'
                 ? '0–9'
                 : '0–19';
@@ -1640,8 +1677,8 @@ void main() {
     testWidgets('loading state, then AT results', (tester) async {
       client.batches.add(_batch('a1', 'AT'));
       client.scansByBatch['a1'] = [
-        _scan('1', 'a1', 'AT', 56),
-        _scan('2', 'a1', 'AT', 50),
+        _scan('1', 'a1', 'AT', 25), // SAI 81 -> B
+        _scan('2', 'a1', 'AT', 50), // SAI 104 -> D
       ];
       await pump(tester);
       expect(find.text('Loading Analytics...'), findsOneWidget);
@@ -1650,8 +1687,9 @@ void main() {
       expect(find.text('Overall Statistics'), findsOneWidget);
       expect(find.text('Score Distribution'), findsOneWidget);
       expect(find.text('Category Distribution'), findsOneWidget);
-      expect(find.text('B (55–60)'), findsOneWidget);
-      expect(find.textContaining('Unclassified'), findsNothing);
+      expect(find.text('B (77 - 84)'), findsOneWidget);
+      expect(find.text('D (90 and above)'), findsOneWidget);
+      expect(find.textContaining('Not classified'), findsNothing);
       expect(find.text('TOTAL'), findsOneWidget);
       expect(find.text('MEDIAN'), findsOneWidget);
       expect(client.keyReads, {'AT': 1}); // supplementary subtest averages

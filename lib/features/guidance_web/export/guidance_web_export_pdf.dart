@@ -616,6 +616,10 @@ pw.Widget _examineePage(
       _h1('Category:'),
       pw.SizedBox(height: 6),
       _categoryList(s),
+      if (s.categoryNote != null) ...[
+        pw.SizedBox(height: 3),
+        pw.Text(_clean(s.categoryNote!), style: _s(8.5, bold: true)),
+      ],
     ],
   );
 }

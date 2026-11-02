@@ -809,6 +809,181 @@ void main() {
       });
     }
 
+    group('Admission category from the Total SAI', () {
+      const atSection = 'Answer Document';
+
+      ExamineeRecord examinee({DateTime? birthDate}) => ExamineeRecord(
+        id: 'e1',
+        temporaryExamineeId: 'EX-000045',
+        firstName: 'Juan',
+        lastName: 'Dela Cruz',
+        birthDate: birthDate,
+        status: 'active',
+        createdAt: DateTime.utc(2026, 1, 1),
+        createdByUid: 'uid',
+        updatedAt: DateTime.utc(2026, 1, 1),
+        updatedByUid: 'uid',
+      );
+
+      Future<void> pumpCategory(
+        WidgetTester tester, {
+        ExamineeRecord? linked,
+        DateTime? examDate,
+        int raw = 34,
+        bool analytics = false,
+      }) async {
+        tester.view.physicalSize = const Size(1400, 2600);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        client.answerKeyToReturn = CloudAnswerKeyRead.found(
+          version: 1,
+          answers: {for (var n = 1; n <= 72; n++) '$atSection|$n': 'A'},
+          updatedByName: 'Officer',
+          updatedAt: '2026-01-01T00:00:00Z',
+        );
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: GuidanceWebResultDetailView(
+                scan: _scan(
+                  result: _storedResult(raw: raw, graded: 72),
+                  items: [
+                    for (var n = 1; n <= 72; n++)
+                      OmrItemResult(
+                        sectionName: atSection,
+                        itemNumber: n,
+                        markedChoice: n <= raw ? 'A' : 'B',
+                      ),
+                  ],
+                ),
+                batch: _batch(),
+                service: service,
+                onBack: () {},
+                linkedExaminee: linked,
+                examDate: examDate,
+                showClusterAnalysis: analytics,
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+      }
+
+      Finder categoryRow(String value) => find.byWidgetPredicate(
+        (w) =>
+            w is Row &&
+            w.children.length == 2 &&
+            w.children.first is SizedBox &&
+            (w.children.first as SizedBox).child is Text &&
+            ((w.children.first as SizedBox).child as Text).data == 'Category' &&
+            w.children.last is Expanded &&
+            (w.children.last as Expanded).child is Text &&
+            ((w.children.last as Expanded).child as Text).data == value,
+      );
+
+      testWidgets('raw 34 for an 18 year old is Total SAI 89, category C', (
+        tester,
+      ) async {
+        await pumpCategory(
+          tester,
+          linked: examinee(birthDate: DateTime(2008, 2, 5)),
+          examDate: DateTime(2026, 11, 1),
+        );
+        expect(categoryRow('C'), findsOneWidget);
+      });
+
+      testWidgets('the same raw score for a 17 year old is SAI 90, category D', (
+        tester,
+      ) async {
+        await pumpCategory(
+          tester,
+          linked: examinee(birthDate: DateTime(2009, 11, 1)),
+          examDate: DateTime(2026, 11, 1),
+        );
+        expect(categoryRow('D'), findsOneWidget);
+      });
+
+      for (final (raw, letter) in [
+        (21, 'A'),
+        (22, 'B'),
+        (28, 'B'),
+        (29, 'C'),
+        (34, 'C'),
+        (35, 'D'),
+      ]) {
+        testWidgets('raw $raw is category $letter at every SAI cut-off', (
+          tester,
+        ) async {
+          await pumpCategory(
+            tester,
+            raw: raw,
+            linked: examinee(birthDate: DateTime(2008, 2, 5)),
+            examDate: DateTime(2026, 11, 1),
+          );
+          expect(categoryRow(letter), findsOneWidget);
+        });
+      }
+
+      testWidgets('no dates: Not classified, never the old raw-score letter', (
+        tester,
+      ) async {
+        // Raw 60 used to be "B" by the old raw-score bands.
+        await pumpCategory(tester, raw: 60, linked: examinee());
+        expect(categoryRow('Not classified'), findsOneWidget);
+        expect(categoryRow('B'), findsNothing);
+      });
+
+      testWidgets('an unlinked scan is Not classified', (tester) async {
+        await pumpCategory(tester, examDate: DateTime(2026, 11, 1));
+        expect(categoryRow('Not classified'), findsOneWidget);
+      });
+
+      testWidgets('under 17 is Not classified', (tester) async {
+        await pumpCategory(
+          tester,
+          linked: examinee(birthDate: DateTime(2010, 6, 1)),
+          examDate: DateTime(2026, 11, 1),
+        );
+        expect(categoryRow('Not classified'), findsOneWidget);
+      });
+
+      testWidgets('the analytics category card shows the SAI ranges and the letter', (
+        tester,
+      ) async {
+        await pumpCategory(
+          tester,
+          analytics: true,
+          linked: examinee(birthDate: DateTime(2008, 2, 5)),
+          examDate: DateTime(2026, 11, 1),
+        );
+        await tester.tap(find.text('Category and interpretation'));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('categoryLetter')), findsOneWidget);
+        expect(
+          tester.widget<Text>(find.byKey(const Key('categoryLetter'))).data,
+          'C.',
+        );
+        expect(find.text('Admission Test (AT) - Total SAI'), findsOneWidget);
+        expect(find.text('76 and below'), findsOneWidget);
+        expect(find.text('77 - 84'), findsOneWidget);
+        expect(find.text('85 - 89'), findsOneWidget);
+        expect(find.text('90 and above'), findsOneWidget);
+      });
+
+      testWidgets('the analytics category card explains Not classified', (
+        tester,
+      ) async {
+        await pumpCategory(tester, analytics: true, linked: examinee());
+        await tester.tap(find.text('Category and interpretation'));
+        await tester.pumpAndSettle();
+        expect(
+          find.textContaining('the category comes from the Total SAI'),
+          findsOneWidget,
+        );
+      });
+    });
+
     group('Age, sex and last school attended', () {
       ExamineeRecord withDetails({
         DateTime? birthDate,

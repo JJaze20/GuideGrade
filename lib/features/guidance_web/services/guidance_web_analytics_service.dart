@@ -20,6 +20,7 @@ import '../../../models/answer_key.dart';
 import '../../../models/local_batch.dart';
 import '../../../models/examinee_record.dart';
 import '../../../core/omr/admission_category.dart';
+import '../../../core/omr/at_sai.dart';
 import '../../../core/omr/qtm_result.dart' show qtmEligibility, QtmEligibility;
 import 'guidance_web_examinee_records_service.dart'
     show examineeRecordFromCloudRow;
@@ -280,11 +281,24 @@ class AnalyticsExamineeResult {
     required this.scan,
     required this.examinee,
     required this.batchCode,
+    this.examDate,
   });
   final LocalScan scan;
   final ExamineeRecord examinee;
   final String batchCode;
+
+  /// scans.exam_date for this sitting, when entered.
+  final DateTime? examDate;
   int get score => scan.result!.rawScore;
+
+  /// Admission Test only: the category from the Total SAI (recorded raw score,
+  /// the examinee's birth date and this sitting's exam date), or null when the
+  /// SAI cannot be given ("Not classified").
+  AdmissionCategory? get atCategory => atAdmissionCategory(
+    rawScore: score,
+    birthDate: examinee.birthDate,
+    examDate: examDate,
+  );
 }
 
 class AnalyticsTopScorer {
@@ -401,15 +415,36 @@ class AnalyticsResult {
       label,
       eligible.where((r) => matches(r.score)),
     );
+    if (examCode == 'AT' &&
+        (section == 'Score Distribution' ||
+            section == 'Category Distribution')) {
+      // Both AT charts follow the Total SAI cut-offs: A 76 and below, B 77-84,
+      // C 85-89, D 90 and above. Examinees whose SAI cannot be given yet are
+      // kept in their own "Not classified" group (and so stay in the Top
+      // Scorers ranking, which reads every group).
+      final withRanges = section == 'Score Distribution';
+      // A recorded score outside 0-72 is invalid: it belongs to no group at
+      // all (as it never belonged to a score band), not to "Not classified".
+      final valid = eligible
+          .where((r) => r.score >= 0 && r.score <= 72)
+          .toList();
+      return [
+        for (final category in AdmissionCategory.values)
+          AnalyticsDistributionGroup(
+            withRanges
+                ? '${category.name.toUpperCase()} (${admissionSaiRange(category)})'
+                : category.name.toUpperCase(),
+            valid.where((r) => r.atCategory == category),
+          ),
+        if (valid.any((r) => r.atCategory == null))
+          AnalyticsDistributionGroup(
+            'Not classified',
+            valid.where((r) => r.atCategory == null),
+          ),
+      ];
+    }
     if (section == 'Score Distribution') {
       return switch (examCode) {
-        'AT' => [
-          for (final band in AtScoreBand.values)
-            group(
-              '${band.categoryName} (${band.label})',
-              (score) => AtScoreBand.forRawScore(score) == band,
-            ),
-        ],
         'QTM' => [
           for (final band in QtmScoreBand.values)
             group(
@@ -422,15 +457,6 @@ class AnalyticsResult {
             group(band.label, (score) => TatTotalBand.forScore(score) == band),
         ],
       };
-    }
-    if (section == 'Category Distribution' && examCode == 'AT') {
-      return [
-        for (final category in AdmissionCategory.values)
-          group(
-            category.name.toUpperCase(),
-            (score) => admissionCategory(score) == category,
-          ),
-      ];
     }
     if (section == 'Eligibility Distribution' && examCode == 'QTM') {
       return [
@@ -712,6 +738,7 @@ class GuidanceWebAnalyticsService {
           scan: mapCloudScan(row),
           examinee: official.$2[row.examineeId]!,
           batchCode: codes[row.batchId] ?? row.batchId,
+          examDate: row.examDate,
         ),
     ]);
 

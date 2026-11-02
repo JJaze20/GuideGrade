@@ -40,20 +40,37 @@ List<ExportCategoryBand> exportCategoryBands(String examCode) =>
         ExportCategoryBand('B', '128 - 135', '80% - 84%'),
         ExportCategoryBand('A', '0 - 121', '76% and below'),
       ],
-      _ => const [
-        ExportCategoryBand('D', '65 - 72'),
-        ExportCategoryBand('C', '61 - 64'),
-        ExportCategoryBand('B', '58 - 60'),
-        ExportCategoryBand('A', '0 - 54'),
+      // Admission Test: Total SAI cut-offs (A 76 and below, B 77 - 84,
+      // C 85 - 89, D 90 and above).
+      _ => [
+        for (final c in AdmissionCategory.values.reversed)
+          ExportCategoryBand(
+            c.name.toUpperCase(),
+            admissionSaiRange(c),
+            'Total SAI',
+          ),
       ],
     };
 
 /// The category letter for a recorded [raw] score, or null when the score is
 /// unclassified or out of range.
-String? exportCategoryLetter(String examCode, int raw) => switch (examCode) {
+///
+/// The Admission Test category comes from the Total SAI, which needs the
+/// examinee's [birthDate] and this sitting's [examDate]; without them it is
+/// null ("Not classified").
+String? exportCategoryLetter(
+  String examCode,
+  int raw, {
+  DateTime? birthDate,
+  DateTime? examDate,
+}) => switch (examCode) {
   'QTM' => qtmCategory(raw)?.name.toUpperCase(),
   'TAT' => tatCategory(raw)?.name.toUpperCase(),
-  _ => admissionCategory(raw)?.name.toUpperCase(),
+  _ => atAdmissionCategory(
+    rawScore: raw,
+    birthDate: birthDate,
+    examDate: examDate,
+  )?.name.toUpperCase(),
 };
 
 /// Turns a batch and a selection into the export PDF. READ-ONLY: it reads
@@ -299,7 +316,12 @@ class GuidanceWebExportService {
         batchDate: _date(batch.createdAt),
         stats: stats,
         scoreBars: bars,
-        categoryBars: categoryBars,
+        categoryBars: batch.examCode == 'AT'
+            ? [
+                for (final g in r.distributionGroups('Category Distribution'))
+                  ExportBar(g.label, g.results.length),
+              ]
+            : categoryBars,
         subtestAverages: r.atCategoryAverages == null
             ? null
             : [
@@ -357,8 +379,8 @@ class GuidanceWebExportService {
             ('Median', _combine(a.medianRawScore, _pct(a.medianPercentage))),
           ],
           [
-            for (final e in a.scoreDistribution.entries)
-              ExportBar('${e.key.categoryName} (${e.key.label})', e.value),
+            for (final g in r.distributionGroups('Score Distribution'))
+              ExportBar(g.label, g.results.length),
           ],
         );
       case 'QTM':
@@ -426,6 +448,10 @@ class GuidanceWebExportService {
   /// Category Distribution: graded scans counted by their recorded score's
   /// letter (A first), plus the unclassified gap.
   List<ExportBar> _categoryBars(String examCode, List<LocalScan> scans) {
+    // The Admission Test bars come from the SAI-based analytics groups (a
+    // raw-score count would show the wrong category); until those are
+    // available print none.
+    if (examCode == 'AT') return const [];
     final counts = <String, int>{'A': 0, 'B': 0, 'C': 0, 'D': 0};
     var unclassified = 0;
     for (final s in scans) {
@@ -531,6 +557,15 @@ class GuidanceWebExportService {
       }
     }
 
+    final categoryLetter = result == null
+        ? null
+        : exportCategoryLetter(
+            batch.examCode,
+            result.rawScore,
+            birthDate: linked.birthDate,
+            examDate: examDate,
+          );
+
     return ExportExamineeSection(
       examLabel: examTypeDisplayLabel(batch.examCode),
       batchLabel: _batchLabel(batch),
@@ -553,9 +588,12 @@ class GuidanceWebExportService {
       clusterRows: clusterRows,
       clusterNote: batch.examCode == 'TAT' ? tatClusterScoringNote : null,
       categoryBands: exportCategoryBands(batch.examCode),
-      categoryLetter: result == null
-          ? null
-          : exportCategoryLetter(batch.examCode, result.rawScore),
+      categoryLetter: categoryLetter,
+      categoryNote:
+          batch.examCode == 'AT' && result != null && categoryLetter == null
+          ? 'Not classified: the category comes from the Total SAI, which needs '
+                'the birth date and the exam date (and an age of 17 or more).'
+          : null,
       // Printed right after this examinee's analytics page.
       certificate: includeCertificates
           ? buildCertificate(
@@ -563,6 +601,7 @@ class GuidanceWebExportService {
               rawScore: result?.rawScore,
               status: result?.status,
               name: linked.displayName,
+              categoryLetter: categoryLetter,
             )
           : null,
     );

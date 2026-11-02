@@ -1,16 +1,21 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:guidegrade/features/guidance_web/export/guidance_web_certificate.dart';
 
+/// For the Admission Test the category letter comes from the Total SAI, so
+/// the caller passes it ([letter], default D); QTM and TAT work it out from
+/// the raw score as before.
 ExportCertificate? cert(
   String exam,
   int? raw, {
   String? name = 'Andulana, Robert P.',
   String? status = 'Graded',
+  String? letter,
 }) => buildCertificate(
   examCode: exam,
   rawScore: raw,
   status: status,
   name: name,
+  categoryLetter: exam == 'AT' ? (letter ?? 'D') : null,
 );
 
 List<String> headings(ExportCertificate c) => [
@@ -39,9 +44,19 @@ void main() {
       expect(cert('AT', null), isNull);
     });
 
-    test('AT 55–57 is B; QTM and TAT retain their existing gaps', () {
-      expect(cert('AT', 55)!.letter, 'B');
-      expect(cert('AT', 57)!.letter, 'B');
+    test('AT takes the letter it is given (Total SAI); QTM and TAT keep their gaps', () {
+      expect(cert('AT', 55, letter: 'B')!.letter, 'B');
+      expect(cert('AT', 57, letter: 'B')!.letter, 'B');
+      // Not classified (no SAI yet): no letter, so no certificate is issued.
+      expect(
+        buildCertificate(
+          examCode: 'AT',
+          rawScore: 55,
+          status: 'Graded',
+          name: 'Andulana, Robert P.',
+        ),
+        isNull,
+      );
       expect(cert('QTM', 46), isNull);
       expect(cert('QTM', 47), isNull);
       expect(cert('TAT', 122), isNull);
@@ -54,11 +69,16 @@ void main() {
   });
 
   group('category and printed name', () {
-    test('AT letters follow the admission category bands', () {
-      expect(cert('AT', 68)!.letter, 'D');
-      expect(cert('AT', 62)!.letter, 'C');
-      expect(cert('AT', 59)!.letter, 'B');
-      expect(cert('AT', 30)!.letter, 'A');
+    test('AT letters follow the Total SAI category it is given', () {
+      expect(cert('AT', 68, letter: 'D')!.letter, 'D');
+      expect(cert('AT', 62, letter: 'C')!.letter, 'C');
+      expect(cert('AT', 59, letter: 'B')!.letter, 'B');
+      expect(cert('AT', 30, letter: 'A')!.letter, 'A');
+      // The printed ranges are Total SAI ranges.
+      expect(cert('AT', 1, letter: 'A')!.rangeLabel, '(76 and below)');
+      expect(cert('AT', 1, letter: 'B')!.rangeLabel, '(77 - 84)');
+      expect(cert('AT', 1, letter: 'C')!.rangeLabel, '(85 - 89)');
+      expect(cert('AT', 1, letter: 'D')!.rangeLabel, '(90 and above)');
     });
 
     test('the name is printed upper-case', () {
@@ -120,7 +140,7 @@ void main() {
 
   group('course lists', () {
     test('a duplicated course is printed once', () {
-      final c = cert('AT', 62)!; // category C listed Marketing twice
+      final c = cert('AT', 62, letter: 'C')!; // category C listed Marketing twice
       expect(
         courses(c).where((t) => t == 'BSBA – MARKETING MANAGEMENT'),
         hasLength(1),
@@ -128,7 +148,7 @@ void main() {
     });
 
     test('a joined line was split into separate courses', () {
-      final c = cert('AT', 62)!;
+      final c = cert('AT', 62, letter: 'C')!;
       expect(courses(c), contains('BSBA – FINANCIAL MANAGEMENT'));
       expect(courses(c), contains('AB – PSYCHOLOGY'));
       expect(

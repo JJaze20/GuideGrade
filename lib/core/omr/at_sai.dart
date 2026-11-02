@@ -17,6 +17,7 @@
 // does not exist in a month (born on the 31st, or Feb 29) the anniversary is
 // the last day of that month.
 
+import 'admission_category.dart';
 import 'at_categories.dart';
 import 'at_reference_tables.dart';
 
@@ -266,4 +267,43 @@ AtScoreProfile computeAtScoreProfile(
     age: age,
     selection: selection,
   );
+}
+
+/// The Total SAI of a recorded Admission Test [rawScore] (0-72) for an
+/// examinee born on [birthDate] who sat the exam on [examDate], or null when
+/// it cannot be given: a date missing, the birth date after the exam date,
+/// under 17, or a raw score outside 0-72. A raw score of 0 gives [atSaiFloor].
+///
+/// Only the recorded total is needed (not the per-subtest scores), so the
+/// category can be worked out wherever a scan's stored score is at hand.
+int? atTotalSai({
+  required int rawScore,
+  DateTime? birthDate,
+  DateTime? examDate,
+}) {
+  if (birthDate == null || examDate == null) return null;
+  if (rawScore < 0 || rawScore > atTotalItems) return null;
+  final age = atAgeOn(birthDate, examDate);
+  if (age == null) return null;
+  final selection = atSaiSelectionFor(age);
+  if (selection == null) return null;
+  if (rawScore == 0) return atSaiFloor;
+  final scaled = atScaledScore(AtScoreCategory.total, rawScore);
+  if (scaled == null) return null;
+  return atSaiForScaled(selection, AtScoreCategory.total, scaled);
+}
+
+/// The Admission Test category (A-D) from the Total SAI, or null ("Not
+/// classified") when the SAI cannot be given. See [admissionCategoryFromSai].
+AdmissionCategory? atAdmissionCategory({
+  required int rawScore,
+  DateTime? birthDate,
+  DateTime? examDate,
+}) {
+  final sai = atTotalSai(
+    rawScore: rawScore,
+    birthDate: birthDate,
+    examDate: examDate,
+  );
+  return sai == null ? null : admissionCategoryFromSai(sai);
 }

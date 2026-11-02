@@ -5,7 +5,6 @@ import '../../../core/analytics/at_batch_analytics.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
 import '../../../core/constants/exam_catalog.dart';
-import '../../../core/omr/admission_category.dart';
 import '../../../core/state/app_state.dart';
 import '../../../models/local_batch.dart';
 
@@ -112,11 +111,6 @@ class _AtBatchAnalyticsScreenState extends State<AtBatchAnalyticsScreen> {
         _sectionTitle(FontAwesomeIcons.chartLine, 'Overall Performance'),
         const SizedBox(height: 8),
         _overallPerformance(a),
-        const SizedBox(height: 16),
-        _sectionTitle(
-            FontAwesomeIcons.circleCheck, 'Admission Category Distribution'),
-        const SizedBox(height: 8),
-        _categoryDistribution(a),
         const SizedBox(height: 16),
         _sectionTitle(FontAwesomeIcons.chartSimple, 'Score Distribution'),
         const SizedBox(height: 8),
@@ -376,128 +370,9 @@ class _AtBatchAnalyticsScreenState extends State<AtBatchAnalyticsScreen> {
   static String _intOf72(int? v) => v == null ? '—' : '$v / 72';
   static String _pct(double? v) =>
       v == null ? '—' : '${v.toStringAsFixed(2)}%';
-  static String _rate(double? v) =>
-      v == null ? '—' : '${v.toStringAsFixed(1)}%';
 
-  // --- admission category distribution ---------------------------
-
-  Widget _categoryDistribution(AtBatchAnalytics a) {
-    if (a.analyzableExaminees == 0) {
-      return _card(
-        child: _emptyLine(
-          'No analyzable Admission Test results yet — the category '
-          'distribution appears once fully-graded 72-item sheets exist.',
-          key: const Key('atAnalytics.categoryDistribution.empty'),
-        ),
-      );
-    }
-    final aCount = a.categoryCount(AdmissionCategory.a);
-    final bCount = a.categoryCount(AdmissionCategory.b);
-    final cCount = a.categoryCount(AdmissionCategory.c);
-    final dCount = a.categoryCount(AdmissionCategory.d);
-    final maxCount = [aCount, bCount, cCount, dCount]
-        .fold<int>(0, (m, c) => c > m ? c : m);
-    return _card(
-      child: Column(
-        children: [
-          _catRow('A', aCount, a.categoryRate(AdmissionCategory.a), maxCount,
-              AppColors.catA,
-              rowKey: const Key('atAnalytics.category.a')),
-          _catRow('B', bCount, a.categoryRate(AdmissionCategory.b), maxCount,
-              AppColors.catB,
-              rowKey: const Key('atAnalytics.category.b')),
-          _catRow('C', cCount, a.categoryRate(AdmissionCategory.c), maxCount,
-              AppColors.catC,
-              rowKey: const Key('atAnalytics.category.c')),
-          _catRow('D', dCount, a.categoryRate(AdmissionCategory.d), maxCount,
-              AppColors.catD,
-              rowKey: const Key('atAnalytics.category.d')),
-        ],
-      ),
-    );
-  }
-
-  Widget _catRow(
-    String label,
-    int count,
-    double? rate,
-    int maxCount,
-    Color color, {
-    required Key rowKey,
-  }) {
-    final fraction = maxCount == 0 ? 0.0 : count / maxCount;
-    return Padding(
-      key: rowKey,
-      padding: const EdgeInsets.symmetric(vertical: 5),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 10,
-                height: 10,
-                decoration: BoxDecoration(
-                  color: color,
-                  borderRadius: BorderRadius.circular(3),
-                ),
-              ),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  label,
-                  style:
-                      AppTextStyles.body(size: 9.5, weight: FontWeight.w600),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                _rate(rate),
-                style: AppTextStyles.body(
-                    size: 9,
-                    color: AppColors.textGray,
-                    weight: FontWeight.w600),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                '$count',
-                style: const TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w800,
-                  fontFamily: 'monospace',
-                  color: AppColors.darkNavy,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          LayoutBuilder(
-            builder: (context, constraints) => Stack(
-              children: [
-                Container(
-                  height: 10,
-                  decoration: BoxDecoration(
-                    color: AppColors.lightBg,
-                    borderRadius: BorderRadius.circular(5),
-                  ),
-                ),
-                Container(
-                  height: 10,
-                  width: constraints.maxWidth * fraction,
-                  decoration: BoxDecoration(
-                    color: color,
-                    borderRadius: BorderRadius.circular(5),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // --- score distribution (official category-aligned bands) -----
+  // --- score distribution (raw-score ranges; the A-D category is shown on
+  // the web console only, where the Total SAI is known) -----
 
   Widget _scoreDistribution(AtBatchAnalytics a) {
     if (a.scoreDistribution.isEmpty) {
@@ -519,7 +394,7 @@ class _AtBatchAnalyticsScreenState extends State<AtBatchAnalyticsScreen> {
         children: [
           for (final band in AtScoreBand.values)
             _distBar(
-              '${band.categoryName} · ${band.label}',
+              'Raw score ${band.label}',
               counts[band]!,
               maxCount,
               barKey: Key('atAnalytics.scoreBand.${band.name}'),
@@ -652,14 +527,6 @@ class _AtBatchAnalyticsScreenState extends State<AtBatchAnalyticsScreen> {
                   style:
                       AppTextStyles.body(size: 8.5, color: AppColors.textGray),
                 ),
-                Text(
-                  _categoryLabel(scorer.category),
-                  style: AppTextStyles.body(
-                    size: 8.5,
-                    color: _categoryColor(scorer.category),
-                    weight: FontWeight.w600,
-                  ),
-                ),
               ],
             ),
           ),
@@ -689,24 +556,4 @@ class _AtBatchAnalyticsScreenState extends State<AtBatchAnalyticsScreen> {
       ),
     );
   }
-
-  /// The AT Analytics screen's own label for a category. Uses
-  /// **"Unclassified"** only for an invalid score (`null`). This is
-  /// deliberately separate from `ScanResultSummary`'s "Not classified"
-  /// wording, which is left untouched.
-  static String _categoryLabel(AdmissionCategory? c) => switch (c) {
-        AdmissionCategory.a => 'A',
-        AdmissionCategory.b => 'B',
-        AdmissionCategory.c => 'C',
-        AdmissionCategory.d => 'D',
-        null => 'Unclassified',
-      };
-
-  static Color _categoryColor(AdmissionCategory? c) => switch (c) {
-        AdmissionCategory.a => AppColors.catA,
-        AdmissionCategory.b => AppColors.catB,
-        AdmissionCategory.c => AppColors.catC,
-        AdmissionCategory.d => AppColors.catD,
-        null => AppColors.catCutoff,
-      };
 }

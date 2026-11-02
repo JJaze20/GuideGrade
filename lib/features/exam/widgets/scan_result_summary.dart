@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
-import '../../../core/omr/admission_category.dart';
 import '../../../core/omr/at_categories.dart';
 import '../../../core/omr/exam_score.dart';
 import '../../../core/omr/omr_scorer.dart';
@@ -81,16 +80,12 @@ class ScanResultSummary extends StatelessWidget {
   Widget _buildAdmissionTest() {
     final raw = _rawScore;
     final pct = _admissionPercentage();
-    final category = raw == null ? null : admissionCategory(raw);
+    // No A-D category here: the Admission Test category comes from the Total
+    // SAI, which needs the birth date and exam date entered on the web
+    // console, so the official category is shown there only.
     return _block([
       _row('Score', raw == null ? '—' : '$raw / 72'),
       if (pct != null) _row('Percentage', '${pct.toStringAsFixed(0)}%'),
-      if (raw != null)
-        _row(
-          'Category',
-          _categoryLabel(category),
-          valueColor: _categoryColor(category),
-        ),
       ..._atSubtestRows(),
     ]);
   }
@@ -131,22 +126,6 @@ class ScanResultSummary extends StatelessWidget {
     }
     return null;
   }
-
-  static String _categoryLabel(AdmissionCategory? c) => switch (c) {
-        AdmissionCategory.a => 'A',
-        AdmissionCategory.b => 'B',
-        AdmissionCategory.c => 'C',
-        AdmissionCategory.d => 'D',
-        null => 'Not classified',
-      };
-
-  static Color _categoryColor(AdmissionCategory? c) => switch (c) {
-        AdmissionCategory.a => AppColors.catA,
-        AdmissionCategory.b => AppColors.catB,
-        AdmissionCategory.c => AppColors.catC,
-        AdmissionCategory.d => AppColors.catD,
-        null => AppColors.catCutoff,
-      };
 
   static String _qtmEligibilityLabel(QtmEligibility? e) => switch (e) {
         QtmEligibility.allCoursesIncludingBscs =>
