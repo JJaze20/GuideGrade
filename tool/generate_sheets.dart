@@ -2632,33 +2632,76 @@ void _paintAtScoreRecordPage(PdfGraphics canvas, ExamSpec exam, PdfFont regular,
   }
   y += idTableHeight + 16;
 
-  // Score-category boxes -- same bordered-table style as the Scores/
-  // Cluster Analysis tables below (one label column, one score-entry
-  // column), rather than individually-positioned floating boxes, so every
-  // row's box lines up under the same left edge with no per-row math to
-  // get wrong.
+  // Score-category boxes and sample-marking guide share a row. The guide
+  // mirrors the examples printed on the front answer sheet, while keeping
+  // the score-entry column wide enough for handwritten values.
   const scoreBoxRows = ['Verbal Comprehension', 'Verbal Reasoning', 'Figural Reasoning', 'Quantitative Reasoning', 'Total'];
-  const scoreBoxRowHeight = 20.0;
+  const scoreBoxRowHeight = 24.0;
   const scoreBoxEntryWidth = 90.0;
-  final scoreBoxLabelWidth = contentWidth - scoreBoxEntryWidth;
+  const sampleBoxWidth = 150.0;
+  const sampleGap = 14.0;
+  final scoreBoxWidth = contentWidth - sampleBoxWidth - sampleGap;
+  final scoreBoxLabelWidth = scoreBoxWidth - scoreBoxEntryWidth;
   final scoreBoxTableHeight = scoreBoxRowHeight * scoreBoxRows.length;
+  final sampleX = kContentLeft;
+  const sampleRowHeight = 20.0;
+  const sampleRows = <(String, List<String>)>[
+    ('A', ['A', 'B', 'C', 'D', 'E']),
+    ('B', ['F', 'G', 'H', 'J', 'K']),
+    ('C', ['A', 'B', 'C', 'D', 'E']),
+    ('D', ['F', 'G', 'H', 'J', 'K']),
+    ('E', ['A', 'B', 'C', 'D', 'E']),
+  ];
   canvas.setColor(kBlack);
   canvas.setLineWidth(1);
-  canvas.drawRect(kContentLeft, flip(y + scoreBoxTableHeight), contentWidth, scoreBoxTableHeight);
+  canvas.drawRect(kContentLeft + sampleBoxWidth + sampleGap, flip(y + scoreBoxTableHeight), scoreBoxWidth, scoreBoxTableHeight);
   canvas.strokePath();
   for (var i = 1; i < scoreBoxRows.length; i++) {
     final lineY = y + scoreBoxRowHeight * i;
-    canvas.drawLine(kContentLeft, flip(lineY), kContentLeft + contentWidth, flip(lineY));
+    canvas.drawLine(kContentLeft + sampleBoxWidth + sampleGap, flip(lineY), kContentLeft + sampleBoxWidth + sampleGap + scoreBoxWidth, flip(lineY));
     canvas.strokePath();
   }
-  final scoreBoxEntryX = kContentLeft + scoreBoxLabelWidth;
+  final scoreBoxLeft = kContentLeft + sampleBoxWidth + sampleGap;
+  final scoreBoxEntryX = scoreBoxLeft + scoreBoxLabelWidth;
   canvas.drawLine(scoreBoxEntryX, flip(y), scoreBoxEntryX, flip(y + scoreBoxTableHeight));
   canvas.strokePath();
+  for (var i = 1; i <= sampleRows.length; i++) {
+    final lineY = y + sampleRowHeight * i;
+    canvas.drawLine(sampleX, flip(lineY), sampleX + sampleBoxWidth, flip(lineY));
+    canvas.strokePath();
+  }
+  canvas.drawRect(sampleX, flip(y + scoreBoxTableHeight), sampleBoxWidth, scoreBoxTableHeight);
+  canvas.strokePath();
+  canvas.setColor(kNavy);
+  canvas.drawString(bold, 10, 'SAMPLES', sampleX + 43, flip(y + 14));
+  for (var i = 0; i < sampleRows.length; i++) {
+    final (rowLabel, choices) = sampleRows[i];
+    final rowTop = y + sampleRowHeight * (i + 1);
+    canvas.setColor(kGray);
+    canvas.drawString(bold, 9, rowLabel, sampleX + 7, flip(rowTop + 13));
+    final choicePitch = 22.0;
+    for (var c = 0; c < choices.length; c++) {
+      final cx = sampleX + 30 + choicePitch * c + 6;
+      final cy = flip(rowTop + 10);
+      canvas.setColor(kBlack);
+      canvas.drawEllipse(cx, cy, 6, 6);
+      canvas.strokePath();
+      if (i == 0 && c == 1) {
+        canvas.setColor(kNavy);
+        canvas.drawEllipse(cx, cy, 3.3, 3.3);
+        canvas.fillPath();
+      } else {
+        canvas.setColor(kGray);
+        final metrics = regular.stringMetrics(choices[c]) * 7;
+        canvas.drawString(regular, 7, choices[c], cx - metrics.advanceWidth / 2, cy - 2.5);
+      }
+    }
+  }
   for (var i = 0; i < scoreBoxRows.length; i++) {
     final rowTop = y + scoreBoxRowHeight * i;
     final isTotal = scoreBoxRows[i] == 'Total';
     canvas.setColor(isTotal ? kNavy : kGray);
-    canvas.drawString(isTotal ? bold : regular, 9, scoreBoxRows[i], kContentLeft + 6, flip(rowTop + 13));
+    canvas.drawString(isTotal ? bold : regular, 9, scoreBoxRows[i], scoreBoxLeft + 6, flip(rowTop + 13));
   }
   y += scoreBoxTableHeight + 18;
 
@@ -2668,7 +2711,7 @@ void _paintAtScoreRecordPage(PdfGraphics canvas, ExamSpec exam, PdfFont regular,
   canvas.drawString(bold, 11, 'Scores', kContentLeft, flip(y + 11));
   y += 18;
   const scoreCols = ['', 'Total', 'Verbal', 'Nonverbal'];
-  const scoreRows = ['Raw Score', 'Percentile Rank', 'Stanine'];
+  const scoreRows = ['Raw Score', 'Percentile Rank', 'Stanine', 'School Ability Index'];
   const scoreLabelWidth = 120.0;
   final scoreColWidth = (contentWidth - scoreLabelWidth) / 3;
   const scoreRowHeight = 20.0;
